@@ -7,7 +7,13 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "dev:start": "./scripts/dev.sh start",
+    "dev:stop": "./scripts/dev.sh stop",
+    "dev:restart": "./scripts/dev.sh restart",
+    "dev:status": "./scripts/dev.sh status",
+    "deploy": "./scripts/deploy.sh",
+    "deploy:preview": "./scripts/deploy.sh -p"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

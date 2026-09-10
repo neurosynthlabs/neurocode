@@ -199,7 +199,7 @@ export default function Projects() {
 
       {/* Onboarding dialog */}
       <Dialog open={newOpen} onOpenChange={setNewOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Onboard a repository</DialogTitle>
             <DialogDescription>
@@ -236,7 +236,7 @@ export default function Projects() {
                 ))}
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-sm border border-line bg-base px-3 py-1.5">
               <KV k="Credentials" v="read-only, against a snapshot replica" />
               <KV k="Write access" v="none until you approve the first plan" />
             </div>

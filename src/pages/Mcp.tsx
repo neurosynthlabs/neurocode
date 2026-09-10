@@ -141,7 +141,7 @@ export default function Mcp() {
       </PageBody>
 
       <Dialog open={add} onOpenChange={setAdd}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Add an MCP server</DialogTitle>
             <DialogDescription>
