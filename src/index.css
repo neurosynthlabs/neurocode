@@ -1,0 +1,561 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "@fontsource-variable/dm-sans";
+@import "@fontsource/poppins/400.css";
+@import "@fontsource/poppins/500.css";
+@import "@fontsource/poppins/600.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ═══════════════════════════════════════════════════════════════════
+   NEUROCODE — theme contract
+
+   Colour lives in HSL triplets on :root (--background, --primary, …),
+   written at runtime by the ThemeProvider. Everything below is a
+   `var()` reference through `@theme inline`, so the whole product
+   repaints when the mode / colour / surface tone changes.
+
+     mode         light · dark · dim · midnight · sepia · high-contrast
+     colour       248 palettes (20 hand-tuned + 228 generated)
+     surface tone 30 light + 34 dark ground shades
+     radius       0 → 1rem, live
+     font         Inter · System · Serif · Mono · Poppins · DM Sans
+     size         compact 13 · default 14 · comfortable 15 · large 16
+   ═══════════════════════════════════════════════════════════════════ */
+
+@theme inline {
+  /* ── shadcn contract ─────────────────────────────────────────── */
+  --color-background:               hsl(var(--background));
+  --color-foreground:               hsl(var(--foreground));
+  --color-card:                     hsl(var(--card));
+  --color-card-foreground:          hsl(var(--card-foreground));
+  --color-popover:                  hsl(var(--popover));
+  --color-popover-foreground:       hsl(var(--popover-foreground));
+  --color-primary:                  hsl(var(--primary));
+  --color-primary-foreground:       hsl(var(--primary-foreground));
+  --color-secondary:                hsl(var(--secondary));
+  --color-secondary-foreground:     hsl(var(--secondary-foreground));
+  --color-muted:                    hsl(var(--muted));
+  --color-muted-foreground:         hsl(var(--muted-foreground));
+  --color-accent:                   hsl(var(--accent));
+  --color-accent-foreground:        hsl(var(--accent-foreground));
+  --color-destructive:              hsl(var(--destructive));
+  --color-destructive-foreground:   hsl(var(--destructive-foreground));
+  --color-border:                   hsl(var(--border));
+  --color-input:                    hsl(var(--input));
+  --color-ring:                     hsl(var(--ring));
+  --color-chart-1:                  hsl(var(--chart-1));
+  --color-chart-2:                  hsl(var(--chart-2));
+  --color-chart-3:                  hsl(var(--chart-3));
+  --color-chart-4:                  hsl(var(--chart-4));
+  --color-chart-5:                  hsl(var(--chart-5));
+  --color-sidebar:                  var(--os-base);
+  --color-sidebar-foreground:       var(--os-ink-2);
+  --color-sidebar-primary:          hsl(var(--primary));
+  --color-sidebar-primary-foreground: hsl(var(--primary-foreground));
+  --color-sidebar-accent:           hsl(var(--secondary));
+  --color-sidebar-accent-foreground: hsl(var(--foreground));
+  --color-sidebar-border:           hsl(var(--border));
+  --color-sidebar-ring:             hsl(var(--ring));
+
+  /* ── OS surface scale — every screen is built on these ───────── */
+  --color-base:        var(--os-base);
+  --color-bg:          var(--os-bg);
+  --color-surface:     var(--os-surface);
+  --color-surface-2:   var(--os-surface-2);
+  --color-surface-3:   var(--os-surface-3);
+  --color-line:        var(--os-line);
+  --color-line-strong: var(--os-line-strong);
+
+  /* ── Text scale ──────────────────────────────────────────────── */
+  --color-ink:    var(--os-ink);
+  --color-ink-2:  var(--os-ink-2);
+  --color-soft:   var(--os-soft);
+  --color-dim:    var(--os-dim);
+
+  /* ── Brand (follows the selected palette) ────────────────────── */
+  --color-brand:      var(--os-brand);
+  --color-brand-2:    var(--os-brand-2);
+  --color-brand-dim:  var(--os-brand-dim);
+  --color-brand-ink:  var(--os-brand-ink);
+
+  /* ── Status ──────────────────────────────────────────────────── */
+  --color-ok:        hsl(var(--status-success));
+  --color-ok-bg:     hsl(var(--status-success-bg));
+  --color-warn:      hsl(var(--status-warning));
+  --color-warn-bg:   hsl(var(--status-warning-bg));
+  --color-danger:    hsl(var(--status-error));
+  --color-danger-bg: hsl(var(--status-error-bg));
+  --color-info:      hsl(var(--status-info));
+  --color-info-bg:   hsl(var(--status-info-bg));
+  --color-violet:    hsl(var(--status-violet));
+  --color-positive:  hsl(var(--positive));
+  --color-negative:  hsl(var(--negative));
+
+  /* ── Radius — driven live by the customizer ──────────────────── */
+  --radius-xs:  calc(var(--radius) * 0.35);
+  --radius-sm:  calc(var(--radius) * 0.6);
+  --radius-md:  calc(var(--radius) * 0.85);
+  --radius-lg:  var(--radius);
+  --radius-xl:  calc(var(--radius) * 1.5);
+  --radius-2xl: calc(var(--radius) * 2);
+  --radius-3xl: calc(var(--radius) * 2.6);
+  --radius-4xl: calc(var(--radius) * 3.2);
+
+  /* ── Type ────────────────────────────────────────────────────── */
+  --font-sans: var(--app-font-family);
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Derived surfaces. The palette only ships background/card/secondary/
+   accent/border/foreground/muted-foreground/primary — everything the
+   OS kit needs is mixed from those so all 248 palettes stay coherent.
+   ═══════════════════════════════════════════════════════════════════ */
+:root {
+  --radius: 0.5rem;
+  --app-font-family: "Inter Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --app-font-size: 13px;
+
+  --os-bg:          hsl(var(--background));
+  --os-base:        color-mix(in srgb, hsl(var(--background)) 94%, hsl(var(--foreground)));
+  --os-surface:     hsl(var(--card));
+  --os-surface-2:   hsl(var(--secondary));
+  --os-surface-3:   hsl(var(--accent));
+  --os-line:        hsl(var(--border));
+  --os-line-strong: color-mix(in srgb, hsl(var(--border)) 62%, hsl(var(--foreground)));
+
+  --os-ink:    hsl(var(--foreground));
+  --os-ink-2:  color-mix(in srgb, hsl(var(--foreground)) 76%, hsl(var(--background)));
+  --os-soft:   hsl(var(--muted-foreground));
+  --os-dim:    color-mix(in srgb, hsl(var(--muted-foreground)) 74%, hsl(var(--background)));
+
+  --os-brand:     hsl(var(--primary));
+  --os-brand-2:   color-mix(in srgb, hsl(var(--primary)) 84%, hsl(var(--foreground)));
+  --os-brand-dim: color-mix(in srgb, hsl(var(--primary)) 16%, hsl(var(--background)));
+  --os-brand-ink: hsl(var(--primary-foreground));
+
+  /* Base palette — overwritten at runtime by the ThemeProvider */
+  --background: 0 0% 100%;
+  --foreground: 240 10% 3.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 10% 3.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 240 10% 3.9%;
+  --primary: 221 83% 53%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 240 4.8% 95.9%;
+  --secondary-foreground: 240 5.9% 10%;
+  --muted: 240 4.8% 95.9%;
+  --muted-foreground: 240 3.8% 46.1%;
+  --accent: 240 4.8% 95.9%;
+  --accent-foreground: 240 5.9% 10%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 5.9% 90%;
+  --input: 240 5.9% 90%;
+  --ring: 221 83% 53%;
+  --chart-1: 221 83% 53%;
+  --chart-2: 142 71% 45%;
+  --chart-3: 38 92% 50%;
+  --chart-4: 271 76% 63%;
+  --chart-5: 199 89% 48%;
+
+  /* Status — light */
+  --status-success: 142 71% 38%;  --status-success-bg: 142 71% 96%;
+  --status-warning: 32 95% 42%;   --status-warning-bg: 38 92% 96%;
+  --status-error:   0 74% 48%;    --status-error-bg:   0 84% 97%;
+  --status-info:    199 89% 42%;  --status-info-bg:    199 89% 96%;
+  --status-violet:  271 70% 52%;
+  --positive: 142 71% 35%;
+  --negative: 0 84% 48%;
+}
+
+.dark {
+  --background: 240 10% 4%;
+  --foreground: 0 0% 98%;
+  --card: 240 8% 8%;
+  --card-foreground: 0 0% 98%;
+  --popover: 240 8% 7%;
+  --popover-foreground: 0 0% 98%;
+  --primary: 217 91% 60%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 240 4% 14%;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 240 4% 14%;
+  --muted-foreground: 240 5% 64.9%;
+  --accent: 240 4% 17%;
+  --accent-foreground: 0 0% 98%;
+  --destructive: 0 62.8% 40%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 4% 18%;
+  --input: 240 4% 18%;
+  --ring: 217 91% 60%;
+
+  /* In dark, "base" must go darker than the ground, not lighter */
+  --os-base: color-mix(in srgb, hsl(var(--background)) 92%, black);
+
+  /* Status — dark */
+  --status-success: 142 69% 58%;  --status-success-bg: 142 60% 9%;
+  --status-warning: 38 92% 60%;   --status-warning-bg: 38 80% 9%;
+  --status-error:   0 84% 65%;    --status-error-bg:   0 70% 10%;
+  --status-info:    199 89% 62%;  --status-info-bg:    199 80% 9%;
+  --status-violet:  271 85% 74%;
+  --positive: 142 71% 62%;
+  --negative: 0 84% 66%;
+}
+
+@layer base {
+  * { @apply border-border; }
+
+  html, body, #root { height: 100%; }
+  html {
+    font-family: var(--app-font-family);
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--app-font-family);
+    font-size: var(--app-font-size);
+    line-height: 1.45;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection { background: var(--os-brand-dim); color: hsl(var(--foreground)); }
+
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, hsl(var(--muted-foreground)) 28%, transparent);
+    border: 2px solid transparent;
+    background-clip: content-box;
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in srgb, hsl(var(--muted-foreground)) 55%, transparent);
+  }
+  ::-webkit-scrollbar-corner { background: transparent; }
+
+  table { border-collapse: collapse; }
+}
+
+@layer utilities {
+  /* ── Product primitives every screen relies on ─────────────── */
+  .eyebrow {
+    font-size: 10px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--os-dim);
+  }
+  .tnum { font-variant-numeric: tabular-nums; }
+  .ascii {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.5;
+    white-space: pre;
+    color: var(--os-ink-2);
+  }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { scrollbar-width: none; }
+  .grid-lines {
+    background-image:
+      linear-gradient(var(--os-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--os-line) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  /* ── Premium surfaces ──────────────────────────────────────── */
+  .elevated {
+    box-shadow:
+      0 1px 2px hsl(var(--foreground) / 0.04),
+      0 2px 8px hsl(var(--foreground) / 0.03);
+  }
+  .dark .elevated {
+    box-shadow:
+      0 1px 2px hsl(0 0% 0% / 0.35),
+      0 2px 10px hsl(0 0% 0% / 0.22);
+  }
+
+  .glass-header {
+    background: color-mix(in srgb, hsl(var(--card)) 82%, transparent);
+    backdrop-filter: blur(18px) saturate(1.35);
+    -webkit-backdrop-filter: blur(18px) saturate(1.35);
+    border-bottom: 1px solid hsl(var(--border));
+    box-shadow: 0 1px 0 hsl(var(--primary) / 0.06);
+  }
+
+  .rail {
+    background: var(--os-base);
+    border-right: 1px solid hsl(var(--border));
+    box-shadow: inset -1px 0 0 hsl(var(--primary) / 0.05);
+  }
+
+  .brand-edge { box-shadow: inset 2px 0 0 hsl(var(--primary)); }
+
+  .hover-lift { transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease; }
+  .hover-lift:hover {
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, hsl(var(--primary)) 35%, hsl(var(--border)));
+    box-shadow: 0 4px 16px hsl(var(--foreground) / 0.06);
+  }
+  .dark .hover-lift:hover { box-shadow: 0 4px 18px hsl(0 0% 0% / 0.35); }
+
+  .stat-glow { transition: box-shadow 240ms ease, border-color 240ms ease; }
+  .stat-glow:hover {
+    border-color: color-mix(in srgb, hsl(var(--primary)) 40%, hsl(var(--border)));
+    box-shadow: 0 0 0 1px hsl(var(--primary) / 0.12), 0 0 24px hsl(var(--primary) / 0.10);
+  }
+
+  .ring-brand { box-shadow: 0 0 0 1px hsl(var(--primary) / 0.35); }
+
+  /* ── Motion ────────────────────────────────────────────────── */
+  @keyframes fade-in { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes slide-up { from { transform: translateY(8px); opacity: 0 } to { transform: none; opacity: 1 } }
+  @keyframes scale-in { from { transform: scale(.96); opacity: 0 } to { transform: none; opacity: 1 } }
+  @keyframes count-up { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+  @keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+  @keyframes pulse-dot { 0%,100% { transform: scale(1); opacity: 1 } 50% { transform: scale(1.35); opacity: .6 } }
+  @keyframes progress-grow { from { width: 0% } }
+
+  .animate-fade-in    { animation: fade-in .25s ease-out }
+  .animate-slide-up   { animation: slide-up .3s cubic-bezier(.16,1,.3,1) }
+  .animate-scale-in   { animation: scale-in .22s cubic-bezier(.16,1,.3,1) }
+  .animate-count-up   { animation: count-up .5s cubic-bezier(.16,1,.3,1) both }
+  .animate-page-enter { animation: slide-up .28s cubic-bezier(.16,1,.3,1) }
+  .animate-pulse-dot  { animation: pulse-dot 2s ease-in-out infinite }
+  .progress-animate   { animation: progress-grow .9s cubic-bezier(.16,1,.3,1) }
+  .animate-shimmer {
+    background: linear-gradient(90deg,
+      hsl(var(--muted)) 25%,
+      color-mix(in srgb, hsl(var(--muted-foreground)) 12%, hsl(var(--muted))) 50%,
+      hsl(var(--muted)) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-fade-in, .animate-slide-up, .animate-scale-in, .animate-count-up,
+    .animate-page-enter, .animate-pulse-dot, .progress-animate, .animate-shimmer {
+      animation: none !important;
+    }
+    .hover-lift:hover { transform: none }
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   RAIL — the sidebar.
+
+   `--primary` in a shadcn palette is a *button* colour, not a surface:
+   zinc-dark resolves to near-white and zinc-light to near-black, so
+   painting a full-height slab with it blows out in most of the 248
+   palettes. The rail is therefore a **tinted surface** — the palette's
+   hue mixed into the ground — and saturation is spent only where it
+   earns attention: the active row.
+
+   Three rail styles, switchable in Appearance:
+     tinted  (default) · brand hue washed into the ground
+     solid              · the bold Reportiva slab, for mid-tone palettes
+     flush              · edge-to-edge chrome, no float, maximum density
+   ═══════════════════════════════════════════════════════════════════ */
+.rail-surface {
+  --rail-bg:      color-mix(in srgb, hsl(var(--primary)) 7%, var(--os-base));
+  --rail-ink:     var(--os-ink);
+  /* Nav labels are chrome, not body copy — they need to READ, not whisper.
+     --rail-item sits close to ink so item names stay legible in every palette. */
+  --rail-item:    color-mix(in srgb, var(--os-ink) 88%, var(--os-bg));
+  --rail-soft:    color-mix(in srgb, var(--os-ink) 72%, var(--os-bg));
+  --rail-dim:     color-mix(in srgb, var(--os-ink) 55%, var(--os-bg));
+  --rail-line:    color-mix(in srgb, hsl(var(--primary)) 12%, var(--os-line));
+  --rail-hover:   color-mix(in srgb, hsl(var(--primary)) 9%, var(--os-surface-2));
+  --rail-active:  color-mix(in srgb, hsl(var(--primary)) 15%, var(--os-surface-2));
+  --rail-accent:  hsl(var(--primary));
+  --rail-chip:    color-mix(in srgb, hsl(var(--primary)) 14%, transparent);
+  --rail-shadow:  hsl(0 0% 0% / 0.10);
+
+  background: var(--rail-bg);
+  color: var(--rail-ink);
+}
+.dark .rail-surface {
+  --rail-bg:     color-mix(in srgb, hsl(var(--primary)) 6%, var(--os-base));
+  --rail-item:   color-mix(in srgb, var(--os-ink) 86%, var(--os-bg));
+  --rail-soft:   color-mix(in srgb, var(--os-ink) 70%, var(--os-bg));
+  --rail-dim:    color-mix(in srgb, var(--os-ink) 52%, var(--os-bg));
+  --rail-line:   color-mix(in srgb, hsl(var(--primary)) 10%, var(--os-line));
+  --rail-hover:  color-mix(in srgb, hsl(var(--primary)) 8%, var(--os-surface-2));
+  --rail-active: color-mix(in srgb, hsl(var(--primary)) 16%, var(--os-surface-2));
+  --rail-shadow: hsl(0 0% 0% / 0.34);
+}
+
+/* Bold slab — only sane when the palette's primary is a mid-tone. */
+[data-rail="solid"] .rail-surface {
+  --rail-bg:     hsl(var(--primary));
+  --rail-ink:    hsl(var(--primary-foreground));
+  --rail-item:   color-mix(in srgb, hsl(var(--primary-foreground)) 94%, transparent);
+  --rail-soft:   color-mix(in srgb, hsl(var(--primary-foreground)) 84%, transparent);
+  --rail-dim:    color-mix(in srgb, hsl(var(--primary-foreground)) 68%, transparent);
+  --rail-line:   color-mix(in srgb, hsl(var(--primary-foreground)) 14%, transparent);
+  --rail-hover:  color-mix(in srgb, hsl(var(--primary-foreground)) 10%, transparent);
+  --rail-active: color-mix(in srgb, hsl(var(--primary-foreground)) 18%, transparent);
+  --rail-accent: hsl(var(--primary-foreground));
+  --rail-chip:   color-mix(in srgb, hsl(var(--primary-foreground)) 16%, transparent);
+}
+
+.rail-slab {
+  box-shadow: 0 1px 14px var(--rail-shadow), inset 0 1px 0 color-mix(in srgb, var(--rail-ink) 7%, transparent);
+}
+
+.rail-flyout {
+  background: color-mix(in srgb, var(--rail-bg) 92%, transparent);
+  backdrop-filter: blur(16px) saturate(1.3);
+  -webkit-backdrop-filter: blur(16px) saturate(1.3);
+  border: 1px solid var(--rail-line);
+  box-shadow: 0 10px 30px var(--rail-shadow);
+  color: var(--rail-ink);
+}
+
+/* Nav scroller: invisible until hovered, faded at both ends */
+.sb-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+}
+.sb-scroll::-webkit-scrollbar { width: 3px; }
+.sb-scroll::-webkit-scrollbar-track { background: transparent; }
+.sb-scroll::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; transition: background .2s; }
+.sb-scroll:hover::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--rail-ink) 18%, transparent); }
+.sb-scroll::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--rail-ink) 42%, transparent); }
+
+.rail-edge {
+  background: linear-gradient(180deg, transparent 8%, var(--rail-line) 28%, var(--rail-line) 72%, transparent 92%);
+}
+
+@keyframes rail-flyout-in { from { opacity: 0; transform: translateX(-4px) } to { opacity: 1; transform: none } }
+.rail-flyout-enter { animation: rail-flyout-in .14s ease-out }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Richness — accents, rings, edges. All radius-aware, all tokenised.
+   ═══════════════════════════════════════════════════════════════════ */
+@layer utilities {
+  /* A 2px accent edge along the top of a card, in the brand colour */
+  .accent-top { position: relative; }
+  .accent-top::before {
+    content: '';
+    position: absolute; inset: 0 0 auto 0; height: 2px;
+    background: hsl(var(--primary));
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .accent-left { box-shadow: inset 2px 0 0 hsl(var(--primary)); }
+
+  /* Quiet inner highlight — gives flat cards a physical edge */
+  .inner-edge { box-shadow: inset 0 1px 0 hsl(var(--foreground) / 0.05); }
+  .dark .inner-edge { box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.045); }
+
+  /* Interactive surfaces */
+  .press { transition: transform 90ms ease; }
+  .press:active { transform: translateY(1px); }
+
+  .focus-brand:focus-within {
+    border-color: hsl(var(--primary) / 0.55);
+    box-shadow: 0 0 0 2px hsl(var(--primary) / 0.14);
+  }
+
+  /* Tabular row hover that survives every palette */
+  .row-hover { transition: background-color 120ms ease; }
+  .row-hover:hover { background-color: color-mix(in srgb, hsl(var(--foreground)) 4%, transparent); }
+
+  /* Subtle striping for very dense tables */
+  .striped > *:nth-child(even) { background-color: color-mix(in srgb, hsl(var(--foreground)) 2%, transparent); }
+
+  /* Sheen used on the logo mark and key stat tiles */
+  .sheen {
+    background-image: linear-gradient(135deg,
+      hsl(var(--primary-foreground) / 0.18) 0%,
+      transparent 42%,
+      transparent 58%,
+      hsl(var(--primary) / 0.10) 100%);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   LIFE — the layer that stops a dense console reading as a spreadsheet.
+   ═══════════════════════════════════════════════════════════════════ */
+@layer utilities {
+  /* Staggered entrance for lists and grids */
+  @keyframes rise { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+  .stagger > * { animation: rise .34s cubic-bezier(.16,1,.3,1) both }
+  .stagger > *:nth-child(1) { animation-delay: 0ms }
+  .stagger > *:nth-child(2) { animation-delay: 30ms }
+  .stagger > *:nth-child(3) { animation-delay: 60ms }
+  .stagger > *:nth-child(4) { animation-delay: 90ms }
+  .stagger > *:nth-child(5) { animation-delay: 120ms }
+  .stagger > *:nth-child(6) { animation-delay: 150ms }
+  .stagger > *:nth-child(7) { animation-delay: 175ms }
+  .stagger > *:nth-child(8) { animation-delay: 200ms }
+  .stagger > *:nth-child(n+9) { animation-delay: 220ms }
+
+  /* Panels get a real edge and lift toward the pointer */
+  .panel {
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, hsl(var(--foreground)) 5%, transparent),
+      0 1px 2px hsl(var(--foreground) / 0.04);
+    transition: border-color 160ms ease, box-shadow 160ms ease;
+  }
+  .dark .panel {
+    box-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.04),
+      0 1px 3px hsl(0 0% 0% / 0.30);
+  }
+  .panel:hover {
+    border-color: color-mix(in srgb, hsl(var(--primary)) 22%, hsl(var(--border)));
+  }
+
+  /* Headline numerals — the anchor on every screen */
+  .figure {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.03em;
+    font-weight: 650;
+  }
+
+  /* A hairline of brand under a page title */
+  .title-rule {
+    background: linear-gradient(90deg,
+      hsl(var(--primary)) 0,
+      hsl(var(--primary) / 0.35) 38px,
+      hsl(var(--border)) 38px,
+      hsl(var(--border)) 100%);
+  }
+
+  /* Live pulse for anything actually running */
+  @keyframes breathe { 0%,100% { opacity: 1 } 50% { opacity: .55 } }
+  .breathe { animation: breathe 2.2s ease-in-out infinite }
+
+  /* Scanline shimmer for in-flight rows */
+  @keyframes sweep { from { transform: translateX(-100%) } to { transform: translateX(300%) } }
+  .sweep { position: relative; overflow: hidden }
+  .sweep::after {
+    content: ''; position: absolute; inset: 0; width: 33%;
+    background: linear-gradient(90deg, transparent, hsl(var(--primary) / 0.12), transparent);
+    animation: sweep 2.4s linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .stagger > *, .breathe, .sweep::after { animation: none !important }
+  }
+}
+
+@layer base {
+  /* Lucide draws on a 24px grid; at 14–16px the default 2px stroke smears.
+     Snap every icon to geometric precision and give the rail a crisper weight. */
+  svg { shape-rendering: geometricPrecision; }
+  .rail-surface svg { vector-effect: non-scaling-stroke; }
+}
