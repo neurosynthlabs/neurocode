@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Check, X, ScanEye, Quote } from 'lucide-react';
 import { toast } from 'sonner';
+import { useData } from '@/lib/data';
+import { useProject } from '@/lib/project-context';
 import { Button } from '@/components/ui/button';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Mono, Ascii, ListRow, DataTable, Row, Cell,
@@ -19,7 +21,11 @@ const LOOP = `  Reviewer ──▶ Coder ──▶ Reviewer ──▶ Tests ─�
 
 export default function Review() {
   const [sel, setSel] = useState(reviews[0].id);
-  const [decided, setDecided] = useState<Record<string, 'accepted' | 'changes'>>({});
+  const { decisions, recordDecision } = useData();
+  const { projectId: activeProject } = useProject();
+  // A verdict is final: saved as a decision, so it survives a reload and cannot be flipped.
+  const decided = useMemo(() => Object.fromEntries(decisions.filter((d) => d.id.startsWith('review:'))
+    .map((d) => [d.id.slice('review:'.length), d.value as 'accepted' | 'changes'])), [decisions]);
   const [finding, setFinding] = useState<string | null>('f2');
 
   const r = useMemo(() => reviews.find((x) => x.id === sel) ?? reviews[0], [sel]);
@@ -82,11 +88,11 @@ export default function Review() {
                 ) : (
                   <>
                     <Button size="sm" disabled={blockers > 0}
-                      onClick={() => { setDecided((d) => ({ ...d, [r.id]: 'accepted' })); toast.success(`${r.ref} accepted`); }}>
+                      onClick={async () => { if (await recordDecision(`review:${r.id}`, 'accepted', { action: 'Review accepted', detail: `${r.ref} · queued for merge`, projectId: activeProject, level: 'ok' })) toast.success(`${r.ref} accepted`); }}>
                       <Check className="size-3.5" />Accept
                     </Button>
                     <Button size="sm" variant="outline"
-                      onClick={() => { setDecided((d) => ({ ...d, [r.id]: 'changes' })); toast(`${r.ref} sent back`, { description: 'The agent gets the findings and re-runs.' }); }}>
+                      onClick={async () => { if (await recordDecision(`review:${r.id}`, 'changes', { action: 'Review sent back', detail: `${r.ref} · the agent gets the findings and re-runs`, projectId: activeProject, level: 'warn' })) toast(`${r.ref} sent back`, { description: 'The agent gets the findings and re-runs.' }); }}>
                       <X className="size-3.5" />Request changes
                     </Button>
                     {blockers > 0 && <span className="text-[11.5px] text-danger">{blockers} blocker{blockers > 1 ? 's' : ''} must be resolved before this can be accepted.</span>}

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Cable, ArrowRight, ArrowLeft, Check, X, Minus } from 'lucide-react';
 import { toast } from 'sonner';
+import { usePref } from '@/lib/data';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Dot, Mono, ListRow, Ascii, KV, Stat, StatGrid,
   DataTable, Row, Cell, Empty, SectionTitle, StatusText,
@@ -22,11 +23,11 @@ const DIAGRAM = `  ┌───────────────────�
 const YES = { yes: Check, no: X, partial: Minus };
 const TONE = { yes: 'text-ok', no: 'text-dim', partial: 'text-warn' };
 
+const ACP_MODES: Record<string, string> = Object.fromEntries(acpClients.map((c) => [c.id, c.permissionMode]));
+
 export default function Acp() {
   const [sel, setSel] = useState(acpClients[0].id);
-  const [modes, setModes] = useState<Record<string, string>>(
-    () => Object.fromEntries(acpClients.map((c) => [c.id, c.permissionMode])),
-  );
+  const [modes, setModes] = usePref('acp.modes', ACP_MODES);
   const c = useMemo(() => acpClients.find((x) => x.id === sel) ?? acpClients[0], [sel]);
   const caps = capabilityMatrix[c.id] ?? {};
   const events = useMemo(() => acpEvents.filter((e) => e.client === c.id), [c.id]);
@@ -82,7 +83,7 @@ export default function Acp() {
                 {permissionModes.map((m) => (
                   <button
                     key={m.id}
-                    onClick={() => { setModes((s) => ({ ...s, [c.id]: m.id })); toast(`${c.name} → ${m.label}`); }}
+                    onClick={() => { setModes({ ...modes, [c.id]: m.id }, `${c.name} permission mode → ${m.label}`); toast(`${c.name} → ${m.label}`); }}
                     className={cn('rounded-sm border px-2 py-1.5 text-left transition-colors',
                       mode === m.id ? 'border-brand bg-brand/10' : 'border-line bg-surface-2 hover:border-line-strong')}
                   >

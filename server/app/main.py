@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
+from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -90,6 +91,30 @@ class CompileIn(BaseModel):
 class AnswerIn(BaseModel):
     answer: str | None = Field(default=None, max_length=1000)
     defer: bool = False
+
+
+class PrefIn(BaseModel):
+    value: Any
+    detail: str = Field(default="", max_length=300)
+    projectId: str = Field(default="aios", max_length=60)
+
+    @field_validator("value")
+    @classmethod
+    def _small(cls, v: Any) -> Any:
+        if len(json.dumps(v)) > 20_000:
+            raise ValueError("a setting is limited to 20 KB")
+        return v
+
+
+class DecisionIn(BaseModel):
+    value: str = Field(min_length=1, max_length=40)
+    action: str = Field(min_length=1, max_length=80)
+    detail: str = Field(default="", max_length=300)
+    projectId: str = Field(default="aios", max_length=60)
+    level: Literal["info", "ok", "warn", "err"] = "ok"
+
+
+KEY = r"^[A-Za-z][\w.:-]{1,80}$"
 
 
 class Bus:
@@ -489,6 +514,31 @@ def create_app(db_path: str | None = None, env_file: Path | None = ENV_FILE) -> 
         put("mcp", store.insert("mcp", doc))
         record("MCP server registered", f"{sid} · {body.transport} · {body.scope} scope · tools default to {body.defaultEffect}",
                project="aios")
+        return doc
+
+    # ── screen settings and final decisions ──────────────────────
+    @app.get("/prefs")
+    async def prefs() -> list[dict[str, Any]]:
+        return store.all("prefs")
+
+    @app.put("/prefs/{key}")
+    async def set_pref(body: PrefIn, key: str = PathParam(pattern=KEY)) -> dict[str, Any]:
+        doc = put("prefs", store.upsert("prefs", {"id": key, "value": body.value}))
+        if body.detail:  # a switch or a choice is worth an audit line; each keystroke in a text field is not
+            record("Setting changed", body.detail, project=body.projectId)
+        return doc
+
+    @app.get("/decisions")
+    async def decisions() -> list[dict[str, Any]]:
+        return store.all("decisions")
+
+    @app.post("/decisions/{key}", status_code=201)
+    async def record_decision(body: DecisionIn, key: str = PathParam(pattern=KEY)) -> dict[str, Any]:
+        if store.get("decisions", key):
+            raise HTTPException(409, f"{key} was already decided — a decision is final")
+        doc = {"id": key, "value": body.value, "decidedAt": datetime.now().isoformat(timespec="seconds")}
+        put("decisions", store.insert("decisions", doc))
+        record(body.action, body.detail, project=body.projectId, level=body.level)
         return doc
 
     # ── activity ─────────────────────────────────────────────────

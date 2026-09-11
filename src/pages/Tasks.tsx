@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Search, Play, Pause, CheckCheck, GitBranch, AlertOctagon, Boxes } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -94,7 +95,9 @@ export default function Tasks() {
   const [q, setQ] = useState('');
   const { tasks, moveTask, toggleCheck } = useData();
   // Held by ref, not by object, so the sheet always shows the task as it is now.
-  const [openRef, setOpenRef] = useState<string | null>(null);
+  const wanted = useSearchParams()[0].get('ref');
+  const [openRef, setOpenRef] = useState<string | null>(wanted);
+  useEffect(() => { if (wanted) setOpenRef(wanted); }, [wanted]);
   const open = useMemo(() => tasks.find((t) => t.ref === openRef) ?? null, [tasks, openRef]);
 
   const list = useMemo(() => {

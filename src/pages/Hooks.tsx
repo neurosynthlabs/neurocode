@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { usePref } from '@/lib/data';
 import { Webhook, ShieldAlert, Zap } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import {
@@ -12,10 +13,12 @@ import type { HookEvent } from '@/types';
 const EVENTS: HookEvent[] = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop', 'PreCompact', 'Notification', 'PreCommit', 'PostDeploy'];
 const RES_TONE = { ok: 'ok', blocked: 'warn', error: 'danger' } as const;
 
+const HOOKS_ON: Record<string, boolean> = Object.fromEntries(hooks.map((h) => [h.id, h.enabled]));
+
 export default function Hooks() {
   const [ev, setEv] = useState('all');
   const [sel, setSel] = useState<string | null>('h1');
-  const [on, setOn] = useState<Record<string, boolean>>(() => Object.fromEntries(hooks.map((h) => [h.id, h.enabled])));
+  const [on, setOn] = usePref('hooks.enabled', HOOKS_ON);
 
   const list = useMemo(() => (ev === 'all' ? hooks : hooks.filter((h) => h.event === ev)), [ev]);
   const h = useMemo(() => hooks.find((x) => x.id === sel), [sel]);
@@ -71,7 +74,7 @@ export default function Hooks() {
                   <Cell className="tnum">{x.fires24h}</Cell>
                   <Cell className="text-dim">{x.lastFired}</Cell>
                   <Cell><Tag tone={RES_TONE[x.lastResult]}>{x.lastResult}</Tag></Cell>
-                  <Cell><Switch checked={on[x.id]} onCheckedChange={(v) => setOn((m) => ({ ...m, [x.id]: v }))} /></Cell>
+                  <Cell><Switch checked={on[x.id]} onCheckedChange={(v) => setOn({ ...on, [x.id]: v }, `Hook ${x.event} · ${x.matcher} ${v ? 'enabled' : 'disabled'}`)} /></Cell>
                 </Row>
               ))}
             </DataTable>

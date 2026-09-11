@@ -7,6 +7,7 @@ import {
 } from '@/components/ui/command';
 import { buildIndex, SEARCH_GROUPS } from '@/lib/search';
 import { Kbd } from '@/components/os';
+import { useData } from '@/lib/data';
 
 function Icon({ name }: { name: string }) {
   const C = ICONS[name] ?? Circle;
@@ -15,7 +16,8 @@ function Icon({ name }: { name: string }) {
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const nav = useNavigate();
-  const index = useMemo(() => buildIndex(), []);
+  const { projects, tasks, plans, memory, mcp } = useData();
+  const index = useMemo(() => buildIndex({ projects, tasks, plans, memory, mcp }), [projects, tasks, plans, memory, mcp]);
   const grouped = useMemo(
     () => SEARCH_GROUPS.map((g) => ({ group: g, items: index.filter((i) => i.group === g) })).filter((g) => g.items.length),
     [index],
@@ -57,7 +59,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       </CommandList>
       <div className="flex items-center justify-between border-t border-line px-3 py-2 text-[11px] text-dim">
         <span className="flex items-center gap-1.5"><Kbd>↑</Kbd><Kbd>↓</Kbd> navigate <Kbd>↵</Kbd> open <Kbd>esc</Kbd> close</span>
-        <span>Indexed: code · database · memory · knowledge · git · tests</span>
+        <span>{index.length} items · tasks, plans, memory and projects are live</span>
       </div>
       </Command>
     </CommandDialog>

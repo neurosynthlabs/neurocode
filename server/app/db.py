@@ -29,13 +29,15 @@ CREATE TABLE IF NOT EXISTS plans     (id TEXT PRIMARY KEY, ref TEXT UNIQUE NOT N
                                       created REAL NOT NULL DEFAULT 0, doc TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS conflicts (id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'open', doc TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS mcp       (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS prefs     (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS decisions (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS activity  (seq INTEGER PRIMARY KEY AUTOINCREMENT, position REAL NOT NULL, doc TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS activity_position ON activity(position);
 """
 
 # Seeded one table at a time, so a database made by an older version gains the tables it is missing
 # and keeps every change it already holds.
-TABLES = ("projects", "agents", "tasks", "approvals", "memory", "plans", "conflicts", "mcp", "activity")
+TABLES = ("projects", "agents", "tasks", "approvals", "memory", "plans", "conflicts", "mcp", "prefs", "decisions", "activity")
 
 # Words that carry no meaning for relevance, English and Hinglish alike.
 STOP = set("""the and for with when that this from into are was were not but should must have has had then than
@@ -99,7 +101,7 @@ class Store:
                     c.executemany("INSERT INTO conflicts(id, status, doc) VALUES (?, 'open', ?)", [(x["id"], _j(x)) for x in rows])
                 elif t == "activity":
                     c.executemany("INSERT INTO activity(position, doc) VALUES (?, ?)", [(i, _j(e)) for i, e in enumerate(rows)])
-                else:  # projects, agents, mcp
+                else:  # projects, agents, mcp, prefs, decisions
                     c.executemany(f"INSERT INTO {t} VALUES (?, ?)", [(x["id"], _j(x)) for x in rows])
 
     @staticmethod
@@ -138,6 +140,12 @@ class Store:
         sets = ", ".join(["doc = ?"] + [f"{k} = ?" for k in columns])
         with self.lock, self.conn:
             self.conn.execute(f"UPDATE {table} SET {sets} WHERE id = ?", (_j(doc), *columns.values(), doc["id"]))
+        return doc
+
+    def upsert(self, table: str, doc: dict[str, Any]) -> dict[str, Any]:
+        with self.lock, self.conn:
+            self.conn.execute(f"INSERT INTO {table}(id, doc) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET doc = excluded.doc",
+                              (doc["id"], _j(doc)))
         return doc
 
     def unique_id(self, table: str, base: str) -> str:

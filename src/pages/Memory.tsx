@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Search, Pin, Archive, Pencil, FileSearch, TriangleAlert, TrendingDown, Zap, Globe, Layers,
 } from 'lucide-react';
@@ -29,6 +30,17 @@ export default function Memory() {
 
   const { memory, conflicts, mode, setPinned, archive, searchMemory, resolveConflict } = useData();
   const query = q.trim();
+
+  // ⌘K opens a fact with ?ref=: show it whatever the filters were
+  const wanted = useSearchParams()[0].get('ref');
+  const wantedId = useMemo(() => memory.find((f) => f.ref === wanted)?.id, [memory, wanted]);
+  useEffect(() => {
+    if (!wantedId) return;
+    setSel(wantedId);
+    setCat('all');
+    setQ('');
+    setTab('facts');
+  }, [wantedId]);
 
   // With the local API up, search is the server's FTS5 index: prefix-matched word by word, best match
   // first. Answers are keyed by their query, so a slow answer never replaces a newer one; until it

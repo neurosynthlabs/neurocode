@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowDown, FileCode, Database, Boxes, HelpCircle, FlaskConical, CircleCheck,
   CircleDot, Circle, CircleX, MinusCircle, Play, Cpu, RefreshCw, Check,
@@ -45,10 +45,13 @@ function CompiledBy({ p }: { p: Plan }) {
 export default function Plans() {
   const nav = useNavigate();
   const { plans, mode, settleQuestion, dispatchPlan, recompile } = useData();
-  const [sel, setSel] = useState(plans[0]?.ref ?? '');
+  const wanted = useSearchParams()[0].get('ref');
+  const [sel, setSel] = useState(wanted ?? plans[0]?.ref ?? '');
   const [draft, setDraft] = useState<{ index: number; text: string } | null>(null);
   const [working, setWorking] = useState<'dispatch' | 'recompile' | null>(null);
   const p = useMemo(() => plans.find((x) => x.ref === sel) ?? plans[0], [plans, sel]);
+  // ⌘K opens a plan with ?ref=, also when this screen is already showing
+  useEffect(() => { if (wanted) { setSel(wanted); setDraft(null); } }, [wanted]);
 
   if (!p) {
     return (

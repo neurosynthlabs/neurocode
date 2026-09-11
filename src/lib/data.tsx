@@ -3,7 +3,8 @@ import {
 } from 'react';
 import { toast } from 'sonner';
 import {
-  API_BASE, ApiError, api, type Change, type Collection, type Health, type McpInput, type ProjectInput,
+  API_BASE, ApiError, api, type Change, type Collection, type DecisionDoc, type Health, type McpInput, type Pref,
+  type ProjectInput,
 } from '@/lib/api';
 import { approvals as seedApprovals } from '@/mock/permissions';
 import { tasks as seedTasks } from '@/mock/tasks';
@@ -37,6 +38,10 @@ interface Domain {
   plans: Plan[];
   mcp: McpServer[];
   conflicts: MemoryConflict[];
+  /** Screen settings that must survive a reload (see usePref). */
+  prefs: Pref[];
+  /** Final decisions made outside the approvals inbox (see useDecision). */
+  decisions: DecisionDoc[];
   /** Newest first, the order every feed renders in. */
   activity: ActivityEvent[];
 }
@@ -62,6 +67,10 @@ export interface DataCtx extends Domain {
   /** Refs ranked by the server's FTS5 index, best first. Live mode only. */
   searchMemory: (q: string, signal?: AbortSignal) => Promise<string[]>;
   reset: () => Promise<boolean>;
+  /** Saves a screen setting. A `detail` also writes an audit line. */
+  setPref: (key: string, value: unknown, detail?: string) => Promise<boolean>;
+  /** A final decision: once made for a key, it cannot be made again. */
+  recordDecision: (key: string, value: string, entry: Omit<Entry, 'taskRef'>) => Promise<boolean>;
 }
 
 const C = createContext<DataCtx | null>(null);
@@ -74,14 +83,17 @@ const seed = (): Domain => ({
   plans: seedPlans,
   mcp: seedMcp,
   conflicts: seedConflicts,
+  prefs: [],
+  decisions: [],
   activity: [...seedActivity].reverse().concat(activityExtra),
 });
 
 async function load(): Promise<Domain> {
-  const [approvals, tasks, memory, projects, plans, mcp, conflicts, activity] = await Promise.all([
-    api.approvals(), api.tasks(), api.memory(), api.projects(), api.plans(), api.mcp(), api.conflicts(), api.activity(),
+  const [approvals, tasks, memory, projects, plans, mcp, conflicts, prefs, decisions, activity] = await Promise.all([
+    api.approvals(), api.tasks(), api.memory(), api.projects(), api.plans(), api.mcp(), api.conflicts(), api.prefs(),
+    api.decisions(), api.activity(),
   ]);
-  return { approvals, tasks, memory, projects, plans, mcp, conflicts, activity };
+  return { approvals, tasks, memory, projects, plans, mcp, conflicts, prefs, decisions, activity };
 }
 
 /** One document into or out of a collection. The server streams these; demo actions make their own. */
@@ -360,6 +372,29 @@ export function DataProvider({ children }: { children: ReactNode }) {
     return doc;
   }, [ask, put]);
 
+  const setPref = useCallback(async (key: string, value: unknown, detail?: string) => {
+    const before = now.current.prefs.find((p) => p.id === key);
+    put('prefs', { id: key, value });
+    if (!live.current) {
+      if (detail) log({ action: 'Setting changed', detail, projectId: 'aios', level: 'info' });
+      return true;
+    }
+    try {
+      await api.setPref(key, value, detail);
+      return true;
+    } catch (e) {
+      if (before) put('prefs', before); else drop('prefs', key);
+      toast.error('Setting not saved', { description: reason(e) });
+      return false;
+    }
+  }, [put, drop, log]);
+
+  const recordDecision = useCallback(async (key: string, value: string, entry: Omit<Entry, 'taskRef'>) => {
+    if (now.current.decisions.some((d) => d.id === key)) return false;
+    put('decisions', { id: key, value, decidedAt: new Date().toISOString() });
+    return commit(() => api.recordDecision(key, { value, ...entry }), () => drop('decisions', key), entry);
+  }, [put, drop, commit]);
+
   const searchMemory = useCallback(
     async (q: string, signal?: AbortSignal) => (await api.memory(q, signal)).map((f) => f.ref),
     [],
@@ -381,10 +416,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const value = useMemo<DataCtx>(
     () => ({
       ...domain, mode, health, decide, moveTask, toggleCheck, setPinned, archive, resolveConflict, createProject,
-      registerMcp, settleQuestion, dispatchPlan, compile, recompile, searchMemory, reset,
+      registerMcp, settleQuestion, dispatchPlan, compile, recompile, searchMemory, reset, setPref, recordDecision,
     }),
     [domain, mode, health, decide, moveTask, toggleCheck, setPinned, archive, resolveConflict, createProject,
-      registerMcp, settleQuestion, dispatchPlan, compile, recompile, searchMemory, reset],
+      registerMcp, settleQuestion, dispatchPlan, compile, recompile, searchMemory, reset, setPref, recordDecision],
   );
   return <C.Provider value={value}>{children}</C.Provider>;
 }
@@ -393,4 +428,29 @@ export function useData() {
   const ctx = useContext(C);
   if (!ctx) throw new Error('useData must be used inside <DataProvider>');
   return ctx;
+}
+
+const isMap = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * Screen state that should survive a reload and leave an audit line: a skill switched off, a model
+ * disabled. Saved by the API; in demo mode it lives in the tab. Pass a module-level `initial`. Maps
+ * merge over it, so an entry added to the mocks later still shows up.
+ */
+export function usePref<T>(key: string, initial: T): [T, (next: T, detail?: string) => void] {
+  const { prefs, setPref } = useData();
+  const stored = prefs.find((p) => p.id === key);
+  const value = useMemo(
+    () => (stored === undefined ? initial : isMap(initial) && isMap(stored.value) ? { ...initial, ...stored.value } : stored.value) as T,
+    [stored, initial],
+  );
+  const set = useCallback((next: T, detail?: string) => { void setPref(key, next, detail); }, [key, setPref]);
+  return [value, set];
+}
+
+/** A decision that is final once made, such as a production gate. `undefined` until it is made. */
+export function useDecision(key: string): [string | undefined, (value: string, entry: Omit<Entry, 'taskRef'>) => Promise<boolean>] {
+  const { decisions, recordDecision } = useData();
+  const decide = useCallback((value: string, entry: Omit<Entry, 'taskRef'>) => recordDecision(key, value, entry), [key, recordDecision]);
+  return [decisions.find((d) => d.id === key)?.value, decide];
 }

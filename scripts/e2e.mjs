@@ -143,6 +143,14 @@ try {
     expect(task.status === 'planning', `its task is ${task.status}`);
   });
 
+  await step('⌘K finds the plan compiled a moment ago and opens it', async () => {
+    const [newest] = await api('/plans');
+    await page.keyboard.press('Control+k');
+    await page.locator('[cmdk-input]').fill(newest.ref);
+    await page.locator('[cmdk-item]', { hasText: newest.ref }).first().click();
+    await page.waitForURL(`**/plans?ref=${newest.ref}`, { timeout: 5000 });
+  });
+
   await step('answering and deferring the questions lets the plan dispatch', async () => {
     const [plan] = await api('/plans');
     await page.getByRole('button', { name: 'Answer', exact: true }).first().click();
@@ -196,6 +204,19 @@ try {
     await page.getByRole('button', { name: 'Keep A', exact: true }).first().click();
     await page.waitForTimeout(500);
     expect(!(await api('/memory/conflicts')).some((x) => x.id === c.id), 'the conflict is still open');
+  });
+
+  await step('a switched-off skill stays off after a reload', async () => {
+    await open('/skills');
+    await page.getByText('saved locally').waitFor({ timeout: 20000 });
+    const before = await page.getByRole('switch').first().getAttribute('aria-checked');
+    await page.getByRole('switch').first().click();
+    await page.waitForTimeout(400);
+    await open('/skills');
+    await page.getByText('saved locally').waitFor({ timeout: 20000 });
+    const after = await page.getByRole('switch').first().getAttribute('aria-checked');
+    expect(after !== before, `the switch is back to ${after} after a reload`);
+    expect((await api('/prefs')).some((p) => p.id === 'skills.enabled'), 'skills.enabled is not in the database');
   });
 
   if (pageErrors.length) results.push(`  ✗ uncaught errors in the page\n      ${pageErrors.join('\n      ')}`), (process.exitCode = 1);

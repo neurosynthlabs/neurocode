@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { TriangleAlert, Rocket, Container as Box, KeyRound, Activity, Terminal } from 'lucide-react';
 import { toast } from 'sonner';
+import { useDecision } from '@/lib/data';
+import { useProject } from '@/lib/project-context';
 import { Button } from '@/components/ui/button';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Dot, Mono, Segmented, DataTable, Row, Cell,
@@ -17,7 +19,10 @@ const DEP_TONE = { success: 'ok', failed: 'danger', running: 'info', rolled_back
 export default function DevOps() {
   const [tab, setTab] = useState<'env' | 'deploys' | 'containers' | 'pipeline' | 'logs' | 'secrets'>('env');
   const [level, setLevel] = useState('all');
-  const [gate, setGate] = useState<'pending' | 'approved' | 'cancelled'>('pending');
+  // The production gate is yours alone, and final: saved as a decision so a reload cannot reopen it.
+  const [verdict, decideGate] = useDecision('deploy:production');
+  const gate = (verdict ?? 'pending') as 'pending' | 'approved' | 'cancelled';
+  const { projectId: activeProject } = useProject();
 
   const shown = useMemo(() => (level === 'all' ? logs : logs.filter((l) => l.level === level)), [level]);
 
@@ -86,8 +91,8 @@ export default function DevOps() {
               <div className="mt-3 flex items-center gap-2 border-t border-line pt-3">
                 {gate === 'pending' ? (
                   <>
-                    <Button size="sm" variant="outline" onClick={() => { setGate('cancelled'); toast('Deployment cancelled — nothing shipped'); }}>Cancel</Button>
-                    <Button size="sm" onClick={() => { setGate('approved'); toast.success('Production deploy approved', { description: 'Rolling restart across 3 nodes, rollback armed.' }); }}>
+                    <Button size="sm" variant="outline" onClick={async () => { if (await decideGate('cancelled', { action: 'Production deploy cancelled', detail: 'Nothing shipped. The release stays on staging.', projectId: activeProject, level: 'warn' })) toast('Deployment cancelled — nothing shipped'); }}>Cancel</Button>
+                    <Button size="sm" onClick={async () => { if (await decideGate('approved', { action: 'Production deploy approved', detail: 'Rolling restart across 3 nodes, rollback armed.', projectId: activeProject, level: 'ok' })) toast.success('Production deploy approved', { description: 'Rolling restart across 3 nodes, rollback armed.' }); }}>
                       <Rocket className="size-3.5" />Approve deployment
                     </Button>
                     <span className="ml-auto text-[11px] text-dim">Your signature is recorded against this version.</span>

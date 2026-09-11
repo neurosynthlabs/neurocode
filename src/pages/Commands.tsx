@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { usePref } from '@/lib/data';
 import { SquareSlash, CornerDownLeft } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import {
@@ -7,10 +8,12 @@ import {
 import { commands } from '@/mock/commands';
 import { cn } from '@/lib/utils';
 
+const COMMANDS_ON: Record<string, boolean> = Object.fromEntries(commands.map((c) => [c.id, c.enabled]));
+
 export default function Commands() {
   const [q, setQ] = useState('/');
   const [sel, setSel] = useState(commands[0].id);
-  const [on, setOn] = useState<Record<string, boolean>>(() => Object.fromEntries(commands.map((c) => [c.id, c.enabled])));
+  const [on, setOn] = usePref('commands.enabled', COMMANDS_ON);
 
   const list = useMemo(() => {
     const t = q.replace(/^\//, '').trim().toLowerCase();
@@ -69,7 +72,7 @@ export default function Commands() {
             <Panel
               eyebrow={`${c.scope} scope · last run ${c.lastRun}`}
               title={<span className="flex items-center gap-2"><Mono tone="brand">{c.name}</Mono><span className="font-mono text-[11.5px] text-dim">{c.args}</span></span>}
-              actions={<Switch checked={on[c.id]} onCheckedChange={(v) => setOn((m) => ({ ...m, [c.id]: v }))} />}
+              actions={<Switch checked={on[c.id]} onCheckedChange={(v) => setOn({ ...on, [c.id]: v }, `Command ${c.name} ${v ? 'enabled' : 'disabled'}`)} />}
             >
               <p className="text-[12.5px] leading-relaxed text-ink-2">{c.description}</p>
               <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 border-t border-line pt-2.5 xl:grid-cols-4">

@@ -38,7 +38,7 @@ def compile_tax(client, requirement=TAX):
 def test_health_counts_match_the_seed(client):
     body = client.get("/health").json()
     for key in TABLES:
-        assert body["counts"][key] == len(SEED[key]), key
+        assert body["counts"][key] == len(SEED.get(key, [])), key
     assert body["compiler"] == {"provider": "rules", "model": "offline planner"}
 
 
@@ -259,3 +259,24 @@ def test_the_offline_planner_follows_memory_into_the_database(client):
     assert "Database" in client.get(f"/tasks/{plan['taskRef']}").json()["layers"]
     assert plan["affectedFiles"] and all(not f.endswith((".md", ".csv")) for f in plan["affectedFiles"])
     assert any("backfill" in q for q in plan["openQuestions"])
+
+
+# ── screen settings and final decisions ─────────────────────────
+def test_a_setting_persists_and_a_described_change_is_logged(client):
+    r = client.put("/prefs/skills.enabled", json={"value": {"api-contract": False}, "detail": "Skill api-contract disabled"})
+    assert r.status_code == 200
+    assert client.get("/prefs").json() == [{"id": "skills.enabled", "value": {"api-contract": False}}]
+    top = client.get("/activity", params={"limit": 1}).json()[0]
+    assert top["action"] == "Setting changed" and "api-contract" in top["detail"]
+    client.put("/prefs/skills.enabled", json={"value": {"api-contract": True}})   # no detail: saved, not logged
+    assert client.get("/prefs").json()[0]["value"] == {"api-contract": True}
+    assert client.get("/activity", params={"limit": 1}).json()[0]["id"] == top["id"]
+    assert client.put("/prefs/bad key!", json={"value": 1}).status_code == 422
+
+
+def test_a_decision_is_final_and_logged(client):
+    body = {"value": "accepted", "action": "Review accepted", "detail": "REV-2451 · tax resolver", "projectId": "erp"}
+    assert client.post("/decisions/review:rv1", json=body).status_code == 201
+    assert client.post("/decisions/review:rv1", json={**body, "value": "changes"}).status_code == 409
+    assert client.get("/decisions").json()[0]["value"] == "accepted"
+    assert client.get("/activity", params={"limit": 1}).json()[0]["action"] == "Review accepted"

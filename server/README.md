@@ -10,6 +10,8 @@ the engine that are real today:
   call graph, business rules) are not connected yet, and the project record says so.
 - **Memory**: FTS5 search, conflict resolution, and answers to a plan's questions saved as business rules.
 - **MCP registry**: servers added in the wizard are stored untrusted and disconnected.
+- **Screen settings and decisions**: skills, plugins, models, hooks, commands, ACP modes and settings
+  persist; a review verdict and the production gate are final decisions.
 
 Every change goes into the activity log and is pushed to open tabs over Server-Sent Events.
 
@@ -73,6 +75,10 @@ change them; CI fails when the two disagree.
 | POST | `/memory/conflicts/{id}/resolve` | `{keep: a \| b \| adr}`; the losing fact is archived as superseded |
 | GET | `/mcp/servers` | |
 | POST | `/mcp/servers` | `{name, transport, command, scope, defaultEffect, config}` |
+| GET | `/prefs` | saved screen settings |
+| PUT | `/prefs/{key}` | `{value, detail}`; a `detail` also writes an audit line |
+| GET | `/decisions` | |
+| POST | `/decisions/{key}` | `{value, action, detail}`; final: a second decision returns 409 |
 | GET | `/agents` | |
 | GET | `/activity?limit=` | newest first |
 | GET | `/activity/stream` | `text/event-stream`: `activity` (a log line) and `change` (a document put or dropped) |

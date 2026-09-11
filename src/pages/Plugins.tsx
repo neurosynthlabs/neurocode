@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Search, Star, Download, Trash2, TriangleAlert, Blocks } from 'lucide-react';
 import { toast } from 'sonner';
+import { usePref } from '@/lib/data';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import {
@@ -10,12 +11,14 @@ import {
 import { plugins, pluginConflicts } from '@/mock/commands';
 import type { Plugin } from '@/types';
 
+const PLUGINS_INSTALLED: Record<string, boolean> = Object.fromEntries(plugins.map((p) => [p.id, p.installed]));
+
 export default function Plugins() {
   const [tab, setTab] = useState<'installed' | 'market'>('installed');
   const [q, setQ] = useState('');
   const [cat, setCat] = useState('all');
   const [open, setOpen] = useState<Plugin | null>(null);
-  const [inst, setInst] = useState<Record<string, boolean>>(() => Object.fromEntries(plugins.map((p) => [p.id, p.installed])));
+  const [inst, setInst] = usePref('plugins.installed', PLUGINS_INSTALLED);
 
   const cats = useMemo(() => ['all', ...Array.from(new Set(plugins.map((p) => p.category)))], []);
   const list = useMemo(() => {
@@ -92,11 +95,11 @@ export default function Plugins() {
                 </div>
                 <div className="mt-2.5 flex items-center gap-1.5">
                   {inst[p.id] ? (
-                    <Button size="xs" variant="destructive" onClick={() => { setInst((m) => ({ ...m, [p.id]: false })); toast(`${p.name} uninstalled`, { description: 'Its skills, commands and hooks were removed.' }); }}>
+                    <Button size="xs" variant="destructive" onClick={() => { setInst({ ...inst, [p.id]: false }, `Plugin ${p.name} uninstalled`); toast(`${p.name} uninstalled`, { description: 'Its skills, commands and hooks were removed.' }); }}>
                       <Trash2 className="size-3" />Uninstall
                     </Button>
                   ) : (
-                    <Button size="xs" onClick={() => { setInst((m) => ({ ...m, [p.id]: true })); toast.success(`${p.name} installed`, { description: `${p.provides.skills} skills, ${p.provides.commands} commands, ${p.provides.hooks} hooks registered.` }); }}>
+                    <Button size="xs" onClick={() => { setInst({ ...inst, [p.id]: true }, `Plugin ${p.name} installed`); toast.success(`${p.name} installed`, { description: `${p.provides.skills} skills, ${p.provides.commands} commands, ${p.provides.hooks} hooks registered.` }); }}>
                       <Download className="size-3" />Install
                     </Button>
                   )}
@@ -143,8 +146,8 @@ export default function Plugins() {
                 </ul>
                 <div className="flex gap-2 border-t border-line pt-3">
                   {inst[open.id]
-                    ? <Button size="sm" variant="destructive" onClick={() => { setInst((m) => ({ ...m, [open.id]: false })); setOpen(null); toast(`${open.name} uninstalled`); }}><Trash2 className="size-3.5" />Uninstall</Button>
-                    : <Button size="sm" onClick={() => { setInst((m) => ({ ...m, [open.id]: true })); setOpen(null); toast.success(`${open.name} installed`); }}><Download className="size-3.5" />Install</Button>}
+                    ? <Button size="sm" variant="destructive" onClick={() => { setInst({ ...inst, [open.id]: false }, `Plugin ${open.name} uninstalled`); setOpen(null); toast(`${open.name} uninstalled`); }}><Trash2 className="size-3.5" />Uninstall</Button>
+                    : <Button size="sm" onClick={() => { setInst({ ...inst, [open.id]: true }, `Plugin ${open.name} installed`); setOpen(null); toast.success(`${open.name} installed`); }}><Download className="size-3.5" />Install</Button>}
                   <Button size="sm" variant="outline" onClick={() => setOpen(null)}>Close</Button>
                 </div>
               </div>

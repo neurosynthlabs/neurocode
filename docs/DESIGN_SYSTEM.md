@@ -101,6 +101,9 @@ The operator's own actions go through the data store, never through local state:
 - With the local API up (`npm run dev:start`), those actions persist to SQLite and the log streams
   in over SSE. With no API, which is how the Vercel demo runs, the same actions work on the seed
   data for the life of the tab. `mode` tells you which of the two you are in.
+- Screen state that must survive a reload (a switch, a mode, a setting) uses `usePref(key, DEFAULTS)`
+  with a module-level `DEFAULTS`. A verdict that is final once given uses `useDecision(key)` or
+  `recordDecision`. Neither belongs in `useState`.
 - Anything else that would need a backend can still be a `sonner` toast.
 
 ## Shared mock data you must reuse (do not duplicate or redefine)

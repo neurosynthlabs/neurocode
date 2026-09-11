@@ -15,7 +15,12 @@ export interface Health {
 }
 
 /** The collections the server streams changes for. Every document in them has an `id`. */
-export type Collection = 'approvals' | 'tasks' | 'memory' | 'projects' | 'plans' | 'mcp' | 'conflicts';
+export type Collection = 'approvals' | 'tasks' | 'memory' | 'projects' | 'plans' | 'mcp' | 'conflicts' | 'prefs' | 'decisions';
+
+/** A saved screen setting. */
+export interface Pref { id: string; value: unknown }
+/** A final operator decision made outside the approvals inbox. */
+export interface DecisionDoc { id: string; value: string; decidedAt: string }
 export type Change =
   | { op: 'put'; collection: Collection; doc: { id: string } }
   | { op: 'drop'; collection: Collection; id: string };
@@ -111,6 +116,13 @@ export const api = {
 
   mcp: () => request<McpServer[]>('/mcp/servers'),
   registerMcp: (input: McpInput) => request<McpServer>('/mcp/servers', { method: 'POST', json: input }),
+
+  prefs: () => request<Pref[]>('/prefs'),
+  setPref: (key: string, value: unknown, detail?: string) =>
+    request<Pref>(`/prefs/${seg(key)}`, { method: 'PUT', json: { value, detail: detail ?? '' } }),
+  decisions: () => request<DecisionDoc[]>('/decisions'),
+  recordDecision: (key: string, body: { value: string; action: string; detail: string; projectId: string; level: string }) =>
+    request<DecisionDoc>(`/decisions/${seg(key)}`, { method: 'POST', json: body }),
 
   activity: () => request<ActivityEvent[]>('/activity?limit=1000'),
   reset: () => request<Health>('/admin/reset', { method: 'POST', headers: { 'X-Confirm': 'reset' } }),

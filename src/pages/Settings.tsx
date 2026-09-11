@@ -9,8 +9,12 @@ import {
 import { settingsGroups } from '@/mock/settings';
 import { useTheme, THEMES } from '@/lib/theme';
 import { categoryMeta } from '@/mock/memory';
-import { useData } from '@/lib/data';
+import { useData, usePref } from '@/lib/data';
 import { cn } from '@/lib/utils';
+
+const SETTING_DEFAULTS: Record<string, string | boolean> = Object.fromEntries(
+  settingsGroups.flatMap((g) => g.items.map((i) => [i.id, i.value])),
+);
 
 export default function Settings() {
   const t = useTheme();
@@ -31,14 +35,15 @@ export default function Settings() {
     }
   };
   const [group, setGroup] = useState(settingsGroups[0].id);
-  const [vals, setVals] = useState<Record<string, string | boolean>>(() => {
-    const o: Record<string, string | boolean> = {};
-    settingsGroups.forEach((g) => g.items.forEach((i) => { o[i.id] = i.value; }));
-    return o;
-  });
+  const [vals, setVals] = usePref('settings.values', SETTING_DEFAULTS);
 
   const g = useMemo(() => settingsGroups.find((x) => x.id === group) ?? settingsGroups[0], [group]);
-  const set = (id: string, v: string | boolean) => setVals((s) => ({ ...s, [id]: v }));
+  // A switch or a choice leaves an audit line; free text is saved without logging every keystroke.
+  const set = (id: string, v: string | boolean) => {
+    const item = settingsGroups.flatMap((x) => x.items).find((i) => i.id === id);
+    const shown = typeof v === 'boolean' ? (v ? 'on' : 'off') : v;
+    setVals({ ...vals, [id]: v }, item && item.kind !== 'text' ? `${item.label} → ${shown}` : undefined);
+  };
 
   const exported = useMemo(() => JSON.stringify({
     appearance: { preset: t.theme, mode: t.mode, palette: t.themeColor, ground: t.surfaceTone, rail: t.rail, radius: t.radius, font: t.fontFamily, size: t.fontSize },
@@ -50,7 +55,7 @@ export default function Settings() {
       <PageHeader
         title="Settings"
         subtitle="Everything the OS will do without asking, and everything it will always stop for."
-        actions={<Button size="sm" variant="outline" onClick={() => toast('Defaults restored for this group')}><RotateCcw className="size-3.5" />Reset group</Button>}
+        actions={<Button size="sm" variant="outline" onClick={() => { setVals({ ...vals, ...Object.fromEntries(g.items.map((i) => [i.id, i.value])) }, `${g.name} settings reset to defaults`); toast('Defaults restored for this group'); }}><RotateCcw className="size-3.5" />Reset group</Button>}
       />
 
       <PageBody className="flex h-full flex-col gap-0 p-0 md:flex-row">

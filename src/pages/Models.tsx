@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Cpu, HardDrive, Cloud, Search } from 'lucide-react';
 import { toast } from 'sonner';
+import { usePref } from '@/lib/data';
 import { Switch } from '@/components/ui/switch';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Dot, Mono, Ascii, Toolbar, Field, SelectField,
@@ -11,17 +12,16 @@ import { cn } from '@/lib/utils';
 
 const KIND_TONE = { reasoning: 'violet', coding: 'brand', vision: 'info', small: 'neutral', embedding: 'ok', reranker: 'warn' } as const;
 
+const ROUTER_ON: Record<string, boolean> = Object.fromEntries(routerToggles.map((t) => [t.id, t.on]));
+const RULES_ON: Record<string, boolean> = Object.fromEntries(routingRules.map((r) => [r.id, r.enabled]));
+
 export default function Models() {
   const [q, setQ] = useState('');
   const [kind, setKind] = useState('all');
   const [host, setHost] = useState('all');
   const [tab, setTab] = useState<'fleet' | 'routing'>('fleet');
-  const [toggles, setToggles] = useState<Record<string, boolean>>(
-    () => Object.fromEntries(routerToggles.map((t) => [t.id, t.on])),
-  );
-  const [rules, setRules] = useState<Record<string, boolean>>(
-    () => Object.fromEntries(routingRules.map((r) => [r.id, r.enabled])),
-  );
+  const [toggles, setToggles] = usePref('models.router', ROUTER_ON);
+  const [rules, setRules] = usePref('models.rules', RULES_ON);
 
   const list = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -85,7 +85,7 @@ export default function Models() {
                   <div key={t.id} className="px-3.5 py-2.5">
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-[12.5px] font-medium text-ink">{t.label}</span>
-                      <Switch checked={on} onCheckedChange={(v) => { setToggles((s) => ({ ...s, [t.id]: v })); toast(`${t.label} ${v ? 'on' : 'off'}`); }} />
+                      <Switch checked={on} onCheckedChange={(v) => { setToggles({ ...toggles, [t.id]: v }, `Router: ${t.label} ${v ? 'on' : 'off'}`); toast(`${t.label} ${v ? 'on' : 'off'}`); }} />
                     </div>
                     <p className={cn('mt-1 text-[11.5px]', on ? 'text-soft' : 'text-warn')}>{on ? t.onText : t.offText}</p>
                   </div>
@@ -131,7 +131,7 @@ export default function Models() {
                   <Cell><Mono tone="brand">{r.route}</Mono></Cell>
                   <Cell><Mono>{r.fallback}</Mono></Cell>
                   <Cell className="tnum">{r.hits24h.toLocaleString()}</Cell>
-                  <Cell><Switch checked={rules[r.id]} onCheckedChange={(v) => setRules((s) => ({ ...s, [r.id]: v }))} /></Cell>
+                  <Cell><Switch checked={rules[r.id]} onCheckedChange={(v) => setRules({ ...rules, [r.id]: v }, `Routing rule ${r.id} ${v ? 'enabled' : 'disabled'}`)} /></Cell>
                 </Row>
               ))}
             </DataTable>

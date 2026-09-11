@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Search, Sparkles, Zap, Gauge } from 'lucide-react';
 import { toast } from 'sonner';
+import { usePref } from '@/lib/data';
 import { Switch } from '@/components/ui/switch';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Mono, ListRow, Toolbar, Field, SelectField,
@@ -11,12 +12,14 @@ import { agentName } from '@/mock/agents';
 import { projectName } from '@/mock/projects';
 import { cn } from '@/lib/utils';
 
+const SKILLS_ON: Record<string, boolean> = Object.fromEntries(skills.map((s) => [s.id, s.enabled]));
+
 export default function Skills() {
   const [q, setQ] = useState('');
   const [scope, setScope] = useState('all');
   const [only, setOnly] = useState('all');
   const [sel, setSel] = useState(skills[0].id);
-  const [on, setOn] = useState<Record<string, boolean>>(() => Object.fromEntries(skills.map((s) => [s.id, s.enabled])));
+  const [on, setOn] = usePref('skills.enabled', SKILLS_ON);
 
   const list = useMemo(() => {
     const t = q.trim().toLowerCase();
@@ -84,7 +87,7 @@ export default function Skills() {
             <Panel
               eyebrow={`${s.scope} · ${s.project === 'all' ? 'every project' : projectName(s.project)} · v${s.version}`}
               title={<span className="flex items-center gap-2">{s.name}<Mono tone="brand">{s.slug}</Mono></span>}
-              actions={<Switch checked={on[s.id]} onCheckedChange={(v) => { setOn((m) => ({ ...m, [s.id]: v })); toast(`${s.name} ${v ? 'enabled' : 'disabled'}`); }} />}
+              actions={<Switch checked={on[s.id]} onCheckedChange={(v) => { setOn({ ...on, [s.id]: v }, `Skill ${s.name} ${v ? 'enabled' : 'disabled'}`); toast(`${s.name} ${v ? 'enabled' : 'disabled'}`); }} />}
             >
               <p className="text-[12.5px] leading-relaxed text-ink-2">{s.description}</p>
               <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 border-t border-line pt-2.5 xl:grid-cols-4">
