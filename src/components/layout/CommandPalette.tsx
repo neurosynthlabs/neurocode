@@ -8,6 +8,7 @@ import {
 import { buildIndex, SEARCH_GROUPS } from '@/lib/search';
 import { Kbd } from '@/components/os';
 import { useData } from '@/lib/data';
+import { useAuth } from '@/lib/auth';
 
 function Icon({ name }: { name: string }) {
   const C = ICONS[name] ?? Circle;
@@ -17,7 +18,11 @@ function Icon({ name }: { name: string }) {
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const nav = useNavigate();
   const { projects, tasks, plans, memory, mcp } = useData();
-  const index = useMemo(() => buildIndex({ projects, tasks, plans, memory, mcp }), [projects, tasks, plans, memory, mcp]);
+  const { canAny } = useAuth();
+  const index = useMemo(
+    () => buildIndex({ projects, tasks, plans, memory, mcp }, canAny),
+    [projects, tasks, plans, memory, mcp, canAny],
+  );
   const grouped = useMemo(
     () => SEARCH_GROUPS.map((g) => ({ group: g, items: index.filter((i) => i.group === g) })).filter((g) => g.items.length),
     [index],

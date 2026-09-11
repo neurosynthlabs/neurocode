@@ -1,22 +1,27 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
-import { Route, Routes, useLocation } from 'react-router-dom';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { ShieldAlert } from 'lucide-react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/sonner';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { ThemeProvider, useTheme } from '@/lib/theme';
+import { AuthProvider, useAuth } from '@/lib/auth';
 import { ProjectProvider, useProject } from '@/lib/project-context';
 import { DataProvider } from '@/lib/data';
+import { NAV } from '@/lib/nav';
 import { cn } from '@/lib/utils';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Topbar } from '@/components/layout/Topbar';
 import { CommandPalette } from '@/components/layout/CommandPalette';
 import { PageSkeleton, RouteBoundary } from '@/components/layout/RouteBoundary';
+import { Empty, LogoMark, Page, PageBody } from '@/components/os';
 
 // The home screen ships in the entry chunk so first paint never waits on a second request.
 // Every other screen is its own chunk, fetched the first time it is opened.
 import CommandCenter from '@/pages/CommandCenter';
 
 const Login = lazy(() => import('@/pages/Login'));
+const Setup = lazy(() => import('@/pages/Setup'));
 const Projects = lazy(() => import('@/pages/Projects'));
 const ProjectOverview = lazy(() => import('@/pages/ProjectOverview'));
 const Memory = lazy(() => import('@/pages/Memory'));
@@ -47,6 +52,30 @@ const Permissions = lazy(() => import('@/pages/Permissions'));
 const Cost = lazy(() => import('@/pages/Cost'));
 const Evals = lazy(() => import('@/pages/Evals'));
 const Settings = lazy(() => import('@/pages/Settings'));
+const People = lazy(() => import('@/pages/admin/People'));
+const Roles = lazy(() => import('@/pages/admin/Roles'));
+const Teams = lazy(() => import('@/pages/admin/Teams'));
+const AiProviders = lazy(() => import('@/pages/admin/AiProviders'));
+const Audit = lazy(() => import('@/pages/admin/Audit'));
+const WorkspacePage = lazy(() => import('@/pages/admin/Workspace'));
+
+/** A screen that needs a permission opens only for roles that hold it. The API checks again regardless. */
+function Guard({ to, children }: { to: string; children: ReactNode }) {
+  const { canAny, roleNames } = useAuth();
+  const perm = NAV.find((n) => n.to === to)?.perm;
+  if (!perm || canAny(...perm)) return children;
+  return (
+    <Page>
+      <PageBody>
+        <Empty
+          icon={<ShieldAlert className="size-6" />}
+          title="This screen is for admins"
+          hint={`${roleNames || 'Your role'} cannot open it. An Owner or Admin can change your roles in Admin → People.`}
+        />
+      </PageBody>
+    </Page>
+  );
+}
 
 function Shell() {
   const [collapsed, setCollapsed] = useState(false);
@@ -126,6 +155,12 @@ function Shell() {
                 <Route path="/cost" element={<Cost />} />
                 <Route path="/evals" element={<Evals />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route path="/admin/users" element={<Guard to="/admin/users"><People /></Guard>} />
+                <Route path="/admin/roles" element={<Guard to="/admin/roles"><Roles /></Guard>} />
+                <Route path="/admin/teams" element={<Guard to="/admin/teams"><Teams /></Guard>} />
+                <Route path="/admin/ai" element={<Guard to="/admin/ai"><AiProviders /></Guard>} />
+                <Route path="/admin/audit" element={<Guard to="/admin/audit"><Audit /></Guard>} />
+                <Route path="/admin/workspace" element={<Guard to="/admin/workspace"><WorkspacePage /></Guard>} />
                 <Route path="*" element={<CommandCenter />} />
               </Routes>
             </Suspense>
@@ -140,27 +175,56 @@ function Shell() {
   );
 }
 
+function Splash() {
+  return (
+    <div className="grid h-full w-full place-items-center bg-bg">
+      <div className="flex flex-col items-center gap-3">
+        <LogoMark size={40} />
+        <span className="text-[13px] text-dim">Opening your workspace…</span>
+      </div>
+    </div>
+  );
+}
+
+/** A full-screen page outside the shell: signing in, or setting the workspace up. */
+function Standalone({ children }: { children: ReactNode }) {
+  return (
+    <RouteBoundary>
+      <Suspense fallback={<Splash />}>{children}</Suspense>
+    </RouteBoundary>
+  );
+}
+
+/** Nothing of the workspace renders until the server says who is here. */
+function Gate() {
+  const { state, user } = useAuth();
+  if (state === 'loading') return <Splash />;
+  if (state === 'setup') return <Standalone><Setup /></Standalone>;
+  if (state === 'signed-out') return <Standalone><Login /></Standalone>;
+  const demo = state === 'demo';
+  return (
+    // Keyed by the person, so signing in as someone else starts from a clean store.
+    <DataProvider key={user?.id ?? 'demo'}>
+      <ProjectProvider>
+        <Routes>
+          <Route path="/login" element={demo ? <Standalone><Login /></Standalone> : <Navigate to="/" replace />} />
+          <Route path="/setup" element={demo ? <Standalone><Setup /></Standalone> : <Navigate to="/" replace />} />
+          <Route path="*" element={<Shell />} />
+        </Routes>
+      </ProjectProvider>
+    </DataProvider>
+  );
+}
+
 export default function App() {
   return (
     <ThemeProvider>
-      <DataProvider>
-        <ProjectProvider>
-          <TooltipProvider>
-            <Routes>
-              <Route
-                path="/login"
-                element={
-                  <RouteBoundary>
-                    <Suspense fallback={<PageSkeleton />}><Login /></Suspense>
-                  </RouteBoundary>
-                }
-              />
-              <Route path="*" element={<Shell />} />
-            </Routes>
-            <Toaster position="bottom-right" />
-          </TooltipProvider>
-        </ProjectProvider>
-      </DataProvider>
+      <AuthProvider>
+        <TooltipProvider>
+          <Gate />
+          <Toaster position="bottom-right" />
+        </TooltipProvider>
+      </AuthProvider>
     </ThemeProvider>
   );
 }

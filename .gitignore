@@ -34,3 +34,6 @@ __pycache__/
 .pytest_cache/
 server/.repos/
 server/.env
+server/secrets.json
+server/secrets.json.tmp
+server/*.db-*

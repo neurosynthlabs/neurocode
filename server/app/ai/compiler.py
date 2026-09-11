@@ -1,28 +1,19 @@
 """The requirement compiler: a requirement in English or Hinglish in, an implementation plan out.
 
-Providers, in the order `auto` tries them (NEUROCODE_COMPILER pins one):
-  deepseek  DEEPSEEK_API_KEY is set              DeepSeek's chat API in JSON mode
-  ollama    an Ollama server has the model       a local model; nothing leaves the machine
-  rules     always                               a keyword planner that says plainly it is one
-
-The compiler is given the memory facts that match the requirement and records which ones, so a
-reader can check what the plan was based on. A model answer that fails to parse or validate is
-never shown: the rules planner stands in, and the API logs that it did.
+The compiler is given the memory facts that match the requirement and records which ones, so a reader
+can check what the plan was based on. The gateway picks the model; when there is none, or its answer
+fails validation, the keyword planner below stands in.
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import re
-import time
-import urllib.error
-import urllib.request
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+from .gateway import Gateway, Result, extract_json
 
 AGENTS = {
     "AI Commander": "commander", "Architect": "architect", "Researcher": "researcher",
@@ -57,119 +48,11 @@ class PlanOut(BaseModel):
 
 
 @dataclass
-class Provider:
-    id: str      # deepseek | ollama | rules
-    model: str   # the name the UI shows
-
-
-@dataclass
 class Context:
     project: dict[str, Any]
     facts: list[dict[str, Any]]
     answers: list[dict[str, str]] = field(default_factory=list)
 
-
-@dataclass
-class Result:
-    plan: PlanOut
-    provider: Provider
-    ms: int
-    cited: list[str]
-    fallback: str | None = None
-
-
-RULES = Provider("rules", "offline planner")
-
-
-# ── which provider ──────────────────────────────────────────────
-def _ollama() -> tuple[str, str]:
-    return (os.environ.get("NEUROCODE_OLLAMA_URL", "http://127.0.0.1:11434"),
-            os.environ.get("NEUROCODE_OLLAMA_MODEL", "qwen2.5-coder:7b"))
-
-
-_ollama_seen: dict[str, tuple[float, bool]] = {}
-
-
-def ollama_ready() -> bool:
-    """Is an Ollama server up with the configured model pulled? Remembered for 30 s."""
-    url, model = _ollama()
-    at, ok = _ollama_seen.get(url + model, (-1e9, False))
-    if time.monotonic() - at < 30:
-        return ok
-    try:
-        with urllib.request.urlopen(f"{url}/api/tags", timeout=0.4) as r:
-            names = {m.get("name", "") for m in json.loads(r.read()).get("models", [])}
-        ok = model in names or f"{model}:latest" in names
-    except (OSError, ValueError):
-        ok = False
-    _ollama_seen[url + model] = (time.monotonic(), ok)
-    return ok
-
-
-def pick() -> Provider:
-    want = os.environ.get("NEUROCODE_COMPILER", "auto")
-    key = os.environ.get("DEEPSEEK_API_KEY")
-    if want in ("auto", "deepseek") and key and _rejected.get("deepseek") != _fp(key):
-        return Provider("deepseek", os.environ.get("NEUROCODE_DEEPSEEK_MODEL", "deepseek-chat"))
-    if want in ("auto", "ollama") and ollama_ready():
-        return Provider("ollama", _ollama()[1])
-    return RULES
-
-
-def status() -> dict[str, str]:
-    """What /health reports: the provider that would compile now, and why a configured one is skipped."""
-    p = pick()
-    out = {"provider": p.id, "model": p.model}
-    key = os.environ.get("DEEPSEEK_API_KEY")
-    if p.id != "deepseek" and key and _rejected.get("deepseek") == _fp(key):
-        out["note"] = "DeepSeek rejected DEEPSEEK_API_KEY. Set a valid key and restart the API."
-    return out
-
-
-# ── model calls ─────────────────────────────────────────────────
-class ProviderError(RuntimeError):
-    """A provider answered with an HTTP error. 401 or 403 means the key itself is bad."""
-
-    def __init__(self, status: int, body: str) -> None:
-        super().__init__(f"HTTP {status}: {body}")
-        self.status = status
-
-
-# Keys a provider has rejected, by fingerprint. Not sent again until the key changes, which takes a restart.
-_rejected: dict[str, str] = {}
-
-
-def _fp(key: str) -> str:
-    return hashlib.sha256(key.encode()).hexdigest()[:16]
-
-
-def _post(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
-    req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST",
-                                 headers={"Content-Type": "application/json", **headers})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:  # the body says why: a bad key, no balance, an unknown model
-        raise ProviderError(e.code, e.read()[:200].decode(errors="replace")) from e
-
-
-def call_deepseek(messages: list[dict[str, str]]) -> str:
-    base = os.environ.get("NEUROCODE_DEEPSEEK_URL", "https://api.deepseek.com")
-    body = _post(f"{base}/chat/completions",
-                 {"model": os.environ.get("NEUROCODE_DEEPSEEK_MODEL", "deepseek-chat"), "messages": messages,
-                  "response_format": {"type": "json_object"}, "temperature": 0.2, "max_tokens": 3000},
-                 {"Authorization": f"Bearer {os.environ['DEEPSEEK_API_KEY']}"}, 120)
-    return body["choices"][0]["message"]["content"]
-
-
-def call_ollama(messages: list[dict[str, str]]) -> str:
-    url, model = _ollama()
-    body = _post(f"{url}/api/chat", {"model": model, "messages": messages, "format": "json", "stream": False,
-                                     "options": {"temperature": 0.2}}, {}, 300)
-    return body["message"]["content"]
-
-
-CALLS: dict[str, Callable[[list[dict[str, str]]], str]] = {"deepseek": call_deepseek, "ollama": call_ollama}
 
 SYSTEM = """You are the requirement compiler inside NeuroCode, an AI engineering OS. The operator writes
 requirements in English or Hinglish, often informally. Turn one requirement into an implementation plan
@@ -207,6 +90,8 @@ SCHEMA_HINT = {
 
 
 def messages(requirement: str, ctx: Context) -> list[dict[str, str]]:
+    import json
+
     p = ctx.project
     lines = [f"Project: {p['name']} · stack: {', '.join(p.get('stack', [])) or 'unknown'}", p.get("description", "")]
     if ctx.facts:
@@ -222,16 +107,6 @@ def messages(requirement: str, ctx: Context) -> list[dict[str, str]]:
 
 
 # ── making a model's answer safe to store ───────────────────────
-def _clip(v: Any) -> Any:
-    if isinstance(v, str):
-        return v.strip()[:1500]
-    if isinstance(v, list):
-        return [_clip(x) for x in v[:16]]
-    if isinstance(v, dict):
-        return {k: _clip(x) for k, x in v.items()}
-    return v
-
-
 def agent_name(raw: str) -> str:
     s = raw.strip().lower()
     for name in AGENTS:
@@ -257,10 +132,7 @@ def layer_name(raw: Any) -> str | None:
 
 
 def parse(raw: str) -> PlanOut:
-    start, end = raw.find("{"), raw.rfind("}")
-    if start < 0 or end <= start:
-        raise ValueError("the answer holds no JSON object")
-    data = _clip(json.loads(raw[start:end + 1]))
+    data = extract_json(raw)
     data["steps"] = [{**s, "agent": agent_name(str(s.get("agent", "")))}
                      for s in data.get("steps", []) if isinstance(s, dict) and s.get("label")]
     data["layers"] = list(dict.fromkeys(x for x in map(layer_name, data.get("layers", [])) if x))
@@ -364,16 +236,7 @@ def rules(requirement: str, ctx: Context) -> PlanOut:
     )
 
 
-def compile_plan(requirement: str, ctx: Context) -> Result:
-    provider, t0 = pick(), time.monotonic()
-    cited = [f["ref"] for f in ctx.facts]
-    fallback = None
-    if provider.id != "rules":
-        try:
-            plan = parse(CALLS[provider.id](messages(requirement, ctx)))
-            return Result(plan, provider, round((time.monotonic() - t0) * 1000), cited)
-        except Exception as e:  # network, key, quota, malformed JSON, schema: the answer is unusable either way
-            if isinstance(e, ProviderError) and e.status in (401, 403) and provider.id == "deepseek":
-                _rejected["deepseek"] = _fp(os.environ.get("DEEPSEEK_API_KEY", ""))
-            fallback = f"{provider.model} failed ({type(e).__name__}: {str(e)[:160]})"
-    return Result(rules(requirement, ctx), RULES, round((time.monotonic() - t0) * 1000), cited, fallback)
+def compile_plan(gw: Gateway, requirement: str, ctx: Context) -> tuple[Result[PlanOut], list[str]]:
+    """The plan, how it was made, and the memory refs the compiler was given."""
+    result = gw.run(messages(requirement, ctx), parse, lambda: rules(requirement, ctx), offline="offline planner")
+    return result, [f["ref"] for f in ctx.facts]

@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Search, Pin, Archive, Pencil, FileSearch, TriangleAlert, TrendingDown, Zap, Globe, Layers,
+  Search, Pin, Archive, Pencil, FileSearch, TriangleAlert, TrendingDown, Zap, Globe, Layers, FilePlus2, Loader2, Sparkles,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import type { Extracted } from '@/lib/api';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Mono, Segmented, ListRow, Empty,
   Stat, StatGrid, KV, Bar, BlockBar, DataTable, Row, Cell,
@@ -27,6 +29,7 @@ export default function Memory() {
   const [q, setQ] = useState('');
   const [sel, setSel] = useState<string | null>(null);
   const [tab, setTab] = useState<'facts' | 'health' | 'conflicts'>('facts');
+  const [adding, setAdding] = useState(false);
 
   const { memory, conflicts, mode, setPinned, archive, searchMemory, resolveConflict } = useData();
   const query = q.trim();
@@ -87,11 +90,14 @@ export default function Memory() {
         title="Memory"
         subtitle="Facts the OS has earned — each one carries its reason, its source and its evidence. Retrieval strengthens a fact; neglect decays it."
         actions={
-          <Segmented
-            options={[{ id: 'project', label: `${projectName(projectId)} + global` }, { id: 'global', label: 'Global brain only' }]}
-            value={scope}
-            onChange={setScope}
-          />
+          <>
+            <Button size="sm" variant="outline" onClick={() => setAdding(true)}><FilePlus2 className="size-3.5" />Add from text</Button>
+            <Segmented
+              options={[{ id: 'project', label: `${projectName(projectId)} + global` }, { id: 'global', label: 'Global brain only' }]}
+              value={scope}
+              onChange={setScope}
+            />
+          </>
         }
       >
         <div className="flex flex-wrap items-center gap-2 pb-3">
@@ -330,6 +336,106 @@ export default function Memory() {
           </div>
         )}
       </PageBody>
+      <AddFromText
+        open={adding} onOpenChange={setAdding} projectId={projectId}
+        onAdded={(docs) => { setTab('facts'); setCat('all'); setQ(''); setSel(docs[0].id); }}
+      />
     </Page>
+  );
+}
+
+/** Paste notes; the facts worth keeping come back as candidates, and only the ones you tick are stored. */
+function AddFromText({ open, onOpenChange, projectId, onAdded }: {
+  open: boolean; onOpenChange: (open: boolean) => void; projectId: string; onAdded: (facts: MemoryFact[]) => void;
+}) {
+  const { extract, addFacts } = useData();
+  const [text, setText] = useState('');
+  const [found, setFound] = useState<Extracted | null>(null);
+  const [skip, setSkip] = useState<Set<number>>(() => new Set());
+  const [scope, setScope] = useState<'project' | 'global'>('project');
+  const [busy, setBusy] = useState(false);
+  const picked = found ? found.facts.filter((_, i) => !skip.has(i)) : [];
+
+  const close = () => { onOpenChange(false); setText(''); setFound(null); setSkip(new Set()); };
+  const find = async () => {
+    if (text.trim().length < 10 || busy) return;
+    setBusy(true);
+    const r = await extract(text.trim(), projectId);
+    setBusy(false);
+    if (r) { setFound(r); setSkip(new Set()); }
+  };
+  const save = async () => {
+    if (!picked.length || busy) return;
+    setBusy(true);
+    const docs = await addFacts(scope === 'global' ? 'global' : projectId, picked);
+    setBusy(false);
+    if (!docs?.length) return;
+    toast.success(`${docs.length} ${docs.length === 1 ? 'fact' : 'facts'} added to memory`, { description: docs.map((d) => d.ref).join(' · ') });
+    onAdded(docs);
+    close();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) close(); }}>
+      <DialogContent className="sm:max-w-[640px]">
+        <DialogHeader>
+          <DialogTitle>Add from text</DialogTitle>
+          <DialogDescription>
+            Paste meeting notes, a requirement or a chat, in English or Hinglish. The facts worth keeping come back, and you choose which to store.
+          </DialogDescription>
+        </DialogHeader>
+        {!found ? (
+          <textarea
+            value={text} onChange={(e) => setText(e.target.value)} rows={9} autoFocus aria-label="Text to read"
+            placeholder={'Billing review, 21 Aug.\nInvoices must round at the invoice level, never per line.\nWe decided to freeze MST_TAX until October.'}
+            className="focus-brand w-full resize-none rounded-lg border border-line bg-surface-2/60 p-3 text-[13.5px] leading-relaxed text-ink placeholder:text-dim focus-visible:outline-none"
+          />
+        ) : found.facts.length === 0 ? (
+          <Empty
+            icon={<FileSearch className="size-6" />} title="No fact worth keeping was found"
+            hint={found.provider === 'rules'
+              ? 'The offline rules keep sentences that state a rule or a decision: must, never, always, decided, zaroori… A model reads more; set one in Admin → AI providers.'
+              : 'Nothing in this text looks durable enough to remember.'}
+          />
+        ) : (
+          <div className="grid gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[12.5px] text-dim">
+              <span>{found.facts.length} found · {found.provider === 'rules' ? 'offline rules' : found.model}</span>
+              <Segmented options={[{ id: 'project', label: 'This project' }, { id: 'global', label: 'Global' }]} value={scope} onChange={setScope} />
+            </div>
+            <div className="max-h-[46vh] divide-y divide-line/50 overflow-y-auto rounded-xl border border-line/70">
+              {found.facts.map((f, i) => (
+                <label key={i} className="flex cursor-pointer items-start gap-3 px-4 py-3 hover:bg-surface-2/50">
+                  <input
+                    type="checkbox" className="mt-1 size-4 shrink-0 accent-[var(--os-brand)]" checked={!skip.has(i)}
+                    onChange={(e) => setSkip((s) => { const n = new Set(s); if (e.target.checked) n.delete(i); else n.add(i); return n; })}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[13.5px] font-medium text-ink">{f.title}</span>
+                    {f.body !== f.title && <span className="mt-0.5 block text-[13px] text-soft">{f.body}</span>}
+                    <span className="mt-1.5 flex flex-wrap gap-1.5">
+                      <Tag tone="neutral">{categoryLabel(f.category)}</Tag>
+                      <Tag tone={CONF_TONE[f.confidence]}>{f.confidence}</Tag>
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={found ? () => setFound(null) : close}>{found ? 'Back' : 'Cancel'}</Button>
+          {found ? (
+            <Button onClick={() => void save()} disabled={busy || !picked.length}>
+              {busy && <Loader2 className="size-3.5 animate-spin" />}Add {picked.length} {picked.length === 1 ? 'fact' : 'facts'}
+            </Button>
+          ) : (
+            <Button onClick={() => void find()} disabled={busy || text.trim().length < 10}>
+              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}Find facts
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

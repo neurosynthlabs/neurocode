@@ -4994,5 +4994,179 @@
    "projectId": "aios",
    "level": "ok"
   }
- ]
+ ],
+ "rbac": {
+  "permissions": [
+   {
+    "id": "plans:compile",
+    "group": "Work",
+    "label": "Compile requirements",
+    "description": "Turn a requirement into a plan and its task."
+   },
+   {
+    "id": "plans:decide",
+    "group": "Work",
+    "label": "Steer plans",
+    "description": "Answer or defer a plan’s questions, re-compile it and dispatch it."
+   },
+   {
+    "id": "tasks:write",
+    "group": "Work",
+    "label": "Move tasks",
+    "description": "Change a task’s status and tick its checklist."
+   },
+   {
+    "id": "approvals:decide",
+    "group": "Gates",
+    "label": "Approve gated actions",
+    "description": "Sign or refuse migrations, deploys and other high-risk actions."
+   },
+   {
+    "id": "decisions:make",
+    "group": "Gates",
+    "label": "Give final verdicts",
+    "description": "Accept a review or send it back, and open or cancel the production gate."
+   },
+   {
+    "id": "memory:write",
+    "group": "Knowledge",
+    "label": "Curate memory",
+    "description": "Add, pin and archive facts, and settle conflicts between them."
+   },
+   {
+    "id": "ai:use",
+    "group": "Knowledge",
+    "label": "Use AI features",
+    "description": "Ask memory, brainstorm, and extract facts from text."
+   },
+   {
+    "id": "projects:onboard",
+    "group": "Platform",
+    "label": "Onboard projects",
+    "description": "Clone or read a repository and measure it."
+   },
+   {
+    "id": "mcp:manage",
+    "group": "Platform",
+    "label": "Manage tools",
+    "description": "Register MCP servers."
+   },
+   {
+    "id": "settings:write",
+    "group": "Platform",
+    "label": "Change screen settings",
+    "description": "Switch skills, plugins, hooks, commands and models on or off."
+   },
+   {
+    "id": "users:manage",
+    "group": "Admin",
+    "label": "Manage people",
+    "description": "Create accounts, assign roles, reset passwords and disable access."
+   },
+   {
+    "id": "roles:manage",
+    "group": "Admin",
+    "label": "Manage roles",
+    "description": "Create and edit custom roles."
+   },
+   {
+    "id": "teams:manage",
+    "group": "Admin",
+    "label": "Manage teams",
+    "description": "Create teams and choose their members."
+   },
+   {
+    "id": "audit:read",
+    "group": "Admin",
+    "label": "Read the audit log",
+    "description": "See who signed in and who changed access, keys or settings."
+   },
+   {
+    "id": "workspace:admin",
+    "group": "Admin",
+    "label": "Administer the workspace",
+    "description": "The workspace name, AI providers and keys, and resetting data."
+   }
+  ],
+  "roles": [
+   {
+    "id": "owner",
+    "name": "Owner",
+    "description": "Everything, including access and keys. There is always at least one.",
+    "permissions": [
+     "plans:compile",
+     "plans:decide",
+     "tasks:write",
+     "approvals:decide",
+     "decisions:make",
+     "memory:write",
+     "ai:use",
+     "projects:onboard",
+     "mcp:manage",
+     "settings:write",
+     "users:manage",
+     "roles:manage",
+     "teams:manage",
+     "audit:read",
+     "workspace:admin"
+    ]
+   },
+   {
+    "id": "admin",
+    "name": "Admin",
+    "description": "Runs the workspace: people, roles, keys and every screen.",
+    "permissions": [
+     "plans:compile",
+     "plans:decide",
+     "tasks:write",
+     "approvals:decide",
+     "decisions:make",
+     "memory:write",
+     "ai:use",
+     "projects:onboard",
+     "mcp:manage",
+     "settings:write",
+     "users:manage",
+     "roles:manage",
+     "teams:manage",
+     "audit:read",
+     "workspace:admin"
+    ]
+   },
+   {
+    "id": "approver",
+    "name": "AI Project Manager",
+    "description": "Steers the work and signs the gates: the final approver.",
+    "permissions": [
+     "plans:compile",
+     "plans:decide",
+     "tasks:write",
+     "approvals:decide",
+     "decisions:make",
+     "memory:write",
+     "ai:use",
+     "projects:onboard",
+     "mcp:manage",
+     "settings:write"
+    ]
+   },
+   {
+    "id": "engineer",
+    "name": "Engineer",
+    "description": "Works the board and curates memory. Cannot sign the gates.",
+    "permissions": [
+     "plans:compile",
+     "tasks:write",
+     "memory:write",
+     "ai:use"
+    ]
+   },
+   {
+    "id": "viewer",
+    "name": "Viewer",
+    "description": "Reads everything and changes nothing.",
+    "permissions": []
+   }
+  ]
+ }
 }

@@ -3,9 +3,12 @@ import {
 } from 'react';
 import { toast } from 'sonner';
 import {
-  API_BASE, ApiError, api, type Change, type Collection, type DecisionDoc, type Health, type McpInput, type Pref,
-  type ProjectInput,
+  ApiError, api, type AskAnswer, type BrainstormDoc, type Change, type Collection, type DecisionDoc, type Extracted,
+  type FactCandidate, type Health, type McpInput, type Pref, type ProjectInput,
 } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
+import * as offline from '@/lib/offline-ai';
+import { permissions as CATALOGUE } from '@/mock/rbac';
 import { approvals as seedApprovals } from '@/mock/permissions';
 import { tasks as seedTasks } from '@/mock/tasks';
 import { memoryFacts as seedMemory, memoryConflicts as seedConflicts, type MemoryConflict } from '@/mock/memory';
@@ -18,12 +21,13 @@ import type { ActivityEvent, ApprovalRequest, McpServer, MemoryFact, Plan, Proje
 
 /* ═══════════════════════════════════════════════════════════════
    DATA — the one place screens read the operator's mutable state.
-   It paints instantly from the seed, then, if the local API
-   answers, swaps in the persisted SQLite state and subscribes to
-   the stream: log lines, and every document that changes, so all
-   open tabs stay in step. Toggles are optimistic; actions that
-   create documents wait for the server. In demo mode every
-   action still works, inside this tab.
+   Signed in, it loads the persisted SQLite state from the local
+   API and subscribes to the stream: log lines, and every document
+   that changes, so all open tabs stay in step. Toggles are
+   optimistic; actions that create documents wait for the server.
+   Every action first checks the signed-in role, so a Viewer is
+   told what is missing instead of watching a change bounce back.
+   With no API, every action still works, inside this tab.
    ═══════════════════════════════════════════════════════════════ */
 
 export type DataMode = 'connecting' | 'live' | 'demo';
@@ -42,6 +46,8 @@ interface Domain {
   prefs: Pref[];
   /** Final decisions made outside the approvals inbox (see useDecision). */
   decisions: DecisionDoc[];
+  /** Briefs made by Brainstorm, newest first. */
+  brainstorms: BrainstormDoc[];
   /** Newest first, the order every feed renders in. */
   activity: ActivityEvent[];
 }
@@ -71,6 +77,12 @@ export interface DataCtx extends Domain {
   setPref: (key: string, value: unknown, detail?: string) => Promise<boolean>;
   /** A final decision: once made for a key, it cannot be made again. */
   recordDecision: (key: string, value: string, entry: Omit<Entry, 'taskRef'>) => Promise<boolean>;
+  /** Answers from memory: a model's when one is set, otherwise the matching facts, labelled as such. */
+  ask: (question: string, projectId?: string) => Promise<AskAnswer | null>;
+  brainstorm: (idea: string, projectId?: string) => Promise<BrainstormDoc | null>;
+  /** Candidate facts found in pasted text. Nothing is stored until addFacts. */
+  extract: (text: string, projectId?: string) => Promise<Extracted | null>;
+  addFacts: (projectId: string, facts: FactCandidate[]) => Promise<MemoryFact[] | null>;
 }
 
 const C = createContext<DataCtx | null>(null);
@@ -85,15 +97,16 @@ const seed = (): Domain => ({
   conflicts: seedConflicts,
   prefs: [],
   decisions: [],
+  brainstorms: [],
   activity: [...seedActivity].reverse().concat(activityExtra),
 });
 
 async function load(): Promise<Domain> {
-  const [approvals, tasks, memory, projects, plans, mcp, conflicts, prefs, decisions, activity] = await Promise.all([
+  const [approvals, tasks, memory, projects, plans, mcp, conflicts, prefs, decisions, brainstorms, activity] = await Promise.all([
     api.approvals(), api.tasks(), api.memory(), api.projects(), api.plans(), api.mcp(), api.conflicts(), api.prefs(),
-    api.decisions(), api.activity(),
+    api.decisions(), api.brainstorms(), api.activity(),
   ]);
-  return { approvals, tasks, memory, projects, plans, mcp, conflicts, prefs, decisions, activity };
+  return { approvals, tasks, memory, projects, plans, mcp, conflicts, prefs, decisions, brainstorms, activity };
 }
 
 /** One document into or out of a collection. The server streams these; demo actions make their own. */
@@ -131,24 +144,25 @@ const nextNumber = (refs: string[]) => Math.max(0, ...refs.map((r) => Number(/\d
 let seq = 0;
 
 export function DataProvider({ children }: { children: ReactNode }) {
+  const { state, user, can, roleNames } = useAuth();
   const [domain, setDomain] = useState<Domain>(seed);
-  const [mode, setMode] = useState<DataMode>(API_BASE ? 'connecting' : 'demo');
+  const [mode, setMode] = useState<DataMode>(state === 'signed-in' ? 'connecting' : 'demo');
   const [health, setHealth] = useState<Health | null>(null);
   const live = useRef(false);
-  // Actions read the latest state through this ref. A layout effect syncs it before the browser can
+  // Actions read the latest state through refs. A layout effect syncs them before the browser can
   // deliver the next click, so two quick clicks never act on the same stale snapshot.
   const now = useRef(domain);
+  const who = useRef({ can, roleNames, name: user?.name ?? 'You' });
   useLayoutEffect(() => { now.current = domain; }, [domain]);
+  useLayoutEffect(() => { who.current = { can, roleNames, name: user?.name ?? 'You' }; }, [can, roleNames, user]);
 
   useEffect(() => {
-    if (!API_BASE) return;
+    if (state !== 'signed-in') return;
     let cancelled = false;
     let unsubscribe: (() => void) | undefined;
     (async () => {
       try {
-        const h = await api.health();
-        if (!h.ok) throw new Error('the API reported itself unhealthy');
-        const data = await load();
+        const [h, data] = await Promise.all([api.health(), load()]);
         if (cancelled) return;
         setDomain(data);
         setHealth(h);
@@ -158,17 +172,29 @@ export function DataProvider({ children }: { children: ReactNode }) {
           activity: (ev) => setDomain((d) => (d.activity.some((e) => e.id === ev.id) ? d : { ...d, activity: [ev, ...d.activity] })),
           change: (c) => setDomain((d) => applyChange(d, c)),
         });
-      } catch {
+      } catch (e) {
         if (cancelled) return;
         setMode('demo');
-        console.info(`[NeuroCode] no local API at ${API_BASE}. Running on seed data; npm run dev:start starts it.`);
+        if (!(e instanceof ApiError && e.status === 401)) {
+          toast.error('The workspace did not load', { description: `${reason(e)} Showing the sample data meanwhile.` });
+        }
       }
     })();
     return () => { cancelled = true; unsubscribe?.(); };
+  }, [state]);
+
+  /** The API refuses what a role cannot do; saying so here first spares the round trip and the flicker. */
+  const permitted = useCallback((perm: string) => {
+    if (who.current.can(perm)) return true;
+    const label = CATALOGUE.find((p) => p.id === perm)?.label ?? perm;
+    toast.error('Your role cannot do that', {
+      description: `${who.current.roleNames || 'This account'} does not include “${label}”. An Owner or Admin can grant it in Admin → Roles & permissions.`,
+    });
+    return false;
   }, []);
 
   const log = useCallback((e: Entry) => {
-    const ev: ActivityEvent = { id: `local-${++seq}`, t: clock(), actor: 'You', actorKind: 'human', ...e };
+    const ev: ActivityEvent = { id: `local-${++seq}`, t: clock(), actor: who.current.name, actorKind: 'human', ...e };
     setDomain((d) => ({ ...d, activity: [ev, ...d.activity] }));
   }, []);
   const put = useCallback(<T extends { id: string }>(collection: Collection, doc: T) =>
@@ -190,7 +216,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, [log]);
 
   /** For actions that create or reshape documents: nothing changes on screen until the server answers. */
-  const ask = useCallback(async <T,>(call: () => Promise<T>, failure: string): Promise<T | null> => {
+  const attempt = useCallback(async <T,>(call: () => Promise<T>, failure: string): Promise<T | null> => {
     try {
       return await call();
     } catch (e) {
@@ -201,29 +227,29 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   const decide = useCallback(async (ref: string, decision: Decision) => {
     const a = now.current.approvals.find((x) => x.ref === ref);
-    if (!a || a.status !== 'pending') return false;
+    if (!a || a.status !== 'pending' || !permitted('approvals:decide')) return false;
     const set = (status: ApprovalRequest['status']) => setDomain((d) => ({ ...d, approvals: patch(d.approvals, ref, { status }) }));
     set(decision === 'approve' ? 'approved' : 'denied');
     return commit(() => api.decide(ref, decision), () => set('pending'), {
       action: decision === 'approve' ? 'Approved' : 'Denied', detail: `${ref} · ${a.title}`,
       projectId: a.projectId, level: decision === 'approve' ? 'ok' : 'warn',
     });
-  }, [commit]);
+  }, [commit, permitted]);
 
   const moveTask = useCallback(async (ref: string, to: TaskStatus) => {
     const t = now.current.tasks.find((x) => x.ref === ref);
-    if (!t || t.status === to) return false;
+    if (!t || t.status === to || !permitted('tasks:write')) return false;
     const set = (fields: Partial<Task>) => setDomain((d) => ({ ...d, tasks: patch(d.tasks, ref, fields) }));
     set({ status: to, updatedAt: 'just now' });
     return commit(() => api.moveTask(ref, to), () => set({ status: t.status, updatedAt: t.updatedAt }), {
       action: 'Task moved', detail: `${ref} · ${words(t.status)} → ${words(to)}`, projectId: t.projectId, level: 'info', taskRef: ref,
     });
-  }, [commit]);
+  }, [commit, permitted]);
 
   const toggleCheck = useCallback(async (ref: string, itemId: string) => {
     const t = now.current.tasks.find((x) => x.ref === ref);
     const item = t?.checklist.find((c) => c.id === itemId);
-    if (!t || !item) return false;
+    if (!t || !item || !permitted('tasks:write')) return false;
     const done = !item.done;
     const set = (v: boolean) => setDomain((d) => ({
       ...d,
@@ -234,33 +260,33 @@ export function DataProvider({ children }: { children: ReactNode }) {
       action: 'Checklist updated', detail: `${ref} · ${done ? '✓' : '○'} ${item.label}`,
       projectId: t.projectId, level: done ? 'ok' : 'info', taskRef: ref,
     });
-  }, [commit]);
+  }, [commit, permitted]);
 
   const setPinned = useCallback(async (ref: string, pinned: boolean) => {
     const f = now.current.memory.find((x) => x.ref === ref);
-    if (!f || f.pinned === pinned) return false;
+    if (!f || f.pinned === pinned || !permitted('memory:write')) return false;
     const set = (v: boolean) => setDomain((d) => ({ ...d, memory: patch(d.memory, ref, { pinned: v }) }));
     set(pinned);
     return commit(() => api.pin(ref, pinned), () => set(!pinned), {
       action: pinned ? 'Memory pinned' : 'Memory unpinned', detail: `${ref} · ${f.title}`, projectId: home(f), level: 'info',
     });
-  }, [commit]);
+  }, [commit, permitted]);
 
   const archive = useCallback(async (ref: string) => {
     const at = now.current.memory.findIndex((x) => x.ref === ref);
-    if (at < 0) return false;
+    if (at < 0 || !permitted('memory:write')) return false;
     const f = now.current.memory[at];
     setDomain((d) => ({ ...d, memory: d.memory.filter((x) => x.ref !== ref) }));
     const restore = () => setDomain((d) => ({ ...d, memory: [...d.memory.slice(0, at), f, ...d.memory.slice(at)] }));
     return commit(() => api.archive(ref), restore, {
       action: 'Memory archived', detail: `${ref} · ${f.title} — recoverable, never deleted`, projectId: home(f), level: 'warn',
     });
-  }, [commit]);
+  }, [commit, permitted]);
 
   const resolveConflict = useCallback(async (id: string, keep: 'a' | 'b' | 'adr') => {
     const c = now.current.conflicts.find((x) => x.id === id);
-    if (!c) return false;
-    if (live.current && !(await ask(() => api.resolveConflict(id, keep), 'Conflict not resolved'))) return false;
+    if (!c || !permitted('memory:write')) return false;
+    if (live.current && !(await attempt(() => api.resolveConflict(id, keep), 'Conflict not resolved'))) return false;
     const fact = (fid: string) => now.current.memory.find((f) => f.id === fid);
     const [winner, loser] = keep === 'b' ? [fact(c.b), fact(c.a)] : [fact(c.a), fact(c.b)];
     drop('conflicts', id);
@@ -271,11 +297,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
         : { action: 'Conflict resolved', detail: `${c.topic} · kept ${winner?.ref ?? c.a}, archived ${loser?.ref ?? c.b} as superseded`, projectId: home(winner), level: 'ok' });
     }
     return true;
-  }, [ask, drop, log]);
+  }, [attempt, drop, log, permitted]);
 
   const createProject = useCallback(async (input: ProjectInput) => {
+    if (!permitted('projects:onboard')) return null;
     if (live.current) {
-      const doc = await ask(() => api.createProject(input), 'Onboarding did not start');
+      const doc = await attempt(() => api.createProject(input), 'Onboarding did not start');
       if (doc) put('projects', doc);
       return doc;
     }
@@ -292,11 +319,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
     put('projects', doc);
     log({ action: 'Onboarding started', detail: `${doc.name} · ${repo}`, projectId: id, level: 'info' });
     return doc;
-  }, [ask, put, log]);
+  }, [attempt, put, log, permitted]);
 
   const registerMcp = useCallback(async (input: McpInput) => {
+    if (!permitted('mcp:manage')) return null;
     if (live.current) {
-      const doc = await ask(() => api.registerMcp(input), 'Server not registered');
+      const doc = await attempt(() => api.registerMcp(input), 'Server not registered');
       if (doc) put('mcp', doc);
       return doc;
     }
@@ -309,15 +337,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
     put('mcp', doc);
     log({ action: 'MCP server registered', detail: `${id} · ${input.transport} · ${input.scope} scope · tools default to ${input.defaultEffect}`, projectId: 'aios', level: 'info' });
     return doc;
-  }, [ask, put, log]);
+  }, [attempt, put, log, permitted]);
 
   const settleQuestion = useCallback(async (ref: string, index: number, answer: string | null) => {
     const p = now.current.plans.find((x) => x.ref === ref);
     const q = p?.openQuestions[index];
-    if (!p || q === undefined) return false;
+    if (!p || q === undefined || !permitted('plans:decide')) return false;
     if (live.current) {
       // the server also writes the answer into memory and streams that fact back
-      const doc = await ask(() => api.settle(ref, index, answer === null ? { defer: true } : { answer }), 'Not saved');
+      const doc = await attempt(() => api.settle(ref, index, answer === null ? { defer: true } : { answer }), 'Not saved');
       if (doc) put('plans', doc);
       return !!doc;
     }
@@ -331,19 +359,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
     put('plans', { ...p, openQuestions, answered: [...(p.answered ?? []), { q, a: answer }] } satisfies Plan);
     put('memory', {
       id: `m${n}`, ref: `MEM-${n}`, category: 'business_rules', title: q, body: answer,
-      reason: `You answered it while reviewing ${ref}.`, source: `${ref} · open question`, projectId: p.projectId,
+      reason: `${who.current.name} answered it while reviewing ${ref}.`, source: `${ref} · open question`, projectId: p.projectId,
       confidence: 'HIGH', strength: 100, hits: 0, createdAt: 'just now', lastUsed: 'just now', evidence: [ref],
       tags: ['answer', ref], pinned: false,
     } satisfies MemoryFact);
     log({ action: 'Business rule recorded', detail: `MEM-${n} · ${q}`, projectId: p.projectId, level: 'ok' });
     return true;
-  }, [ask, put, log]);
+  }, [attempt, put, log, permitted]);
 
   const dispatchPlan = useCallback(async (ref: string) => {
     const p = now.current.plans.find((x) => x.ref === ref);
-    if (!p) return false;
+    if (!p || !permitted('plans:decide')) return false;
     if (live.current) {
-      const doc = await ask(() => api.dispatch(ref), 'Not dispatched');
+      const doc = await attempt(() => api.dispatch(ref), 'Not dispatched');
       if (doc) put('plans', doc);
       return !!doc;
     }
@@ -356,23 +384,24 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
     log({ action: 'Plan dispatched', detail: `${ref} → ${p.taskRef} · ${steps[0].agent} starts: ${steps[0].label}`, projectId: p.projectId, level: 'ok', taskRef: p.taskRef });
     return true;
-  }, [ask, put, log]);
+  }, [attempt, put, log, permitted]);
 
   const compile = useCallback(async (requirement: string, projectId: string) => {
-    if (!live.current) return null;
-    const doc = await ask(() => api.compile(requirement, projectId), 'The compiler did not answer');
+    if (!live.current || !permitted('plans:compile')) return null;
+    const doc = await attempt(() => api.compile(requirement, projectId), 'The compiler did not answer');
     if (doc) put('plans', doc);
     return doc;
-  }, [ask, put]);
+  }, [attempt, put, permitted]);
 
   const recompile = useCallback(async (ref: string) => {
-    if (!live.current) return null;
-    const doc = await ask(() => api.recompile(ref), 'Not re-compiled');
+    if (!live.current || !permitted('plans:decide')) return null;
+    const doc = await attempt(() => api.recompile(ref), 'Not re-compiled');
     if (doc) put('plans', doc);
     return doc;
-  }, [ask, put]);
+  }, [attempt, put, permitted]);
 
   const setPref = useCallback(async (key: string, value: unknown, detail?: string) => {
+    if (!permitted('settings:write')) return false;
     const before = now.current.prefs.find((p) => p.id === key);
     put('prefs', { id: key, value });
     if (!live.current) {
@@ -387,20 +416,64 @@ export function DataProvider({ children }: { children: ReactNode }) {
       toast.error('Setting not saved', { description: reason(e) });
       return false;
     }
-  }, [put, drop, log]);
+  }, [put, drop, log, permitted]);
 
   const recordDecision = useCallback(async (key: string, value: string, entry: Omit<Entry, 'taskRef'>) => {
-    if (now.current.decisions.some((d) => d.id === key)) return false;
-    put('decisions', { id: key, value, decidedAt: new Date().toISOString() });
+    if (now.current.decisions.some((d) => d.id === key) || !permitted('decisions:make')) return false;
+    put('decisions', { id: key, value, decidedAt: new Date().toISOString(), decidedBy: who.current.name });
     return commit(() => api.recordDecision(key, { value, ...entry }), () => drop('decisions', key), entry);
-  }, [put, drop, commit]);
+  }, [put, drop, commit, permitted]);
 
   const searchMemory = useCallback(
     async (q: string, signal?: AbortSignal) => (await api.memory(q, signal)).map((f) => f.ref),
     [],
   );
 
+  const ask = useCallback(async (question: string, projectId?: string) => {
+    if (!permitted('ai:use')) return null;
+    if (live.current) return attempt(() => api.ask(question, projectId), 'Memory did not answer');
+    const answer = offline.ask(question, now.current.memory, projectId);
+    log({ action: 'Asked memory', detail: `“${question.slice(0, 120)}” · ${answer.citations.length} facts cited · ${answer.model}`, projectId: projectId ?? 'aios', level: 'info' });
+    return answer;
+  }, [attempt, log, permitted]);
+
+  const brainstorm = useCallback(async (idea: string, projectId?: string) => {
+    if (!permitted('ai:use')) return null;
+    const doc = live.current
+      ? await attempt(() => api.brainstorm(idea, projectId), 'The brainstorm did not run')
+      : offline.brainstorm(idea, projectId ?? null, now.current.brainstorms.length + 1, who.current.name);
+    if (!doc) return null;
+    put('brainstorms', doc);
+    if (!live.current) log({ action: 'Brainstormed', detail: `${doc.ref} · ${doc.brief.title} · ${doc.compiler.model}`, projectId: projectId ?? 'aios', level: 'ok' });
+    return doc;
+  }, [attempt, put, log, permitted]);
+
+  const extract = useCallback(async (text: string, projectId?: string) => {
+    if (!permitted('ai:use')) return null;
+    return live.current ? attempt(() => api.extract(text, projectId), 'No facts were extracted') : offline.extract(text);
+  }, [attempt, permitted]);
+
+  const addFacts = useCallback(async (projectId: string, facts: FactCandidate[]) => {
+    if (!facts.length || !permitted('memory:write')) return null;
+    if (live.current) {
+      const docs = await attempt(() => api.addFacts(projectId, facts), 'Facts not added');
+      docs?.forEach((d) => put('memory', d));
+      return docs;
+    }
+    const n = nextNumber(now.current.memory.map((f) => f.ref));
+    const docs = facts.map((f, i) => ({
+      id: `m${n + i}`, ref: `MEM-${n + i}`, category: f.category, title: f.title, body: f.body,
+      reason: f.reason || `Added from text by ${who.current.name}.`, source: `Added from text by ${who.current.name}`, projectId,
+      confidence: f.confidence, strength: 80, hits: 0, createdAt: 'just now', lastUsed: 'never', evidence: [],
+      tags: [f.category.replace('_', '-')], pinned: false,
+    } satisfies MemoryFact));
+    docs.forEach((d) => put('memory', d));
+    log({ action: 'Memory added', detail: `${docs.length} fact${docs.length > 1 ? 's' : ''} · ${docs[0].title.slice(0, 80)}`, projectId: home(docs[0]), level: 'ok' });
+    return docs;
+  }, [attempt, put, log, permitted]);
+
   const reset = useCallback(async () => {
+    if (!permitted('workspace:admin')) return false;
     if (!live.current) { setDomain(seed()); return true; }
     try {
       const h = await api.reset();
@@ -411,15 +484,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
       toast.error('Reset failed', { description: reason(e) });
       return false;
     }
-  }, []);
+  }, [permitted]);
 
   const value = useMemo<DataCtx>(
     () => ({
       ...domain, mode, health, decide, moveTask, toggleCheck, setPinned, archive, resolveConflict, createProject,
       registerMcp, settleQuestion, dispatchPlan, compile, recompile, searchMemory, reset, setPref, recordDecision,
+      ask, brainstorm, extract, addFacts,
     }),
     [domain, mode, health, decide, moveTask, toggleCheck, setPinned, archive, resolveConflict, createProject,
-      registerMcp, settleQuestion, dispatchPlan, compile, recompile, searchMemory, reset, setPref, recordDecision],
+      registerMcp, settleQuestion, dispatchPlan, compile, recompile, searchMemory, reset, setPref, recordDecision,
+      ask, brainstorm, extract, addFacts],
   );
   return <C.Provider value={value}>{children}</C.Provider>;
 }

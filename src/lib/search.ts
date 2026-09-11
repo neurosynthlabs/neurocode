@@ -1,5 +1,5 @@
 import type { McpServer, MemoryFact, Plan, Project, SearchHit, Task } from '@/types';
-import { NAV } from './nav';
+import { NAV, allowed } from './nav';
 import { agents } from '@/mock/agents';
 
 /** Curated hits for what the index cannot read yet: code, database objects, bugs, commits, tests. */
@@ -33,9 +33,13 @@ export interface Indexable { projects: Project[]; tasks: Task[]; plans: Plan[]; 
  * Everything ⌘K can find. Built from the live store, so a plan compiled a minute ago or a project
  * onboarded just now is searchable at once. Hits that name one record open it through `?ref=`.
  */
-export function buildIndex({ projects, tasks, plans, memory, mcp }: Indexable): SearchHit[] {
+export function buildIndex(
+  { projects, tasks, plans, memory, mcp }: Indexable,
+  /** `useAuth().canAny`: screens a role cannot open are left out. */
+  canAny: (...perms: string[]) => boolean = () => true,
+): SearchHit[] {
   return [
-    ...NAV.map<SearchHit>((n) => ({
+    ...NAV.filter((n) => allowed(n, canAny)).map<SearchHit>((n) => ({
       id: `nav-${n.to}`, group: 'Navigate', title: n.label,
       subtitle: n.keywords.split(' ').slice(0, 6).join(' · '), to: n.to, icon: n.icon,
     })),

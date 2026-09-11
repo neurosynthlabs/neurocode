@@ -70,7 +70,7 @@ export const settingsGroups: SettingGroup[] = [
   ]},
   { id: 'appearance', name: 'Appearance', items: [] },
   { id: 'apikeys', name: 'API Keys', items: [
-    { id: 'key.deepseek', label: 'DeepSeek', description: 'Reasoning and planning. Stored in the OS keychain, never rendered into a prompt.', kind: 'secret', value: '' },
+    { id: 'key.deepseek', label: 'DeepSeek', description: 'Reasoning and planning. Set in Admin → AI providers, kept owner-only on this machine, never rendered into a prompt.', kind: 'secret', value: '' },
     { id: 'key.moonshot', label: 'Moonshot (Kimi)', description: 'Vision and review.', kind: 'secret', value: '' },
     { id: 'key.zhipu', label: 'Zhipu (GLM)', description: 'Fallback coding model.', kind: 'secret', value: '' },
     { id: 'key.github', label: 'GitHub', description: 'Repository and issue access for the research agent.', kind: 'secret', value: '' },

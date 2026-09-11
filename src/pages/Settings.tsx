@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { RotateCcw, Check } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -10,6 +11,7 @@ import { settingsGroups } from '@/mock/settings';
 import { useTheme, THEMES } from '@/lib/theme';
 import { categoryMeta } from '@/mock/memory';
 import { useData, usePref } from '@/lib/data';
+import { useAuth } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 
 const SETTING_DEFAULTS: Record<string, string | boolean> = Object.fromEntries(
@@ -19,6 +21,8 @@ const SETTING_DEFAULTS: Record<string, string | boolean> = Object.fromEntries(
 export default function Settings() {
   const t = useTheme();
   const data = useData();
+  const nav = useNavigate();
+  const { roleNames } = useAuth();
   // Resetting data is two clicks: the first arms the button for four seconds, the second does it.
   const [armed, setArmed] = useState(false);
   useEffect(() => {
@@ -158,12 +162,13 @@ export default function Settings() {
                           {i.kind === 'text' && (
                             <Field value={String(vals[i.id])} onChange={(v) => set(i.id, v)} mono />
                           )}
-                          {i.kind === 'secret' && (
-                            <div className="flex h-9 items-center justify-between gap-2 rounded-lg border border-line bg-surface-2 px-2.5">
-                              <span className="font-mono text-[13px] text-dim">••••••••••••</span>
-                              <Tag tone="ok">keychain</Tag>
+                          {i.kind === 'secret' && (i.id === 'key.deepseek' ? (
+                            <Button size="sm" variant="outline" className="w-full" onClick={() => nav('/admin/ai')}>Manage in AI providers</Button>
+                          ) : (
+                            <div className="flex h-9 items-center justify-end">
+                              <Tag tone="neutral">Arrives with its integration</Tag>
                             </div>
-                          )}
+                          ))}
                         </div>
                       </div>
                     ))}
@@ -193,10 +198,10 @@ export default function Settings() {
                 <Ascii className="max-h-[420px] overflow-auto">{exported}</Ascii>
               </Panel>
               <Panel eyebrow="Where this lives" title="Storage">
-                <KV k="Preferences" v="~/.neurocode/settings.json" mono />
+                <KV k="Preferences" v={data.mode === 'live' ? 'SQLite · prefs table' : 'this tab only'} mono />
                 <KV k="Project rules" v=".os/rules/*.md" mono />
-                <KV k="Secrets" v="OS keychain — never a file" mono />
-                <KV k="Memory" v="Postgres + Qdrant, both local" mono />
+                <KV k="Model keys" v="server/secrets.json · owner-only" mono />
+                <KV k="Memory" v={data.mode === 'live' ? 'SQLite + FTS5 · local' : 'seed data · this tab only'} mono />
                 <KV k="Operational data" v={data.mode === 'live' ? 'SQLite + FTS5 · local API' : 'seed data · this tab only'} mono />
                 {data.health && <KV k="Database file" v={data.health.db.split('/').slice(-2).join('/')} mono />}
                 {data.health?.compiler && (
@@ -223,7 +228,7 @@ export default function Settings() {
               <Panel eyebrow="Build" title="About">
                 <KV k="Version" v={<Mono>v{__APP_VERSION__}</Mono>} />
                 <KV k="Runtime" v="local · self-hosted" />
-                <KV k="Operator" v="AI Project Manager" />
+                <KV k="Your roles" v={roleNames || '—'} />
                 <KV k="Agents" v="12 registered" />
               </Panel>
             </div>

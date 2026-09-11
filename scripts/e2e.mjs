@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // NeuroCode full-stack test. It runs the real API on a throwaway database and the real web app in dev
-// mode, proxying to it, then drives a headless browser to prove two things: what the operator does is
-// written to the database, and what the server records streams into an open tab.
+// mode, proxying to it, then drives a headless browser through first-run setup and proves that what
+// people do is written to the database, that what the server records streams into an open tab, that
+// the AI features answer with no key, and that roles decide who may change what.
 //
 //   npm run e2e          needs uv; the API's dependencies are installed on the first run
 import { spawn, spawnSync } from 'node:child_process';
@@ -42,10 +43,21 @@ async function waitFor(url, what, ms = 60000) {
   }
   throw new Error(`${what} did not come up at ${url}`);
 }
-async function api(p, init) {
-  const r = await fetch(API + p, init);
-  if (!r.ok) throw new Error(`${init?.method ?? 'GET'} ${p} → ${r.status}`);
+const OWNER = { workspace: 'E2E Works', name: 'Asha Rao', email: 'asha@e2e.test', password: 'e2e-owner-password' };
+const VIEWER = { name: 'Vik Viewer', email: 'vik@e2e.test', password: 'e2e-viewer-password' };
+// The test's own calls sign in like a script would: a bearer token, no cookie.
+let TOKEN = '';
+async function api(p, init = {}) {
+  const r = await fetch(API + p, { ...init, headers: { ...init.headers, ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}) } });
+  if (!r.ok) throw new Error(`${init.method ?? 'GET'} ${p} → ${r.status}`);
   return r.json();
+}
+async function tokenFor(email, password) {
+  const r = await fetch(`${API}/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }),
+  });
+  if (!r.ok) throw new Error(`signing in ${email} → ${r.status}`);
+  return /nc_session=([^;]+)/.exec(r.headers.get('set-cookie') ?? '')?.[1] ?? '';
 }
 const expect = (cond, msg) => { if (!cond) throw new Error(msg); };
 
@@ -69,7 +81,8 @@ try {
   // Both servers are spawned directly (not through uv run / npm) so killing them really stops them.
   run('api', path.join(ROOT, 'server/.venv/bin/python'),
     ['-m', 'uvicorn', 'app.main:create_app', '--factory', '--app-dir', 'server', '--host', '127.0.0.1', '--port', String(API_PORT)],
-    { NEUROCODE_DB: path.join(TMP, 'e2e.db'), NEUROCODE_COMPILER: 'rules' });
+    // No server/.env and no key from this shell: the run must not depend on, or reach, a real model.
+    { NEUROCODE_DB: path.join(TMP, 'e2e.db'), NEUROCODE_COMPILER: 'rules', NEUROCODE_ENV_FILE: '', DEEPSEEK_API_KEY: '' });
   run('web', process.execPath,
     [path.join(ROOT, 'node_modules/vite/bin/vite.js'), '--port', String(WEB_PORT), '--strictPort', '--host', '127.0.0.1'],
     { NC_API_PORT: String(API_PORT) });
@@ -83,9 +96,21 @@ try {
   // An open EventSource keeps the network busy forever, so never wait for networkidle here.
   const open = (route) => page.goto(WEB + route, { waitUntil: 'domcontentloaded' });
 
-  await step('the app finds the local API and says so', async () => {
+  await step('first run: the setup wizard makes the Owner and opens the workspace', async () => {
     await open('/');
+    await page.getByText('Welcome to NeuroCode').waitFor({ timeout: 20000 });
+    await page.getByLabel('Workspace name').fill(OWNER.workspace);
+    await page.getByRole('button', { name: /Continue/ }).click();
+    await page.getByLabel('Your name').fill(OWNER.name);
+    await page.getByLabel('Email', { exact: true }).fill(OWNER.email);
+    await page.getByLabel('Password', { exact: true }).fill(OWNER.password);
+    await page.getByLabel('Password, again').fill(OWNER.password);
+    await page.getByRole('button', { name: /Create workspace/ }).click();
+    await page.getByRole('button', { name: 'Skip for now' }).click();
     await page.getByText('saved locally').waitFor({ timeout: 20000 });
+    TOKEN = await tokenFor(OWNER.email, OWNER.password);
+    const me = await api('/auth/me');
+    expect(me.user.roles.includes('owner') && me.workspace.name === OWNER.workspace, `signed in with roles ${me.user.roles}`);
   });
 
   await step('approving in the UI is written to the database', async () => {
@@ -217,6 +242,82 @@ try {
     const after = await page.getByRole('switch').first().getAttribute('aria-checked');
     expect(after !== before, `the switch is back to ${after} after a reload`);
     expect((await api('/prefs')).some((p) => p.id === 'skills.enabled'), 'skills.enabled is not in the database');
+  });
+
+  await step('asking memory answers with no key, and cites its facts', async () => {
+    await open('/');
+    await page.getByText('saved locally').waitFor({ timeout: 20000 });
+    await page.getByRole('radio', { name: 'Ask' }).click();
+    await page.getByLabel('Requirement').fill('How is CGST and SGST split on interstate invoices?');
+    await page.getByRole('button', { name: 'Ask memory' }).click();
+    await page.getByText(/Memory search, no model/).waitFor({ timeout: 10000 });
+    expect(await page.locator('a[href^="/memory?ref="]').count() > 0, 'the answer cites no fact');
+  });
+
+  await step('a brainstorm becomes a stored brief', async () => {
+    await page.getByRole('radio', { name: 'Brainstorm' }).click();
+    await page.getByLabel('Requirement').fill('A vendor portal where suppliers raise invoice disputes themselves.');
+    await page.getByRole('button', { name: 'Brainstorm', exact: true }).click();
+    await page.waitForURL('**/brainstorm?ref=IDEA-1', { timeout: 10000 });
+    await page.getByText('Plan the MVP').waitFor({ timeout: 5000 });
+    const [doc] = await api('/ai/brainstorms');
+    expect(doc?.ref === 'IDEA-1' && doc.compiler.provider === 'rules', `stored ${doc?.ref} from ${doc?.compiler?.provider}`);
+  });
+
+  await step('pasted notes become memory facts', async () => {
+    await open('/memory');
+    await page.getByRole('button', { name: /Add from text/ }).click();
+    const dlg = page.locator('[data-slot="dialog-content"]');
+    await dlg.getByLabel('Text to read').fill('Billing review. Credit notes must always reference the original invoice number. Lunch was fine.');
+    await dlg.getByRole('button', { name: /Find facts/ }).click();
+    await dlg.getByRole('button', { name: 'Add 1 fact' }).click();
+    await page.waitForTimeout(500);
+    const hits = await api('/memory?q=credit%20notes%20original');
+    expect(hits.some((f) => f.body.startsWith('Credit notes must always')), 'the fact is not in memory');
+  });
+
+  await step('a model key is saved masked, never logged, and can be removed', async () => {
+    await open('/admin/ai');
+    await page.getByLabel('API key').fill('sk-e2e-test-0000abcd');
+    await page.getByRole('button', { name: 'Save key' }).click();
+    await page.getByText('••••abcd').waitFor({ timeout: 5000 });
+    const cfg = await api('/admin/ai');
+    expect(cfg.deepseek.hasKey && cfg.deepseek.keyMask === '••••abcd', `the key reads ${cfg.deepseek.keyMask}`);
+    expect(!JSON.stringify(await api('/admin/audit')).includes('0000abcd'), 'the key leaked into the audit log');
+    await page.getByRole('button', { name: 'Remove key' }).click();
+    await page.getByText('Not set').waitFor({ timeout: 5000 });
+  });
+
+  await step('an admin adds a Viewer, and the API refuses the Viewer an approval', async () => {
+    await open('/admin/users');
+    await page.getByRole('button', { name: /Add person/ }).first().click();
+    const dlg = page.locator('[data-slot="dialog-content"]');
+    await dlg.getByLabel('Name', { exact: true }).fill(VIEWER.name);
+    await dlg.getByLabel('Email', { exact: true }).fill(VIEWER.email);
+    await dlg.getByLabel('Temporary password').fill(VIEWER.password);
+    await dlg.getByRole('checkbox', { name: /^Engineer/ }).uncheck();
+    await dlg.getByRole('checkbox', { name: /^Viewer/ }).check();
+    await dlg.getByRole('button', { name: 'Add person' }).click();
+    await dlg.getByText(`${VIEWER.name} can sign in now`).waitFor({ timeout: 5000 });
+    await dlg.getByRole('button', { name: 'Done' }).click();
+    const viewer = await tokenFor(VIEWER.email, VIEWER.password);
+    const [a] = await api('/approvals?status=pending');
+    const r = await fetch(`${API}/approvals/${a.ref}/approve`, { method: 'POST', headers: { Authorization: `Bearer ${viewer}` } });
+    expect(r.status === 403, `the Viewer's approval got ${r.status}`);
+  });
+
+  await step('signed in as the Viewer, Admin is hidden and changes are refused', async () => {
+    await page.getByRole('button', { name: /^Account:/ }).click();
+    await page.getByRole('button', { name: 'Sign out' }).click();
+    await page.getByLabel('Email').fill(VIEWER.email);
+    await page.getByLabel('Password').fill(VIEWER.password);
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await page.getByText('saved locally').waitFor({ timeout: 20000 });
+    expect(await page.getByRole('link', { name: 'People', exact: true }).count() === 0, 'a Viewer sees Admin → People');
+    await open('/permissions');
+    await page.getByText('saved locally').waitFor({ timeout: 20000 });
+    await page.getByRole('button', { name: 'Approve', exact: true }).first().click();
+    await page.getByText('Your role cannot do that').waitFor({ timeout: 5000 });
   });
 
   if (pageErrors.length) results.push(`  ✗ uncaught errors in the page\n      ${pageErrors.join('\n      ')}`), (process.exitCode = 1);

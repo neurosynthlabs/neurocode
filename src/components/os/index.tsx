@@ -4,7 +4,7 @@
    boxes in boxes, capsule tags, slim meters, sentence-case labels.
    Built on the shadcn token contract so every theme repaints them.
    ═══════════════════════════════════════════════════════════════ */
-import type { CSSProperties, ReactNode } from 'react';
+import { useId, type CSSProperties, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import type { Risk } from '@/types';
 
@@ -417,29 +417,41 @@ export function Avatar2({ label, tone = 'brand' }: { label: string; tone?: Tone 
 
 /** Labelled input. Focus ring follows the brand colour. */
 export function Field({
-  value, onChange, placeholder, icon, label, className, mono, type = 'text', onClear,
+  value, onChange, placeholder, icon, label, className, mono, type = 'text', onClear, autoComplete, autoFocus, disabled, hint,
 }: {
   value: string; onChange: (v: string) => void; placeholder?: string; icon?: ReactNode;
   label?: string; className?: string; mono?: boolean; type?: string; onClear?: () => void;
+  autoComplete?: string; autoFocus?: boolean; disabled?: boolean;
+  /** A quiet line under the input: a rule it must meet, or what it is for. */
+  hint?: ReactNode;
 }) {
+  // The hint sits outside the label and is linked by id, so the input's name stays just its label.
+  const hintId = useId();
   return (
-    <label className={cn('block', className)}>
-      {label && <span className="mb-1.5 block text-[12.5px] font-medium text-soft">{label}</span>}
-      <span className="focus-brand flex h-9 items-center gap-2 rounded-lg border border-line bg-surface-2/60 px-3 transition-colors">
-        {icon && <span className="shrink-0 text-dim">{icon}</span>}
-        <input
-          type={type}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
-          className={cn('min-w-0 flex-1 bg-transparent text-[13.5px] text-ink placeholder:text-dim focus-visible:outline-none',
-            mono && 'font-mono text-[13px]')}
-        />
-        {onClear && value && (
-          <button onClick={onClear} className="shrink-0 text-[12px] text-dim hover:text-ink">Clear</button>
-        )}
-      </span>
-    </label>
+    <div className={cn('block', disabled && 'opacity-60', className)}>
+      <label className="block">
+        {label && <span className="mb-1.5 block text-[12.5px] font-medium text-soft">{label}</span>}
+        <span className="focus-brand flex h-9 items-center gap-2 rounded-lg border border-line bg-surface-2/60 px-3 transition-colors">
+          {icon && <span className="shrink-0 text-dim">{icon}</span>}
+          <input
+            type={type}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder}
+            autoComplete={autoComplete}
+            autoFocus={autoFocus}
+            disabled={disabled}
+            aria-describedby={hint ? hintId : undefined}
+            className={cn('min-w-0 flex-1 bg-transparent text-[13.5px] text-ink placeholder:text-dim focus-visible:outline-none disabled:cursor-not-allowed',
+              mono && 'font-mono text-[13px]')}
+          />
+          {onClear && value && (
+            <button type="button" onClick={onClear} className="shrink-0 text-[12px] text-dim hover:text-ink">Clear</button>
+          )}
+        </span>
+      </label>
+      {hint && <span id={hintId} className="mt-1.5 block text-[12px] text-dim">{hint}</span>}
+    </div>
   );
 }
 

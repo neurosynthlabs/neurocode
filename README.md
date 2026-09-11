@@ -1,13 +1,14 @@
 # NeuroCode
 
-**An AI engineering OS for a single operator.**
+**An AI engineering OS for your team, on your own machine.**
 
 You are the AI Project Manager and the final approver. Everything else — planning, research,
 coding, testing, review, DevOps, legacy analysis, memory and knowledge management — is done by
 twelve specialist agents working in isolated git worktrees.
 
-This repository is the **static frontend prototype**: 32 screens, real-shaped mock data, no backend.
-It exists so the UX can be settled before a single service is written.
+This repository holds the web app (32 screens and an Admin section) and a local API: FastAPI over one
+SQLite file, with accounts, roles and permissions, an audit log and an AI gateway. `docs/ARCHITECTURE.md`
+has the whole shape. The public demo runs the same app on sample data, with no server behind it.
 
 ## What is in here
 
@@ -20,7 +21,8 @@ It exists so the UX can be settled before a single service is written.
 | Thinking | Brainstorm · Research |
 | Governance | Activity · Sessions · Permissions · Cost & Usage · Evals · Settings |
 
-Plus a login screen and a ⌘K palette that searches code, memory, tasks, decisions, commits and tests.
+Plus Admin (People · Roles & permissions · Teams · AI providers · Audit log · Workspace), first-run
+setup, sign-in, and a ⌘K palette that searches code, memory, tasks, decisions, commits and tests.
 
 ## The ideas the UI is arguing for
 
@@ -50,9 +52,14 @@ sizes and three sidebar styles — all driven by CSS variables written at runtim
 
 ```bash
 npm install
-npm run dev      # http://localhost:5173
-npm run build
+npm run dev:start   # web on http://localhost:5180, API on 127.0.0.1:8787 (the API needs uv)
 ```
+
+The first visit opens the setup wizard: name the workspace and create the Owner account. Every AI
+feature works with no key (offline rules, labelled as such); add a DeepSeek key or a local Ollama
+model in Admin → AI providers when you are ready.
+
+Checks: `npm run build` · `npm run smoke` · `npm run lint:layout` · `npm run api:test` · `npm run e2e`.
 
 ## Conventions
 

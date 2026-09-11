@@ -5,10 +5,12 @@ import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import {
   ChevronRight, Circle, Cpu, FileText, GripVertical, Lightbulb, ListTodo, PanelLeftClose, PanelLeftOpen,
-  Plug, Puzzle, Rocket, Search, Settings, ShieldCheck, SquarePen,
+  Plug, Puzzle, Rocket, Search, ShieldCheck, SquarePen,
 } from 'lucide-react';
 import { ICONS } from '@/lib/icons';
-import { NAV, NAV_SECTIONS, type NavItem, type NavSection } from '@/lib/nav';
+import { NAV, NAV_SECTIONS, allowed, type NavItem, type NavSection } from '@/lib/nav';
+import { useAuth } from '@/lib/auth';
+import { AccountMenu } from './AccountMenu';
 import { cn } from '@/lib/utils';
 import { LogoMark, Wordmark } from '@/components/os/Logo';
 import { useTheme } from '@/lib/theme';
@@ -37,7 +39,7 @@ type Count = { n: number; alert?: boolean };
 /** Each section's tint for its icon tiles. Status tokens, so every theme repaints them. */
 const TONE: Record<NavSection, string> = {
   Home: 'var(--os-brand)', Build: 'var(--os-info)', Knowledge: 'var(--os-violet)',
-  Platform: 'var(--os-warn)', Governance: 'var(--os-ok)',
+  Platform: 'var(--os-warn)', Governance: 'var(--os-ok)', Admin: 'var(--os-danger)',
 };
 const SUB_ICON: Record<string, Glyph> = {
   Planning: ListTodo, Execution: Cpu, Quality: ShieldCheck, Delivery: Rocket,
@@ -46,10 +48,10 @@ const SUB_ICON: Record<string, Glyph> = {
 
 type Block = { kind: 'item'; item: NavItem } | { kind: 'sub'; name: string; items: NavItem[] };
 
-/** A section's items in order, with consecutive items of one sub-section folded into a block. */
-function blocksOf(section: NavSection): Block[] {
+/** A section's items in order, only those the role may open, with one sub-section's items folded into a block. */
+function blocksOf(section: NavSection, canAny: (...perms: string[]) => boolean): Block[] {
   const out: Block[] = [];
-  for (const item of NAV.filter((n) => n.section === section)) {
+  for (const item of NAV.filter((n) => n.section === section && allowed(n, canAny))) {
     const last = out[out.length - 1];
     if (item.sub && last?.kind === 'sub' && last.name === item.sub) last.items.push(item);
     else if (item.sub) out.push({ kind: 'sub', name: item.sub, items: [item] });
@@ -57,7 +59,6 @@ function blocksOf(section: NavSection): Block[] {
   }
   return out;
 }
-const BLOCKS = Object.fromEntries(NAV_SECTIONS.map((s) => [s, blocksOf(s)])) as Record<NavSection, Block[]>;
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -84,7 +85,12 @@ export function Sidebar({ collapsed, onToggle, onSearch, variant = 'rail' }: {
   const loc = useLocation();
   const nav = useNavigate();
   const { rail } = useTheme();
-  const { tasks, plans, approvals, conflicts, mode } = useData();
+  const { tasks, plans, approvals, conflicts } = useData();
+  const { canAny } = useAuth();
+  const blocks = useMemo(
+    () => Object.fromEntries(NAV_SECTIONS.map((s) => [s, blocksOf(s, canAny)])) as Record<NavSection, Block[]>,
+    [canAny],
+  );
   const ref = useRef<HTMLElement>(null);
   const [resizing, setResizing] = useState(false);
   const [width, setWidth] = useState(() => load(WKEY, DEF_W));
@@ -193,12 +199,13 @@ export function Sidebar({ collapsed, onToggle, onSearch, variant = 'rail' }: {
         {/* Navigation */}
         <nav aria-label="Main" className={cn('sb-scroll min-h-0 flex-1 overflow-y-auto pb-4', mini ? 'px-2' : 'px-2.5')}>
           {NAV_SECTIONS.map((section, si) => {
+            if (!blocks[section].length) return null;  // nothing in it this role may open
             if (mini) {
               return (
                 <div key={section}>
                   {si > 0 && <div className="mx-2 my-2 h-px" style={{ background: 'var(--rail-line)' }} />}
                   <div className="space-y-0.5">
-                    {NAV.filter((n) => n.section === section).map((n) => (
+                    {NAV.filter((n) => n.section === section && allowed(n, canAny)).map((n) => (
                       <Flyout key={n.to} label={n.label}>
                         <NavLink
                           to={n.to} end={n.to === '/'} aria-label={n.label}
@@ -236,7 +243,7 @@ export function Sidebar({ collapsed, onToggle, onSearch, variant = 'rail' }: {
                 )}
                 <Fold open={open}>
                   <div className="space-y-px">
-                    {BLOCKS[section].map((b) => (b.kind === 'item'
+                    {blocks[section].map((b) => (b.kind === 'item'
                       ? <Row key={b.item.to} item={b.item} tone={TONE[section]} count={counts[b.item.to]} />
                       : (
                         <Sub
@@ -272,26 +279,7 @@ export function Sidebar({ collapsed, onToggle, onSearch, variant = 'rail' }: {
 
         {/* The operator */}
         <div className={cn('shrink-0 py-2.5', mini ? 'px-2' : 'px-2.5')} style={{ borderTop: '1px solid var(--rail-line)' }}>
-          <NavLink
-            to="/settings" title="Settings"
-            className={({ isActive: a }) => cn('rail-row flex items-center gap-2.5 py-1.5', mini ? 'justify-center' : 'px-2', a && 'is-active')}
-            style={{ borderRadius: RADIUS }}
-          >
-            <span className="grid size-8 shrink-0 place-items-center rounded-full text-[12px] font-semibold"
-              style={{ background: 'var(--rail-accent)', color: 'var(--os-brand-ink)' }}>RR</span>
-            {!mini && (
-              <>
-                <span className="min-w-0 flex-1 leading-tight">
-                  <span className="block truncate text-[13.5px] font-semibold" style={{ color: 'var(--rail-ink)' }}>Rajat</span>
-                  <span className="mt-0.5 flex items-center gap-1.5 text-[12px]" style={{ color: 'var(--rail-dim)' }}>
-                    <span className="size-1.5 shrink-0 rounded-full" style={{ background: mode === 'live' ? 'var(--os-ok)' : 'var(--rail-dim)' }} />
-                    <span className="truncate">{mode === 'live' ? 'Saved locally' : mode === 'demo' ? 'Demo data' : 'Connecting…'}</span>
-                  </span>
-                </span>
-                <Settings className="size-4 shrink-0" strokeWidth={1.8} style={{ color: 'var(--rail-dim)' }} />
-              </>
-            )}
-          </NavLink>
+          <AccountMenu mini={mini} />
           {mini && (
             <button
               onClick={onToggle} aria-label="Expand sidebar"

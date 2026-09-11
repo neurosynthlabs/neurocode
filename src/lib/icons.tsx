@@ -4,17 +4,17 @@
    moment a data file starts referencing it (scripts/smoke.mjs does not catch a missing one —
    it silently falls back to a circle). */
 import {
-  Activity, Blocks, Bot, Brain, Bug, Cable, Circle, Coins, Compass, Cpu, Crown, Database, Dna, Eye,
-  FileCode, FileText, FlaskConical, FolderKanban, Gauge, GitBranchPlus, GitCommit, GitMerge, History,
-  LayoutDashboard, Library, Lightbulb, ListChecks, Mic, Microscope, Monitor, Network, Plug, Rocket,
-  Scale, ScanEye, ScrollText, Server, Settings, ShieldAlert, ShieldCheck, Sparkles, SquareSlash, Table2,
-  Webhook, Workflow, type LucideIcon,
+  Activity, Blocks, Bot, Brain, BrainCircuit, Bug, Building2, Cable, Circle, Coins, Compass, Cpu, Crown, Database,
+  Dna, Eye, FileClock, FileCode, FileText, FlaskConical, FolderKanban, Gauge, GitBranchPlus, GitCommit, GitMerge,
+  History, KeyRound, LayoutDashboard, Library, Lightbulb, ListChecks, Mic, Microscope, Monitor, Network, Plug,
+  Rocket, Scale, ScanEye, ScrollText, Server, Settings, ShieldAlert, ShieldCheck, Sparkles, SquareSlash, Table2,
+  Users, UsersRound, Webhook, Workflow, type LucideIcon,
 } from 'lucide-react';
 
 export const ICONS: Record<string, LucideIcon> = {
-  Activity, Blocks, Bot, Brain, Bug, Cable, Circle, Coins, Compass, Cpu, Crown, Database, Dna, Eye,
-  FileCode, FileText, FlaskConical, FolderKanban, Gauge, GitBranchPlus, GitCommit, GitMerge, History,
-  LayoutDashboard, Library, Lightbulb, ListChecks, Mic, Microscope, Monitor, Network, Plug, Rocket,
-  Scale, ScanEye, ScrollText, Server, Settings, ShieldAlert, ShieldCheck, Sparkles, SquareSlash, Table2,
-  Webhook, Workflow,
+  Activity, Blocks, Bot, Brain, BrainCircuit, Bug, Building2, Cable, Circle, Coins, Compass, Cpu, Crown, Database,
+  Dna, Eye, FileClock, FileCode, FileText, FlaskConical, FolderKanban, Gauge, GitBranchPlus, GitCommit, GitMerge,
+  History, KeyRound, LayoutDashboard, Library, Lightbulb, ListChecks, Mic, Microscope, Monitor, Network, Plug,
+  Rocket, Scale, ScanEye, ScrollText, Server, Settings, ShieldAlert, ShieldCheck, Sparkles, SquareSlash, Table2,
+  Users, UsersRound, Webhook, Workflow,
 };

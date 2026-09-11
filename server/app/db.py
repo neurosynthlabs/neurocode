@@ -1,9 +1,10 @@
 """SQLite storage for the NeuroCode API.
 
-One file, no server process, full-text search through FTS5 — the right size for a single-operator,
-local-first tool, and it runs on a laptop without a container. Each record is kept as the same JSON
-document the frontend's mocks use; the few fields the API filters on or mutates are lifted into real
-columns and kept in step with the document.
+One file, no server process, full-text search through FTS5: the right size for a local-first tool.
+The schema lives in numbered SQL migrations (app/migrations). This module applies them, then offers two
+kinds of access: documents (domain records kept as JSON shaped like the frontend's types, with the
+fields the API filters on lifted into columns) and plain rows (identity, access, audit and settings,
+which are strictly relational).
 """
 from __future__ import annotations
 
@@ -12,32 +13,19 @@ import re
 import sqlite3
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 SEED_PATH = Path(__file__).resolve().parent.parent / "seed" / "seed.json"
+MIGRATIONS = Path(__file__).resolve().parent / "migrations"
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS projects  (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS agents    (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS tasks     (id TEXT PRIMARY KEY, ref TEXT UNIQUE NOT NULL, project_id TEXT, status TEXT, doc TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY, ref TEXT UNIQUE NOT NULL, status TEXT NOT NULL, doc TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS memory    (id TEXT PRIMARY KEY, ref TEXT UNIQUE NOT NULL, project_id TEXT, category TEXT,
-                                      pinned INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0, doc TEXT NOT NULL);
-CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(ref, title, body, reason, tags, content='');
-CREATE TABLE IF NOT EXISTS plans     (id TEXT PRIMARY KEY, ref TEXT UNIQUE NOT NULL, project_id TEXT,
-                                      created REAL NOT NULL DEFAULT 0, doc TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS conflicts (id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'open', doc TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS mcp       (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS prefs     (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS decisions (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS activity  (seq INTEGER PRIMARY KEY AUTOINCREMENT, position REAL NOT NULL, doc TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS activity_position ON activity(position);
-"""
-
-# Seeded one table at a time, so a database made by an older version gains the tables it is missing
-# and keeps every change it already holds.
-TABLES = ("projects", "agents", "tasks", "approvals", "memory", "plans", "conflicts", "mcp", "prefs", "decisions", "activity")
+# Document tables, seeded from seed.json one at a time, so a database made by an older version gains
+# the tables it is missing and keeps every change it already holds.
+TABLES = ("projects", "agents", "tasks", "approvals", "memory", "plans", "conflicts", "mcp", "prefs", "decisions",
+          "brainstorms", "activity")
 
 # Words that carry no meaning for relevance, English and Hinglish alike.
 STOP = set("""the and for with when that this from into are was were not but should must have has had then than
@@ -46,7 +34,15 @@ been being does did done fix make need needs want please mein hai hain raha rahi
 aur nahi ho yeh woh tha thi abhi bhi jo kya kuch sab""".split())
 
 
-def _j(doc: dict[str, Any]) -> str:
+def now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def load_seed() -> dict[str, Any]:
+    return json.loads(SEED_PATH.read_text())
+
+
+def _j(doc: Any) -> str:
     return json.dumps(doc, ensure_ascii=False)
 
 
@@ -67,18 +63,43 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.lock = threading.RLock()
         with self.lock:
-            self.conn.executescript(SCHEMA)
+            self.conn.execute("PRAGMA foreign_keys = ON")
+            self.conn.execute("PRAGMA busy_timeout = 5000")
+            if path != ":memory:":
+                self.conn.execute("PRAGMA journal_mode = WAL")  # readers never wait for the writer
+        self.migrate()
         empty = [t for t in TABLES if self.count(t) == 0]
         if empty:
             self.seed(tables=empty)
 
-    # ── setup ────────────────────────────────────────────────────
+    # ── schema ───────────────────────────────────────────────────
+    def migrate(self) -> list[str]:
+        """Apply every migration not applied yet, each in its own transaction. Returns what ran."""
+        ran: list[str] = []
+        with self.lock:
+            self.conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations "
+                              "(version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)")
+            self.conn.commit()
+            done = {r[0] for r in self.conn.execute("SELECT version FROM schema_migrations")}
+            for f in sorted(MIGRATIONS.glob("[0-9]*.sql")):
+                version = int(f.name.split("_", 1)[0])
+                if version in done:
+                    continue
+                try:
+                    self.conn.executescript(f"BEGIN;\n{f.read_text()}\n"
+                                            f"INSERT INTO schema_migrations VALUES ({version}, '{f.stem}', '{now_iso()}');\nCOMMIT;")
+                except sqlite3.Error:
+                    self.conn.execute("ROLLBACK")
+                    raise
+                ran.append(f.stem)
+        return ran
+
     def count(self, table: str) -> int:
         with self.lock:
             return self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
     def seed(self, data: dict[str, Any] | None = None, tables: tuple[str, ...] | list[str] = TABLES) -> None:
-        data = data or json.loads(SEED_PATH.read_text())
+        data = data or load_seed()
         with self.lock, self.conn:
             c = self.conn
             for t in tables:
@@ -94,9 +115,10 @@ class Store:
                 elif t == "approvals":
                     c.executemany("INSERT INTO approvals VALUES (?, ?, ?, ?)",
                                   [(x["id"], x["ref"], x["status"], _j(x)) for x in rows])
-                elif t == "plans":
-                    c.executemany("INSERT INTO plans(id, ref, project_id, created, doc) VALUES (?, ?, ?, 0, ?)",
-                                  [(x["id"], x["ref"], x["projectId"], _j(x)) for x in rows])
+                elif t in ("plans", "brainstorms"):
+                    col = "ref, " if t == "plans" else ""
+                    c.executemany(f"INSERT INTO {t}(id, {col}project_id, created, doc) VALUES (?, {'?, ' if col else ''}?, 0, ?)",
+                                  [((x["id"], x["ref"]) if col else (x["id"],)) + (x.get("projectId"), _j(x)) for x in rows])
                 elif t == "conflicts":
                     c.executemany("INSERT INTO conflicts(id, status, doc) VALUES (?, 'open', ?)", [(x["id"], _j(x)) for x in rows])
                 elif t == "activity":
@@ -111,14 +133,40 @@ class Store:
         c.execute("INSERT INTO memory_fts(rowid, ref, title, body, reason, tags) VALUES (?, ?, ?, ?, ?, ?)",
                   (cur.lastrowid, f["ref"], f["title"], f["body"], f["reason"], " ".join(f.get("tags", []))))
 
-    # ── generic reads and writes ─────────────────────────────────
-    def docs(self, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
+    # ── rows: identity, access, audit, settings ─────────────────
+    def rows(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
         with self.lock:
-            return [json.loads(r["doc"]) for r in self.conn.execute(sql, params).fetchall()]
+            return self.conn.execute(sql, params).fetchall()
+
+    def row(self, sql: str, params: tuple = ()) -> sqlite3.Row | None:
+        with self.lock:
+            return self.conn.execute(sql, params).fetchone()
+
+    def execute(self, sql: str, params: tuple = ()) -> int:
+        with self.lock, self.conn:
+            return self.conn.execute(sql, params).lastrowid or 0
+
+    @contextmanager
+    def tx(self) -> Iterator[sqlite3.Connection]:
+        """Several statements as one transaction: all of them happen, or none do."""
+        with self.lock, self.conn:
+            yield self.conn
+
+    def setting(self, key: str, default: Any = None) -> Any:
+        r = self.row("SELECT value FROM settings WHERE key = ?", (key,))
+        return json.loads(r[0]) if r else default
+
+    def set_setting(self, key: str, value: Any) -> None:
+        self.execute("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                     (key, _j(value)))
+
+    # ── documents ────────────────────────────────────────────────
+    def docs(self, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
+        return [json.loads(r["doc"]) for r in self.rows(sql, params)]
 
     def all(self, table: str) -> list[dict[str, Any]]:
-        # plans: the newest compiled first, then the seed in its own order
-        order = "created DESC, rowid" if table == "plans" else "rowid"
+        # plans and brainstorms: the newest first, then the seed in its own order
+        order = "created DESC, rowid" if table in ("plans", "brainstorms") else "rowid"
         return self.docs(f"SELECT doc FROM {table} ORDER BY {order}")
 
     def get(self, table: str, id: str) -> dict[str, Any] | None:
@@ -157,13 +205,11 @@ class Store:
 
     def next_number(self) -> int:
         """The next TASK-/PLAN- number. A compiled plan and its task share it."""
-        with self.lock:
-            refs = [r[0] for r in self.conn.execute("SELECT ref FROM tasks UNION ALL SELECT ref FROM plans")]
+        refs = [r[0] for r in self.rows("SELECT ref FROM tasks UNION ALL SELECT ref FROM plans")]
         return max((int(m.group()) for r in refs if (m := re.search(r"\d+$", r))), default=500) + 1
 
     def next_memory_number(self) -> int:
-        with self.lock:
-            refs = [r[0] for r in self.conn.execute("SELECT ref FROM memory")]
+        refs = [r[0] for r in self.rows("SELECT ref FROM memory")]
         return max((int(m.group()) for r in refs if (m := re.search(r"\d+$", r))), default=0) + 1
 
     # ── domain ───────────────────────────────────────────────────
@@ -178,6 +224,9 @@ class Store:
 
     def insert_plan(self, doc: dict[str, Any]) -> dict[str, Any]:
         return self.insert("plans", doc, ref=doc["ref"], project_id=doc["projectId"], created=time.time())
+
+    def insert_brainstorm(self, doc: dict[str, Any]) -> dict[str, Any]:
+        return self.insert("brainstorms", doc, project_id=doc.get("projectId"), created=time.time())
 
     def insert_memory(self, doc: dict[str, Any]) -> dict[str, Any]:
         with self.lock, self.conn:

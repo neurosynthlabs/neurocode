@@ -37,8 +37,11 @@ const seed = {
   mcp: m('mcp').mcpServers,
   // newest first — the order the Activity screen renders
   activity: [...m('activity').activity].reverse().concat(m('activity-extra').activityExtra),
+  // the access catalogue the API enforces: permissions and the built-in roles
+  rbac: { permissions: m('rbac').permissions, roles: m('rbac').roles },
 };
 const dest = path.join(ROOT, 'server/seed/seed.json');
 fs.mkdirSync(path.dirname(dest), { recursive: true });
 fs.writeFileSync(dest, JSON.stringify(seed, null, 1) + '\n');
-console.log('seed:', Object.entries(seed).map(([k, v]) => `${k} ${v.length}`).join(' · '), '→', path.relative(ROOT, dest));
+const size = (v) => (Array.isArray(v) ? v.length : Object.entries(v).map(([k, x]) => `${k} ${x.length}`).join(', '));
+console.log('seed:', Object.entries(seed).map(([k, v]) => `${k} ${size(v)}`).join(' · '), '→', path.relative(ROOT, dest));
