@@ -2,8 +2,10 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import { Route, Routes, useLocation } from 'react-router-dom';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/sonner';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { ThemeProvider, useTheme } from '@/lib/theme';
 import { ProjectProvider, useProject } from '@/lib/project-context';
+import { DataProvider } from '@/lib/data';
 import { cn } from '@/lib/utils';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Topbar } from '@/components/layout/Topbar';
@@ -49,9 +51,13 @@ const Settings = lazy(() => import('@/pages/Settings'));
 function Shell() {
   const [collapsed, setCollapsed] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
   const { projectId, setProjectId } = useProject();
   const { rail } = useTheme();
   const loc = useLocation();
+
+  // Picking a screen from the drawer should put you on it, not leave the menu over it.
+  useEffect(() => { setNavOpen(false); }, [loc.pathname]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -70,9 +76,17 @@ function Shell() {
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-base">
-      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} />
-      <div className={cn('flex min-w-0 flex-1 flex-col', rail === 'flush' ? '' : 'gap-2 p-2')}>
-        <Topbar onOpenSearch={() => setSearchOpen(true)} projectId={projectId} onProject={setProjectId} />
+      <div className="hidden h-full lg:flex">
+        <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} />
+      </div>
+      <Sheet open={navOpen} onOpenChange={setNavOpen}>
+        <SheetContent side="left" showCloseButton={false} className="gap-0 p-0 data-[side=left]:w-[288px] data-[side=left]:max-w-[86vw] data-[side=left]:sm:max-w-[288px]">
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
+          <Sidebar variant="drawer" collapsed={false} onToggle={() => setNavOpen(false)} />
+        </SheetContent>
+      </Sheet>
+      <div className={cn('flex min-w-0 flex-1 flex-col', rail === 'flush' ? '' : 'gap-1.5 p-1.5 sm:gap-2 sm:p-2')}>
+        <Topbar onOpenNav={() => setNavOpen(true)} onOpenSearch={() => setSearchOpen(true)} projectId={projectId} onProject={setProjectId} />
         <main
           className={cn('min-h-0 flex-1 overflow-hidden bg-bg', rail === 'flush' ? '' : 'elevated border border-line')}
           style={rail === 'flush' ? undefined : { borderRadius: 'calc(var(--radius) * 1.6)' }}
@@ -130,20 +144,22 @@ export default function App() {
   return (
     <ThemeProvider>
       <ProjectProvider>
-        <TooltipProvider>
-          <Routes>
-            <Route
-              path="/login"
-              element={
-                <RouteBoundary>
-                  <Suspense fallback={<PageSkeleton />}><Login /></Suspense>
-                </RouteBoundary>
-              }
-            />
-            <Route path="*" element={<Shell />} />
-          </Routes>
-          <Toaster position="bottom-right" />
-        </TooltipProvider>
+        <DataProvider>
+          <TooltipProvider>
+            <Routes>
+              <Route
+                path="/login"
+                element={
+                  <RouteBoundary>
+                    <Suspense fallback={<PageSkeleton />}><Login /></Suspense>
+                  </RouteBoundary>
+                }
+              />
+              <Route path="*" element={<Shell />} />
+            </Routes>
+            <Toaster position="bottom-right" />
+          </TooltipProvider>
+        </DataProvider>
       </ProjectProvider>
     </ThemeProvider>
   );

@@ -26,3 +26,9 @@ dist-ssr
 
 # smoke-test screenshots (scripts/smoke.mjs SMOKE_SHOTS)
 shots/
+
+# local API
+server/.venv/
+server/*.db
+__pycache__/
+.pytest_cache/

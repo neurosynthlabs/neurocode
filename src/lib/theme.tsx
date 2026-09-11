@@ -4,6 +4,7 @@ import {
   themeBaseMap, themeModeOverrides, fontFamilyMap, fontSizeMap,
 } from '@/lib/themes';
 import type { Theme, ThemeColor, SurfaceToneOption, FontFamily, FontSize } from '@/lib/themes';
+import { repairPalette } from '@/lib/contrast';
 
 export type { Theme, ThemeColor, SurfaceToneOption, FontFamily, FontSize };
 
@@ -115,20 +116,18 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     root.style.colorScheme = baseMode;
   }, [mode, baseMode, preset, density, rail]);
 
-  /* ── palette → surface tone → mode overrides, in that order ─── */
+  /* ── palette → mode overrides → ground tone → readability repair ─── */
   useEffect(() => {
     const root = document.documentElement;
     const scheme = themeColors.find((c) => c.value === themeColor) ?? themeColors[0];
-    const vars = baseMode === 'dark' ? scheme.darkVars : scheme.lightVars;
-    Object.entries(vars).forEach(([k, v]) => root.style.setProperty(k, v));
-
-    const overrides = themeModeOverrides[mode];
-    if (overrides) Object.entries(overrides).forEach(([k, v]) => root.style.setProperty(k, v));
-
+    const vars: Record<string, string> = { ...(baseMode === 'dark' ? scheme.darkVars : scheme.lightVars) };
+    Object.assign(vars, themeModeOverrides[mode] ?? {});
     const tone = surfaceToneOptions.find((t) => t.value === surfaceTone);
-    if (tone && tone.mode === baseMode) {
-      Object.entries(tone.overrides).forEach(([k, v]) => root.style.setProperty(k, v));
-    }
+    if (tone && tone.mode === baseMode) Object.assign(vars, tone.overrides);
+    // Many palettes ship a --primary that is unreadable as text or under white button labels.
+    // repairPalette moves just those colours far enough to pass WCAG — see src/lib/contrast.ts.
+    Object.assign(vars, repairPalette(vars, baseMode).css);
+    Object.entries(vars).forEach(([k, v]) => root.style.setProperty(k, v));
   }, [themeColor, surfaceTone, mode, baseMode]);
 
   /* ── radius / type ──────────────────────────────────────────── */

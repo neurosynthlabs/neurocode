@@ -31,7 +31,13 @@ const GROUP_ICON: Record<string, string> = {
   Governance: 'ShieldCheck',
 };
 
-export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+export function Sidebar({ collapsed, onToggle, variant = 'rail' }: {
+  collapsed: boolean;
+  onToggle: () => void;
+  /** 'drawer' renders inside the mobile sheet: full width, no float, no resize, no collapse. */
+  variant?: 'rail' | 'drawer';
+}) {
+  const drawer = variant === 'drawer';
   const loc = useLocation();
   const { rail } = useTheme();
   const ref = useRef<HTMLElement>(null);
@@ -85,26 +91,26 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
 
   return (
     <div
-      className={cn('h-full shrink-0', rail !== 'flush' && 'p-2 pr-0', resizing ? '' : 'transition-[width] duration-300 ease-out')}
-      style={{ width: (collapsed ? COLLAPSED_W : width) + (rail === 'flush' ? 0 : 8) }}
+      className={cn('h-full shrink-0', drawer ? 'w-full' : [rail !== 'flush' && 'p-2 pr-0', !resizing && 'transition-[width] duration-300 ease-out'])}
+      style={drawer ? undefined : { width: (collapsed ? COLLAPSED_W : width) + (rail === 'flush' ? 0 : 8) }}
     >
       <aside
         ref={ref}
         className={cn(
-          'rail-surface relative flex h-full flex-col', rail !== 'flush' && 'rail-slab',
+          'rail-surface relative flex h-full flex-col', !drawer && rail !== 'flush' && 'rail-slab',
           collapsed ? 'overflow-visible' : 'overflow-hidden',
           resizing ? '' : 'transition-[width] duration-300 ease-out',
         )}
         style={{
-          width: collapsed ? COLLAPSED_W : width,
-          borderRadius: rail === 'flush' ? 0 : 'calc(var(--radius) * 2)',
-          borderRight: rail === 'flush' ? '1px solid var(--rail-line)' : undefined,
+          width: drawer ? '100%' : collapsed ? COLLAPSED_W : width,
+          borderRadius: drawer || rail === 'flush' ? 0 : 'calc(var(--radius) * 2)',
+          borderRight: !drawer && rail === 'flush' ? '1px solid var(--rail-line)' : undefined,
         }}
       >
         <div className="rail-edge pointer-events-none absolute inset-y-0 left-0 w-px" style={{ borderRadius: 'inherit' }} />
 
         {/* Resize handle */}
-        {!collapsed && (
+        {!collapsed && !drawer && (
           <div
             onMouseDown={(e) => { e.preventDefault(); setResizing(true); }}
             className="group/rz absolute inset-y-0 right-0 z-10 w-1 cursor-col-resize"

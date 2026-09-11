@@ -1,53 +1,88 @@
 #!/usr/bin/env bash
-# NeuroCode dev server.
-#   ./scripts/dev.sh start | stop | restart | status | logs
-# Port defaults to 5180 (5173 is usually taken by another project here).
+# NeuroCode local stack: the web app (Vite) and the local API (FastAPI + SQLite), together.
+#   ./scripts/dev.sh start | stop | restart | status | logs [web|api]
+# Ports: web 5180 (5173 is usually taken by another project here), API 8787.
+# NC_API=0 starts the web app alone. It then runs on seed data, exactly like the public demo.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-PORT="${NC_PORT:-5180}"
-LOG=/tmp/neurocode-dev.log
-PIDF=/tmp/neurocode-dev.pid
+WEB_PORT="${NC_PORT:-5180}"
+API_PORT="${NC_API_PORT:-8787}"
+export NC_API_PORT="$API_PORT"   # vite.config.ts points its /api proxy here
 
-alive() { [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; }
-owner() { lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1; }
+pidf()  { echo "/tmp/neurocode-$1.pid"; }
+logf()  { echo "/tmp/neurocode-$1.log"; }
+port()  { if [ "$1" = web ]; then echo "$WEB_PORT"; else echo "$API_PORT"; fi; }
+url()   { if [ "$1" = web ]; then echo "http://localhost:$WEB_PORT/"; else echo "http://127.0.0.1:$API_PORT/health"; fi; }
+alive() { [ -f "$(pidf "$1")" ] && kill -0 "$(cat "$(pidf "$1")")" 2>/dev/null; }
+owner() { lsof -nP -iTCP:"$(port "$1")" -sTCP:LISTEN -t 2>/dev/null | head -1; }
+descendants() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do echo "$c"; descendants "$c"; done; }
 
-start() {
-  if alive; then printf '▸ already running — pid %s  http://localhost:%s/\n' "$(cat "$PIDF")" "$PORT"; return; fi
-  if [ -n "$(owner)" ]; then
-    printf '✗ port %s is taken by pid %s (%s)\n' "$PORT" "$(owner)" "$(ps -p "$(owner)" -o comm= 2>/dev/null)"
-    printf '  use a different port:  NC_PORT=5190 %s start\n' "$0"; return 1
+launch() {
+  case $1 in
+    web) npm run dev -- --port "$WEB_PORT" --strictPort ;;
+    api) uv run --project server uvicorn app.main:create_app --factory --app-dir server --host 127.0.0.1 --port "$API_PORT" ;;
+  esac
+}
+
+start_one() {
+  local s=$1
+  if alive "$s"; then printf '▸ %s already running   pid %s   %s\n' "$s" "$(cat "$(pidf "$s")")" "$(url "$s")"; return; fi
+  if [ -n "$(owner "$s")" ]; then
+    printf '✗ %s: port %s is taken by pid %s (%s)\n' "$s" "$(port "$s")" "$(owner "$s")" "$(ps -p "$(owner "$s")" -o comm= 2>/dev/null)"
+    return 1
   fi
-  npm run dev -- --port "$PORT" --strictPort >"$LOG" 2>&1 &
-  echo $! >"$PIDF"
-  for _ in $(seq 1 40); do
-    curl -sf -o /dev/null "http://localhost:$PORT/" && break
-    sleep 0.25
-  done
-  if curl -sf -o /dev/null "http://localhost:$PORT/"; then
-    printf '\033[1;32m✓ dev\033[0m  http://localhost:%s/   pid %s   logs: %s\n' "$PORT" "$(cat "$PIDF")" "$LOG"
+  launch "$s" >"$(logf "$s")" 2>&1 &
+  echo $! >"$(pidf "$s")"
+  # the API's first start also installs its dependencies, so give it time
+  for _ in $(seq 1 120); do curl -sf -o /dev/null "$(url "$s")" && break; sleep 0.25; done
+  if curl -sf -o /dev/null "$(url "$s")"; then
+    printf '\033[1;32m✓ %s\033[0m  %s   pid %s   logs: %s\n' "$s" "$(url "$s")" "$(cat "$(pidf "$s")")" "$(logf "$s")"
   else
-    printf '✗ failed to start — last lines:\n'; tail -15 "$LOG"; rm -f "$PIDF"; return 1
+    printf '✗ %s failed to start. Last lines:\n' "$s"; tail -15 "$(logf "$s")"; stop_one "$s" >/dev/null; return 1
   fi
 }
 
-stop() {
-  local p; p="$( [ -f "$PIDF" ] && cat "$PIDF" || owner )"
-  [ -z "${p:-}" ] && { printf '▸ not running\n'; rm -f "$PIDF"; return; }
-  pkill -P "$p" 2>/dev/null; kill "$p" 2>/dev/null
-  sleep 0.6; kill -9 "$p" 2>/dev/null
-  rm -f "$PIDF"
-  printf '\033[1;32m✓\033[0m stopped (pid %s)\n' "$p"
+stop_one() {
+  local s=$1 p pids
+  if ! alive "$s"; then
+    rm -f "$(pidf "$s")"
+    if [ -n "$(owner "$s")" ]; then printf '▸ %s: port %s is held by pid %s, which this script did not start. Left alone.\n' "$s" "$(port "$s")" "$(owner "$s")"
+    else printf '▸ %s not running\n' "$s"; fi
+    return
+  fi
+  p=$(cat "$(pidf "$s")")
+  pids="$p $(descendants "$p")"   # npm → sh → node and uv → uvicorn: take the whole tree
+  kill $pids 2>/dev/null
+  sleep 0.6
+  kill -9 $pids 2>/dev/null
+  rm -f "$(pidf "$s")"
+  printf '\033[1;32m✓\033[0m %s stopped (pid %s)\n' "$s" "$p"
+}
+
+status_one() {
+  local s=$1
+  if alive "$s"; then printf '● %-3s running   pid %s   %s\n' "$s" "$(cat "$(pidf "$s")")" "$(url "$s")"
+  elif [ -n "$(owner "$s")" ]; then printf '● %-3s port %s held by pid %s (not ours)\n' "$s" "$(port "$s")" "$(owner "$s")"
+  else printf '○ %-3s stopped\n' "$s"; fi
+}
+
+start() {
+  if [ "${NC_API:-1}" = 0 ]; then
+    printf '▸ NC_API=0: web app only, on seed data\n'
+  elif ! command -v uv >/dev/null 2>&1; then
+    printf '▸ uv not found: web app only, on seed data. Install uv for the local API: https://docs.astral.sh/uv/\n'
+  else
+    start_one api || printf '▸ continuing without the API. The web app falls back to seed data.\n'
+  fi
+  start_one web
 }
 
 case "${1:-status}" in
   start)   start ;;
-  stop)    stop ;;
-  restart) stop; sleep 0.4; start ;;
-  logs)    tail -f "$LOG" ;;
-  status)
-    if alive; then printf '● running   pid %s   http://localhost:%s/\n' "$(cat "$PIDF")" "$PORT"
-    elif [ -n "$(owner)" ]; then printf '● port %s held by pid %s (not ours)\n' "$PORT" "$(owner)"
-    else printf '○ stopped\n'; fi ;;
-  *) printf 'usage: %s {start|stop|restart|status|logs}\n' "$0"; exit 1 ;;
+  stop)    stop_one web; stop_one api ;;
+  restart) stop_one web; stop_one api; sleep 0.4; start ;;
+  logs)    tail -f "$(logf "${2:-web}")" ;;
+  status)  status_one web; status_one api ;;
+  *) printf 'usage: %s {start|stop|restart|status|logs [web|api]}\n' "$0"; exit 1 ;;
 esac

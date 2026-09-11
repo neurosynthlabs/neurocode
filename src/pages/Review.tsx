@@ -47,8 +47,8 @@ export default function Review() {
           <Ascii>{LOOP}</Ascii>
         </Panel>
 
-        <div className="flex min-h-[560px] gap-3">
-          <div className="no-scrollbar w-[300px] shrink-0 overflow-y-auto rounded-md border border-line bg-surface">
+        <div className="flex min-h-[560px] flex-col gap-3 md:flex-row">
+          <div className="no-scrollbar w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[300px] overflow-y-auto rounded-md border border-line bg-surface">
             {reviews.map((x) => (
               <ListRow key={x.id} active={x.id === sel} onClick={() => { setSel(x.id); setFinding(x.findings[0]?.id ?? null); }}>
                 <div className="flex items-center gap-2">

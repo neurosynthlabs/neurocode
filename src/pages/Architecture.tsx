@@ -19,7 +19,9 @@ const LAYER_COLOR: Record<GraphNode['layer'], string> = {
 const RISK_STROKE: Record<string, string> = {
   LOW: 'var(--os-line-strong)', MEDIUM: 'var(--os-warn)', HIGH: 'var(--os-danger)', CRITICAL: 'var(--os-danger)',
 };
-const NW = 152, NH = 30, W = 960, H = 668;
+const NW = 152, NH = 30, H = 668;
+// Sized from the data: the canvas used to be a fixed 960 and cut the rightmost nodes off by 12px.
+const W = Math.max(...nodes.map((n) => n.x)) + NW + 12;
 const ADR_TONE = { accepted: 'ok', proposed: 'warn', superseded: 'neutral', rejected: 'danger' } as const;
 
 export default function Architecture() {

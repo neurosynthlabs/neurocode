@@ -112,8 +112,8 @@ export default function Testing() {
         )}
 
         {tab === 'failures' && (
-          <div className="flex min-h-[440px] gap-3">
-            <div className="w-[320px] shrink-0 overflow-y-auto rounded-md border border-line bg-surface">
+          <div className="flex min-h-[440px] flex-col gap-3 md:flex-row">
+            <div className="w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[320px] overflow-y-auto rounded-md border border-line bg-surface">
               {failures.map((x) => (
                 <button key={x.id} onClick={() => setSel(x.id)}
                   className={cn('w-full border-l-2 px-3 py-2.5 text-left transition-colors',

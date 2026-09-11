@@ -5,9 +5,9 @@ import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import {
   Page, PageHeader, PageBody, Panel, Tag, RiskPill, Dot, Mono, Ascii, Segmented,
-  DataTable, Row, Cell, BlockBar, KV, Empty, SectionTitle, Avatar2,
+  DataTable, Row, Cell, BlockBar, KV, Empty, SectionTitle, Avatar2, SelectField,
 } from '@/components/os';
-import { tasks } from '@/mock/tasks';
+import { useData } from '@/lib/data';
 import { agentName, agents } from '@/mock/agents';
 import { projects } from '@/mock/projects';
 import { useProject } from '@/lib/project-context';
@@ -92,8 +92,10 @@ export default function Tasks() {
   const [risk, setRisk] = useState('all');
   const [agent, setAgent] = useState('all');
   const [q, setQ] = useState('');
-  const [open, setOpen] = useState<Task | null>(null);
-  const [checks, setChecks] = useState<Record<string, boolean>>({});
+  const { tasks, moveTask, toggleCheck } = useData();
+  // Held by ref, not by object, so the sheet always shows the task as it is now.
+  const [openRef, setOpenRef] = useState<string | null>(null);
+  const open = useMemo(() => tasks.find((t) => t.ref === openRef) ?? null, [tasks, openRef]);
 
   const list = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -105,7 +107,7 @@ export default function Tasks() {
       if (!s) return true;
       return (t.ref + t.title + t.requirement + (t.epic ?? '')).toLowerCase().includes(s);
     });
-  }, [proj, prio, risk, agent, q]);
+  }, [tasks, proj, prio, risk, agent, q]);
 
   const epics = useMemo(() => {
     const m = new Map<string, Task[]>();
@@ -116,8 +118,10 @@ export default function Tasks() {
     return [...m.entries()];
   }, [list]);
 
-  const toggle = (id: string, initial: boolean) =>
-    setChecks((c) => ({ ...c, [id]: !(c[id] ?? initial) }));
+  const move = async (to: TaskStatus, note: string) => {
+    if (!open) return;
+    if (await moveTask(open.ref, to)) toast(`${open.ref} → ${COLUMNS.find((c) => c.id === to)?.label}`, { description: note });
+  };
 
   return (
     <Page>
@@ -177,7 +181,7 @@ export default function Tasks() {
                   <div className="space-y-2">
                     {items.length === 0
                       ? <div className="rounded-md border border-dashed border-line px-2 py-4 text-center text-[11px] text-dim">empty</div>
-                      : items.map((t) => <Card key={t.id} t={t} onOpen={() => setOpen(t)} />)}
+                      : items.map((t) => <Card key={t.id} t={t} onOpen={() => setOpenRef(t.ref)} />)}
                   </div>
                 </div>
               );
@@ -190,7 +194,7 @@ export default function Tasks() {
             {list.length === 0 ? <Empty title="No task matches" /> : (
               <DataTable head={['Ref', 'Task', 'Project', 'Status', 'Priority', 'Risk', 'Layers', 'Agents', 'Files', 'Tests', 'Progress', 'Updated']}>
                 {list.map((t) => (
-                  <Row key={t.id} onClick={() => setOpen(t)}>
+                  <Row key={t.id} onClick={() => setOpenRef(t.ref)}>
                     <Cell mono>{t.ref}</Cell>
                     <Cell className="font-medium text-ink">{t.title}</Cell>
                     <Cell className="text-dim">{projects.find((p) => p.id === t.projectId)?.name}</Cell>
@@ -219,7 +223,7 @@ export default function Tasks() {
                   actions={<span className="flex items-center gap-2"><BlockBar pct={pct} width={14} /><span className="tnum text-[11.5px] text-soft">{pct}%</span></span>} flush>
                   <div className="divide-y divide-line">
                     {items.map((t) => (
-                      <button key={t.id} onClick={() => setOpen(t)} className="flex w-full items-center gap-3 px-3.5 py-2 text-left hover:bg-surface-2">
+                      <button key={t.id} onClick={() => setOpenRef(t.ref)} className="flex w-full items-center gap-3 px-3.5 py-2 text-left hover:bg-surface-2">
                         <Dot state={t.status} />
                         <Mono>{t.ref}</Mono>
                         <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink">{t.title}</span>
@@ -237,7 +241,7 @@ export default function Tasks() {
       </PageBody>
 
       {/* Detail sheet */}
-      <Sheet open={!!open} onOpenChange={(o) => !o && setOpen(null)}>
+      <Sheet open={!!open} onOpenChange={(o) => !o && setOpenRef(null)}>
         <SheetContent side="right" className="w-[620px] gap-0 overflow-y-auto p-0 sm:max-w-none">
           {open && (
             <>
@@ -290,9 +294,9 @@ export default function Tasks() {
                   <Panel eyebrow="Progress" title="Checklist" flush>
                     <div className="divide-y divide-line">
                       {open.checklist.map((c) => {
-                        const done = checks[c.id] ?? c.done;
+                        const done = c.done;
                         return (
-                          <button key={c.id} onClick={() => toggle(c.id, c.done)} className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left hover:bg-surface-2">
+                          <button key={c.id} onClick={() => toggleCheck(open.ref, c.id)} role="checkbox" aria-checked={done} className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left hover:bg-surface-2">
                             <span className={cn('grid size-3.5 shrink-0 place-items-center rounded-xs border',
                               done ? 'border-ok bg-ok/15 text-ok' : 'border-line-strong text-transparent')}>
                               <CheckCheck className="size-2.5" />
@@ -312,10 +316,19 @@ export default function Tasks() {
                   {open.worktree && <Mono><GitBranch className="mr-1 inline size-2.5" />{open.worktree}</Mono>}
                 </div>
 
-                <div className="flex items-center gap-2 border-t border-line pt-3">
-                  <Button size="sm" onClick={() => toast(`${open.ref} handed to the orchestrator`)}><Play className="size-3.5" />Run</Button>
-                  <Button size="sm" variant="outline" onClick={() => toast(`${open.ref} paused — worktrees kept`)}><Pause className="size-3.5" />Pause</Button>
-                  <Button size="sm" variant="outline" onClick={() => toast(`${open.ref} approved for merge`)}><CheckCheck className="size-3.5" />Approve</Button>
+                <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">
+                  <Button size="sm" disabled={open.status === 'in_progress' || open.status === 'done'} onClick={() => move('in_progress', 'Handed to the orchestrator.')}>
+                    <Play className="size-3.5" />Run
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={open.status === 'backlog' || open.status === 'done'} onClick={() => move('backlog', 'Paused. Its worktrees are kept.')}>
+                    <Pause className="size-3.5" />Pause
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={open.status !== 'review'} title={open.status === 'review' ? undefined : 'Only a task in review can be approved for merge'}
+                    onClick={() => move('done', 'Approved for merge.')}>
+                    <CheckCheck className="size-3.5" />Approve
+                  </Button>
+                  <SelectField className="ml-auto w-36" value={open.status} onChange={(v) => move(v as TaskStatus, 'Moved by hand.')}
+                    options={COLUMNS.map((c) => ({ value: c.id, label: c.label }))} />
                 </div>
               </div>
             </>

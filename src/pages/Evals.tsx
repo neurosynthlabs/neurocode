@@ -54,8 +54,8 @@ export default function Evals() {
           <Ascii>{LOOP}</Ascii>
         </Panel>
 
-        <div className="flex min-h-[520px] gap-3">
-          <div className="no-scrollbar w-[330px] shrink-0 overflow-y-auto rounded-md border border-line bg-surface">
+        <div className="flex min-h-[520px] flex-col gap-3 md:flex-row">
+          <div className="no-scrollbar w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[330px] overflow-y-auto rounded-md border border-line bg-surface">
             {list.map((x) => (
               <ListRow key={x.id} active={x.id === s.id} onClick={() => setSel(x.id)}>
                 <div className="flex items-center gap-2">

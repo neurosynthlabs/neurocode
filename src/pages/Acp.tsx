@@ -52,8 +52,8 @@ export default function Acp() {
           <Stat label="Permission modes" value={permissionModes.length} tone="warn" sub="the security boundary" />
         </StatGrid>
 
-        <div className="flex min-h-[560px] gap-3">
-          <div className="no-scrollbar w-[280px] shrink-0 overflow-y-auto rounded-md border border-line bg-surface">
+        <div className="flex min-h-[560px] flex-col gap-3 md:flex-row">
+          <div className="no-scrollbar w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[280px] overflow-y-auto rounded-md border border-line bg-surface">
             {acpClients.map((x) => (
               <ListRow key={x.id} active={x.id === sel} onClick={() => setSel(x.id)}>
                 <div className="flex items-center gap-2">
@@ -71,7 +71,7 @@ export default function Acp() {
 
           <div className="min-w-0 flex-1 space-y-3">
             <Panel eyebrow={c.editor} title={<span className="flex items-center gap-2">{c.name}<StatusText state={c.status} /></span>}>
-              <div className="grid grid-cols-2 gap-x-6 md:grid-cols-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 xl:grid-cols-4">
                 <KV k="Version" v={c.version} />
                 <KV k="Session" v={c.sessionId} mono />
                 <KV k="Last ping" v={c.lastPing} />

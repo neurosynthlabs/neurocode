@@ -11,10 +11,8 @@ import {
   BlockBar, Ascii, Mono, Kbd, SectionTitle, Empty,
 } from '@/components/os';
 import { useProject } from '@/lib/project-context';
-import { tasks } from '@/mock/tasks';
 import { agents, agentName } from '@/mock/agents';
-import { activity } from '@/mock/activity';
-import { approvals } from '@/mock/permissions';
+import { useData } from '@/lib/data';
 import { runs } from '@/mock/runs';
 import { budget } from '@/mock/cost';
 import { cn } from '@/lib/utils';
@@ -27,17 +25,18 @@ const COMPILER = `Requirement  ──▶  Research  ──▶  Architecture  ─
 export default function CommandCenter() {
   const nav = useNavigate();
   const { project } = useProject();
+  const { tasks, approvals, activity } = useData();
   const [req, setReq] = useState('');
   const [compiling, setCompiling] = useState(false);
 
-  const mine = useMemo(() => tasks.filter((t) => t.projectId === project.id), [project.id]);
+  const mine = useMemo(() => tasks.filter((t) => t.projectId === project.id), [tasks, project.id]);
   const active = useMemo(
     () => mine.filter((t) => ['in_progress', 'review', 'blocked', 'planning'].includes(t.status)),
     [mine],
   );
   const live = useMemo(() => runs.filter((r) => r.status === 'running' || r.status === 'waiting'), []);
-  const pending = useMemo(() => approvals.filter((a) => a.status === 'pending'), []);
-  const feed = useMemo(() => activity.slice(-11).reverse(), []);
+  const pending = useMemo(() => approvals.filter((a) => a.status === 'pending'), [approvals]);
+  const feed = useMemo(() => activity.slice(0, 11), [activity]);
 
   const compile = () => {
     if (!req.trim()) return;

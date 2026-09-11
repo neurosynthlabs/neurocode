@@ -51,8 +51,8 @@ export default function Commands() {
           <Stat label="Model-pinned" value={commands.filter((x) => x.model).length} sub="the rest go through the router" />
         </StatGrid>
 
-        <div className="flex min-h-[520px] gap-3">
-          <div className="no-scrollbar w-[320px] shrink-0 overflow-y-auto rounded-md border border-line bg-surface">
+        <div className="flex min-h-[520px] flex-col gap-3 md:flex-row">
+          <div className="no-scrollbar w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[320px] overflow-y-auto rounded-md border border-line bg-surface">
             {list.length === 0 ? <Empty title="No command matches" hint="Try /plan, /fix, /impact or /ship." /> : list.map((x) => (
               <ListRow key={x.id} active={x.id === c.id} onClick={() => setSel(x.id)}>
                 <div className="flex items-center gap-2">
@@ -72,7 +72,7 @@ export default function Commands() {
               actions={<Switch checked={on[c.id]} onCheckedChange={(v) => setOn((m) => ({ ...m, [c.id]: v }))} />}
             >
               <p className="text-[12.5px] leading-relaxed text-ink-2">{c.description}</p>
-              <div className="mt-3 grid grid-cols-2 gap-x-6 border-t border-line pt-2.5 md:grid-cols-4">
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 border-t border-line pt-2.5 xl:grid-cols-4">
                 <KV k="Dispatches to" v={c.agent} />
                 <KV k="Model" v={c.model ? <Mono tone="brand">{c.model}</Mono> : <span className="text-dim">router decides</span>} />
                 <KV k="Runs" v={c.runs.toLocaleString()} />

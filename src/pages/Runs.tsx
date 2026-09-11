@@ -109,7 +109,7 @@ export default function Runs() {
       </PageHeader>
 
       <PageBody className="flex h-full flex-col gap-3 p-0">
-        <div className="shrink-0 px-6 pt-4">
+        <div className="shrink-0 px-4 pt-4 sm:px-6">
           <StatGrid cols={5}>
             <Stat label="Running" value={running.length} tone="ok" sub={`${seedRuns.length} runs in this task`} />
             <Stat label="Worktrees" value={new Set(seedRuns.map((r) => r.worktree)).size} sub="isolated, never shared" />
@@ -119,9 +119,9 @@ export default function Runs() {
           </StatGrid>
         </div>
 
-        <div className="flex min-h-0 flex-1 gap-3 px-6 pb-5">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 pb-4 sm:px-6 sm:pb-5 md:flex-row">
           {/* Run list */}
-          <div className="flex w-[340px] shrink-0 flex-col rounded-md border border-line bg-surface">
+          <div className="flex w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[340px] flex-col rounded-md border border-line bg-surface overflow-y-auto">
             <div className="shrink-0 border-b border-line px-3.5 py-2.5">
               <div className="eyebrow">Parallel agents</div>
             </div>
@@ -187,7 +187,7 @@ export default function Runs() {
             </div>
 
             <div className="shrink-0 border-t border-line px-3.5 py-2.5">
-              <div className="grid grid-cols-2 gap-x-6 md:grid-cols-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 xl:grid-cols-4">
                 <KV k="Worktree" v={run.worktree} mono />
                 <KV k="Started" v={run.startedAt} />
                 <KV k="Tokens" v={`${(run.tokensIn / 1000).toFixed(0)}k in · ${(run.tokensOut / 1000).toFixed(0)}k out`} />

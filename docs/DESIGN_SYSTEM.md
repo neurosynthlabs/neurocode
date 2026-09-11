@@ -85,20 +85,32 @@ plus your own padding, or give `PageBody` `className="h-full"` and lay out with 
 
 ## Interactivity expectations
 
-This is a static prototype, but it must not feel dead. Every screen needs **real local
-state**: selection, tab switching, filtering, search, expand/collapse, kanban column
-filtering, log auto-scroll, etc. Use `useState`/`useMemo`. Buttons that would mutate a
-backend can be no-ops or show a `sonner` toast — but selection and filtering must work.
+Nothing may feel dead. Every screen needs **real local state**: selection, tab switching,
+filtering, search, expand/collapse, kanban filtering, log auto-scroll. Use `useState`/`useMemo`.
+
+The operator's own actions go through the data store, never through local state:
+
+- `useData()` from `@/lib/data` owns **approvals, tasks, memory facts and the activity log**.
+  Read them from there, never from `@/mock/*`, so a decision made on one screen shows on every
+  other one. Act with `decide`, `moveTask`, `toggleCheck`, `setPinned` and `archive`. Each action
+  is optimistic, writes its own activity event, and resolves to `false` when it was not saved.
+- With the local API up (`npm run dev:start`), those actions persist to SQLite and the log streams
+  in over SSE. With no API, which is how the Vercel demo runs, the same actions work on the seed
+  data for the life of the tab. `mode` tells you which of the two you are in.
+- Anything else that would need a backend can still be a `sonner` toast.
 
 ## Shared mock data you must reuse (do not duplicate or redefine)
 
 - `@/mock/projects` — `projects`, `getProject`, `projectName`, `activeProjectId`
 - `@/mock/agents` — `agents`, `getAgent`, `agentName`
-- `@/mock/tasks` — `tasks`, `byStatus`, `getTask`
-- `@/mock/activity` — `activity`
-- `@/mock/permissions` — `permissionRules`, `approvals`
+- `@/mock/tasks` — `byStatus`, `getTask` for static lookups (the live list is `useData().tasks`)
+- `@/mock/permissions` — `permissionRules` (approvals come from `useData()`)
+- `@/lib/data` — `useData()`: approvals, tasks, memory, activity, and the actions on them
 - `@/lib/project-context` — `useProject()` returns the active project
 - `@/lib/theme` — `useTheme()`
+
+The mocks in `src/mock/` are also the API's seed. After changing tasks, approvals, memory or
+activity, run `npm run seed` to regenerate `server/seed/seed.json`.
 
 Names must stay consistent across screens: the ERP tax bug is always **TASK-492 /
 BUG-883 / InvoiceService.cs / TaxService.cs / SP_CalculateTax / MST_TAX / TRANS_INVOICE /
@@ -108,9 +120,14 @@ Qwen3-Coder-Next, Kimi-K2.5, DeepSeek-V3.2, GLM-4.7, Qwen3-Next-80B, BGE-M3, BGE
 ## Verify before you finish
 
 ```
-npx tsc --noEmit -p tsconfig.app.json
+npm run build          # tsc -b + vite build; no chunk may pass 500 KB
+npm run smoke          # every route in two themes, plus the key interactions, headless
+npm run lint:layout    # nothing spills at 390 / 820 / 1440
+npm run audit:themes   # text contrast across every palette × mode × ground
+npm run api:test       # the local API
+npm run e2e            # API + web app + browser, on a throwaway database
 ```
-must be clean for the files you touched. Fix anything you broke.
+All of them must pass. Fix anything you broke.
 
 ---
 

@@ -53,8 +53,8 @@ export default function Git() {
               <Ascii className="overflow-auto">{worktreeTree}</Ascii>
             </Panel>
 
-            <div className="flex min-h-[420px] gap-3">
-              <div className="no-scrollbar w-[320px] shrink-0 overflow-y-auto rounded-md border border-line bg-surface">
+            <div className="flex min-h-[420px] flex-col gap-3 md:flex-row">
+              <div className="no-scrollbar w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[320px] overflow-y-auto rounded-md border border-line bg-surface">
                 {worktrees.map((w) => (
                   <ListRow key={w.id} active={w.id === sel} onClick={() => setSel(w.id)}>
                     <div className="flex items-center gap-2">
@@ -81,7 +81,7 @@ export default function Git() {
                     <Button size="xs" variant="outline" onClick={() => toast(`${wt.branch} merged into main`)}><GitMerge className="size-3" />Merge</Button>
                     <Button size="xs" onClick={() => toast('PR opened — reviewer assigned')}><GitPullRequest className="size-3" />Create PR</Button>
                   </div>}>
-                  <div className="grid grid-cols-2 gap-x-6 md:grid-cols-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 xl:grid-cols-4">
                     <KV k="Owner" v={agentName(wt.agent)} />
                     <KV k="Path" v={wt.path} mono />
                     <KV k="Ahead / behind" v={`${wt.ahead} / ${wt.behind}`} />

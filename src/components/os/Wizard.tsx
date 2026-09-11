@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeft, ArrowRight, Check, Loader2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -38,6 +38,7 @@ export function Wizard({
   className?: string;
 }) {
   const [i, setI] = useState(0);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   // Every time the wizard opens it starts from the first step.
   useEffect(() => { if (open) setI(0); }, [open]);
@@ -47,6 +48,30 @@ export function Wizard({
   const last = idx === steps.length - 1;
   const canNext = step.valid !== false;
   const go = (n: number) => setI(Math.max(0, Math.min(steps.length - 1, n)));
+
+  // Put the caret in the step's first field — or on the step itself — every time the step changes.
+  // Deferred a frame so it lands after Base UI's own open-focus instead of being overridden by it.
+  useEffect(() => {
+    if (!open) return;
+    const id = requestAnimationFrame(() => {
+      const body = bodyRef.current;
+      if (!body) return;
+      const field = body.querySelector<HTMLElement>(
+        'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([disabled]), textarea:not([disabled]), select:not([disabled])',
+      );
+      (field ?? body).focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [open, idx]);
+
+  // Enter in a single-line field behaves like a form: next step, or finish on the last one.
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const t = e.target as HTMLElement;
+    if (e.key !== 'Enter' || e.shiftKey || t.tagName !== 'INPUT') return;
+    e.preventDefault();
+    if (!canNext) return;
+    if (last) onFinish(); else go(idx + 1);
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -100,7 +125,16 @@ export function Wizard({
         </nav>
 
         {/* Body — keyed so each step animates in */}
-        <div key={step.id} className="animate-slide-up max-h-[58vh] min-h-[220px] overflow-y-auto px-5 py-4">
+        <p className="sr-only" aria-live="polite" aria-atomic="true">{`Step ${idx + 1} of ${steps.length}: ${step.title}`}</p>
+        <div
+          key={step.id}
+          ref={bodyRef}
+          tabIndex={-1}
+          role="group"
+          aria-label={step.title}
+          onKeyDown={onKeyDown}
+          className="animate-slide-up max-h-[58vh] min-h-[220px] overflow-y-auto px-5 py-4 focus-visible:outline-none"
+        >
           {step.content}
         </div>
 

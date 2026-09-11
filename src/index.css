@@ -47,7 +47,7 @@
   --color-destructive-foreground:   hsl(var(--destructive-foreground));
   --color-border:                   hsl(var(--border));
   --color-input:                    hsl(var(--input));
-  --color-ring:                     hsl(var(--ring));
+  --color-ring:                     var(--os-brand);
   --color-chart-1:                  hsl(var(--chart-1));
   --color-chart-2:                  hsl(var(--chart-2));
   --color-chart-3:                  hsl(var(--chart-3));
@@ -380,7 +380,7 @@
   --rail-line:    color-mix(in srgb, hsl(var(--primary)) 12%, var(--os-line));
   --rail-hover:   color-mix(in srgb, hsl(var(--primary)) 9%, var(--os-surface-2));
   --rail-active:  color-mix(in srgb, hsl(var(--primary)) 15%, var(--os-surface-2));
-  --rail-accent:  hsl(var(--primary));
+  --rail-accent:  var(--os-brand);
   --rail-chip:    color-mix(in srgb, hsl(var(--primary)) 14%, transparent);
   --rail-shadow:  color-mix(in srgb, var(--os-shadow) 14%, transparent);
 
@@ -402,7 +402,7 @@
 [data-rail="solid"] .rail-surface {
   --rail-bg:     hsl(var(--primary));
   --rail-ink:    hsl(var(--primary-foreground));
-  --rail-item:   color-mix(in srgb, hsl(var(--primary-foreground)) 94%, transparent);
+  --rail-item:   hsl(var(--primary-foreground));
   --rail-soft:   color-mix(in srgb, hsl(var(--primary-foreground)) 84%, transparent);
   --rail-dim:    color-mix(in srgb, hsl(var(--primary-foreground)) 68%, transparent);
   --rail-line:   color-mix(in srgb, hsl(var(--primary-foreground)) 14%, transparent);

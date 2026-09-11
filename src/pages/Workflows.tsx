@@ -96,9 +96,9 @@ export default function Workflows() {
           </div>
         </Panel>
 
-        <div className="flex min-h-[560px] gap-3">
+        <div className="flex min-h-[560px] flex-col gap-3 md:flex-row">
           {/* Library */}
-          <div className="flex w-[310px] shrink-0 flex-col overflow-hidden rounded-md border border-line bg-surface">
+          <div className="flex w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[310px] flex-col overflow-hidden rounded-md border border-line bg-surface">
             <div className="space-y-2 border-b border-line p-2.5">
               <Field value={q} onChange={setQ} icon={<Search className="size-3.5" />} placeholder="Search workflows…" onClear={() => setQ('')} />
               <Segmented className="w-full" options={[{ id: 'all', label: 'All' }, { id: 'global', label: 'Global' }, { id: 'project', label: 'Project' }]} value={scope} onChange={setScope} />
@@ -126,7 +126,7 @@ export default function Workflows() {
               title={<span className="flex items-center gap-2"><Mono tone="brand">{w.name}</Mono><Tag tone={RES_TONE[w.lastResult]}>last: {w.lastResult}</Tag></span>}
               actions={<Segmented options={[{ id: 'graph', label: 'Phase graph' }, { id: 'script', label: 'Script' }]} value={tab} onChange={setTab} />}>
               <p className="text-[12.5px] leading-relaxed text-ink-2">{w.description}</p>
-              <div className="mt-3 grid grid-cols-2 gap-x-6 border-t border-line pt-2.5 md:grid-cols-4">
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 border-t border-line pt-2.5 xl:grid-cols-4">
                 <KV k="Runs" v={w.runs} />
                 <KV k="Avg agents" v={w.avgAgents} />
                 <KV k="Avg duration" v={`${w.avgMinutes}m`} />

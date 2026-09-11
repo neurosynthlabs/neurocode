@@ -82,9 +82,9 @@ export default function Knowledge() {
           <Stat label="Sources today" value={knowledgeDocs.filter((x) => x.addedAt.includes('min') || x.addedAt.includes('h ago') || x.addedAt.includes('today')).length} tone="ok" />
         </StatGrid>
 
-        <div className="flex min-h-[520px] gap-3">
+        <div className="flex min-h-[520px] flex-col gap-3 lg:flex-row">
           {/* Kind rail */}
-          <div className="w-44 shrink-0 rounded-md border border-line bg-surface py-2">
+          <div className="max-h-[30vh] w-full shrink-0 overflow-y-auto rounded-md border border-line bg-surface py-2 lg:max-h-none lg:w-44">
             <button onClick={() => setKind('all')}
               className={cn('flex w-full items-center justify-between px-3.5 py-1.5 text-[12px]',
                 kind === 'all' ? 'bg-surface-2 font-medium text-ink' : 'text-soft hover:text-ink-2')}>
@@ -103,7 +103,7 @@ export default function Knowledge() {
           </div>
 
           {/* Doc list */}
-          <div className="no-scrollbar w-[330px] shrink-0 overflow-y-auto rounded-md border border-line bg-surface">
+          <div className="no-scrollbar w-full shrink-0 max-h-[42vh] lg:max-h-none lg:w-[330px] overflow-y-auto rounded-md border border-line bg-surface">
             <div className="border-b border-line p-2.5">
               <Field value={q} onChange={setQ} icon={<Search className="size-3.5" />} placeholder="Filter documents…" onClear={() => setQ('')} />
             </div>
@@ -126,7 +126,7 @@ export default function Knowledge() {
               title={<span className="flex flex-wrap items-center gap-2"><Mono tone="brand">{d.ref}</Mono>{d.title}</span>}
               actions={d.indexed ? <Tag tone="ok">indexed</Tag> : <Tag tone="warn">awaiting index</Tag>}>
               <p className="text-[12.5px] leading-relaxed text-ink-2">{d.summary}</p>
-              <div className="mt-3 grid grid-cols-2 gap-x-6 border-t border-line pt-2.5 md:grid-cols-4">
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 border-t border-line pt-2.5 xl:grid-cols-4">
                 <KV k="Source" v={d.source} />
                 <KV k="Size" v={d.size} />
                 <KV k="Chunks" v={d.chunks.toLocaleString()} />

@@ -8,7 +8,7 @@ import {
 } from '@/components/os';
 import { projects, getProject } from '@/mock/projects';
 import { getModules, rulesByProject, adrsByProject, riskyByProject, infraByProject } from '@/mock/modules';
-import { tasks } from '@/mock/tasks';
+import { useData } from '@/lib/data';
 import { agentName } from '@/mock/agents';
 import { cn } from '@/lib/utils';
 
@@ -35,7 +35,8 @@ export default function ProjectOverview() {
   const adrs = adrsByProject[p.id] ?? adrsByProject.erp;
   const risky = riskyByProject[p.id] ?? riskyByProject.erp;
   const infra = infraByProject[p.id] ?? infraByProject.erp;
-  const myTasks = useMemo(() => tasks.filter((t) => t.projectId === p.id), [p.id]);
+  const { tasks } = useData();
+  const myTasks = useMemo(() => tasks.filter((t) => t.projectId === p.id), [tasks, p.id]);
 
   return (
     <Page>

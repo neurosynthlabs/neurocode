@@ -65,8 +65,8 @@ export default function Skills() {
           </p>
         </Panel>
 
-        <div className="flex min-h-[560px] gap-3">
-          <div className="no-scrollbar w-[320px] shrink-0 overflow-y-auto rounded-md border border-line bg-surface">
+        <div className="flex min-h-[560px] flex-col gap-3 md:flex-row">
+          <div className="no-scrollbar w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[320px] overflow-y-auto rounded-md border border-line bg-surface">
             {list.length === 0 ? <Empty title="No skill matches" /> : list.map((x) => (
               <ListRow key={x.id} active={x.id === s.id} onClick={() => setSel(x.id)}>
                 <div className="flex items-center gap-2">
@@ -87,7 +87,7 @@ export default function Skills() {
               actions={<Switch checked={on[s.id]} onCheckedChange={(v) => { setOn((m) => ({ ...m, [s.id]: v })); toast(`${s.name} ${v ? 'enabled' : 'disabled'}`); }} />}
             >
               <p className="text-[12.5px] leading-relaxed text-ink-2">{s.description}</p>
-              <div className="mt-3 grid grid-cols-2 gap-x-6 border-t border-line pt-2.5 md:grid-cols-4">
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 border-t border-line pt-2.5 xl:grid-cols-4">
                 <KV k="Context cost" v={`${s.tokens.toLocaleString()} tokens`} />
                 <KV k="Loads 24h" v={s.loads24h} />
                 <KV k="Invocations" v={s.invocations.toLocaleString()} />

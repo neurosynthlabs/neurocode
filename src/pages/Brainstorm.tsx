@@ -45,8 +45,8 @@ export default function Brainstorm() {
         </div>
       </PageHeader>
 
-      <PageBody className="flex h-full gap-0 p-0">
-        <div className="no-scrollbar w-[290px] shrink-0 overflow-y-auto border-r border-line">
+      <PageBody className="flex h-full flex-col gap-0 p-0 md:flex-row">
+        <div className="no-scrollbar w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[290px] overflow-y-auto border-b border-line md:border-b-0 md:border-r">
           {brainstorms.map((x) => (
             <ListRow key={x.id} active={x.id === b.id} onClick={() => setSel(x.id)}>
               <div className="flex items-center gap-2">

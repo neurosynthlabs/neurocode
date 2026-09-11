@@ -15,30 +15,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { findChrome } from './chrome.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.SMOKE_PORT ?? 5192);
 const BASE = `http://127.0.0.1:${PORT}`;
 const SHOTS = process.env.SMOKE_SHOTS ? path.resolve(process.env.SMOKE_SHOTS) : null;
 
-function findChrome() {
-  if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
-  const roots = [
-    path.join(os.homedir(), 'Library/Caches/ms-playwright'),
-    path.join(os.homedir(), '.cache/ms-playwright'),
-  ];
-  for (const root of roots) {
-    if (!fs.existsSync(root)) continue;
-    const dirs = fs.readdirSync(root).filter((d) => d.startsWith('chromium_headless_shell-')).sort().reverse();
-    for (const dir of dirs) {
-      for (const sub of fs.readdirSync(path.join(root, dir))) {
-        const exe = path.join(root, dir, sub, 'chrome-headless-shell');
-        if (fs.existsSync(exe)) return exe;
-      }
-    }
-  }
-  throw new Error('No headless Chromium found. Set CHROME_PATH, or run: npx playwright install chromium-headless-shell');
-}
 
 // Routes come from the nav config itself, so a new screen is covered the moment it is added.
 const nav = fs.readFileSync(path.join(ROOT, 'src/lib/nav.ts'), 'utf8');
@@ -70,6 +53,7 @@ const server = fs.existsSync(viteBin)
 server.on('exit', (code) => { serverExit = code ?? -1; });
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { server.kill(); process.exit(130); });
 const problems = [];
+let interactions = 0;
 let browser;
 
 try {
@@ -121,6 +105,7 @@ try {
   const ixErrors = [];
   page.on('pageerror', (e) => ixErrors.push(String(e.message).slice(0, 240)));
   const check = async (name, fn) => {
+    interactions++;
     try { await fn(); } catch (e) { problems.push({ where: `interaction: ${name}`, errors: [String(e.message).split('\n')[0].slice(0, 200)] }); }
   };
   const expect = (cond, msg) => { if (!cond) throw new Error(msg); };
@@ -180,6 +165,21 @@ try {
     await page.locator('[data-slot="sheet-content"]').waitFor({ timeout: 3000 });
   });
 
+  await check('Demo mode: approving updates the inbox, the badge and the log', async () => {
+    // No API in a production build, so this is exactly the Vercel demo's path. State lives in the
+    // tab, which is why the move to Activity is a client-side navigation and not a reload.
+    const seed = JSON.parse(fs.readFileSync(path.join(ROOT, 'server/seed/seed.json'), 'utf8'));
+    const first = seed.approvals.find((a) => a.status === 'pending');
+    await page.goto(BASE + '/permissions', { waitUntil: 'networkidle' });
+    const count = async () => Number((await page.getByTitle(/approvals waiting on you/).getAttribute('title')).match(/\d+/)[0]);
+    const before = await count();
+    await page.getByRole('button', { name: 'Approve', exact: true }).first().click();
+    await page.waitForTimeout(200);
+    expect((await count()) === before - 1, `badge still shows ${before}`);
+    await page.getByRole('button', { name: 'Activity', exact: true }).click();
+    await page.getByText(`${first.ref} · ${first.title}`).first().waitFor({ timeout: 3000 });
+  });
+
   if (ixErrors.length) problems.push({ where: 'interactions (uncaught)', errors: ixErrors });
   await ctx.close();
 } finally {
@@ -188,7 +188,7 @@ try {
 }
 
 const renders = ROUTES.length * THEMES.length;
-console.log(`smoke: ${renders} renders (${ROUTES.length} routes × ${THEMES.length} themes) + 5 interactions`);
+console.log(`smoke: ${renders} renders (${ROUTES.length} routes × ${THEMES.length} themes) + ${interactions} interactions`);
 if (!problems.length) {
   console.log('✓ no problems');
 } else {

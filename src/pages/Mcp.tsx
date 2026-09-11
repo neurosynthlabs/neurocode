@@ -37,6 +37,18 @@ function deriveName(transport: string, raw: string) {
   return name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'new-server';
 }
 
+/** What is wrong with the connection step for this transport, or null when it is usable. */
+function connectionProblem(transport: string, raw: string): string | null {
+  const v = raw.trim();
+  if (!v) return 'Enter a command or URL';
+  if (transport === 'stdio') return /^[a-z][\w+.-]*:\/\//i.test(v) ? 'That is a URL — choose HTTP or SSE, or enter a launch command' : null;
+  try {
+    return /^https?:$/.test(new URL(v).protocol) ? null : 'Use an http:// or https:// URL';
+  } catch {
+    return 'Not a valid URL — e.g. https://mcp.example.com/mcp';
+  }
+}
+
 const TRANSPORTS = [
   { id: 'stdio', label: 'stdio', note: 'A local process the OS launches and talks to over pipes. Fastest, and the most common.' },
   { id: 'http', label: 'Streamable HTTP', note: 'A remote server over HTTPS. Needs a URL and usually a token.' },
@@ -112,8 +124,8 @@ export default function Mcp() {
           </div>
         </Panel>
 
-        <div className="flex min-h-[520px] gap-3">
-          <div className="no-scrollbar w-[290px] shrink-0 overflow-y-auto rounded-md border border-line bg-surface">
+        <div className="flex min-h-[520px] flex-col gap-3 md:flex-row">
+          <div className="no-scrollbar w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[290px] overflow-y-auto rounded-md border border-line bg-surface">
             {list.length === 0 ? <Empty title="No server matches" /> : list.map((m) => (
               <ListRow key={m.id} active={m.id === srv.id} onClick={() => setSel(m.id)}>
                 <div className="flex items-center gap-2">
@@ -136,7 +148,7 @@ export default function Mcp() {
               title={<span className="flex items-center gap-2">{srv.name}<StatusText state={srv.status} /></span>}
               actions={untrustedSourceIds.includes(srv.id) ? <Tag tone="warn"><ShieldAlert className="size-3" />untrusted source</Tag> : <Tag tone="ok">trusted</Tag>}
             >
-              <div className="grid grid-cols-2 gap-x-6 md:grid-cols-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 xl:grid-cols-4">
                 <KV k="Transport" v={srv.transport} />
                 <KV k="Latency" v={`${srv.latencyMs} ms`} />
                 <KV k="Calls 24h" v={srv.calls24h.toLocaleString()} />
@@ -217,7 +229,7 @@ export default function Mcp() {
           },
           {
             id: 'connection', title: 'Connection', hint: transport === 'stdio' ? 'launch command' : 'endpoint',
-            valid: cmd.trim().length > 0, blocker: 'Enter a command or URL',
+            valid: connectionProblem(transport, cmd) === null, blocker: connectionProblem(transport, cmd) ?? undefined,
             content: (
               <div className="space-y-3">
                 <Field

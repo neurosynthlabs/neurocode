@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { RotateCcw, Check } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -9,10 +9,27 @@ import {
 import { settingsGroups } from '@/mock/settings';
 import { useTheme, THEMES } from '@/lib/theme';
 import { categoryMeta } from '@/mock/memory';
+import { useData } from '@/lib/data';
 import { cn } from '@/lib/utils';
 
 export default function Settings() {
   const t = useTheme();
+  const data = useData();
+  // Resetting data is two clicks: the first arms the button for four seconds, the second does it.
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const id = window.setTimeout(() => setArmed(false), 4000);
+    return () => window.clearTimeout(id);
+  }, [armed]);
+  const resetData = async () => {
+    if (!armed) { setArmed(true); return; }
+    setArmed(false);
+    if (await data.reset()) {
+      toast.success(data.mode === 'live' ? 'Database restored to the seed' : 'Demo data restored',
+        { description: 'Approvals, tasks, memory and the activity log are back to where they started.' });
+    }
+  };
   const [group, setGroup] = useState(settingsGroups[0].id);
   const [vals, setVals] = useState<Record<string, string | boolean>>(() => {
     const o: Record<string, string | boolean> = {};
@@ -36,9 +53,9 @@ export default function Settings() {
         actions={<Button size="sm" variant="outline" onClick={() => toast('Defaults restored for this group')}><RotateCcw className="size-3.5" />Reset group</Button>}
       />
 
-      <PageBody className="flex h-full gap-0 p-0">
+      <PageBody className="flex h-full flex-col gap-0 p-0 md:flex-row">
         {/* Group rail */}
-        <div className="no-scrollbar w-[212px] shrink-0 overflow-y-auto border-r border-line py-2">
+        <div className="no-scrollbar w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[212px] overflow-y-auto border-b border-line md:border-b-0 md:border-r py-2">
           {settingsGroups.map((x) => (
             <button
               key={x.id}
@@ -175,18 +192,23 @@ export default function Settings() {
                 <KV k="Project rules" v=".os/rules/*.md" mono />
                 <KV k="Secrets" v="OS keychain — never a file" mono />
                 <KV k="Memory" v="Postgres + Qdrant, both local" mono />
+                <KV k="Operational data" v={data.mode === 'live' ? 'SQLite + FTS5 · local API' : 'seed data · this tab only'} mono />
+                {data.health && <KV k="Database file" v={data.health.db.split('/').slice(-2).join('/')} mono />}
               </Panel>
               <Panel eyebrow="Danger zone" title="Reset" className="border-danger/30">
                 <p className="text-[11.5px] text-soft">
                   Resetting appearance is instant and safe. Resetting memory or permissions is not — those hold everything
                   the OS has learned about your codebase and what it is allowed to do with it.
                 </p>
-                <div className="mt-2.5 flex gap-1.5">
+                <div className="mt-2.5 flex flex-wrap gap-1.5">
                   <Button size="xs" variant="outline" onClick={() => { t.setTheme('graphite'); t.setRail('tinted'); t.setRadius(0.5); t.setFontFamily('inter'); t.setFontSize('compact'); toast('Appearance reset'); }}>
                     Reset appearance
                   </Button>
                   <Button size="xs" variant="destructive" onClick={() => toast('Refused — memory reset needs a typed confirmation in the real system')}>
                     Reset memory
+                  </Button>
+                  <Button size="xs" variant="destructive" onClick={resetData}>
+                    {armed ? 'Click again to confirm' : data.mode === 'live' ? 'Reset database' : 'Reset demo data'}
                   </Button>
                 </div>
               </Panel>

@@ -1,0 +1,3 @@
+# Vercel serves the static web app only. The local API and its virtualenv never ship.
+server/
+shots/

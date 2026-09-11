@@ -43,9 +43,9 @@ export default function Plans() {
         actions={<Button size="sm" onClick={() => nav('/tasks')}><Play className="size-3.5" />Open the board</Button>}
       />
 
-      <PageBody className="flex h-full gap-0 p-0">
+      <PageBody className="flex h-full flex-col gap-0 p-0 md:flex-row">
         {/* Plan list */}
-        <div className="no-scrollbar w-[300px] shrink-0 overflow-y-auto border-r border-line">
+        <div className="no-scrollbar w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[300px] overflow-y-auto border-b border-line md:border-b-0 md:border-r">
           {plans.map((x) => {
             const d = x.steps.filter((s) => s.state === 'done').length;
             return (

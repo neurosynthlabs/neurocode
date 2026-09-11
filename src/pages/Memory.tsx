@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Search, Pin, Archive, Pencil, FileSearch, TriangleAlert, TrendingDown, Zap, Globe, Layers,
 } from 'lucide-react';
@@ -7,13 +7,14 @@ import {
   Page, PageHeader, PageBody, Panel, Tag, Mono, Segmented, ListRow, Empty,
   Stat, StatGrid, KV, Bar, BlockBar, DataTable, Row, Cell,
 } from '@/components/os';
-import { memoryFacts, categoryMeta, categoryLabel, memoryConflicts, recentHits, memoryStats } from '@/mock/memory';
+import { categoryMeta, categoryLabel, memoryConflicts, recentHits, memoryStats } from '@/mock/memory';
 import { agentName } from '@/mock/agents';
 import { projectName } from '@/mock/projects';
 import { useProject } from '@/lib/project-context';
+import { useData } from '@/lib/data';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
-import type { MemoryCategory, Confidence } from '@/types';
+import type { MemoryCategory, Confidence, MemoryFact } from '@/types';
 
 const CONF_TONE: Record<Confidence, 'ok' | 'warn' | 'danger'> = { HIGH: 'ok', MEDIUM: 'warn', LOW: 'danger' };
 const SEV_TONE = { HIGH: 'danger', MEDIUM: 'warn', LOW: 'neutral' } as const;
@@ -26,18 +27,40 @@ export default function Memory() {
   const [sel, setSel] = useState<string | null>(null);
   const [tab, setTab] = useState<'facts' | 'health' | 'conflicts'>('facts');
 
+  const { memory, mode, setPinned, archive, searchMemory } = useData();
+  const query = q.trim();
+
+  // With the local API up, search is the server's FTS5 index: prefix-matched word by word, best match
+  // first. Answers are keyed by their query, so a slow answer never replaces a newer one; until it
+  // arrives, the local filter stands in.
+  const [ranked, setRanked] = useState<{ q: string; refs: string[] } | null>(null);
+  useEffect(() => {
+    if (mode !== 'live' || !query) return;
+    const ctl = new AbortController();
+    const id = window.setTimeout(() => {
+      searchMemory(query, ctl.signal).then((refs) => setRanked({ q: query, refs })).catch(() => { /* aborted or offline */ });
+    }, 120);
+    return () => { window.clearTimeout(id); ctl.abort(); };
+  }, [mode, query, searchMemory]);
+  const fts = mode === 'live' && ranked?.q === query ? ranked.refs : null;
+
   const scoped = useMemo(
-    () => memoryFacts.filter((f) => (scope === 'global' ? f.projectId === 'global' : f.projectId === projectId || f.projectId === 'global')),
-    [scope, projectId],
+    () => memory.filter((f) => (scope === 'global' ? f.projectId === 'global' : f.projectId === projectId || f.projectId === 'global')),
+    [memory, scope, projectId],
   );
 
   const list = useMemo(() => {
-    const s = q.trim().toLowerCase();
+    const inCat = (f: MemoryFact) => cat === 'all' || f.category === cat;
+    if (fts) {
+      const byRef = new Map(scoped.map((f) => [f.ref, f]));
+      return fts.map((r) => byRef.get(r)).filter((f): f is MemoryFact => !!f && inCat(f));
+    }
+    const s = query.toLowerCase();
     return scoped
-      .filter((f) => (cat === 'all' ? true : f.category === cat))
+      .filter(inCat)
       .filter((f) => (s ? (f.title + f.body + f.reason + f.tags.join(' ') + f.ref).toLowerCase().includes(s) : true))
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.strength - a.strength);
-  }, [scoped, cat, q]);
+  }, [scoped, cat, query, fts]);
 
   const fact = useMemo(() => list.find((f) => f.id === sel) ?? list[0], [list, sel]);
   const counts = useMemo(() => {
@@ -77,14 +100,15 @@ export default function Memory() {
                 className="min-w-0 flex-1 bg-transparent text-[12px] text-ink placeholder:text-dim focus-visible:outline-none" />
             </div>
           )}
+          {tab === 'facts' && fts && <Tag tone="brand">FTS5 · ranked</Tag>}
         </div>
       </PageHeader>
 
       <PageBody className={cn(tab === 'facts' && 'flex h-full flex-col p-0')}>
         {tab === 'facts' && (
-          <div className="flex min-h-0 flex-1 gap-0">
+          <div className="flex min-h-0 flex-1 flex-col gap-0 lg:flex-row">
             {/* Category rail */}
-            <div className="flex w-52 shrink-0 flex-col border-r border-line">
+            <div className="hidden w-52 shrink-0 flex-col border-r border-line lg:flex">
               <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto py-2">
                 <button
                   onClick={() => setCat('all')}
@@ -115,8 +139,22 @@ export default function Memory() {
               </div>
             </div>
 
+            {/* Categories as a scrollable chip row where the rail does not fit */}
+            <div className="no-scrollbar flex shrink-0 gap-1.5 overflow-x-auto border-b border-line px-3 py-2 lg:hidden">
+              {[{ id: 'all', label: 'All' }, ...categoryMeta].map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => { setCat(c.id as MemoryCategory | 'all'); setSel(null); }}
+                  className={cn('shrink-0 rounded-sm border px-2 py-1 text-[11.5px] transition-colors',
+                    cat === c.id ? 'border-brand bg-brand/10 font-medium text-brand' : 'border-line bg-surface text-soft')}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+
             {/* Fact list */}
-            <div className="no-scrollbar w-[340px] shrink-0 overflow-y-auto border-r border-line">
+            <div className="no-scrollbar w-full shrink-0 max-h-[42vh] lg:max-h-none lg:w-[340px] overflow-y-auto border-b border-line lg:border-b-0 lg:border-r">
               {list.length === 0 ? <Empty title="Nothing recalled" hint="No fact in this scope matches that search." /> : list.map((f) => (
                 <ListRow key={f.id} active={fact?.id === f.id} onClick={() => setSel(f.id)}>
                   <div className="flex items-center gap-2">
@@ -191,8 +229,8 @@ export default function Memory() {
                   <div className="flex items-center gap-2">
                     <Button size="sm" variant="outline" onClick={() => toast('Evidence opened in Knowledge')}><FileSearch className="size-3.5" />View evidence</Button>
                     <Button size="sm" variant="outline" onClick={() => toast('Editing a fact requires a source — static prototype')}><Pencil className="size-3.5" />Edit</Button>
-                    <Button size="sm" variant="outline" onClick={() => toast(fact.pinned ? 'Unpinned' : 'Pinned — exempt from decay')}><Pin className="size-3.5" />{fact.pinned ? 'Unpin' : 'Pin'}</Button>
-                    <Button size="sm" variant="destructive" onClick={() => toast('Archived — recoverable for 90 days')}><Archive className="size-3.5" />Archive</Button>
+                    <Button size="sm" variant="outline" onClick={async () => { if (await setPinned(fact.ref, !fact.pinned)) toast(fact.pinned ? `${fact.ref} unpinned` : `${fact.ref} pinned — exempt from decay`); }}><Pin className="size-3.5" />{fact.pinned ? 'Unpin' : 'Pin'}</Button>
+                    <Button size="sm" variant="destructive" onClick={async () => { if (await archive(fact.ref)) toast(`${fact.ref} archived`, { description: 'Out of recall, never deleted. The record stays recoverable.' }); }}><Archive className="size-3.5" />Archive</Button>
                   </div>
                 </div>
               )}

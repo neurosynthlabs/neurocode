@@ -100,9 +100,9 @@ export default function CodeIntelligence() {
         </div>
       </PageHeader>
 
-      <PageBody className="flex h-full gap-0 p-0">
+      <PageBody className="flex h-full flex-col gap-0 p-0 md:flex-row">
         {/* Tree */}
-        <div className="flex w-[280px] shrink-0 flex-col border-r border-line">
+        <div className="flex w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[280px] flex-col border-b border-line md:border-b-0 md:border-r overflow-y-auto">
           <div className="shrink-0 border-b border-line p-2.5">
             <div className="flex h-7 items-center gap-2 rounded-sm border border-line bg-surface-2 px-2.5 focus-within:border-brand">
               <Search className="size-3.5 shrink-0 text-dim" />

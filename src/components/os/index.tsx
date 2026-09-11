@@ -3,7 +3,7 @@
    Built on the shadcn token contract so every theme repaints them.
    Pair these with shadcn components (Button, Dialog, Tabs, …).
    ═══════════════════════════════════════════════════════════════ */
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import type { Risk } from '@/types';
 
@@ -22,17 +22,17 @@ export function PageHeader({
   title, subtitle, actions, children, icon,
 }: { title: string; subtitle?: string; actions?: ReactNode; children?: ReactNode; icon?: ReactNode }) {
   return (
-    <header className="relative shrink-0 bg-bg px-6 pt-5">
+    <header className="relative shrink-0 bg-bg px-4 pt-4 sm:px-6 sm:pt-5">
       <span className="title-rule pointer-events-none absolute inset-x-0 bottom-0 h-px" />
-      <div className="flex items-start justify-between gap-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
         <div className="flex min-w-0 items-start gap-2.5">
           {icon && <span className="mt-0.5 text-brand">{icon}</span>}
           <div className="min-w-0">
-            <h1 className="text-[20px] leading-tight font-semibold tracking-[-0.022em] text-ink">{title}</h1>
+            <h1 className="text-[18px] leading-tight font-semibold tracking-[-0.022em] text-ink sm:text-[20px]">{title}</h1>
             {subtitle && <p className="mt-1 max-w-3xl text-[12.5px] text-soft">{subtitle}</p>}
           </div>
         </div>
-        {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+        {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
       </div>
       <div className={children ? 'mt-4' : 'mt-5'}>{children}</div>
     </header>
@@ -40,8 +40,11 @@ export function PageHeader({
 }
 
 export function PageBody({ children, className }: { children: ReactNode; className?: string }) {
+  // A page that sets its own padding (p-0 for edge-to-edge master/detail) must win outright —
+  // tailwind-merge would otherwise keep the sm: variant of the default alongside it.
+  const custom = /(^|\s)(p|px|py)-/.test(className ?? '');
   return (
-    <div className={cn('animate-page-enter min-h-0 flex-1 overflow-y-auto px-6 py-5', className)}>
+    <div className={cn('animate-page-enter min-h-0 flex-1 overflow-y-auto', !custom && 'px-4 py-4 sm:px-6 sm:py-5', className)}>
       {children}
     </div>
   );
@@ -57,10 +60,10 @@ export function Panel({
   return (
     <section className={cn('panel flex min-h-0 flex-col rounded-md border border-line bg-surface', className)}>
       {(title || actions || eyebrow) && (
-        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-3.5 py-2.5">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-line px-3.5 py-2.5">
           <div className="min-w-0">
-            {eyebrow && <div className="eyebrow mb-0.5">{eyebrow}</div>}
-            {title && <h2 className="truncate text-[12.5px] font-semibold text-ink">{title}</h2>}
+            {eyebrow && <div className="eyebrow mb-0.5 [overflow-wrap:anywhere]">{eyebrow}</div>}
+            {title && <h2 className="text-[12.5px] font-semibold text-ink [overflow-wrap:anywhere] [&>span]:flex-wrap">{title}</h2>}
           </div>
           {actions && <div className="flex shrink-0 items-center gap-1.5">{actions}</div>}
         </div>
@@ -229,7 +232,10 @@ export function Stat({ label, value, sub, tone, icon, onClick }: {
 
 export function StatGrid({ children, cols = 4, className }: { children: ReactNode; cols?: number; className?: string }) {
   return (
-    <div className={cn('stagger grid gap-3', className)} style={{ gridTemplateColumns: `repeat(${cols}, minmax(0,1fr))` }}>
+    <div
+      className={cn('stagger grid grid-cols-2 gap-3', cols > 2 && 'sm:grid-cols-3 md:grid-cols-[repeat(var(--cols),minmax(0,1fr))]', className)}
+      style={{ '--cols': cols } as CSSProperties}
+    >
       {children}
     </div>
   );
@@ -297,12 +303,12 @@ export function Segmented<T extends string>({ options, value, onChange, classNam
   options: { id: T; label: string }[]; value: T; onChange: (v: T) => void; className?: string;
 }) {
   return (
-    <div className={cn('inline-flex rounded-sm border border-line-strong bg-surface-2 p-0.5', className)}>
+    <div className={cn('no-scrollbar inline-flex max-w-full overflow-x-auto rounded-sm border border-line-strong bg-surface-2 p-0.5', className)}>
       {options.map((o) => (
         <button
           key={o.id}
           onClick={() => onChange(o.id)}
-          className={cn('rounded-xs px-2.5 py-1 text-[11.5px] transition-colors',
+          className={cn('shrink-0 rounded-xs px-2.5 py-1 text-[11.5px] whitespace-nowrap transition-colors',
             value === o.id ? 'bg-surface-3 font-medium text-ink' : 'text-soft hover:text-ink-2')}
         >
           {o.label}
@@ -335,8 +341,8 @@ export function Split({ left, right, leftWidth = 300, className }: {
   left: ReactNode; right: ReactNode; leftWidth?: number; className?: string;
 }) {
   return (
-    <div className={cn('flex h-full min-h-0 gap-3', className)}>
-      <div className="flex min-h-0 shrink-0 flex-col" style={{ width: leftWidth }}>{left}</div>
+    <div className={cn('flex h-full min-h-0 flex-col gap-3 md:flex-row', className)}>
+      <div className="flex min-h-0 w-full shrink-0 flex-col md:w-[var(--split-w)]" style={{ '--split-w': `${leftWidth}px` } as CSSProperties}>{left}</div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">{right}</div>
     </div>
   );

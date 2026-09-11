@@ -27,6 +27,17 @@ const SEED_RULES = [
 const DB_STEPS = [5, 6, 7, 8];
 const DEFAULT_EXCLUDED = 'node_modules, bin, obj, dist, **/*.designer.cs';
 const estSeconds = (e: string) => (e.endsWith('m') ? parseFloat(e) * 60 : parseFloat(e));
+const GIT_URL = /^(git@[\w.-]+:[\w.~/-]+?(\.git)?|(https?|ssh):\/\/[^\s/]+\/[\w.~/-]+?(\.git)?)\/?$/i;
+const GIT_REF = /^(?!-)(?!.*\.\.)(?!.*\/$)[\w./-]+$/;
+
+/** What is wrong with the repository step, or null when it is ready to continue. */
+function repoProblem(source: 'git' | 'local', repo: string, branch: string): string | null {
+  const r = repo.trim();
+  if (!r) return 'Enter a repository to continue';
+  if (source === 'local') return /^(\/|~\/)/.test(r) ? null : 'Use an absolute path — it starts with / or ~/';
+  if (!GIT_URL.test(r)) return 'Not a clone URL — e.g. git@github.com:org/repo.git';
+  return GIT_REF.test(branch.trim()) ? null : 'Branch name is empty or invalid';
+}
 
 export default function Projects() {
   const nav = useNavigate();
@@ -258,7 +269,7 @@ export default function Projects() {
         steps={[
           {
             id: 'repo', title: 'Repository', hint: 'where the code lives',
-            valid: repo.trim().length > 3, blocker: 'Enter a repository to continue',
+            valid: repoProblem(source, repo, branch) === null, blocker: repoProblem(source, repo, branch) ?? undefined,
             content: (
               <div className="space-y-3">
                 <Segmented options={[{ id: 'git', label: 'Git remote' }, { id: 'local', label: 'Local path' }]} value={source} onChange={setSource} />

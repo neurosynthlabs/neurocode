@@ -4,8 +4,8 @@ import { Switch } from '@/components/ui/switch';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Dot, Mono, Segmented, Stat, StatGrid, Empty, KV,
 } from '@/components/os';
-import { activity } from '@/mock/activity';
-import { activityExtra, dayOf, timeOf } from '@/mock/activity-extra';
+import { dayOf, timeOf } from '@/mock/activity-extra';
+import { useData } from '@/lib/data';
 import { projects, projectName } from '@/mock/projects';
 import { cn } from '@/lib/utils';
 import type { ActivityEvent } from '@/types';
@@ -15,16 +15,16 @@ const KIND_TONE = { human: 'brand', agent: 'ok', system: 'violet', hook: 'warn',
 const KINDS = ['human', 'agent', 'system', 'hook', 'tool'] as const;
 
 export default function Activity() {
-  const [live, setLive] = useState(true);
+  const { activity } = useData();
+  // Pausing freezes the list where it is. New events keep arriving underneath and are counted.
+  const [frozen, setFrozen] = useState<ActivityEvent[] | null>(null);
   const [proj, setProj] = useState('all');
   const [kind, setKind] = useState<'all' | ActivityEvent['actorKind']>('all');
   const [level, setLevel] = useState<'all' | ActivityEvent['level']>('all');
   const [q, setQ] = useState('');
 
-  const all = useMemo(
-    () => [...activity].reverse().concat(activityExtra),
-    [],
-  );
+  const all = frozen ?? activity;
+  const unseen = frozen ? activity.length - frozen.length : 0;
 
   const list = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -67,8 +67,10 @@ export default function Activity() {
         subtitle="Every decision, tool call, hook firing and approval — in order. This is the audit trail and the reason the system feels alive."
         actions={
           <label className="flex items-center gap-2 text-[12px] text-soft">
-            <Switch checked={live} onCheckedChange={setLive} />
-            {live ? <><Play className="size-3" />live</> : <><Pause className="size-3" />paused</>}
+            <Switch checked={!frozen} onCheckedChange={(on) => setFrozen(on ? null : activity)} />
+            {frozen
+              ? <><Pause className="size-3" />paused{unseen > 0 && <Tag tone="brand">{unseen} new</Tag>}</>
+              : <><Play className="size-3" />live</>}
           </label>
         }
       >
@@ -113,7 +115,7 @@ export default function Activity() {
                         {events.map((e) => {
                           const Icon = KIND_ICON[e.actorKind];
                           return (
-                            <div key={e.id} className={cn('flex items-start gap-3 px-3.5 py-2', e.level === 'err' && 'bg-danger/5')}>
+                            <div key={e.id} className={cn('flex items-start gap-3 px-3.5 py-2', e.level === 'err' && 'bg-danger/5', /^(live|local)-/.test(e.id) && 'animate-slide-up bg-brand/5')}>
                               <span className="tnum mt-px w-14 shrink-0 font-mono text-[10.5px] text-dim">{timeOf(e.t)}</span>
                               <span className={cn('mt-px shrink-0',
                                 e.actorKind === 'human' ? 'text-brand' : e.actorKind === 'hook' ? 'text-warn' : e.actorKind === 'tool' ? 'text-info' : e.actorKind === 'system' ? 'text-violet' : 'text-ok')}>

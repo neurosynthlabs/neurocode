@@ -39,8 +39,8 @@ export default function Sessions() {
           <Stat label="Cost" value={`$${sessions.reduce((n, x) => n + x.cost, 0).toFixed(2)}`} sub="local models carry most of it" />
         </StatGrid>
 
-        <div className="flex min-h-[620px] gap-3">
-          <div className="flex w-[320px] shrink-0 flex-col overflow-hidden rounded-md border border-line bg-surface">
+        <div className="flex min-h-[620px] flex-col gap-3 md:flex-row">
+          <div className="flex w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[320px] flex-col overflow-hidden rounded-md border border-line bg-surface">
             <div className="border-b border-line p-2.5">
               <Field value={q} onChange={setQ} icon={<Search className="size-3.5" />} placeholder="Search sessions…" onClear={() => setQ('')} />
             </div>
@@ -64,7 +64,7 @@ export default function Sessions() {
               title={<span className="flex items-center gap-2"><Mono tone="brand">{s.ref}</Mono>{s.title}</span>}
               actions={<Button size="xs" variant="outline" onClick={() => toast.success(`Forked ${s.ref}`, { description: 'New session from the latest checkpoint; the original is untouched.' })}><GitFork className="size-3" />Fork</Button>}>
               <p className="text-[12.5px] leading-relaxed text-ink-2">{s.summary}</p>
-              <div className="mt-3 grid grid-cols-2 gap-x-6 border-t border-line pt-2.5 md:grid-cols-4">
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 border-t border-line pt-2.5 xl:grid-cols-4">
                 <KV k="Duration" v={s.duration} />
                 <KV k="Messages" v={s.messages} />
                 <KV k="Tokens" v={`${(s.tokens / 1000).toFixed(0)}k`} />

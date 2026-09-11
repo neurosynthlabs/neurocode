@@ -6,7 +6,8 @@ import {
   Page, PageHeader, PageBody, Panel, Tag, RiskPill, Mono, Toolbar, Field, SelectField,
   DataTable, Row, Cell, Stat, StatGrid, KV, Empty, SectionTitle, Segmented,
 } from '@/components/os';
-import { permissionRules, approvals } from '@/mock/permissions';
+import { permissionRules } from '@/mock/permissions';
+import { useData } from '@/lib/data';
 import { projectName } from '@/mock/projects';
 import { cn } from '@/lib/utils';
 
@@ -29,7 +30,7 @@ export default function Permissions() {
   const [effect, setEffect] = useState('all');
   const [tool, setTool] = useState('all');
   const [q, setQ] = useState('');
-  const [decided, setDecided] = useState<Record<string, 'approved' | 'denied'>>({});
+  const { approvals, decide: record } = useData();
 
   const tools = useMemo(() => ['all', ...Array.from(new Set(permissionRules.map((r) => r.tool)))], []);
   const rules = useMemo(() => {
@@ -40,14 +41,13 @@ export default function Permissions() {
       (!t || (r.pattern + r.note + r.tool).toLowerCase().includes(t)));
   }, [effect, tool, q]);
 
-  const pending = approvals.filter((a) => a.status === 'pending' && !decided[a.id]);
-  const resolved = approvals.filter((a) => a.status !== 'pending' || decided[a.id]);
+  const pending = approvals.filter((a) => a.status === 'pending');
+  const resolved = approvals.filter((a) => a.status !== 'pending');
 
-  const decide = (id: string, ref: string, v: 'approved' | 'denied') => {
-    setDecided((d) => ({ ...d, [id]: v }));
-    v === 'approved'
-      ? toast.success(`${ref} approved`, { description: 'Your signature is recorded against this action.' })
-      : toast(`${ref} denied`, { description: 'The agent is told why, and will not retry silently.' });
+  const decide = async (ref: string, v: 'approve' | 'deny') => {
+    if (!(await record(ref, v))) return;
+    if (v === 'approve') toast.success(`${ref} approved`, { description: 'Your signature is recorded against this action.' });
+    else toast(`${ref} denied`, { description: 'The agent is told why, and will not retry silently.' });
   };
 
   return (
@@ -101,8 +101,8 @@ export default function Permissions() {
                     <SectionTitle className="mt-3">Why the agent is asking</SectionTitle>
                     <p className="text-[12.5px] leading-relaxed text-ink-2">{a.reason}</p>
                     <div className="mt-3 flex items-center gap-2 border-t border-line pt-3">
-                      <Button size="sm" onClick={() => decide(a.id, a.ref, 'approved')}><Check className="size-3.5" />Approve</Button>
-                      <Button size="sm" variant="destructive" onClick={() => decide(a.id, a.ref, 'denied')}><X className="size-3.5" />Deny</Button>
+                      <Button size="sm" onClick={() => decide(a.ref, 'approve')}><Check className="size-3.5" />Approve</Button>
+                      <Button size="sm" variant="destructive" onClick={() => decide(a.ref, 'deny')}><X className="size-3.5" />Deny</Button>
                       <span className="ml-auto text-[11px] text-dim">Approving records your name against this exact payload.</span>
                     </div>
                   </Panel>
@@ -116,7 +116,7 @@ export default function Permissions() {
                 <Panel flush>
                   <DataTable head={['Ref', 'Title', 'Agent', 'Tool', 'Risk', 'Outcome']}>
                     {resolved.map((a) => {
-                      const st = decided[a.id] ?? a.status;
+                      const st = a.status;
                       return (
                         <Row key={a.id}>
                           <Cell mono>{a.ref}</Cell>
