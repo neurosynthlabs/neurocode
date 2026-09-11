@@ -76,6 +76,7 @@ class Accounts:
         self.store, self.rbac = store, rbac
         self._fails: dict[str, list[float]] = {}
         self._lock = threading.Lock()
+        store.execute("DELETE FROM sessions WHERE expires_at < ?", (now_iso(),))  # an expired session is only clutter
 
     # ── reading ──────────────────────────────────────────────────
     def count(self) -> int:

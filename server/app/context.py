@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -30,6 +30,7 @@ class Ctx:
     rbac: Rbac
     accounts: Accounts
     gateway: Gateway
+    indexing: set[str] = field(default_factory=set)  # projects whose code is being indexed right now
 
     def put(self, collection: str, doc: dict[str, Any]) -> dict[str, Any]:
         """Tell every tab this document changed."""

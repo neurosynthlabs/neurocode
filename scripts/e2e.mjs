@@ -276,6 +276,45 @@ try {
     expect(hits.some((f) => f.body.startsWith('Credit notes must always')), 'the fact is not in memory');
   });
 
+  await step('every AI call so far is in the usage ledger', async () => {
+    const u = await api('/usage');
+    const features = new Set(u.byFeature.map((f) => f.feature));
+    expect(u.totals.calls >= 4, `the ledger holds ${u.totals.calls} calls`);
+    expect(['compile', 'ask', 'brainstorm', 'extract'].every((f) => features.has(f)), `features in the ledger: ${[...features]}`);
+  });
+
+  await step('the onboarded project is indexed: search a symbol, open its file and its blast radius', async () => {
+    let s;
+    for (const t0 = Date.now(); Date.now() - t0 < 20000; await new Promise((r) => setTimeout(r, 300))) {
+      s = await api('/projects/server/code');
+      if (s.indexed) break;
+    }
+    expect(s?.indexed && s.run.parsers.Python === 'python-ast' && s.run.symbols > 50, `index: ${JSON.stringify(s?.run ?? s)}`);
+    await open('/');
+    await page.getByText('saved locally').waitFor({ timeout: 20000 });
+    await page.locator('header [data-slot="popover-trigger"]').first().click();
+    await page.locator('[data-slot="popover-content"]').getByRole('button', { name: /^Server/ }).click();
+    await page.getByRole('link', { name: 'Code Intelligence', exact: true }).click();
+    await page.getByText('Python · python-ast').waitFor({ timeout: 10000 });
+    await page.getByLabel('Search the code').fill('create_app');
+    await page.getByRole('button', { name: /create_app/ }).first().click();
+    await page.getByText('If main.py changes…').waitFor({ timeout: 10000 });
+    await page.getByRole('button', { name: /Show in Architecture/ }).click();
+    await page.getByText('Module graph').waitFor({ timeout: 10000 });
+    await page.getByText('If main.py changes…').waitFor({ timeout: 10000 });
+    await page.getByRole('button', { name: 'app', exact: true }).first().click();
+    await page.getByText('If app changes…').waitFor({ timeout: 10000 });
+  });
+
+  await step('a database backup is made from Admin → Database', async () => {
+    await open('/admin/database');
+    await page.getByRole('button', { name: /Back up now/ }).click();
+    await page.getByText(/neurocode-\d{8}-\d{6}-manual\.db/).first().waitFor({ timeout: 10000 });
+    const db = await api('/admin/database');
+    expect(db.backups.some((b) => b.name.endsWith('-manual.db')), 'no manual backup is listed');
+    expect(db.migrations.length === 5, `${db.migrations.length} migrations applied`);
+  });
+
   await step('a model key is saved masked, never logged, and can be removed', async () => {
     await open('/admin/ai');
     await page.getByLabel('API key').fill('sk-e2e-test-0000abcd');

@@ -54,7 +54,8 @@ export const NAV: NavItem[] = [
   { section: 'Admin', to: '/admin/teams',     label: 'Teams',               icon: 'UsersRound',   perm: ['teams:manage', 'users:manage'], keywords: 'groups squads members' },
   { section: 'Admin', to: '/admin/ai',        label: 'AI providers',        icon: 'BrainCircuit', perm: ['workspace:admin'],              keywords: 'deepseek ollama api key model routing offline test connection' },
   { section: 'Admin', to: '/admin/audit',     label: 'Audit log',           icon: 'FileClock',    perm: ['audit:read'],                   keywords: 'security sign in history who changed access' },
-  { section: 'Admin', to: '/admin/workspace', label: 'Workspace',           icon: 'Building2',    perm: ['workspace:admin'],              keywords: 'name organisation reset data database' },
+  { section: 'Admin', to: '/admin/workspace', label: 'Workspace',           icon: 'Building2',    perm: ['workspace:admin'],              keywords: 'name organisation reset data' },
+  { section: 'Admin', to: '/admin/database',  label: 'Database',            icon: 'Database',     perm: ['workspace:admin'],              keywords: 'sqlite backup integrity check migrations optimize tables' },
 ];
 
 export const NAV_SECTIONS: NavSection[] = ['Home', 'Build', 'Knowledge', 'Platform', 'Governance', 'Admin'];

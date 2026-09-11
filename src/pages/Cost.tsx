@@ -5,7 +5,89 @@ import {
   Stat, StatGrid, Bar, KV, Ring, SectionTitle,
 } from '@/components/os';
 import { costDays, byAgent, byModel, byProject, budget, expensiveOps, savings, savingsTotals } from '@/mock/cost';
+import { api } from '@/lib/api';
+import { useData } from '@/lib/data';
+import { useRemote } from '@/lib/remote';
 import { cn } from '@/lib/utils';
+import { ago, tokens } from '@/pages/code/format';
+
+const FEATURE: Record<string, string> = {
+  compile: 'Requirement compiler', ask: 'Ask memory', brainstorm: 'Brainstorm', extract: 'Add from text', test: 'Connection test',
+};
+
+/** The gateway's ledger: every model call and every offline answer, as they really happened. */
+function Measured() {
+  const u = useRemote('usage:30', () => api.usage(30));
+  if (u.error) return <Panel><p className="text-[13px] text-soft">The usage ledger did not load: {u.error}</p></Panel>;
+  if (!u.data) return null;
+  const { totals: t, byFeature, byProvider, recent, byPerson } = u.data;
+  return (
+    <section className="space-y-4">
+      <SectionTitle right={<span className="text-[12.5px] text-dim">last 30 days · from the AI gateway’s ledger</span>}>Measured</SectionTitle>
+      {t.calls === 0 ? (
+        <Panel><p className="text-[13.5px] text-soft">No AI call yet. Compile a requirement, ask memory or brainstorm, and every call is counted here.</p></Panel>
+      ) : (
+        <>
+          <StatGrid cols={5}>
+            <Stat label="AI calls" value={t.calls.toLocaleString()} sub={`${t.modelCalls} to a model · ${t.offline} offline`} />
+            <Stat label="Tokens" value={tokens(t.tokensIn + t.tokensOut)} sub={`${tokens(t.tokensIn)} in · ${tokens(t.tokensOut)} out`} />
+            <Stat label="Failed model calls" value={t.failures} tone={t.failures ? 'warn' : 'ok'} sub="the rules answered instead" />
+            <Stat label="Average answer" value={`${(t.avgMs / 1000).toFixed(1)} s`} />
+            <Stat label="Offline share" value={`${Math.round((100 * t.offline) / Math.max(1, t.calls))}%`} tone="ok" sub="free, on this machine" icon={<HardDrive className="size-3" />} />
+          </StatGrid>
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+            <Panel flush title="By feature">
+              <DataTable head={['Feature', 'Calls', 'Model', 'Offline', 'Failed', 'Tokens']}>
+                {byFeature.map((f) => (
+                  <Row key={f.feature}>
+                    <Cell className="font-medium text-ink">{FEATURE[f.feature] ?? f.feature}</Cell>
+                    <Cell className="tnum">{f.calls}</Cell>
+                    <Cell className="tnum">{f.model}</Cell>
+                    <Cell className="tnum text-ok">{f.offline}</Cell>
+                    <Cell className={cn('tnum', f.failures && 'text-warn')}>{f.failures || '—'}</Cell>
+                    <Cell className="tnum">{tokens(f.tokensIn + f.tokensOut)}</Cell>
+                  </Row>
+                ))}
+              </DataTable>
+            </Panel>
+            <Panel flush title="By provider">
+              <DataTable head={['Answered by', 'Calls', 'Failed', 'Tokens', 'Average']}>
+                {byProvider.map((p) => (
+                  <Row key={`${p.provider}:${p.model}`}>
+                    <Cell className="font-medium text-ink">{p.provider === 'rules' ? `Offline · ${p.model}` : p.model}</Cell>
+                    <Cell className="tnum">{p.calls}</Cell>
+                    <Cell className={cn('tnum', p.failures && 'text-warn')}>{p.failures || '—'}</Cell>
+                    <Cell className="tnum">{p.provider === 'rules' ? 'free' : tokens(p.tokensIn + p.tokensOut)}</Cell>
+                    <Cell className="tnum">{p.avgMs} ms</Cell>
+                  </Row>
+                ))}
+              </DataTable>
+            </Panel>
+          </div>
+          <Panel flush title="Latest calls" eyebrow={byPerson ? `${byPerson.length} ${byPerson.length === 1 ? 'person' : 'people'} used AI` : undefined}>
+            <DataTable head={['When', 'Feature', 'Answered by', 'Tokens', 'Time', ...(byPerson ? ['By'] : [])]}>
+              {recent.map((r, i) => (
+                <Row key={`${r.at}:${i}`}>
+                  <Cell className="whitespace-nowrap text-soft">{ago(r.at)}</Cell>
+                  <Cell className="text-ink">{FEATURE[r.feature] ?? r.feature}</Cell>
+                  <Cell>
+                    <span className="flex items-center gap-1.5" title={r.error || undefined}>
+                      {!r.ok && <Tag tone="warn">failed</Tag>}
+                      <span className={cn('text-[13px]', r.provider === 'rules' ? 'text-ok' : 'text-ink-2')}>{r.provider === 'rules' ? 'offline rules' : r.model}</span>
+                    </span>
+                  </Cell>
+                  <Cell className="tnum">{r.tokensIn + r.tokensOut ? tokens(r.tokensIn + r.tokensOut) : '—'}</Cell>
+                  <Cell className="tnum">{r.ms} ms</Cell>
+                  {byPerson && <Cell className="text-soft">{r.by ?? '—'}</Cell>}
+                </Row>
+              ))}
+            </DataTable>
+          </Panel>
+        </>
+      )}
+    </section>
+  );
+}
 
 const W = 560, H = 116;
 
@@ -20,15 +102,18 @@ export default function Cost() {
   const pctUsed = Math.round((budget.spent / budget.daily) * 100);
 
   const totalTokens = useMemo(() => buckets.reduce((n, b) => n + b.tokensIn + b.tokensOut, 0), [buckets]);
+  const { mode } = useData();
 
   return (
     <Page>
       <PageHeader
         title="Cost & Usage"
-        subtitle="What the fleet actually costs, where it goes, and an honest account of what running models locally does and does not save."
+        subtitle="What the AI work really cost, measured call by call, and an honest account of what running models locally does and does not save."
       />
 
       <PageBody className="space-y-4">
+        {mode === 'live' && <Measured />}
+        <SectionTitle right={<span className="text-[12.5px] text-dim">sample data · fleet spend arrives with the agent runtime</span>}>Fleet spend</SectionTitle>
         <StatGrid cols={5}>
           <Stat label="Spent today" value={`$${budget.spent.toFixed(2)}`} tone={pctUsed > 80 ? 'warn' : 'brand'} sub={`${pctUsed}% of $${budget.daily.toFixed(2)}`} icon={<Coins className="size-3" />} />
           <Stat label="This month" value={`$${budget.monthSpent.toFixed(2)}`} sub={`${budget.monthDays} days elapsed`} />

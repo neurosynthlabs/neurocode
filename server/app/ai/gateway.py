@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 import time
 import urllib.error
 import urllib.request
@@ -17,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
-from ..db import Store
+from ..db import Store, now_iso
 from ..secrets import Secrets
 
 T = TypeVar("T")
@@ -59,21 +60,32 @@ def _post(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: f
         raise ProviderError(e.code, e.read()[:200].decode(errors="replace")) from e
 
 
-def call_deepseek(messages: list[dict[str, str]], cfg: dict[str, Any]) -> str:
+Usage = dict[str, int]      # {"in": prompt tokens, "out": completion tokens}
+Answer = tuple[str, Usage]
+
+
+def call_deepseek(messages: list[dict[str, str]], cfg: dict[str, Any]) -> Answer:
     body = _post(f"{cfg['baseUrl']}/chat/completions",
                  {"model": cfg["model"], "messages": messages, "response_format": {"type": "json_object"},
                   "temperature": 0.2, "max_tokens": 3000},
                  {"Authorization": f"Bearer {cfg['key']}"}, 120)
-    return body["choices"][0]["message"]["content"]
+    usage = body.get("usage") or {}
+    return body["choices"][0]["message"]["content"], {"in": usage.get("prompt_tokens", 0), "out": usage.get("completion_tokens", 0)}
 
 
-def call_ollama(messages: list[dict[str, str]], cfg: dict[str, Any]) -> str:
+def call_ollama(messages: list[dict[str, str]], cfg: dict[str, Any]) -> Answer:
     body = _post(f"{cfg['url']}/api/chat", {"model": cfg["model"], "messages": messages, "format": "json",
                                             "stream": False, "options": {"temperature": 0.2}}, {}, 300)
-    return body["message"]["content"]
+    return body["message"]["content"], {"in": body.get("prompt_eval_count", 0), "out": body.get("eval_count", 0)}
 
 
-CALLS: dict[str, Callable[[list[dict[str, str]], dict[str, Any]], str]] = {"deepseek": call_deepseek, "ollama": call_ollama}
+# A provider returns its text and the tokens it counted. A stand-in (a test) may return just the text.
+CALLS: dict[str, Callable[[list[dict[str, str]], dict[str, Any]], Answer | str]] = {
+    "deepseek": call_deepseek, "ollama": call_ollama}
+
+
+def _split(out: Answer | str) -> Answer:
+    return (out[0], out[1] or {}) if isinstance(out, tuple) else (out, {})
 
 
 def extract_json(raw: str) -> dict[str, Any]:
@@ -176,35 +188,63 @@ class Gateway:
 
     # ── calls ────────────────────────────────────────────────────
     def run(self, messages: list[dict[str, str]], parse: Callable[[str], T], fallback: Callable[[], T], *,
-            offline: str = "offline planner") -> Result[T]:
-        """Ask the chosen model and validate its answer. No model, or an unusable answer: the rules stand in."""
+            offline: str = "offline planner", feature: str = "compile", actor: str | None = None,
+            project: str | None = None) -> Result[T]:
+        """Ask the chosen model and validate its answer. No model, or an unusable answer: the rules stand in.
+        Every attempt and every offline answer is written to the usage ledger."""
         provider, t0 = self.pick(), time.monotonic()
         reason = None
         if provider is not None:
+            usage: Usage = {}
             try:
-                return Result(parse(CALLS[provider.id](messages, self.config(provider.id))), provider, _ms(t0))
+                raw, usage = _split(CALLS[provider.id](messages, self.config(provider.id)))
+                data = parse(raw)
             except Exception as e:  # network, key, quota, malformed JSON, schema: the answer is unusable either way
                 if isinstance(e, ProviderError) and e.status in (401, 403) and provider.id == "deepseek":
                     self._rejected = _fp(self.deepseek()["key"] or "")
                 reason = f"{provider.model} failed ({type(e).__name__}: {str(e)[:160]})"
-        return Result(fallback(), Provider("rules", offline), _ms(t0), reason)
+                self._record(feature, provider, False, _ms(t0), usage, actor, project, reason)
+            else:
+                result = Result(data, provider, _ms(t0))
+                self._record(feature, provider, True, result.ms, usage, actor, project)
+                return result
+        t1 = time.monotonic()
+        result = Result(fallback(), Provider("rules", offline), _ms(t0), reason)
+        self._record(feature, result.provider, True, _ms(t1), {}, actor, project)
+        return result
 
-    def test(self, provider_id: str) -> dict[str, Any]:
+    def test(self, provider_id: str, actor: str | None = None) -> dict[str, Any]:
         """One tiny round trip, so the admin screen can say whether a provider really answers."""
         if provider_id == "rules":
             return {"ok": True, "ms": 0, "detail": "The offline rules need no model."}
         cfg = self.config(provider_id)
         if provider_id == "deepseek" and not cfg["key"]:
             return {"ok": False, "ms": 0, "detail": "No API key is set."}
-        t0 = time.monotonic()
+        provider, t0, usage = Provider(provider_id, cfg["model"]), time.monotonic(), {}
         try:
-            raw = CALLS[provider_id]([{"role": "system", "content": 'Reply with the JSON object {"ok": true} and nothing else.'},
-                                      {"role": "user", "content": "ping"}], cfg)
+            raw, usage = _split(CALLS[provider_id](
+                [{"role": "system", "content": 'Reply with the JSON object {"ok": true} and nothing else.'},
+                 {"role": "user", "content": "ping"}], cfg))
             extract_json(raw)
             if provider_id == "deepseek":
                 self._rejected = None
+            self._record("test", provider, True, _ms(t0), usage, actor, None)
             return {"ok": True, "ms": _ms(t0), "detail": f"{cfg['model']} answered."}
         except Exception as e:  # report whatever went wrong; this is a diagnostic
             if isinstance(e, ProviderError) and e.status in (401, 403) and provider_id == "deepseek":
                 self._rejected = _fp(cfg["key"])
-            return {"ok": False, "ms": _ms(t0), "detail": (str(e) or type(e).__name__)[:200]}
+            detail = (str(e) or type(e).__name__)[:200]
+            self._record("test", provider, False, _ms(t0), usage, actor, None, detail)
+            return {"ok": False, "ms": _ms(t0), "detail": detail}
+
+    def _record(self, feature: str, provider: Provider, ok: bool, ms: int, usage: Usage, actor: str | None,
+                project: str | None, error: str = "") -> None:
+        """One line in the usage ledger. The ledger must never break the feature it measures."""
+        try:
+            self.store.execute(
+                "INSERT INTO ai_calls(at, feature, provider, model, ok, ms, tokens_in, tokens_out, user_id, project_id, error) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (now_iso(), feature, provider.id, provider.model, int(ok), ms, int(usage.get("in") or 0),
+                 int(usage.get("out") or 0), actor, project, error[:300]))
+        except sqlite3.Error:
+            pass

@@ -1,4 +1,7 @@
 import { useState, type SyntheticEvent, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
+import { useRemote } from '@/lib/remote';
+import { tokens } from '@/pages/code/format';
 import { KeyRound, Loader2, PlugZap } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -94,6 +97,8 @@ export default function AiProviders() {
               )}
             </Panel>
 
+            {live && <Usage />}
+
             <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
               <Panel eyebrow="Cloud model" title="DeepSeek">
                 <KV
@@ -171,6 +176,31 @@ export default function AiProviders() {
         )}
       </PageBody>
     </Page>
+  );
+}
+
+/** What each provider did over the last 30 days, from the gateway's ledger. */
+function Usage() {
+  const u = useRemote('usage:30', () => api.usage(30));
+  if (!u.data) return null;
+  const { totals: t, byProvider } = u.data;
+  return (
+    <Panel flush title="Last 30 days" eyebrow={`${t.calls} calls · ${t.modelCalls} to a model · ${t.failures} failed`}
+      actions={<Link to="/cost" className="text-[12.5px] text-brand hover:underline">Full ledger →</Link>}>
+      {byProvider.length === 0 ? <p className="px-5 py-3 text-[13px] text-soft">No AI call yet.</p> : (
+        <DataTable head={['Answered by', 'Calls', 'Failed', 'Tokens', 'Average']}>
+          {byProvider.map((p) => (
+            <Row key={`${p.provider}:${p.model}`}>
+              <Cell className="font-medium text-ink">{p.provider === 'rules' ? `Offline · ${p.model}` : p.model}</Cell>
+              <Cell className="tnum">{p.calls}</Cell>
+              <Cell className={cn('tnum', p.failures > 0 && 'text-warn')}>{p.failures || '—'}</Cell>
+              <Cell className="tnum">{p.provider === 'rules' ? 'free' : tokens(p.tokensIn + p.tokensOut)}</Cell>
+              <Cell className="tnum">{p.avgMs} ms</Cell>
+            </Row>
+          ))}
+        </DataTable>
+      )}
+    </Panel>
   );
 }
 

@@ -22,7 +22,7 @@ const LABEL: Record<string, string> = {
   'user.create': 'Person added', 'user.update': 'Person changed', 'user.password_reset': 'Password set by an admin',
   'role.create': 'Role created', 'role.update': 'Role changed', 'role.delete': 'Role deleted',
   'team.create': 'Team created', 'team.update': 'Team changed', 'team.delete': 'Team deleted',
-  'ai.update': 'AI providers changed',
+  'ai.update': 'AI providers changed', 'database.backup': 'Database backed up', 'database.optimize': 'Database optimized',
 };
 const kind = (action: string): Filter =>
   action.startsWith('auth.') ? 'auth' : /^(user|role|team)\./.test(action) ? 'access' : 'system';

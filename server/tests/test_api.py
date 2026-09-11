@@ -275,6 +275,7 @@ def test_an_older_database_gains_the_new_tables(tmp_path):
     assert store.count("projects") == 1                      # its own data survives
     assert store.count("plans") == len(SEED["plans"])        # the missing tables arrive seeded
     assert store.row("SELECT COUNT(*) FROM users")[0] == 0   # and so does the access schema
+    assert list((tmp_path / "backups").glob("*before-0001*"))  # copied aside before the schema changed
 
 
 def test_approving_is_final_and_logged(client):
@@ -504,3 +505,135 @@ def test_a_decision_is_final_and_logged(client):
     decided = client.get("/decisions").json()[0]
     assert decided["value"] == "accepted" and decided["decidedBy"] == "Rajat"
     assert client.get("/activity", params={"limit": 1}).json()[0]["action"] == "Review accepted"
+
+
+# ── the database itself ──────────────────────────────────────────
+def test_the_audit_log_is_append_only(client):
+    store = client.app.state.store
+    with pytest.raises(sqlite3.DatabaseError):
+        store.execute("UPDATE audit_log SET action = 'rewritten'")
+    with pytest.raises(sqlite3.DatabaseError):
+        store.execute("DELETE FROM audit_log")
+    assert client.get("/admin/audit").json()[-1]["action"] == "workspace.setup"
+
+
+def test_the_database_is_backed_up_checked_and_optimized(client, tmp_path):
+    info = client.get("/admin/database").json()
+    assert {"users", "ai_calls", "code_files", "audit_log"} <= {t["name"] for t in info["tables"]}
+    assert "code_fts_data" not in {t["name"] for t in info["tables"]}          # search internals stay out of the list
+    assert [m["version"] for m in info["migrations"]] == [1, 2, 3, 4, 5]
+    made = client.post("/admin/database/backup")
+    assert made.status_code == 201
+    path = tmp_path / "backups" / made.json()["name"]
+    assert path.is_file() and path.stat().st_mode & 0o777 == 0o600
+    copy = sqlite3.connect(path)
+    assert copy.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1       # a complete, readable copy
+    copy.close()
+    assert client.post("/admin/database/check").json()["ok"] is True
+    assert client.post("/admin/database/optimize").status_code == 200
+    assert {"database.backup", "database.optimize"} <= {a["action"] for a in client.get("/admin/audit").json()}
+    assert person(client, "approver").get("/admin/database").status_code == 403
+
+
+def test_a_reset_is_backed_up_first(client):
+    reset = client.post("/admin/reset", headers={"X-Confirm": "reset"}).json()
+    assert "before-reset" in reset["backup"]
+    assert any(b["name"] == reset["backup"] for b in client.get("/admin/database").json()["backups"])
+
+
+def test_every_model_call_is_in_the_usage_ledger(client, monkeypatch):
+    client.post("/ai/ask", json={"question": "tax on invoices"})                       # offline rules
+    monkeypatch.setenv("NEUROCODE_COMPILER", "auto")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    answer = json.dumps({"answer": "From memory.", "citations": []})
+    monkeypatch.setitem(gateway.CALLS, "deepseek", lambda messages, cfg: (answer, {"in": 120, "out": 30}))
+    client.post("/ai/ask", json={"question": "tax on invoices"})                       # a model, 150 tokens
+    monkeypatch.setitem(gateway.CALLS, "deepseek", lambda messages, cfg: "not json")
+    client.post("/ai/brainstorm", json={"idea": "a vendor portal"})                    # a failed model, then the rules
+    u = client.get("/usage").json()
+    assert u["totals"] | {"avgMs": 0} == {"calls": 4, "modelCalls": 2, "offline": 2, "failures": 1, "tokensIn": 120,
+                                          "tokensOut": 30, "avgMs": 0}
+    assert {f["feature"] for f in u["byFeature"]} == {"ask", "brainstorm"}
+    assert u["recent"][0]["feature"] == "brainstorm" and u["recent"][0]["provider"] == "rules"
+    assert u["recent"][0]["by"] == "Rajat" and u["byPerson"][0]["calls"] == 4
+    viewer = person(client, "viewer").get("/usage").json()
+    assert viewer["totals"]["calls"] == 4 and viewer["recent"][0]["by"] is None and "byPerson" not in viewer
+
+
+# ── the code index ───────────────────────────────────────────────
+REPO = {
+    "pkg/__init__.py": "",
+    "pkg/core.py": "def total(x):\n    if x > 1:\n        return x\n    return 0\n\n\nclass Ledger:\n    def post(self):\n        pass\n",
+    "pkg/api.py": "from .core import total\n\n\ndef handler():\n    return total(2)\n",
+    "tests/test_core.py": "from pkg.core import total\n\n\ndef test_total():\n    assert total(2) == 2\n",
+    "web/src/lib/money.ts": "export function round(n: number) { return Math.round(n) }\nexport const RATE = 18\n",
+    "web/src/App.tsx": "import { round } from './lib/money'\nimport React from 'react'\n\nexport default function App() {\n  return round(1)\n}\n",
+    "db/schema.sql": "CREATE TABLE ORDERS (id int);\nCREATE PROCEDURE SP_GET_ORDERS AS SELECT * FROM ORDERS;\n",
+    "Billing/OrderWriter.cs": 'public class OrderWriter {\n    public void Save() {\n        Run("INSERT INTO ORDERS VALUES (1)");\n'
+                              '        Run("EXEC SP_GET_ORDERS");\n    }\n}\n',
+}
+
+
+def onboard_repo(client, root):
+    for rel, text in REPO.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
+    r = client.post("/projects", json={"source": "local", "repo": str(root)})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_onboarding_indexes_the_code(client, tmp_path):
+    pid = onboard_repo(client, tmp_path / "shop")
+    s = client.get(f"/projects/{pid}/code").json()
+    assert s["indexed"] and s["run"]["files"] == 8 and s["run"]["unresolved"] == 0
+    assert s["run"]["parsers"] == {"C#": "patterns", "Python": "python-ast", "T-SQL": "patterns", "TypeScript": "patterns"}
+    assert s["database"]["top"][0]["name"] == "ORDERS" and s["database"]["top"][0]["writers"] == 1
+    project = next(p for p in client.get("/projects").json() if p["id"] == pid)
+    assert project["codeIndex"]["files"] == 8 and project["understoodPct"] == round(100 * 4 / 15)
+    assert {c["label"]: c["pct"] for c in project["coverage"]}["Syntax & symbols"] == 100
+    actions = [e["action"] for e in client.get("/activity", params={"limit": 4}).json()]
+    assert "Code indexed" in actions
+
+
+def test_a_file_knows_its_symbols_users_and_blast_radius(client, tmp_path):
+    pid = onboard_repo(client, tmp_path / "shop")
+    core = client.get(f"/projects/{pid}/code/file", params={"path": "pkg/core.py"}).json()
+    assert {s["name"] for s in core["symbols"]} == {"total", "Ledger", "Ledger.post"}
+    assert {u["path"] for u in core["usedBy"]} == {"pkg/api.py", "tests/test_core.py"}
+    assert core["file"]["complexity"] == 1 and core["impact"]["counts"]["tests"] == 1
+    app = client.get(f"/projects/{pid}/code/file", params={"path": "web/src/App.tsx"}).json()
+    assert {(d["path"], d["target"]) for d in app["dependsOn"]} == {("web/src/lib/money.ts", "./lib/money"), (None, "react")}
+    assert ("App", "component") in {(s["name"], s["kind"]) for s in app["symbols"]}
+    writer = client.get(f"/projects/{pid}/code/file", params={"path": "Billing/OrderWriter.cs"}).json()
+    assert {(d["object"], d["kind"]) for d in writer["database"]} == {("ORDERS", "writes"), ("SP_GET_ORDERS", "calls")}
+    orders = client.get(f"/projects/{pid}/code/impact", params={"object": "ORDERS"}).json()
+    assert orders["blastRadius"][0]["items"] == ["Billing/OrderWriter.cs"] and orders["risk"] == "HIGH"
+    assert client.get(f"/projects/{pid}/code/impact", params={"module": "pkg"}).json()["counts"]["tests"] == 1
+    assert client.get(f"/projects/{pid}/code/file", params={"path": "nope.py"}).status_code == 404
+
+
+def test_the_code_index_searches_browses_and_maps_modules(client, tmp_path):
+    pid = onboard_repo(client, tmp_path / "shop")
+    assert {"Ledger", "Ledger.post"} <= {h["name"] for h in client.get(f"/projects/{pid}/code/search", params={"q": "ledger"}).json()}
+    assert client.get(f"/projects/{pid}/code/search", params={"q": 'x" OR *'}).status_code == 200
+    root = client.get(f"/projects/{pid}/code/files").json()
+    assert {d["name"] for d in root["dirs"]} == {"Billing", "db", "pkg", "tests", "web"}
+    pkg = client.get(f"/projects/{pid}/code/files", params={"dir": "pkg"}).json()
+    assert [f["name"] for f in pkg["files"]] == ["__init__.py", "api.py", "core.py"]
+    assert next(f for f in pkg["files"] if f["name"] == "core.py")["fanIn"] == 2
+    g = client.get(f"/projects/{pid}/code/graph").json()
+    assert {"m:pkg", "m:tests", "d:ORDERS"} <= {n["id"] for n in g["nodes"]}
+    assert any(e["from"] == "m:tests" and e["to"] == "m:pkg" for e in g["edges"])
+    assert any(e["from"] == "m:Billing" and e["to"] == "d:ORDERS" and e["kind"] == "writes" for e in g["edges"])
+
+
+def test_reindexing_needs_code_on_this_machine_and_the_permission(client, tmp_path):
+    pid = onboard_repo(client, tmp_path / "shop")
+    (tmp_path / "shop" / "pkg" / "extra.py").write_text("from .core import Ledger\n")
+    assert client.post(f"/projects/{pid}/code/reindex").status_code == 202
+    assert client.get(f"/projects/{pid}/code").json()["run"]["files"] == 9
+    assert client.get("/projects/erp/code").json() == {"indexed": False, "indexing": False, "canIndex": False}
+    assert client.post("/projects/erp/code/reindex").status_code == 409
+    assert person(client, "viewer").post(f"/projects/{pid}/code/reindex").status_code == 403
+    assert TestClient(client.app).get(f"/projects/{pid}/code").status_code == 401

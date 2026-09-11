@@ -10,8 +10,19 @@ import {
 } from '@/components/os';
 import { repoTree, symbols, indexStatus, questions } from '@/mock/code';
 import { agentName } from '@/mock/agents';
+import { useData } from '@/lib/data';
+import { useProject } from '@/lib/project-context';
 import { cn } from '@/lib/utils';
 import type { CodeNode } from '@/types';
+import { LiveCode } from './code/LiveCode';
+
+/** An onboarded project shows its real index; a sample project (and the demo) shows the worked example. */
+export default function CodeIntelligence() {
+  const { mode } = useData();
+  const { project } = useProject();
+  if (mode === 'live' && project.source) return <LiveCode project={project} />;
+  return <SampleCode note={mode === 'live' ? `${project.name} is a sample project, so this is a worked example. Onboard a repository in Projects to see its real index.` : undefined} />;
+}
 
 const KIND_ICON = { folder: Folder, file: FileCode, class: FileCode, sproc: Database, table: Table2, component: Component };
 
@@ -59,7 +70,7 @@ function Tree({ nodes, depth, open, onToggle, sel, onSelect, filter }: {
   );
 }
 
-export default function CodeIntelligence() {
+function SampleCode({ note }: { note?: string }) {
   const nav = useNavigate();
   const [open, setOpen] = useState(new Set(['be', 'be-tax', 'be-bill', 'db', 'db-proc']));
   const [sel, setSel] = useState('sym-invsvc');
@@ -90,6 +101,7 @@ export default function CodeIntelligence() {
         title="Code Intelligence"
         subtitle="Tree-sitter AST + LSP references + git history. The OS answers questions about the codebase from a parsed graph, not from a giant context window."
       >
+        {note && <p className="pb-2 text-[12.5px] text-warn">{note}</p>}
         <div className="flex flex-wrap items-center gap-3 pb-3 text-[12.5px] text-dim">
           <Mono>{indexStatus.parser}</Mono>
           <span>{indexStatus.filesParsed.toLocaleString()} files</span>

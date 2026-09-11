@@ -291,9 +291,9 @@ async def update_ai(body: AiPatch, request: Request, actor: User = Depends(requi
     return await asyncio.to_thread(_ai, c)
 
 
-@router.post("/ai/test", dependencies=[Depends(require("workspace:admin"))])
-async def test_ai(body: AiTest, c: Ctx = Depends(ctx)) -> dict[str, Any]:
-    return await asyncio.to_thread(c.gateway.test, body.provider)
+@router.post("/ai/test")
+async def test_ai(body: AiTest, actor: User = Depends(require("workspace:admin")), c: Ctx = Depends(ctx)) -> dict[str, Any]:
+    return await asyncio.to_thread(c.gateway.test, body.provider, actor.id)
 
 
 # ── resetting data ───────────────────────────────────────────────
@@ -303,6 +303,40 @@ async def reset(request: Request, x_confirm: str | None = Header(default=None), 
     """Puts the sample work back. People, roles, teams, keys and the audit log are kept."""
     if x_confirm != "reset":
         raise HTTPException(400, "send header X-Confirm: reset — this restores the seed data and drops every change")
+    # a reset is undoable: the database is copied aside first
+    saved = await asyncio.to_thread(c.store.backup, "before reset") if c.store.backup_dir else None
     c.store.seed()
-    c.audit("data.reset", user=actor, target="workspace data", request=request)
-    return {"ok": True, "counts": {t: c.store.count(t) for t in TABLES}, "compiler": await asyncio.to_thread(c.gateway.status)}
+    c.audit("data.reset", user=actor, target="workspace data", detail={"backup": saved["name"] if saved else None}, request=request)
+    return {"ok": True, "backup": saved["name"] if saved else None, "counts": {t: c.store.count(t) for t in TABLES},
+            "compiler": await asyncio.to_thread(c.gateway.status)}
+
+
+# ── the database ─────────────────────────────────────────────────
+@router.get("/database", dependencies=[Depends(require("workspace:admin"))])
+async def database(c: Ctx = Depends(ctx)) -> dict[str, Any]:
+    return await asyncio.to_thread(c.store.stats)
+
+
+@router.post("/database/backup", status_code=201)
+async def backup_database(request: Request, actor: User = Depends(require("workspace:admin")),
+                          c: Ctx = Depends(ctx)) -> dict[str, Any]:
+    try:
+        made = await asyncio.to_thread(c.store.backup, "manual")
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
+    c.audit("database.backup", user=actor, target=made["name"], detail={"bytes": made["bytes"]}, request=request)
+    return made
+
+
+@router.post("/database/check", dependencies=[Depends(require("workspace:admin"))])
+async def check_database(c: Ctx = Depends(ctx)) -> dict[str, Any]:
+    return await asyncio.to_thread(c.store.check)
+
+
+@router.post("/database/optimize")
+async def optimize_database(request: Request, actor: User = Depends(require("workspace:admin")),
+                            c: Ctx = Depends(ctx)) -> dict[str, Any]:
+    done = await asyncio.to_thread(c.store.optimize)
+    c.audit("database.optimize", user=actor, target="database",
+            detail={"beforeBytes": done["beforeBytes"], "afterBytes": done["afterBytes"]}, request=request)
+    return done

@@ -139,10 +139,11 @@ def _task_shape(out: PlanOut, steps: list[dict[str, Any]], n: int) -> dict[str, 
             "checklist": [{"id": f"c{n}-{s['n']}", "label": s["label"], "done": False} for s in steps]}
 
 
-async def _run_compiler(c: Ctx, project: dict[str, Any], requirement: str,
-                        answers: list[dict[str, str]]) -> tuple[Result[PlanOut], list[str]]:
+async def _run_compiler(c: Ctx, project: dict[str, Any], requirement: str, answers: list[dict[str, str]],
+                        actor: str | None = None) -> tuple[Result[PlanOut], list[str]]:
     facts = c.store.memory(requirement, project=project["id"], mode="any")[:6]
-    res, cited = await asyncio.to_thread(compile_plan, c.gateway, requirement, Context(project=project, facts=facts, answers=answers))
+    res, cited = await asyncio.to_thread(compile_plan, c.gateway, requirement, Context(project=project, facts=facts, answers=answers),
+                                         actor=actor, project=project["id"])
     if res.fallback:
         c.record("Compiler fell back", f"{res.fallback}. The offline planner stood in.", project=project["id"],
                  level="warn", actor="AI Commander", kind="agent")
@@ -159,7 +160,7 @@ async def compile_requirement(body: CompileIn, user: User = Depends(require("pla
                               c: Ctx = Depends(ctx)) -> dict[str, Any]:
     project = need(c.store.get("projects", body.projectId), f"project {body.projectId}")
     requirement = body.requirement.strip()
-    res, cited = await _run_compiler(c, project, requirement, [])
+    res, cited = await _run_compiler(c, project, requirement, [], user.id)
     n = c.store.next_number()
     fields = _compiled(res, cited, n)
     task = {"id": f"t{n}", "ref": f"TASK-{n}", "projectId": project["id"], "status": "planning", "tests": 0,
@@ -183,7 +184,7 @@ async def recompile(ref: str, user: User = Depends(require("plans:decide")), c: 
     if in_flight(plan):
         raise HTTPException(409, f"{ref} is already under way. Compile a new requirement instead.")
     project = need(c.store.get("projects", plan["projectId"]), f"project {plan['projectId']}")
-    res, cited = await _run_compiler(c, project, plan["rawRequirement"], plan.get("answered", []))
+    res, cited = await _run_compiler(c, project, plan["rawRequirement"], plan.get("answered", []), user.id)
     settled = {a["q"] for a in plan.get("answered", [])} | set(plan.get("deferred", []))
     n = int(re.search(r"\d+$", ref).group())  # type: ignore[union-attr]
     plan.update(_compiled(res, cited, n), openQuestions=[q for q in res.data.openQuestions if q not in settled])

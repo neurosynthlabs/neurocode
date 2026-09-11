@@ -42,7 +42,7 @@ def _fell_back(c: Ctx, res: Result[Any], project: str | None) -> None:
 async def ask(body: AskIn, user: User = Depends(require("ai:use")), c: Ctx = Depends(ctx)) -> dict[str, Any]:
     question = body.question.strip()
     facts = c.store.memory(question, project=body.projectId, mode="any")[:6]
-    res = await asyncio.to_thread(features.ask, c.gateway, question, facts)
+    res = await asyncio.to_thread(features.ask, c.gateway, question, facts, actor=user.id, project_id=body.projectId)
     _fell_back(c, res, body.projectId)
     cited = [f for f in facts if f["ref"] in res.data.citations]
     c.act(user, "Asked memory", f"“{question[:120]}” · {len(cited)} facts cited · {res.provider.model}", project=body.projectId or "aios")
@@ -58,7 +58,7 @@ async def brainstorms(c: Ctx = Depends(ctx)) -> list[dict[str, Any]]:
 async def brainstorm(body: IdeaIn, user: User = Depends(require("ai:use")), c: Ctx = Depends(ctx)) -> dict[str, Any]:
     idea = body.idea.strip()
     project = c.store.get("projects", body.projectId) if body.projectId else None
-    res = await asyncio.to_thread(features.brainstorm, c.gateway, idea, project)
+    res = await asyncio.to_thread(features.brainstorm, c.gateway, idea, project, actor=user.id, project_id=body.projectId)
     _fell_back(c, res, body.projectId)
     n = c.store.count("brainstorms") + 1
     doc = {"id": f"b{n}-{int(datetime.now().timestamp())}", "ref": f"IDEA-{n}", "idea": idea, "projectId": body.projectId,
@@ -72,6 +72,6 @@ async def brainstorm(body: IdeaIn, user: User = Depends(require("ai:use")), c: C
 @router.post("/extract")
 async def extract(body: TextIn, user: User = Depends(require("ai:use")), c: Ctx = Depends(ctx)) -> dict[str, Any]:
     project = c.store.get("projects", body.projectId) if body.projectId else None
-    res = await asyncio.to_thread(features.extract, c.gateway, body.text, project)
+    res = await asyncio.to_thread(features.extract, c.gateway, body.text, project, actor=user.id, project_id=body.projectId)
     _fell_back(c, res, body.projectId)
     return {"facts": [f.model_dump() for f in res.data.facts], **res.meta()}

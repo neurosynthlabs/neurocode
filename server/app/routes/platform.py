@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 from .. import onboarding
 from ..auth import User, current_user, require
 from ..context import Ctx, ctx
+from .code import run_index
 
 router = APIRouter()
 
@@ -87,7 +88,14 @@ def _onboard(c: Ctx, project_id: str, spec: ProjectIn) -> None:
     say("Tree mapped", f"{found['files']:,} files · {onboarding.fmt_lines(found['lines'])} lines · {found['modules']} modules")
     if found["dbTables"] or found["storedProcs"]:
         say("SQL objects found", f"{found['dbTables']} tables · {found['storedProcs']} procedures", "info")
-    say("Onboarding paused", f"step 3 of {steps}: the syntax-tree parser is not connected yet", "warn")
+    try:
+        idx = run_index(c, project_id, root, spec.excluded, found=found, steps=steps)
+    except Exception as e:  # a parser must never undo onboarding: the measured project stays
+        say("Indexing failed", onboarding.redact(str(e))[:200] or type(e).__name__, "err")
+        return
+    say("Code indexed", idx.describe())
+    say("Onboarding paused", f"step {onboarding.INDEXED_STEPS + 1} of {steps}: business rules and test mapping "
+                             "are not connected yet", "warn")
 
 
 @router.post("/projects", status_code=201)
@@ -104,7 +112,7 @@ async def create_project(body: ProjectIn, jobs: BackgroundTasks, user: User = De
         "work": {"tasks": 0, "running": 0, "review": 0, "blocked": 0},
         "description": f"Onboarding from {where}.",
         "source": {"kind": body.source, "repo": where, **({"branch": body.branch.strip()} if body.source == "git" else {})},
-        "rules": [r.model_dump() for r in body.rules], "onboardedBy": user.name,
+        "rules": [r.model_dump() for r in body.rules], "excluded": body.excluded, "onboardedBy": user.name,
     }
     c.put("projects", c.store.insert("projects", doc))
     c.act(user, "Onboarding started", f"{doc['name']} · {where}", project=pid)

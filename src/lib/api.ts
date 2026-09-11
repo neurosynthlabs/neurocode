@@ -1,6 +1,6 @@
 import type { MemoryConflict } from '@/mock/memory';
 import type {
-  ActivityEvent, ApprovalRequest, Confidence, McpServer, MemoryCategory, MemoryFact, Plan, Project, Task, TaskStatus,
+  ActivityEvent, ApprovalRequest, Confidence, McpServer, MemoryCategory, MemoryFact, Plan, Project, Risk, Task, TaskStatus,
 } from '@/types';
 
 /* Where the local API lives. In dev every call goes through Vite's /api proxy (scripts/dev.sh starts
@@ -116,6 +116,82 @@ export interface BrainstormDoc {
 export interface FactCandidate { title: string; body: string; category: MemoryCategory; confidence: Confidence; reason: string }
 export interface Extracted extends AiMeta { facts: FactCandidate[] }
 
+/* ── the code index ───────────────────────────────────────────── */
+export interface CodeModule { name: string; files: number; lines: number; complexity: number; symbols: number; fanIn: number; fanOut: number }
+export interface DbObject { name: string; kind: string; path: string; readers: number; writers: number; callers: number }
+export interface CodeSummary {
+  indexed: boolean;
+  /** An index is being built right now. */
+  indexing: boolean;
+  /** The project's code is on this machine (onboarded, not a sample). */
+  canIndex: boolean;
+  run?: { files: number; symbols: number; edges: number; unresolved: number; ms: number; finishedAt: string; parsers: Record<string, string> };
+  languages?: { name: string; files: number; lines: number }[];
+  modules?: CodeModule[];
+  hotspots?: { path: string; lines: number; complexity: number; churn: number; fanIn: number; risk: Risk }[];
+  database?: { objects: number; top: DbObject[] };
+}
+export interface CodeChildren {
+  dir: string;
+  dirs: { name: string; path: string; files: number; lines: number }[];
+  files: { id: number; name: string; path: string; lang: string; lines: number; complexity: number; fanIn: number }[];
+}
+export interface CodeHit { name: string; path: string; kind: string; line: number }
+export interface Impact {
+  target: string;
+  kind: 'file' | 'module' | 'object';
+  risk: Risk;
+  confidence: number;
+  counts: { direct: number; dependents: number; modules: number; tests: number; data: number };
+  blastRadius: { label: string; items: string[] }[];
+  modules: { name: string; files: number }[];
+  warnings: string[];
+  recommendation: string;
+}
+export interface CodeFile {
+  file: {
+    path: string; lang: string; module: string; lines: number; bytes: number; complexity: number; churn: number;
+    changedAt: string | null; fanIn: number; fanOut: number; test: boolean;
+  };
+  symbols: { name: string; kind: string; line: number; exported: boolean }[];
+  /** `path` is null for a package outside the repository. */
+  dependsOn: { path: string | null; target: string; kind: string }[];
+  database: { object: string; kind: string; path: string | null }[];
+  usedBy: { path: string; kinds: string[]; targets: string[] }[];
+  impact: Impact | null;
+}
+export interface CodeGraph {
+  nodes: { id: string; label: string; kind: string; files: number; lines: number; risk: Risk }[];
+  edges: { from: string; to: string; kind: string; weight: number }[];
+  modules: number;
+  truncated: boolean;
+}
+export type ImpactTarget = { path: string } | { module: string } | { object: string };
+
+/* ── usage and the database ───────────────────────────────────── */
+export interface UsageReport {
+  days: number;
+  totals: { calls: number; modelCalls: number; offline: number; failures: number; tokensIn: number; tokensOut: number; avgMs: number };
+  byDay: { day: string; calls: number; model: number; offline: number; tokens: number }[];
+  byFeature: { feature: string; calls: number; model: number; offline: number; failures: number; tokensIn: number; tokensOut: number; avgMs: number }[];
+  byProvider: { provider: string; model: string; calls: number; failures: number; tokensIn: number; tokensOut: number; avgMs: number }[];
+  /** `by` is filled in for admins only. */
+  recent: { at: string; feature: string; provider: string; model: string; ok: boolean; ms: number; tokensIn: number; tokensOut: number; error: string; by: string | null }[];
+  byPerson?: { name: string; calls: number; tokens: number }[];
+}
+export interface BackupInfo { name: string; bytes: number; at: string }
+export interface DatabaseInfo {
+  path: string; sqlite: string; pageSize: number; pages: number; freePages: number; journalMode: string;
+  sizeBytes: number; walBytes: number; tables: { name: string; rows: number }[];
+  /** Full-text search indexes. */
+  indexes: number;
+  migrations: { version: number; name: string; appliedAt: string }[];
+  backups: BackupInfo[];
+  backupDir: string | null;
+}
+export interface DatabaseCheck { ok: boolean; integrity: string[]; foreignKeyProblems: number; at: string }
+export interface DatabaseOptimized { beforeBytes: number; afterBytes: number; ms: number }
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -197,7 +273,27 @@ export const api = {
     ai: () => request<AiConfig>('/admin/ai', { signal: AbortSignal.timeout(8000) }),
     updateAi: (patch: AiPatch) => request<AiConfig>('/admin/ai', { method: 'PUT', json: patch, signal: AbortSignal.timeout(8000) }),
     testAi: (provider: CompilerInfo['provider']) => request<AiTestResult>('/admin/ai/test', { ...POST({ provider }), signal: modelTimeout() }),
+    database: () => request<DatabaseInfo>('/admin/database', { signal: AbortSignal.timeout(15_000) }),
+    backupDatabase: () => request<BackupInfo>('/admin/database/backup', { ...POST(), signal: AbortSignal.timeout(120_000) }),
+    checkDatabase: () => request<DatabaseCheck>('/admin/database/check', { ...POST(), signal: AbortSignal.timeout(120_000) }),
+    optimizeDatabase: () => request<DatabaseOptimized>('/admin/database/optimize', { ...POST(), signal: AbortSignal.timeout(300_000) }),
   },
+
+  /* the code index of an onboarded project */
+  code: {
+    summary: (pid: string) => request<CodeSummary>(`/projects/${seg(pid)}/code`, { signal: AbortSignal.timeout(15_000) }),
+    files: (pid: string, dir = '') => request<CodeChildren>(`/projects/${seg(pid)}/code/files?${new URLSearchParams({ dir })}`),
+    search: (pid: string, q: string) => request<CodeHit[]>(`/projects/${seg(pid)}/code/search?${new URLSearchParams({ q })}`),
+    file: (pid: string, path: string) =>
+      request<CodeFile>(`/projects/${seg(pid)}/code/file?${new URLSearchParams({ path })}`, { signal: AbortSignal.timeout(15_000) }),
+    impact: (pid: string, target: ImpactTarget) =>
+      request<Impact>(`/projects/${seg(pid)}/code/impact?${new URLSearchParams(target)}`, { signal: AbortSignal.timeout(15_000) }),
+    graph: (pid: string) => request<CodeGraph>(`/projects/${seg(pid)}/code/graph`, { signal: AbortSignal.timeout(15_000) }),
+    reindex: (pid: string) => request<{ ok: boolean }>(`/projects/${seg(pid)}/code/reindex`, POST()),
+  },
+
+  /** The AI gateway's ledger: every model call and every offline answer. */
+  usage: (days = 30) => request<UsageReport>(`/usage?days=${days}`),
 
   /* AI features */
   ask: (question: string, projectId?: string) => request<AskAnswer>('/ai/ask', { ...POST({ question, projectId }), signal: modelTimeout() }),

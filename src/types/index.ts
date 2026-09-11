@@ -36,6 +36,10 @@ export interface Project {
   /** Measured by the onboarding scan. */
   languages?: { name: string; pct: number }[];
   files?: number;
+  /** The latest code index, when the project's code is on this machine. `at` changes with every index. */
+  codeIndex?: { files: number; symbols: number; edges: number; unresolved: number; ms: number; at: string };
+  /** Glob patterns the onboarding wizard left out; re-indexing keeps leaving them out. */
+  excluded?: string[];
 }
 
 /* ── Agents ───────────────────────────────────────────────────── */

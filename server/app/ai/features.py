@@ -30,7 +30,8 @@ answer the question, say so plainly and say what would need to be found out. At 
 Reply with one JSON object: {"answer": "...", "citations": ["MEM-142"]}"""
 
 
-def ask(gw: Gateway, question: str, facts: list[dict[str, Any]]) -> Result[AskOut]:
+def ask(gw: Gateway, question: str, facts: list[dict[str, Any]], *, actor: str | None = None,
+        project_id: str | None = None) -> Result[AskOut]:
     refs = {f["ref"] for f in facts}
     context = "\n".join(f"- {f['ref']} · {f['title']}: {f['body'][:500]}" for f in facts) or "(no fact matched)"
     msgs = [{"role": "system", "content": ASK_SYSTEM},
@@ -49,7 +50,7 @@ def ask(gw: Gateway, question: str, facts: list[dict[str, Any]]) -> Result[AskOu
         lines = "\n".join(f"• [{f['ref']}] {f['title']}. {_first_sentence(f['body'])}" for f in top)
         return AskOut(answer=f"Here is what memory holds on that:\n{lines}", citations=[f["ref"] for f in top])
 
-    return gw.run(msgs, parse, fallback, offline="memory search")
+    return gw.run(msgs, parse, fallback, offline="memory search", feature="ask", actor=actor, project=project_id)
 
 
 # ── brainstorm ───────────────────────────────────────────────────
@@ -77,7 +78,8 @@ the way a skeptical senior engineer would. Reply with one JSON object:
  "metrics": ["..."], "questions": ["..."], "roadmap": [{"phase": "Week 1", "items": ["..."]}]}"""
 
 
-def brainstorm(gw: Gateway, idea: str, project: dict[str, Any] | None) -> Result[BriefOut]:
+def brainstorm(gw: Gateway, idea: str, project: dict[str, Any] | None, *, actor: str | None = None,
+               project_id: str | None = None) -> Result[BriefOut]:
     about = f"Project: {project['name']} · stack: {', '.join(project.get('stack', [])) or 'unknown'}" if project else "No project chosen."
     msgs = [{"role": "system", "content": BRAIN_SYSTEM}, {"role": "user", "content": f"{about}\n\nIdea:\n{idea}"}]
 
@@ -100,7 +102,8 @@ def brainstorm(gw: Gateway, idea: str, project: dict[str, Any] | None) -> Result
                      Phase(phase="Week 4", items=["Measure it", "Decide: grow, change or stop"])],
         )
 
-    return gw.run(msgs, lambda raw: BriefOut.model_validate(extract_json(raw)), fallback, offline="offline template")
+    return gw.run(msgs, lambda raw: BriefOut.model_validate(extract_json(raw)), fallback, offline="offline template",
+                  feature="brainstorm", actor=actor, project=project_id)
 
 
 # ── extract facts from text ─────────────────────────────────────
@@ -138,7 +141,8 @@ HINTS = [
 ]
 
 
-def extract(gw: Gateway, text: str, project: dict[str, Any] | None) -> Result[ExtractOut]:
+def extract(gw: Gateway, text: str, project: dict[str, Any] | None, *, actor: str | None = None,
+            project_id: str | None = None) -> Result[ExtractOut]:
     about = f"Project: {project['name']}" if project else "No project chosen."
     msgs = [{"role": "system", "content": EXTRACT_SYSTEM}, {"role": "user", "content": f"{about}\n\nText:\n{text}"}]
 
@@ -163,4 +167,4 @@ def extract(gw: Gateway, text: str, project: dict[str, Any] | None) -> Result[Ex
                 break
         return ExtractOut(facts=facts)
 
-    return gw.run(msgs, parse, fallback, offline="offline rules")
+    return gw.run(msgs, parse, fallback, offline="offline rules", feature="extract", actor=actor, project=project_id)

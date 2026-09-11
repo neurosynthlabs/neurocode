@@ -236,7 +236,9 @@ def rules(requirement: str, ctx: Context) -> PlanOut:
     )
 
 
-def compile_plan(gw: Gateway, requirement: str, ctx: Context) -> tuple[Result[PlanOut], list[str]]:
+def compile_plan(gw: Gateway, requirement: str, ctx: Context, *, actor: str | None = None,
+                 project: str | None = None) -> tuple[Result[PlanOut], list[str]]:
     """The plan, how it was made, and the memory refs the compiler was given."""
-    result = gw.run(messages(requirement, ctx), parse, lambda: rules(requirement, ctx), offline="offline planner")
+    result = gw.run(messages(requirement, ctx), parse, lambda: rules(requirement, ctx), offline="offline planner",
+                    feature="compile", actor=actor, project=project)
     return result, [f["ref"] for f in ctx.facts]

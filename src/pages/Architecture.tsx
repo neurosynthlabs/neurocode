@@ -9,8 +9,10 @@ import {
 import { nodes, edges, impacts, layers, recentlyChanged } from '@/mock/architecture';
 import { adrsByProject } from '@/mock/modules';
 import { useProject } from '@/lib/project-context';
+import { useData } from '@/lib/data';
 import { cn } from '@/lib/utils';
 import type { GraphNode } from '@/types';
+import { LiveGraph } from './code/LiveGraph';
 
 const LAYER_COLOR: Record<GraphNode['layer'], string> = {
   ui: 'var(--os-info)', api: 'var(--os-brand)', service: 'var(--os-violet)',
@@ -24,7 +26,15 @@ const NW = 152, NH = 30, H = 668;
 const W = Math.max(...nodes.map((n) => n.x)) + NW + 12;
 const ADR_TONE = { accepted: 'ok', proposed: 'warn', superseded: 'neutral', rejected: 'danger' } as const;
 
+/** An onboarded project shows its measured module graph; a sample project (and the demo) shows the worked example. */
 export default function Architecture() {
+  const { mode } = useData();
+  const { project } = useProject();
+  if (mode === 'live' && project.source) return <LiveGraph project={project} />;
+  return <SampleArchitecture note={mode === 'live' ? `${project.name} is a sample project, so this is a worked example. Onboard a repository to see its real graph.` : undefined} />;
+}
+
+function SampleArchitecture({ note }: { note?: string }) {
   const nav = useNavigate();
   const { projectId } = useProject();
   const [sel, setSel] = useState('svc-tax');
@@ -61,6 +71,7 @@ export default function Architecture() {
           <Segmented options={[{ id: 'graph', label: 'Graph & impact' }, { id: 'decisions', label: `Decisions (${adrs.length})` }]} value={tab} onChange={setTab} />
         }
       >
+        {note && <p className="pb-2 text-[12.5px] text-warn">{note}</p>}
         {tab === 'graph' && (
           <Toolbar>
             <span className="eyebrow mr-1">Layers</span>

@@ -9,6 +9,7 @@ which are strictly relational).
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -21,6 +22,7 @@ from typing import Any
 
 SEED_PATH = Path(__file__).resolve().parent.parent / "seed" / "seed.json"
 MIGRATIONS = Path(__file__).resolve().parent / "migrations"
+KEEP_BACKUPS = 20
 
 # Document tables, seeded from seed.json one at a time, so a database made by an older version gains
 # the tables it is missing and keeps every change it already holds.
@@ -59,14 +61,17 @@ def _fts_query(text: str, mode: str = "all") -> str:
 class Store:
     def __init__(self, path: str) -> None:
         self.path = path
+        self.backup_dir: Path | None = None if path == ":memory:" else Path(path).resolve().with_name("backups")
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.lock = threading.RLock()
         with self.lock:
             self.conn.execute("PRAGMA foreign_keys = ON")
             self.conn.execute("PRAGMA busy_timeout = 5000")
+            self.conn.execute("PRAGMA temp_store = MEMORY")
             if path != ":memory:":
-                self.conn.execute("PRAGMA journal_mode = WAL")  # readers never wait for the writer
+                self.conn.execute("PRAGMA journal_mode = WAL")    # readers never wait for the writer
+                self.conn.execute("PRAGMA synchronous = NORMAL")  # safe under WAL, and far fewer fsyncs
         self.migrate()
         empty = [t for t in TABLES if self.count(t) == 0]
         if empty:
@@ -81,10 +86,14 @@ class Store:
                               "(version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)")
             self.conn.commit()
             done = {r[0] for r in self.conn.execute("SELECT version FROM schema_migrations")}
-            for f in sorted(MIGRATIONS.glob("[0-9]*.sql")):
+            pending = [f for f in sorted(MIGRATIONS.glob("[0-9]*.sql")) if int(f.name.split("_", 1)[0]) not in done]
+            # A database that already holds data is copied aside before its schema changes.
+            if pending and self.backup_dir is not None and self.conn.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' "
+                    "AND name NOT IN ('schema_migrations', 'sqlite_sequence')").fetchone()[0]:
+                self.backup(f"before {pending[0].stem}")
+            for f in pending:
                 version = int(f.name.split("_", 1)[0])
-                if version in done:
-                    continue
                 try:
                     self.conn.executescript(f"BEGIN;\n{f.read_text()}\n"
                                             f"INSERT INTO schema_migrations VALUES ({version}, '{f.stem}', '{now_iso()}');\nCOMMIT;")
@@ -104,6 +113,8 @@ class Store:
             c = self.conn
             for t in tables:
                 c.execute(f"DELETE FROM {t}")
+                if t == "projects":  # the code index went with the projects; its search table is not a foreign key
+                    c.execute("DELETE FROM code_fts")
                 rows = data.get(t, [])
                 if t == "memory":
                     c.execute("INSERT INTO memory_fts(memory_fts) VALUES('delete-all')")
@@ -269,3 +280,88 @@ class Store:
             doc = {"id": f"live-{cur.lastrowid}", **doc}
             self.conn.execute("UPDATE activity SET doc = ? WHERE seq = ?", (_j(doc), cur.lastrowid))
         return doc
+
+    # ── care: backups, checks, compaction ───────────────────────
+    def backup(self, reason: str = "manual") -> dict[str, Any]:
+        """A consistent copy of the whole database, taken while it stays in use (SQLite's online backup).
+        Only the account that runs the API can read it; the newest KEEP_BACKUPS are kept."""
+        if self.backup_dir is None:
+            raise RuntimeError("An in-memory database has no file to back up")
+        self.backup_dir.mkdir(parents=True, exist_ok=True)
+        tag = re.sub(r"[^a-z0-9]+", "-", reason.lower()).strip("-")[:40] or "manual"
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        dest, n = self.backup_dir / f"neurocode-{stamp}-{tag}.db", 1
+        while dest.exists():
+            n += 1
+            dest = self.backup_dir / f"neurocode-{stamp}-{tag}-{n}.db"
+        with self.lock:
+            target = sqlite3.connect(dest)
+            try:
+                self.conn.backup(target)
+            finally:
+                target.close()
+        os.chmod(dest, 0o600)
+        for old in self._backup_files()[KEEP_BACKUPS:]:
+            old.unlink(missing_ok=True)
+        return self._describe(dest)
+
+    def _backup_files(self) -> list[Path]:
+        if self.backup_dir is None or not self.backup_dir.is_dir():
+            return []
+        return sorted(self.backup_dir.glob("neurocode-*.db"), key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
+
+    @staticmethod
+    def _describe(p: Path) -> dict[str, Any]:
+        st = p.stat()
+        return {"name": p.name, "bytes": st.st_size, "at": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")}
+
+    def backups(self) -> list[dict[str, Any]]:
+        return [self._describe(p) for p in self._backup_files()]
+
+    def _sizes(self) -> tuple[int, int]:
+        if self.path == ":memory:":
+            return 0, 0
+        main, wal = Path(self.path), Path(self.path + "-wal")
+        return (main.stat().st_size if main.exists() else 0), (wal.stat().st_size if wal.exists() else 0)
+
+    def stats(self) -> dict[str, Any]:
+        """The file, its pages, every table with its row count, and the migrations applied."""
+        with self.lock:
+            def one(sql: str) -> Any:
+                return self.conn.execute(sql).fetchone()[0]
+            virtual = [r[0] for r in self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND sql LIKE 'CREATE VIRTUAL TABLE%'")]
+            names = [r[0] for r in self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+            tables = [t for t in names if t not in virtual and not any(t.startswith(f"{v}_") for v in virtual)]
+            counts = [{"name": t, "rows": one(f'SELECT COUNT(*) FROM "{t}"')} for t in tables]
+            pages = {"pageSize": one("PRAGMA page_size"), "pages": one("PRAGMA page_count"),
+                     "freePages": one("PRAGMA freelist_count"), "journalMode": one("PRAGMA journal_mode")}
+            migrations = [{"version": r[0], "name": r[1], "appliedAt": r[2]} for r in self.conn.execute(
+                "SELECT version, name, applied_at FROM schema_migrations ORDER BY version")]
+        size, wal = self._sizes()
+        return {"path": self.path, "sqlite": sqlite3.sqlite_version, **pages, "sizeBytes": size, "walBytes": wal,
+                "tables": counts, "indexes": len(virtual), "migrations": migrations, "backups": self.backups(),
+                "backupDir": str(self.backup_dir) if self.backup_dir else None}
+
+    def check(self) -> dict[str, Any]:
+        """SQLite's own integrity check, and every row whose foreign key points at nothing."""
+        with self.lock:
+            integrity = [r[0] for r in self.conn.execute("PRAGMA quick_check")]
+            orphans = self.conn.execute("PRAGMA foreign_key_check").fetchall()
+        return {"ok": integrity == ["ok"] and not orphans, "integrity": integrity[:20], "foreignKeyProblems": len(orphans),
+                "at": now_iso()}
+
+    def optimize(self) -> dict[str, Any]:
+        """Refresh the planner's statistics, merge the search indexes, rebuild the file without its free
+        pages, and fold the write-ahead log back in."""
+        before, t0 = sum(self._sizes()), time.monotonic()
+        with self.lock:
+            with self.conn:
+                self.conn.execute("INSERT INTO memory_fts(memory_fts) VALUES ('optimize')")
+                self.conn.execute("INSERT INTO code_fts(code_fts) VALUES ('optimize')")
+            self.conn.execute("PRAGMA optimize")
+            self.conn.execute("VACUUM")
+            if self.path != ":memory:":
+                self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return {"beforeBytes": before, "afterBytes": sum(self._sizes()), "ms": round((time.monotonic() - t0) * 1000)}

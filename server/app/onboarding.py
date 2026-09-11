@@ -1,9 +1,9 @@
 """Onboarding, the part that is real today: get the code onto this machine and measure it.
 
 It clones a remote (or reads a local path), walks the tree and records what can be proven without a
-parser: files, lines, languages, SQL objects and top-level modules. The semantic passes of the
-pipeline (syntax trees, symbol index, call graph, business rules) are not connected yet, and the
-project record says so instead of pretending.
+parser: files, lines, languages, SQL objects and top-level modules. The code index (codeindex.py)
+then adds symbols and the dependency graph. Business rules and test mapping are not connected yet,
+and the project record says so instead of pretending.
 """
 from __future__ import annotations
 
@@ -12,12 +12,14 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 REPOS_DIR = Path(__file__).resolve().parent.parent / ".repos"
 TOTAL_STEPS = 15      # the pipeline the wizard shows (src/mock/modules.ts → onboardingSteps)
-MEASURED_STEPS = 2    # what this module really does: clone & detect stack, map the repository tree
+MEASURED_STEPS = 2    # clone & detect the stack, map the repository tree
+INDEXED_STEPS = 4     # and, once the code index has run: syntax & symbols, the dependency graph
 MAX_FILES = 60_000
 MAX_BYTES = 2_000_000
 SKIP_DIRS = {"node_modules", "bin", "obj", "dist", "build", "out", "target", "vendor", "packages", "coverage",
@@ -90,17 +92,16 @@ def _excluded(rel: str, name: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(rel, p) or fnmatch.fnmatch(name, p.removeprefix("**/")) for p in patterns)
 
 
-def scan(root: Path, excluded: list[str]) -> dict[str, Any]:
-    by_lang: dict[str, int] = {}
-    modules: set[str] = set()
-    files = lines = tables = procs = 0
+def walk(root: Path, excluded: list[str]) -> Iterator[tuple[str, str, bytes]]:
+    """Every source file under root that is not excluded, as (path relative to root with forward
+    slashes, language, contents). Dependency and build folders are never entered."""
+    count = 0
     for dirpath, dirnames, filenames in os.walk(root):
         rel_dir = os.path.relpath(dirpath, root)
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")
                        and not _excluded(os.path.normpath(os.path.join(rel_dir, d)), d, excluded)]
         for name in filenames:
-            ext = os.path.splitext(name)[1].lower()
-            lang = LANGS.get(ext)
+            lang = LANGS.get(os.path.splitext(name)[1].lower())
             rel = os.path.normpath(os.path.join(rel_dir, name))
             if not lang or _excluded(rel, name, excluded):
                 continue
@@ -112,22 +113,34 @@ def scan(root: Path, excluded: list[str]) -> dict[str, Any]:
                     data = fh.read()
             except OSError:
                 continue
-            n = data.count(b"\n") + (1 if data and not data.endswith(b"\n") else 0)
-            files += 1
-            lines += n
-            by_lang[lang] = by_lang.get(lang, 0) + n
-            if ext == ".sql":
-                tables += len(TABLE.findall(data))
-                procs += len(PROC.findall(data))
-            parts = rel.split(os.sep)
-            if len(parts) >= 3 and parts[0].lower() in CONTAINERS:
-                modules.add(f"{parts[0]}/{parts[1]}")
-            elif len(parts) >= 2:
-                modules.add(parts[0])
-            if files >= MAX_FILES:
-                break
-        if files >= MAX_FILES:
-            break
+            yield rel.replace(os.sep, "/"), lang, data
+            count += 1
+            if count >= MAX_FILES:
+                return
+
+
+def module_of(rel: str) -> str:
+    """The top-level module a file belongs to: src/billing/x.cs → src/billing, api/x.py → api."""
+    parts = rel.split("/")
+    if len(parts) >= 3 and parts[0].lower() in CONTAINERS:
+        return f"{parts[0]}/{parts[1]}"
+    return parts[0] if len(parts) >= 2 else "(root)"
+
+
+def scan(root: Path, excluded: list[str]) -> dict[str, Any]:
+    by_lang: dict[str, int] = {}
+    modules: set[str] = set()
+    files = lines = tables = procs = 0
+    for rel, lang, data in walk(root, excluded):
+        n = data.count(b"\n") + (1 if data and not data.endswith(b"\n") else 0)
+        files += 1
+        lines += n
+        by_lang[lang] = by_lang.get(lang, 0) + n
+        if rel.lower().endswith(".sql"):
+            tables += len(TABLE.findall(data))
+            procs += len(PROC.findall(data))
+        if "/" in rel:
+            modules.add(module_of(rel))
     ranked = sorted(by_lang.items(), key=lambda kv: -kv[1])
     languages = [{"name": lang, "pct": round(100 * n / lines)} for lang, n in ranked if lines and n / lines >= 0.02][:6]
     return {"files": files, "lines": lines, "languages": languages, "dbTables": tables, "storedProcs": procs,
@@ -142,20 +155,25 @@ def fmt_lines(n: int) -> str:
     return f"{n / 1_000_000:.1f}M"
 
 
-def measured(found: dict[str, Any], steps_total: int) -> dict[str, Any]:
-    """The project fields a scan can honestly fill in."""
+def measured(found: dict[str, Any], steps_total: int, coverage: dict[str, int] | None = None,
+             index: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The project fields a scan (and, when given, the code index) can honestly fill in."""
     names = [lang["name"] for lang in found["languages"]]
     legacy = any(n in names for n in ("VB.NET", "ASP.NET WebForms")) or (
         ("C#" in names or "T-SQL" in names) and found["lines"] > 50_000)
     capped = " (stopped at the file cap)" if found["truncated"] else ""
+    cov = coverage or {}
+    indexed = (f"{index['symbols']:,} symbols and {index['edges']:,} dependencies indexed; business rules and test "
+               "mapping are not connected yet.") if index else "The code index has not run yet."
     return {
         "stack": names[:4], "languages": found["languages"], "files": found["files"], "lines": fmt_lines(found["lines"]),
         "modules": found["modules"], "dbTables": found["dbTables"], "storedProcs": found["storedProcs"],
         "kind": "legacy" if legacy else "greenfield", "status": "active", "lastActive": "just now",
-        "understoodPct": round(100 * MEASURED_STEPS / steps_total),
+        "understoodPct": round(100 * (INDEXED_STEPS if index else MEASURED_STEPS) / steps_total),
         "coverage": [{"label": "Files & languages", "pct": 100}, {"label": "Repository tree", "pct": 100},
-                     {"label": "Syntax trees", "pct": 0}, {"label": "Call graph", "pct": 0},
-                     {"label": "Database links", "pct": 0}, {"label": "Business rules", "pct": 0}],
-        "description": f"{found['files']:,} files and {fmt_lines(found['lines'])} lines measured{capped}. "
-                       "The semantic passes (syntax trees, call graph, business rules) are not connected yet.",
+                     {"label": "Syntax & symbols", "pct": cov.get("Syntax & symbols", 0)},
+                     {"label": "Dependency graph", "pct": cov.get("Dependency graph", 0)},
+                     {"label": "Database links", "pct": cov.get("Database links", 0)},
+                     {"label": "Business rules", "pct": 0}],
+        "description": f"{found['files']:,} files and {fmt_lines(found['lines'])} lines measured{capped}. {indexed}",
     }

@@ -58,6 +58,7 @@ const Teams = lazy(() => import('@/pages/admin/Teams'));
 const AiProviders = lazy(() => import('@/pages/admin/AiProviders'));
 const Audit = lazy(() => import('@/pages/admin/Audit'));
 const WorkspacePage = lazy(() => import('@/pages/admin/Workspace'));
+const DatabasePage = lazy(() => import('@/pages/admin/Database'));
 
 /** A screen that needs a permission opens only for roles that hold it. The API checks again regardless. */
 function Guard({ to, children }: { to: string; children: ReactNode }) {
@@ -161,6 +162,7 @@ function Shell() {
                 <Route path="/admin/ai" element={<Guard to="/admin/ai"><AiProviders /></Guard>} />
                 <Route path="/admin/audit" element={<Guard to="/admin/audit"><Audit /></Guard>} />
                 <Route path="/admin/workspace" element={<Guard to="/admin/workspace"><WorkspacePage /></Guard>} />
+                <Route path="/admin/database" element={<Guard to="/admin/database"><DatabasePage /></Guard>} />
                 <Route path="*" element={<CommandCenter />} />
               </Routes>
             </Suspense>
