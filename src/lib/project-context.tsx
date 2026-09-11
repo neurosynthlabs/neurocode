@@ -1,14 +1,18 @@
 import { createContext, useContext, useState, type ReactNode } from 'react';
-import { projects, activeProjectId } from '@/mock/projects';
+import { activeProjectId } from '@/mock/projects';
+import { useData } from '@/lib/data';
 import type { Project } from '@/types';
 
 interface Ctx { projectId: string; setProjectId: (id: string) => void; project: Project; all: Project[] }
 const C = createContext<Ctx | null>(null);
 
+/** The active project. The list comes from the data store, so an onboarded project can be switched to. */
 export function ProjectProvider({ children }: { children: ReactNode }) {
-  const [projectId, setProjectId] = useState(activeProjectId);
-  const project = projects.find((p) => p.id === projectId) ?? projects[0];
-  return <C.Provider value={{ projectId, setProjectId, project, all: projects }}>{children}</C.Provider>;
+  const { projects } = useData();
+  const [picked, setProjectId] = useState(activeProjectId);
+  // If the picked project disappears (a reset, say), fall back to the first one everywhere at once.
+  const project = projects.find((p) => p.id === picked) ?? projects[0];
+  return <C.Provider value={{ projectId: project.id, setProjectId, project, all: projects }}>{children}</C.Provider>;
 }
 
 export function useProject() {

@@ -11,7 +11,7 @@ memory and knowledge management. Requirements arrive in broken Hindi/Hinglish an
 compiled into technical work. The moat is memory + legacy knowledge + orchestration,
 not "another coding chat".
 
-Everything is **static mock data**. There is no backend and there will not be one.
+Everything starts from the **mock data** in `src/mock/`, which is also the local API's seed.
 Every number, log line and name must look like it came from a real day of work on a
 14-year-old ERP — never `Lorem ipsum`, never `Item 1 / Item 2`, never round marketing numbers.
 
@@ -26,12 +26,13 @@ Every number, log line and name must look like it came from a real day of work o
 - **Never hardcode a hex value or a Tailwind palette class** (`bg-zinc-900`, `text-blue-500`).
   Only theme tokens: `bg-bg bg-base bg-surface bg-surface-2 bg-surface-3 border-line
   border-line-strong text-ink text-ink-2 text-soft text-dim text-brand text-ok text-warn
-  text-danger text-info text-violet`. The app has 8 switchable themes (6 dark, 2 light) and
-  a hardcoded colour breaks every one of them.
+  text-danger text-info text-violet`. The app has 248 switchable palettes in light and dark
+  modes, and a hardcoded colour breaks every one of them.
 - Small radii (`rounded-xs/sm/md`). Numbers use the `tnum` class. IDs, paths, refs, SHAs,
   timestamps and commands are `font-mono`.
 - Section labels use the `eyebrow` class (10px uppercase).
-- Desktop-first, 1440px. Must not break below ~1100px, but no mobile design work needed.
+- Desktop-first at 1440px, and every screen must also work at 820px (tablet) and 390px (phone):
+  `npm run lint:layout` fails on anything that spills.
 
 ## File conventions
 
@@ -90,10 +91,13 @@ filtering, search, expand/collapse, kanban filtering, log auto-scroll. Use `useS
 
 The operator's own actions go through the data store, never through local state:
 
-- `useData()` from `@/lib/data` owns **approvals, tasks, memory facts and the activity log**.
-  Read them from there, never from `@/mock/*`, so a decision made on one screen shows on every
-  other one. Act with `decide`, `moveTask`, `toggleCheck`, `setPinned` and `archive`. Each action
-  is optimistic, writes its own activity event, and resolves to `false` when it was not saved.
+- `useData()` from `@/lib/data` owns **projects, approvals, tasks, plans, memory facts and their
+  conflicts, MCP servers and the activity log**. Read them from there (projects through
+  `useProject().all`), never from `@/mock/*`, so a decision made on one screen shows on every other
+  one. Toggles (`decide`, `moveTask`, `toggleCheck`, `setPinned`, `archive`) are optimistic. Actions
+  that create or reshape documents (`createProject`, `registerMcp`, `resolveConflict`,
+  `settleQuestion`, `dispatchPlan`, `compile`, `recompile`) wait for the server. Every action writes
+  its own activity event and resolves to `false` or `null` when it was not saved.
 - With the local API up (`npm run dev:start`), those actions persist to SQLite and the log streams
   in over SSE. With no API, which is how the Vercel demo runs, the same actions work on the seed
   data for the life of the tab. `mode` tells you which of the two you are in.
@@ -101,16 +105,16 @@ The operator's own actions go through the data store, never through local state:
 
 ## Shared mock data you must reuse (do not duplicate or redefine)
 
-- `@/mock/projects` — `projects`, `getProject`, `projectName`, `activeProjectId`
+- `@/mock/projects` — `projectName`, `activeProjectId` (the live list is `useProject().all`)
 - `@/mock/agents` — `agents`, `getAgent`, `agentName`
 - `@/mock/tasks` — `byStatus`, `getTask` for static lookups (the live list is `useData().tasks`)
 - `@/mock/permissions` — `permissionRules` (approvals come from `useData()`)
-- `@/lib/data` — `useData()`: approvals, tasks, memory, activity, and the actions on them
+- `@/lib/data` — `useData()`: the operator's state and every action on it; `inFlight(plan)`
 - `@/lib/project-context` — `useProject()` returns the active project
 - `@/lib/theme` — `useTheme()`
 
 The mocks in `src/mock/` are also the API's seed. After changing tasks, approvals, memory or
-activity, run `npm run seed` to regenerate `server/seed/seed.json`.
+activity, run `npm run seed` to regenerate `server/seed/seed.json`. CI fails when they disagree.
 
 Names must stay consistent across screens: the ERP tax bug is always **TASK-492 /
 BUG-883 / InvoiceService.cs / TaxService.cs / SP_CalculateTax / MST_TAX / TRANS_INVOICE /

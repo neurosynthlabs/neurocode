@@ -194,6 +194,9 @@ export default function Settings() {
                 <KV k="Memory" v="Postgres + Qdrant, both local" mono />
                 <KV k="Operational data" v={data.mode === 'live' ? 'SQLite + FTS5 · local API' : 'seed data · this tab only'} mono />
                 {data.health && <KV k="Database file" v={data.health.db.split('/').slice(-2).join('/')} mono />}
+                {data.health?.compiler && (
+                  <KV k="Requirement compiler" v={data.health.compiler.note ?? (data.health.compiler.provider === 'rules' ? 'offline planner' : data.health.compiler.model)} />
+                )}
               </Panel>
               <Panel eyebrow="Danger zone" title="Reset" className="border-danger/30">
                 <p className="text-[11.5px] text-soft">
@@ -213,7 +216,7 @@ export default function Settings() {
                 </div>
               </Panel>
               <Panel eyebrow="Build" title="About">
-                <KV k="Version" v={<Mono>v0.9.4</Mono>} />
+                <KV k="Version" v={<Mono>v{__APP_VERSION__}</Mono>} />
                 <KV k="Runtime" v="local · self-hosted" />
                 <KV k="Operator" v="AI Project Manager" />
                 <KV k="Agents" v="12 registered" />

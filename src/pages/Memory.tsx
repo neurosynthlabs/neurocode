@@ -7,7 +7,7 @@ import {
   Page, PageHeader, PageBody, Panel, Tag, Mono, Segmented, ListRow, Empty,
   Stat, StatGrid, KV, Bar, BlockBar, DataTable, Row, Cell,
 } from '@/components/os';
-import { categoryMeta, categoryLabel, memoryConflicts, recentHits, memoryStats } from '@/mock/memory';
+import { categoryMeta, categoryLabel, recentHits, memoryStats } from '@/mock/memory';
 import { agentName } from '@/mock/agents';
 import { projectName } from '@/mock/projects';
 import { useProject } from '@/lib/project-context';
@@ -27,7 +27,7 @@ export default function Memory() {
   const [sel, setSel] = useState<string | null>(null);
   const [tab, setTab] = useState<'facts' | 'health' | 'conflicts'>('facts');
 
-  const { memory, mode, setPinned, archive, searchMemory } = useData();
+  const { memory, conflicts, mode, setPinned, archive, searchMemory, resolveConflict } = useData();
   const query = q.trim();
 
   // With the local API up, search is the server's FTS5 index: prefix-matched word by word, best match
@@ -87,7 +87,7 @@ export default function Memory() {
             options={[
               { id: 'facts', label: `Facts (${scoped.length})` },
               { id: 'health', label: 'Decay & health' },
-              { id: 'conflicts', label: `Conflicts (${memoryConflicts.length})` },
+              { id: 'conflicts', label: `Conflicts (${conflicts.length})` },
             ]}
             value={tab}
             onChange={setTab}
@@ -244,7 +244,7 @@ export default function Memory() {
               <Stat label="Facts held" value={memoryStats.total} sub={`${memoryStats.global} in the global brain`} icon={<Layers className="size-3" />} />
               <Stat label="Pinned" value={memoryStats.pinned} tone="brand" sub="never decay" icon={<Pin className="size-3" />} />
               <Stat label="Decaying" value={memoryStats.decaying} tone="warn" sub="strength under 70" icon={<TrendingDown className="size-3" />} />
-              <Stat label="Conflicts" value={memoryStats.conflicting} tone="danger" sub="need a human ruling" icon={<TriangleAlert className="size-3" />} />
+              <Stat label="Conflicts" value={conflicts.length} tone="danger" sub="need a human ruling" icon={<TriangleAlert className="size-3" />} />
               <Stat label="Retired 30d" value={memoryStats.retired30d} sub="decayed below threshold" />
             </StatGrid>
 
@@ -289,24 +289,28 @@ export default function Memory() {
               Two facts cannot both be true. The OS refuses to silently pick a winner — a contradiction is surfaced with
               both claims intact and waits for your ruling.
             </p>
-            {memoryConflicts.map((c) => (
+            {conflicts.length === 0 && <Empty title="No contradictions left" hint="Every fact in memory agrees with the others." />}
+            {conflicts.map((c) => (
               <Panel key={c.id} eyebrow={`detected ${c.detected}`} title={c.topic} className={c.severity === 'HIGH' ? 'border-danger/35' : undefined}
                 actions={<Tag tone={SEV_TONE[c.severity]}>{c.severity}</Tag>}>
                 <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
-                  {[c.a, c.b].map((side, i) => (
-                    <div key={i} className="rounded-sm border border-line bg-base p-3">
-                      <div className="eyebrow mb-1">claim {i === 0 ? 'A' : 'B'}</div>
-                      <p className="text-[12px] text-ink-2">{side}</p>
-                    </div>
-                  ))}
+                  {[c.a, c.b].map((id, i) => {
+                    const f = memory.find((x) => x.id === id);
+                    return (
+                      <div key={id} className="rounded-sm border border-line bg-base p-3">
+                        <div className="eyebrow mb-1">claim {i === 0 ? 'A' : 'B'}{f && <> · <span className="font-mono normal-case">{f.ref}</span></>}</div>
+                        <p className="text-[12px] text-ink-2">{f ? f.title : id}</p>
+                      </div>
+                    );
+                  })}
                 </div>
                 <p className="mt-2.5 text-[12px] text-soft">{c.detail}</p>
                 <div className="mt-2.5 flex items-center justify-between gap-3 border-t border-line pt-2.5">
                   <p className="flex items-start gap-1.5 text-[11.5px] text-ink-2"><Zap className="mt-px size-3 shrink-0 text-brand" />{c.suggestion}</p>
                   <div className="flex shrink-0 gap-1.5">
-                    <Button size="xs" variant="outline" onClick={() => toast('Kept A — B archived with a superseded-by link')}>Keep A</Button>
-                    <Button size="xs" variant="outline" onClick={() => toast('Kept B — A archived with a superseded-by link')}>Keep B</Button>
-                    <Button size="xs" variant="ghost" onClick={() => toast('Escalated to an ADR')}>Write ADR</Button>
+                    <Button size="xs" variant="outline" onClick={async () => { if (await resolveConflict(c.id, 'a')) toast.success('Kept A', { description: 'B is archived as superseded. Nothing is deleted.' }); }}>Keep A</Button>
+                    <Button size="xs" variant="outline" onClick={async () => { if (await resolveConflict(c.id, 'b')) toast.success('Kept B', { description: 'A is archived as superseded. Nothing is deleted.' }); }}>Keep B</Button>
+                    <Button size="xs" variant="ghost" onClick={async () => { if (await resolveConflict(c.id, 'adr')) toast('Escalated to an ADR', { description: 'Both facts stay until the decision is recorded.' }); }}>Write ADR</Button>
                   </div>
                 </div>
               </Panel>

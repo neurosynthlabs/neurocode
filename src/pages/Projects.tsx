@@ -7,9 +7,9 @@ import {
   Page, PageHeader, PageBody, Panel, Tag, Dot, BlockBar, Segmented, Mono,
   SectionTitle, Empty, KV, Field, Wizard,
 } from '@/components/os';
-import { projects } from '@/mock/projects';
 import { onboardingSteps, globalBrain, isolatedMemory } from '@/mock/modules';
 import { useProject } from '@/lib/project-context';
+import { useData } from '@/lib/data';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
@@ -41,7 +41,9 @@ function repoProblem(source: 'git' | 'local', repo: string, branch: string): str
 
 export default function Projects() {
   const nav = useNavigate();
-  const { projectId, setProjectId } = useProject();
+  const { projectId, setProjectId, all: projects } = useProject();
+  const { createProject, mode } = useData();
+  const [busy, setBusy] = useState(false);
   const [q, setQ] = useState('');
   const [kind, setKind] = useState('all');
   const [status, setStatus] = useState('all');
@@ -96,7 +98,7 @@ export default function Projects() {
       if (sort === 'size') return b.modules - a.modules;
       return (order.indexOf(b.status) - order.indexOf(a.status)) || b.memoryPct - a.memoryPct;
     });
-  }, [q, kind, status, sort]);
+  }, [projects, q, kind, status, sort]);
 
   return (
     <Page>
@@ -261,9 +263,22 @@ export default function Projects() {
         title="Onboard a repository"
         description="The OS reads the codebase end to end before it is allowed to change anything. One pass produces the architecture graph, the project memory and the rule set."
         finishLabel="Start onboarding"
-        onFinish={() => {
+        busy={busy}
+        onFinish={async () => {
+          setBusy(true);
+          const doc = await createProject({
+            source, repo: repo.trim(), branch: branch.trim(), connectDb, mineGit, ingestDocs,
+            excluded: excluded.split(',').map((s) => s.trim()).filter(Boolean),
+            rules: SEED_RULES.filter((r) => seeded.has(r.id)),
+          });
+          setBusy(false);
+          if (!doc) return;
           setNewOpen(false);
-          toast.success('Onboarding queued', { description: `${activeSteps.length} steps · est. ${estMinutes} min · the Architect reports back at 100%.` });
+          toast.success(`${doc.name} is onboarding`, {
+            description: mode === 'live'
+              ? `The Architect is ${source === 'git' ? 'cloning and ' : ''}measuring it now. Each stage lands in Activity.`
+              : 'Demo data: with the local API running, the repository is really cloned and measured.',
+          });
           resetDraft();
         }}
         steps={[

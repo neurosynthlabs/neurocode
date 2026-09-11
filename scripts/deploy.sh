@@ -74,6 +74,12 @@ if [ "$PREV_GH" != "$ACCOUNT" ]; then
   say "switching gh account → $ACCOUNT for the push (back to ${PREV_GH:-the previous account} right after)"
   gh auth switch --user "$ACCOUNT" >/dev/null 2>&1 || die "gh account '$ACCOUNT' not available — run: gh auth login"
 fi
+# GitHub refuses a push that adds or changes a workflow unless the token carries the `workflow` scope.
+# Say so before pushing, instead of letting git fail with a message about OAuth apps.
+if git diff --name-only '@{u}..HEAD' 2>/dev/null | grep -q '^\.github/workflows/' \
+   && ! gh auth status --active 2>&1 | grep -q "'workflow'"; then
+  die "this push changes .github/workflows and $ACCOUNT's token lacks the workflow scope. Run: gh auth refresh -h github.com -s workflow (with $ACCOUNT active), then deploy again — the commit is kept"
+fi
 say "push origin $(git rev-parse --abbrev-ref HEAD)"
 git push -q origin HEAD
 restore_gh

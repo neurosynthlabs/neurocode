@@ -69,7 +69,7 @@ export default function CodeIntelligence() {
   const s = symbols[sel];
   const toggle = (id: string) => setOpen((o) => {
     const n = new Set(o);
-    n.has(id) ? n.delete(id) : n.add(id);
+    if (n.has(id)) n.delete(id); else n.add(id);
     return n;
   });
 

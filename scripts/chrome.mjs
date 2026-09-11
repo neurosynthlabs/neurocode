@@ -16,10 +16,14 @@ export function findChrome() {
     for (const dir of dirs) {
       // the install dir also holds marker files such as DEPENDENCIES_VALIDATED, so look for the binary itself
       for (const sub of fs.readdirSync(path.join(root, dir))) {
-        const exe = path.join(root, dir, sub, 'chrome-headless-shell');
-        if (fs.existsSync(exe)) return exe;
+        for (const bin of ['chrome-headless-shell', 'headless_shell']) {
+          const exe = path.join(root, dir, sub, bin);
+          if (fs.existsSync(exe)) return exe;
+        }
       }
     }
   }
-  throw new Error('No headless Chromium found. Set CHROME_PATH, or run: npx playwright install chromium-headless-shell');
+  // Nothing cached under a known layout: let playwright-core launch the browser it installed itself,
+  // which is what CI does. If that is missing too, its error names the install command.
+  return undefined;
 }

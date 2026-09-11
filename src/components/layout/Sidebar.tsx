@@ -85,7 +85,7 @@ export function Sidebar({ collapsed, onToggle, variant = 'rail' }: {
   const toggleGroup = (g: string) =>
     setClosed((c) => {
       const n = new Set(c);
-      n.has(g) ? n.delete(g) : n.add(g);
+      if (n.has(g)) n.delete(g); else n.add(g);
       return n;
     });
 

@@ -6,7 +6,9 @@ import {
   Page, PageHeader, PageBody, Panel, Tag, RiskPill, Dot, Mono, ListRow, Toolbar, Field,
   SelectField, DataTable, Row, Cell, Stat, StatGrid, KV, Empty, Ascii, StatusText, Wizard,
 } from '@/components/os';
-import { mcpServers, mcpCallLog, rawConfigs, untrustedSourceIds } from '@/mock/mcp';
+import { mcpCallLog, rawConfigs, untrustedSourceIds } from '@/mock/mcp';
+import { useData } from '@/lib/data';
+import type { McpServer } from '@/types';
 import { agentName } from '@/mock/agents';
 import { cn } from '@/lib/utils';
 
@@ -58,7 +60,9 @@ const TRANSPORTS = [
 export default function Mcp() {
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('all');
-  const [sel, setSel] = useState(mcpServers[0].id);
+  const { mcp: servers, registerMcp, mode } = useData();
+  const [sel, setSel] = useState(servers[0]?.id ?? '');
+  const [busy, setBusy] = useState(false);
   const [add, setAdd] = useState(false);
   const [cmd, setCmd] = useState('');
   const [transport, setTransport] = useState('stdio');
@@ -69,7 +73,7 @@ export default function Mcp() {
   const parts = cmd.trim().split(/\s+/).filter(Boolean);
   const draftName = deriveName(transport, cmd);
   const draftConfig = JSON.stringify({
-    mcpServers: {
+    servers: {
       [draftName]: transport === 'stdio'
         ? { command: parts[0] ?? '', args: parts.slice(1), scope, untrusted: true, defaultEffect: effect }
         : { url: cmd.trim(), transport, scope, untrusted: true, defaultEffect: effect },
@@ -78,15 +82,15 @@ export default function Mcp() {
 
   const list = useMemo(() => {
     const s = q.trim().toLowerCase();
-    return mcpServers.filter((m) =>
+    return servers.filter((m) =>
       (status === 'all' || m.status === status) &&
       (!s || (m.name + m.command + m.tools.map((t) => t.name).join(' ')).toLowerCase().includes(s)));
-  }, [q, status]);
+  }, [servers, q, status]);
 
-  const srv = useMemo(() => list.find((m) => m.id === sel) ?? list[0] ?? mcpServers[0], [list, sel]);
+  const srv = useMemo(() => list.find((m) => m.id === sel) ?? list[0] ?? servers[0], [list, sel, servers]);
   const calls = useMemo(() => mcpCallLog.filter((c) => c.server === srv.id), [srv.id]);
-  const connected = mcpServers.filter((m) => m.status === 'connected').length;
-  const tools = mcpServers.reduce((n, m) => n + m.tools.length, 0);
+  const connected = servers.filter((m) => m.status === 'connected').length;
+  const tools = servers.reduce((n, m) => n + m.tools.length, 0);
 
   return (
     <Page>
@@ -99,16 +103,16 @@ export default function Mcp() {
           <Field className="w-64" value={q} onChange={setQ} icon={<Search className="size-3.5" />} placeholder="Search servers, tools, commands…" onClear={() => setQ('')} />
           <SelectField className="w-40" value={status} onChange={setStatus}
             options={[{ value: 'all', label: 'Any status' }, { value: 'connected', label: 'connected' }, { value: 'disconnected', label: 'disconnected' }, { value: 'error', label: 'error' }, { value: 'auth_required', label: 'auth required' }]} />
-          <span className="ml-auto text-[11.5px] text-dim">{list.length} of {mcpServers.length} servers · {tools} tools</span>
+          <span className="ml-auto text-[11.5px] text-dim">{list.length} of {servers.length} servers · {tools} tools</span>
         </Toolbar>
       </PageHeader>
 
       <PageBody className="space-y-4">
         <StatGrid cols={5}>
-          <Stat label="Connected" value={connected} tone="ok" sub={`${mcpServers.length - connected} not available`} icon={<Server className="size-3" />} />
+          <Stat label="Connected" value={connected} tone="ok" sub={`${servers.length - connected} not available`} icon={<Server className="size-3" />} />
           <Stat label="Tools exposed" value={tools} sub="across every server" />
-          <Stat label="Calls 24h" value={mcpServers.reduce((n, m) => n + m.calls24h, 0).toLocaleString()} />
-          <Stat label="Median latency" value={`${Math.round(mcpServers.reduce((n, m) => n + m.latencyMs, 0) / mcpServers.length)}ms`} />
+          <Stat label="Calls 24h" value={servers.reduce((n, m) => n + m.calls24h, 0).toLocaleString()} />
+          <Stat label="Median latency" value={`${Math.round(servers.reduce((n, m) => n + m.latencyMs, 0) / servers.length)}ms`} />
           <Stat label="Untrusted sources" value={untrustedSourceIds.length} tone="warn" sub="output is data, not orders" icon={<ShieldAlert className="size-3" />} />
         </StatGrid>
 
@@ -131,7 +135,7 @@ export default function Mcp() {
                 <div className="flex items-center gap-2">
                   <Dot state={m.status} pulse={m.status === 'connected'} />
                   <span className="truncate text-[12.5px] font-medium text-ink">{m.name}</span>
-                  {untrustedSourceIds.includes(m.id) && <ShieldAlert className="ml-auto size-3 text-warn" />}
+                  {(m.untrusted || untrustedSourceIds.includes(m.id)) && <ShieldAlert className="ml-auto size-3 text-warn" />}
                 </div>
                 <div className="mt-1 flex items-center gap-2 text-[10.5px] text-dim">
                   <Mono>{m.transport}</Mono>
@@ -146,7 +150,7 @@ export default function Mcp() {
             <Panel
               eyebrow={`${srv.scope} scope`}
               title={<span className="flex items-center gap-2">{srv.name}<StatusText state={srv.status} /></span>}
-              actions={untrustedSourceIds.includes(srv.id) ? <Tag tone="warn"><ShieldAlert className="size-3" />untrusted source</Tag> : <Tag tone="ok">trusted</Tag>}
+              actions={(srv.untrusted || untrustedSourceIds.includes(srv.id)) ? <Tag tone="warn"><ShieldAlert className="size-3" />untrusted source</Tag> : <Tag tone="ok">trusted</Tag>}
             >
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 xl:grid-cols-4">
                 <KV k="Transport" v={srv.transport} />
@@ -175,7 +179,7 @@ export default function Mcp() {
 
             <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
               <Panel eyebrow="As configured" title="Server config">
-                <Ascii className="max-h-[240px] overflow-auto">{rawConfigs[srv.id] ?? '// no config recorded for this server'}</Ascii>
+                <Ascii className="max-h-[240px] overflow-auto">{srv.config ?? rawConfigs[srv.id] ?? '// no config recorded for this server'}</Ascii>
               </Panel>
               <Panel eyebrow={`${calls.length} recent calls`} title="Call log" flush>
                 {calls.length === 0 ? <Empty title="No calls recorded" hint="This server has been idle in the current window." /> : (
@@ -203,9 +207,21 @@ export default function Mcp() {
         title="Add an MCP server"
         description="New servers arrive disconnected, and every tool they expose starts on the default effect you pick here until you promote it in Permissions."
         finishLabel="Register server"
-        onFinish={() => {
+        busy={busy}
+        onFinish={async () => {
+          setBusy(true);
+          const doc = await registerMcp({
+            name: draftName, command: cmd.trim(), config: draftConfig,
+            transport: transport as McpServer['transport'], scope: scope as McpServer['scope'],
+            defaultEffect: effect as NonNullable<McpServer['defaultEffect']>,
+          });
+          setBusy(false);
+          if (!doc) return;
           setAdd(false);
-          toast.success(`${draftName} registered`, { description: 'Disconnected until you connect it from the list.' });
+          setSel(doc.id);
+          toast.success(`${doc.name} registered`, {
+            description: mode === 'live' ? 'Saved. It stays disconnected until you connect it.' : 'Disconnected until you connect it from the list.',
+          });
           setCmd('');
           setTransport('stdio');
           setScope('project');

@@ -44,7 +44,7 @@ export default function Login() {
                 <span className="font-semibold" style={{ color: 'var(--rail-accent)' }}>Code</span>
               </span>
               <span className="mt-1.5 block font-mono text-[11px]" style={{ color: 'var(--rail-dim)' }}>
-                AI engineering OS · v0.9.4 · self-hosted
+                AI engineering OS · v{__APP_VERSION__} · self-hosted
               </span>
             </span>
           </span>

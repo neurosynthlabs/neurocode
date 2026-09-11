@@ -1,6 +1,10 @@
+import { readFileSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+
+// package.json is the one place the version lives; the UI reads it as __APP_VERSION__.
+const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }
 
 // ~60% of the entry chunk was framework code. Splitting it into its own chunks keeps every chunk
 // under 500 KB and lets the browser keep React cached across deploys — app code changes far more
@@ -9,6 +13,7 @@ const vendor = (pkgs: string) => new RegExp(`[\\\\/]node_modules[\\\\/](${pkgs})
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  define: { __APP_VERSION__: JSON.stringify(version) },
   resolve: {
     alias: { '@': new URL('./src', import.meta.url).pathname },
   },

@@ -7,19 +7,21 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const MOCKS = path.join(ROOT, 'src/mock');
 const OUT = path.join(ROOT, 'node_modules/.cache/nc-seed');
 const require = createRequire(import.meta.url);
 const ts = require(path.join(ROOT, 'node_modules/typescript'));
 
+// Every mock is transpiled, so a mock that imports another one always resolves.
 fs.rmSync(OUT, { recursive: true, force: true });
 fs.mkdirSync(OUT, { recursive: true });
 fs.writeFileSync(path.join(OUT, 'package.json'), '{ "type": "commonjs" }\n');
-for (const f of ['projects', 'agents', 'tasks', 'permissions', 'memory', 'activity', 'activity-extra']) {
-  let js = ts.transpileModule(fs.readFileSync(path.join(ROOT, `src/mock/${f}.ts`), 'utf8'), {
+for (const file of fs.readdirSync(MOCKS).filter((f) => f.endsWith('.ts'))) {
+  let js = ts.transpileModule(fs.readFileSync(path.join(MOCKS, file), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText;
   js = js.replace(/require\("@\/mock\/([\w-]+)"\)/g, 'require("./$1")');
-  fs.writeFileSync(path.join(OUT, `${f}.js`), js);
+  fs.writeFileSync(path.join(OUT, file.replace(/\.ts$/, '.js')), js);
 }
 const m = (f) => require(path.join(OUT, `${f}.js`));
 
@@ -30,6 +32,9 @@ const seed = {
   approvals: m('permissions').approvals,
   permissionRules: m('permissions').permissionRules,
   memory: m('memory').memoryFacts,
+  plans: m('plans').plans,
+  conflicts: m('memory').memoryConflicts,
+  mcp: m('mcp').mcpServers,
   // newest first — the order the Activity screen renders
   activity: [...m('activity').activity].reverse().concat(m('activity-extra').activityExtra),
 };

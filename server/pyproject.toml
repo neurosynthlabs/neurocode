@@ -11,3 +11,8 @@ dev = ["pytest>=8", "httpx>=0.27"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# Starlette's TestClient warns about its own dependencies; nothing in this code base triggers these.
+filterwarnings = [
+    "ignore:Using .httpx. with .starlette.testclient. is deprecated",
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated",
+]

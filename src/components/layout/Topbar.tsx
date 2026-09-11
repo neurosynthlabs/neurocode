@@ -6,7 +6,7 @@ import { Kbd, Dot, Tag, BlockBar } from '@/components/os';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/lib/theme';
 import { ThemeCustomizer } from './ThemeCustomizer';
-import { projects } from '@/mock/projects';
+import { useProject } from '@/lib/project-context';
 import { useData } from '@/lib/data';
 
 export function Topbar({
@@ -16,6 +16,7 @@ export function Topbar({
   const [themeOpen, setThemeOpen] = useState(false);
   const [projOpen, setProjOpen] = useState(false);
   const nav = useNavigate();
+  const { all: projects } = useProject();
   const active = projects.find((p) => p.id === projectId) ?? projects[0];
   const { approvals, mode } = useData();
   const pending = approvals.filter((a) => a.status === 'pending');

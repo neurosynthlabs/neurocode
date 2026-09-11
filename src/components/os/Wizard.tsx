@@ -69,7 +69,7 @@ export function Wizard({
     const t = e.target as HTMLElement;
     if (e.key !== 'Enter' || e.shiftKey || t.tagName !== 'INPUT') return;
     e.preventDefault();
-    if (!canNext) return;
+    if (!canNext || busy) return;
     if (last) onFinish(); else go(idx + 1);
   };
 

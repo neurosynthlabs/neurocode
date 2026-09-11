@@ -53,7 +53,7 @@ export function LogoMark({ size = 34, className }: { size?: number; className?: 
 
 /** Mark + name. `onDark` switches the type to the sidebar's foreground. */
 export function Wordmark({
-  size = 34, sub = 'v0.9.4 · self-hosted', className, onDark, hideSub,
+  size = 34, sub = `v${__APP_VERSION__} · self-hosted`, className, onDark, hideSub,
 }: { size?: number; sub?: string; className?: string; onDark?: boolean; hideSub?: boolean }) {
   const ink = onDark ? 'var(--rail-ink)' : 'var(--os-ink)';
   const accent = onDark ? 'var(--rail-accent)' : 'var(--os-brand)';

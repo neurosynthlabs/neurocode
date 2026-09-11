@@ -2,18 +2,18 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowDown, FileCode, Database, Boxes, HelpCircle, FlaskConical, CircleCheck,
-  CircleDot, Circle, CircleX, MinusCircle, Play,
+  CircleDot, Circle, CircleX, MinusCircle, Play, Cpu, RefreshCw, Check,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Page, PageHeader, PageBody, Panel, Tag, RiskPill, Mono, ListRow, Empty,
   BlockBar, SectionTitle, KV, Bar,
 } from '@/components/os';
-import { plans } from '@/mock/plans';
 import { projectName } from '@/mock/projects';
+import { inFlight, useData } from '@/lib/data';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
-import type { PlanStepState } from '@/types';
+import type { Plan, PlanStepState } from '@/types';
 
 const STATE_ICON: Record<PlanStepState, { icon: typeof Circle; cls: string; mark: string }> = {
   done:    { icon: CircleCheck, cls: 'text-ok',     mark: '✓' },
@@ -29,11 +29,66 @@ const STAGES = [
   { k: 'technicalRequirement', label: 'Technical requirement',hint: 'what has to change in the code' },
 ] as const;
 
+/** Which planner wrote a compiled plan. The rules planner is marked as such: it is not a model. */
+function CompiledBy({ p }: { p: Plan }) {
+  if (!p.compiler) return null;
+  const rules = p.compiler.provider === 'rules';
+  return (
+    <span title={rules ? 'Keyword rules, not a model. Set DEEPSEEK_API_KEY or run Ollama for a real compile.' : `Compiled by ${p.compiler.model}`}>
+      <Tag tone={rules ? 'warn' : 'brand'}>
+        <Cpu className="size-3" />{rules ? 'offline planner' : p.compiler.model} · {(p.compiler.ms / 1000).toFixed(1)}s
+      </Tag>
+    </span>
+  );
+}
+
 export default function Plans() {
   const nav = useNavigate();
-  const [sel, setSel] = useState(plans[0].ref);
-  const p = useMemo(() => plans.find((x) => x.ref === sel) ?? plans[0], [sel]);
+  const { plans, mode, settleQuestion, dispatchPlan, recompile } = useData();
+  const [sel, setSel] = useState(plans[0]?.ref ?? '');
+  const [draft, setDraft] = useState<{ index: number; text: string } | null>(null);
+  const [working, setWorking] = useState<'dispatch' | 'recompile' | null>(null);
+  const p = useMemo(() => plans.find((x) => x.ref === sel) ?? plans[0], [plans, sel]);
+
+  if (!p) {
+    return (
+      <Page>
+        <PageHeader title="Plans" subtitle="The requirement compiler." />
+        <PageBody><Empty title="No plans yet" hint="Compile a requirement from the Command Center." /></PageBody>
+      </Page>
+    );
+  }
+
   const doneSteps = p.steps.filter((s) => s.state === 'done').length;
+  const underway = inFlight(p);
+  const open = p.openQuestions.length;
+
+  const settle = async (index: number, answer: string | null) => {
+    if (!(await settleQuestion(p.ref, index, answer))) return;
+    setDraft(null);
+    if (answer === null) toast('Deferred', { description: 'The plan proceeds under its stated assumption.' });
+    else toast.success('Answer recorded', { description: 'Saved to memory as a business rule, so the next plan knows it.' });
+  };
+
+  const dispatch = async () => {
+    setWorking('dispatch');
+    const ok = await dispatchPlan(p.ref);
+    setWorking(null);
+    if (!ok) return;
+    toast.success(`${p.ref} dispatched`, { description: `${p.taskRef} is in progress. ${p.steps[0]?.agent ?? 'The first agent'} starts.` });
+    nav('/tasks');
+  };
+
+  const again = async () => {
+    if (mode !== 'live') {
+      toast('Re-compiling needs the local API', { description: 'This demo runs on sample data. Start it with npm run dev:start.' });
+      return;
+    }
+    setWorking('recompile');
+    const doc = await recompile(p.ref);
+    setWorking(null);
+    if (doc) toast.success(`${doc.ref} re-compiled`, { description: `${doc.steps.length} steps · ${doc.openQuestions.length} open questions` });
+  };
 
   return (
     <Page>
@@ -49,9 +104,10 @@ export default function Plans() {
           {plans.map((x) => {
             const d = x.steps.filter((s) => s.state === 'done').length;
             return (
-              <ListRow key={x.ref} active={x.ref === sel} onClick={() => setSel(x.ref)}>
+              <ListRow key={x.ref} active={x.ref === p.ref} onClick={() => { setSel(x.ref); setDraft(null); }}>
                 <div className="flex items-center gap-2">
-                  <Mono tone={x.ref === sel ? 'brand' : 'neutral'}>{x.ref}</Mono>
+                  <Mono tone={x.ref === p.ref ? 'brand' : 'neutral'}>{x.ref}</Mono>
+                  {!inFlight(x) && <Tag tone="neutral">draft</Tag>}
                   <span className="ml-auto"><RiskPill risk={x.risk} bare /></span>
                 </div>
                 <p className="mt-1 line-clamp-2 text-[12px] text-ink">{x.technicalRequirement.split('.')[0]}.</p>
@@ -73,6 +129,7 @@ export default function Plans() {
             <Mono>{p.taskRef}</Mono>
             <Tag tone="neutral">{projectName(p.projectId)}</Tag>
             <RiskPill risk={p.risk} />
+            <CompiledBy p={p} />
             <span className="ml-auto text-[11.5px] text-dim">compiled {p.createdAt}</span>
           </div>
 
@@ -92,12 +149,16 @@ export default function Plans() {
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
               <Panel eyebrow={`${p.affectedModules.length} modules`} title={<span className="flex items-center gap-1.5"><Boxes className="size-3.5 text-brand" />Affected modules</span>} flush>
                 <div className="divide-y divide-line">
-                  {p.affectedModules.map((m) => <div key={m} className="px-3.5 py-1.5 text-[12px] text-ink-2">{m}</div>)}
+                  {p.affectedModules.length === 0
+                    ? <div className="px-3.5 py-3 text-[12px] text-dim">None named yet.</div>
+                    : p.affectedModules.map((m) => <div key={m} className="px-3.5 py-1.5 text-[12px] text-ink-2">{m}</div>)}
                 </div>
               </Panel>
               <Panel eyebrow={`${p.affectedFiles.length} files`} title={<span className="flex items-center gap-1.5"><FileCode className="size-3.5 text-brand" />Affected files</span>} flush>
                 <div className="divide-y divide-line">
-                  {p.affectedFiles.map((f) => <div key={f} className="truncate px-3.5 py-1.5 font-mono text-[11px] text-ink-2" title={f}>{f}</div>)}
+                  {p.affectedFiles.length === 0
+                    ? <div className="px-3.5 py-3 text-[12px] text-dim">None named yet.</div>
+                    : p.affectedFiles.map((f) => <div key={f} className="truncate px-3.5 py-1.5 font-mono text-[11px] text-ink-2" title={f}>{f}</div>)}
                 </div>
               </Panel>
               <Panel eyebrow={`${p.affectedDb.length} objects`} title={<span className="flex items-center gap-1.5"><Database className="size-3.5 text-brand" />Affected database</span>} flush>
@@ -157,35 +218,77 @@ export default function Plans() {
               <Bar pct={p.confidence} tone={p.confidence >= 85 ? 'ok' : p.confidence >= 70 ? 'warn' : 'danger'} height="h-1.5" />
               <SectionTitle className="mt-3 mb-1.5">Evidence</SectionTitle>
               <div className="space-y-1">
-                <KV k="Source files read" v={p.affectedFiles.length + 5} />
-                <KV k="Database objects mapped" v={p.affectedDb.length} />
-                <KV k="Previous fixes reviewed" v={4} />
-                <KV k="Decisions cited" v="ADR-47 · ADR-49 · MEM-142" />
+                {p.compiler ? (
+                  <>
+                    <KV k="Memory consulted" v={p.cited?.length ? p.cited.join(' · ') : 'nothing matched'} />
+                    <KV k="Files named" v={p.affectedFiles.length} />
+                    <KV k="Database objects named" v={p.affectedDb.length} />
+                    <KV k="Compiled by" v={p.compiler.provider === 'rules' ? 'offline planner, not a model' : p.compiler.model} />
+                  </>
+                ) : (
+                  <>
+                    <KV k="Source files read" v={p.affectedFiles.length + 5} />
+                    <KV k="Database objects mapped" v={p.affectedDb.length} />
+                    <KV k="Previous fixes reviewed" v={4} />
+                    <KV k="Decisions cited" v="ADR-47 · ADR-49 · MEM-142" />
+                  </>
+                )}
               </div>
               <SectionTitle className="mt-3 mb-1.5">Unknown</SectionTitle>
               <p className="text-[11.5px] text-warn">
-                {p.openQuestions.length > 0
-                  ? `${p.openQuestions.length} business question${p.openQuestions.length > 1 ? 's' : ''} not documented anywhere in the codebase.`
+                {open > 0
+                  ? `${open} business question${open > 1 ? 's' : ''} not documented anywhere in the codebase.`
                   : 'Nothing material is unknown for this plan.'}
               </p>
             </Panel>
 
             <Panel eyebrow="The plan refuses to guess" title={<span className="flex items-center gap-1.5"><HelpCircle className="size-3.5 text-warn" />Open questions</span>} flush>
-              {p.openQuestions.length === 0 ? (
-                <Empty title="No open questions" hint="Everything this plan needed was already documented." />
+              {open === 0 ? (
+                <Empty title="No open questions" hint="Everything this plan needed is documented or decided." />
               ) : (
                 <div className="divide-y divide-line">
                   {p.openQuestions.map((q, i) => (
-                    <div key={i} className="px-3.5 py-2.5">
+                    <div key={`${p.ref}-${q}`} className="px-3.5 py-2.5">
                       <p className="text-[12px] text-ink-2">{q}</p>
-                      <div className="mt-1.5 flex gap-1.5">
-                        <Button size="xs" variant="outline" onClick={() => toast('Answer recorded as a business rule in memory')}>Answer</Button>
-                        <Button size="xs" variant="ghost" onClick={() => toast('Deferred — the plan proceeds under its stated assumption')}>Defer</Button>
-                      </div>
+                      {draft?.index === i ? (
+                        <form
+                          className="mt-2 space-y-1.5"
+                          onSubmit={(e) => { e.preventDefault(); if (draft.text.trim()) settle(i, draft.text.trim()); }}
+                        >
+                          <textarea
+                            autoFocus
+                            rows={2}
+                            value={draft.text}
+                            onChange={(e) => setDraft({ index: i, text: e.target.value })}
+                            aria-label={`Answer: ${q}`}
+                            placeholder="Your answer becomes a business rule in memory…"
+                            className="w-full resize-none rounded-sm border border-line bg-base px-2.5 py-1.5 text-[12px] text-ink placeholder:text-dim focus-visible:border-brand focus-visible:outline-none"
+                          />
+                          <div className="flex gap-1.5">
+                            <Button size="xs" type="submit" disabled={!draft.text.trim()}><Check className="size-3" />Save answer</Button>
+                            <Button size="xs" type="button" variant="ghost" onClick={() => setDraft(null)}>Cancel</Button>
+                          </div>
+                        </form>
+                      ) : (
+                        <div className="mt-1.5 flex gap-1.5">
+                          <Button size="xs" variant="outline" onClick={() => setDraft({ index: i, text: '' })}>Answer</Button>
+                          <Button size="xs" variant="ghost" onClick={() => settle(i, null)}>Defer</Button>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
               )}
+              {(p.answered?.length || p.deferred?.length) ? (
+                <div className="space-y-1.5 border-t border-line px-3.5 py-2.5">
+                  {p.answered?.map((a) => (
+                    <p key={a.q} className="text-[11.5px] text-soft">
+                      <Check className="mr-1 inline size-3 text-ok" /><span className="text-ink-2">{a.q}</span> → {a.a}
+                    </p>
+                  ))}
+                  {p.deferred?.map((q) => <p key={q} className="text-[11.5px] text-dim">Deferred: {q}</p>)}
+                </div>
+              ) : null}
             </Panel>
           </div>
 
@@ -200,12 +303,18 @@ export default function Plans() {
             </div>
           </Panel>
 
-          <div className="mt-4 flex items-center gap-2">
-            <Button size="sm" onClick={() => { toast.success(`${p.ref} dispatched`, { description: 'Worktrees created, agents assigned.' }); nav('/runs'); }}>
-              <Play className="size-3.5" />Dispatch plan
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <Button size="sm" disabled={underway || open > 0 || working !== null} onClick={dispatch}>
+              <Play className="size-3.5" />{underway ? 'Dispatched' : working === 'dispatch' ? 'Dispatching…' : 'Dispatch plan'}
             </Button>
             <Button size="sm" variant="outline" onClick={() => nav('/architecture')}>See impact analysis</Button>
-            <Button size="sm" variant="ghost" onClick={() => toast('Re-compiled with the answers you provided')}>Re-compile</Button>
+            <Button size="sm" variant="ghost" disabled={underway || working !== null} onClick={again}>
+              <RefreshCw className={cn('size-3.5', working === 'recompile' && 'animate-spin')} />
+              {working === 'recompile' ? 'Re-compiling…' : 'Re-compile'}
+            </Button>
+            {!underway && open > 0 && (
+              <span className="text-[11px] text-warn">Answer or defer {open} open question{open > 1 ? 's' : ''} to dispatch.</span>
+            )}
           </div>
         </div>
       </PageBody>

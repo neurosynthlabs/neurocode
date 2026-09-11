@@ -46,7 +46,7 @@ export default function Architecture() {
 
   const toggleLayer = (id: string) => setHidden((h) => {
     const n = new Set(h);
-    n.has(id) ? n.delete(id) : n.add(id);
+    if (n.has(id)) n.delete(id); else n.add(id);
     return n;
   });
 

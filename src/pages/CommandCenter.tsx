@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Paperclip, Image, Sparkles, ArrowRight, Play, Lightbulb, Microscope,
-  FolderPlus, Workflow, ShieldAlert, Cpu, Coins, Bot, ListChecks, Clock,
+  FolderPlus, Workflow, ShieldAlert, Cpu, Coins, Bot, ListChecks, Clock, TriangleAlert,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -25,7 +25,7 @@ const COMPILER = `Requirement  ──▶  Research  ──▶  Architecture  ─
 export default function CommandCenter() {
   const nav = useNavigate();
   const { project } = useProject();
-  const { tasks, approvals, activity } = useData();
+  const { tasks, approvals, activity, mode, health, compile: compileRequirement } = useData();
   const [req, setReq] = useState('');
   const [compiling, setCompiling] = useState(false);
 
@@ -38,18 +38,28 @@ export default function CommandCenter() {
   const pending = useMemo(() => approvals.filter((a) => a.status === 'pending'), [approvals]);
   const feed = useMemo(() => activity.slice(0, 11), [activity]);
 
-  const compile = () => {
-    if (!req.trim()) return;
-    setCompiling(true);
-    toast.success('Requirement queued for the Commander', {
-      description: 'Compiling → research → impact → task breakdown.',
-    });
-    window.setTimeout(() => {
-      setCompiling(false);
-      setReq('');
+  const compile = async () => {
+    const text = req.trim();
+    if (!text || compiling) return;
+    if (mode !== 'live') {
+      // The public demo has no API: show where a compiled plan lands, using the sample plans.
+      toast('Demo: showing a compiled sample plan', { description: 'Run npm run dev:start to compile your own requirement.' });
       nav('/plans');
-    }, 1400);
+      return;
+    }
+    setCompiling(true);
+    const plan = await compileRequirement(text, project.id);
+    setCompiling(false);
+    if (!plan) return;
+    setReq('');
+    toast.success(`${plan.ref} compiled`, {
+      description: `${plan.steps.length} steps · ${plan.openQuestions.length} open questions · ${plan.compiler?.provider === 'rules' ? 'offline planner' : plan.compiler?.model}`,
+    });
+    nav('/plans');
   };
+  const compilerName = mode === 'live' && health?.compiler
+    ? (health.compiler.provider === 'rules' ? 'offline planner' : health.compiler.model)
+    : 'DeepSeek-V3.2';
 
   return (
     <Page>
@@ -81,6 +91,8 @@ export default function CommandCenter() {
               <textarea
                 value={req}
                 onChange={(e) => setReq(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); compile(); } }}
+                aria-label="Requirement"
                 rows={3}
                 placeholder="Invoice mein tax galat aa raha hai — CGST/SGST interstate orders pe reverse ho raha hai. Fix karo."
                 className="w-full resize-none rounded-sm border border-line bg-base px-3 py-2.5 text-[13px] leading-relaxed text-ink placeholder:text-dim focus-visible:border-brand focus-visible:outline-none"
@@ -94,7 +106,10 @@ export default function CommandCenter() {
                     <Image className="size-3" />Screenshot
                   </Button>
                   <span className="ml-1 hidden items-center gap-1.5 text-[11px] text-dim sm:flex">
-                    <Cpu className="size-3" />routes to <Mono tone="brand">DeepSeek-V3.2</Mono> for planning
+                    <Cpu className="size-3" />routes to <Mono tone="brand">{compilerName}</Mono> for planning
+                    {mode === 'live' && health?.compiler?.note && (
+                      <span title={health.compiler.note} aria-label={health.compiler.note}><TriangleAlert className="size-3 text-warn" /></span>
+                    )}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">

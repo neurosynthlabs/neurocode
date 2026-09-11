@@ -143,8 +143,8 @@ function Shell() {
 export default function App() {
   return (
     <ThemeProvider>
-      <ProjectProvider>
-        <DataProvider>
+      <DataProvider>
+        <ProjectProvider>
           <TooltipProvider>
             <Routes>
               <Route
@@ -159,8 +159,8 @@ export default function App() {
             </Routes>
             <Toaster position="bottom-right" />
           </TooltipProvider>
-        </DataProvider>
-      </ProjectProvider>
+        </ProjectProvider>
+      </DataProvider>
     </ThemeProvider>
   );
 }

@@ -6,8 +6,8 @@ import {
   Page, PageHeader, PageBody, Panel, Stat, StatGrid, Tag, RiskPill, Dot, Mono,
   DataTable, Row, Cell, MeterRow, Segmented, KV, BlockBar, Empty, SectionTitle,
 } from '@/components/os';
-import { projects, getProject } from '@/mock/projects';
-import { getModules, rulesByProject, adrsByProject, riskyByProject, infraByProject } from '@/mock/modules';
+import { useProject } from '@/lib/project-context';
+import { getModules, rulesByProject, adrsByProject, riskyByProject, infraByProject, type InfraKv, type ProjectRule } from '@/mock/modules';
 import { useData } from '@/lib/data';
 import { agentName } from '@/mock/agents';
 import { cn } from '@/lib/utils';
@@ -21,20 +21,33 @@ const SEV_TONE = { blocker: 'danger', major: 'warn', minor: 'neutral' } as const
 export default function ProjectOverview() {
   const { projectId } = useParams();
   const nav = useNavigate();
-  const p = useMemo(() => (projectId && projects.some((x) => x.id === projectId) ? getProject(projectId) : projects[0]), [projectId]);
+  const { all: projects } = useProject();
+  const p = useMemo(() => projects.find((x) => x.id === projectId) ?? projects[0], [projects, projectId]);
+  // Onboarded from this app: show only what the scan measured, never another project's sample data.
+  const src = p.source;
   const [tab, setTab] = useState<Tab>('modules');
   const [q, setQ] = useState('');
 
+  const allModules = useMemo(() => (src ? [] : getModules(p.id)), [src, p.id]);
   const modules = useMemo(() => {
-    const list = getModules(p.id);
+    const list = allModules;
     const s = q.trim().toLowerCase();
     return s ? list.filter((m) => (m.name + m.path + m.note + m.tables.join(' ')).toLowerCase().includes(s)) : list;
-  }, [p.id, q]);
+  }, [allModules, q]);
 
-  const rules = rulesByProject[p.id] ?? rulesByProject.erp;
-  const adrs = adrsByProject[p.id] ?? adrsByProject.erp;
-  const risky = riskyByProject[p.id] ?? riskyByProject.erp;
-  const infra = infraByProject[p.id] ?? infraByProject.erp;
+  const rules: ProjectRule[] = src
+    ? (p.rules ?? []).map((r) => ({ id: r.id, rule: r.label, detail: r.note, enforcedBy: 'Code Reviewer · from the first change', severity: 'major' as const, violations24h: 0 }))
+    : rulesByProject[p.id] ?? rulesByProject.erp;
+  const adrs = src ? [] : adrsByProject[p.id] ?? adrsByProject.erp;
+  const risky = src ? [] : riskyByProject[p.id] ?? riskyByProject.erp;
+  const infra: InfraKv[] = src
+    ? [
+        { k: 'Source', v: src.repo, mono: true },
+        { k: src.kind === 'git' ? 'Branch' : 'Kind', v: src.branch ?? 'local folder', mono: src.kind === 'git' },
+        { k: 'Files measured', v: (p.files ?? 0).toLocaleString() },
+        { k: 'Languages', v: p.languages?.map((l) => `${l.name} ${l.pct}%`).join(' · ') || 'not measured yet' },
+      ]
+    : infraByProject[p.id] ?? infraByProject.erp;
   const { tasks } = useData();
   const myTasks = useMemo(() => tasks.filter((t) => t.projectId === p.id), [tasks, p.id]);
 
@@ -90,7 +103,7 @@ export default function ProjectOverview() {
         <div className="flex flex-wrap items-center gap-2">
           <Segmented
             options={[
-              { id: 'modules', label: `Modules (${getModules(p.id).length})` },
+              { id: 'modules', label: `Modules (${allModules.length})` },
               { id: 'rules', label: `Rules (${rules.length})` },
               { id: 'decisions', label: `Decisions (${adrs.length})` },
               { id: 'risk', label: `Risky areas (${risky.length})` },
@@ -109,7 +122,9 @@ export default function ProjectOverview() {
 
         {tab === 'modules' && (
           <Panel flush>
-            {modules.length === 0 ? <Empty title="No module matches" hint="Try a table name like MST_TAX." /> : (
+            {modules.length === 0 ? (src
+              ? <Empty title="Modules are not mapped yet" hint="They come from the syntax-tree pass, step 3 of onboarding, which is not connected yet." />
+              : <Empty title="No module matches" hint="Try a table name like MST_TAX." />) : (
               <DataTable head={['Module', 'Path', 'LOC', 'Understood', 'Coverage', 'Risk', 'Renewal', 'Owner', 'Bugs']}>
                 {modules.map((m) => (
                   <Row key={m.id} onClick={() => nav('/code')}>
@@ -134,6 +149,7 @@ export default function ProjectOverview() {
 
         {tab === 'rules' && (
           <Panel eyebrow="Enforced automatically — a violation stops the pipeline" title="Project rules" flush>
+            {rules.length === 0 && <Empty title="No rules yet" hint="Choose them when you onboard a project, or add them as it grows." />}
             <div className="divide-y divide-line">
               {rules.map((r) => (
                 <div key={r.id} className="px-3.5 py-3">
@@ -152,6 +168,7 @@ export default function ProjectOverview() {
 
         {tab === 'decisions' && (
           <Panel eyebrow="Rejected decisions are kept — they are memory too" title="Architecture decision records" flush>
+            {adrs.length === 0 && <Empty title="No decisions recorded yet" hint="ADRs appear as plans are compiled, reviewed and decided." />}
             <div className="divide-y divide-line">
               {adrs.map((a) => (
                 <div key={a.id} className="px-3.5 py-3">
@@ -171,6 +188,7 @@ export default function ProjectOverview() {
 
         {tab === 'risk' && (
           <Panel eyebrow="Ranked by churn × complexity × incident history" title="Risky areas" flush>
+            {risky.length === 0 && <Empty title="Not ranked yet" hint="Risk needs churn and complexity, which come from the git and syntax-tree passes." />}
             <DataTable head={['Path', 'Risk', 'Churn', 'Complexity', 'Why it is risky', 'Last incident']}>
               {risky.map((r) => (
                 <Row key={r.id}>

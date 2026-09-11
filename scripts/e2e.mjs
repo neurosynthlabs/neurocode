@@ -69,7 +69,7 @@ try {
   // Both servers are spawned directly (not through uv run / npm) so killing them really stops them.
   run('api', path.join(ROOT, 'server/.venv/bin/python'),
     ['-m', 'uvicorn', 'app.main:create_app', '--factory', '--app-dir', 'server', '--host', '127.0.0.1', '--port', String(API_PORT)],
-    { NEUROCODE_DB: path.join(TMP, 'e2e.db') });
+    { NEUROCODE_DB: path.join(TMP, 'e2e.db'), NEUROCODE_COMPILER: 'rules' });
   run('web', process.execPath,
     [path.join(ROOT, 'node_modules/vite/bin/vite.js'), '--port', String(WEB_PORT), '--strictPort', '--host', '127.0.0.1'],
     { NC_API_PORT: String(API_PORT) });
@@ -128,6 +128,74 @@ try {
     await page.waitForTimeout(500);
     const after = (await api('/memory?q=TRANS')).find((f) => f.ref === top.ref);
     expect(after.pinned === !top.pinned, `${top.ref} pinned is still ${after.pinned}`);
+  });
+
+  await step('a requirement compiles into a stored plan and its task', async () => {
+    await open('/');
+    await page.getByText('saved locally').waitFor({ timeout: 20000 });
+    await page.getByLabel('Requirement').fill('Invoice mein tax galat aa raha hai, CGST/SGST interstate pe reverse. Fix karo.');
+    await page.getByRole('button', { name: /Compile Plan/ }).click();
+    await page.waitForURL('**/plans', { timeout: 15000 });
+    const [newest] = await api('/plans');
+    expect(newest.compiler?.provider === 'rules', `the newest plan came from ${newest.compiler?.provider}`);
+    await page.getByText(newest.ref).first().waitFor({ timeout: 5000 });
+    const task = await api(`/tasks/${newest.taskRef}`);
+    expect(task.status === 'planning', `its task is ${task.status}`);
+  });
+
+  await step('answering and deferring the questions lets the plan dispatch', async () => {
+    const [plan] = await api('/plans');
+    await page.getByRole('button', { name: 'Answer', exact: true }).first().click();
+    await page.getByPlaceholder(/business rule/).fill('Round at invoice level.');
+    await page.getByRole('button', { name: /Save answer/ }).click();
+    await page.waitForTimeout(400);
+    for (let n = 0; n < 8 && (await page.getByRole('button', { name: 'Defer', exact: true }).count()); n++) {
+      await page.getByRole('button', { name: 'Defer', exact: true }).first().click();
+      await page.waitForTimeout(300);
+    }
+    await page.getByRole('button', { name: /Dispatch plan/ }).click();
+    await page.waitForURL('**/tasks', { timeout: 5000 });
+    expect((await api(`/tasks/${plan.taskRef}`)).status === 'in_progress', 'the task did not start');
+    expect((await api('/memory?q=invoice')).some((f) => f.body === 'Round at invoice level.'), 'the answer is not in memory');
+  });
+
+  await step('onboarding a local folder measures it for real', async () => {
+    await open('/projects');
+    await page.getByRole('button', { name: /New project/ }).click();
+    const dlg = page.locator('[data-slot="dialog-content"]');
+    await dlg.getByRole('button', { name: 'Local path', exact: true }).click();
+    await dlg.locator('input').first().fill(path.join(ROOT, 'server'));
+    for (let n = 0; n < 3; n++) await dlg.getByRole('button', { name: /^Next/ }).click();
+    await dlg.getByRole('button', { name: /Start onboarding/ }).click();
+    let p;
+    for (const t0 = Date.now(); Date.now() - t0 < 15000; await new Promise((r) => setTimeout(r, 300))) {
+      p = (await api('/projects')).find((x) => x.id === 'server');
+      if (p?.status === 'active') break;
+    }
+    expect(p?.status === 'active', `the project is ${p?.status ?? 'missing'}`);
+    expect(p.stack.includes('Python') && p.files > 3, `measured ${p.files} files, stack ${p.stack}`);
+  });
+
+  await step('registering an MCP server persists it, untrusted', async () => {
+    await open('/mcp');
+    await page.getByRole('button', { name: /Add server/ }).click();
+    const dlg = page.locator('[data-slot="dialog-content"]');
+    await dlg.getByRole('button', { name: /^Next/ }).click();
+    await dlg.locator('input').first().fill('npx -y @acme/server-ledger');
+    await dlg.getByRole('button', { name: /^Next/ }).click();
+    await dlg.getByRole('button', { name: /^Next/ }).click();
+    await dlg.getByRole('button', { name: /Register server/ }).click();
+    await page.waitForTimeout(500);
+    expect((await api('/mcp/servers')).some((s) => s.id === 'ledger' && s.untrusted), 'the server is not in the database');
+  });
+
+  await step('keeping one side of a memory conflict archives the other', async () => {
+    const [c] = await api('/memory/conflicts');
+    await open('/memory');
+    await page.getByRole('button', { name: /^Conflicts \(/ }).click();
+    await page.getByRole('button', { name: 'Keep A', exact: true }).first().click();
+    await page.waitForTimeout(500);
+    expect(!(await api('/memory/conflicts')).some((x) => x.id === c.id), 'the conflict is still open');
   });
 
   if (pageErrors.length) results.push(`  ✗ uncaught errors in the page\n      ${pageErrors.join('\n      ')}`), (process.exitCode = 1);

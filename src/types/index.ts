@@ -29,6 +29,13 @@ export interface Project {
   coverage: Coverage[];
   work: { tasks: number; running: number; review: number; blocked: number };
   description: string;
+  /** Set on projects onboarded from this app; the seeded ones have none. */
+  source?: { kind: 'git' | 'local'; repo: string; branch?: string };
+  /** Rules chosen in the onboarding wizard. */
+  rules?: { id: string; label: string; note: string }[];
+  /** Measured by the onboarding scan. */
+  languages?: { name: string; pct: number }[];
+  files?: number;
 }
 
 /* ── Agents ───────────────────────────────────────────────────── */
@@ -111,6 +118,13 @@ export interface Plan {
   steps: PlanStep[];
   testPlan: string[];
   openQuestions: string[];
+  /** Compiled plans: `draft` until dispatched. Seeded plans are read from their steps instead. */
+  status?: 'draft' | 'dispatched';
+  answered?: { q: string; a: string }[];
+  deferred?: string[];
+  /** The memory facts the compiler was given. */
+  cited?: string[];
+  compiler?: { provider: 'deepseek' | 'ollama' | 'rules'; model: string; ms: number };
 }
 
 /* ── Live runs (parallel agents) ──────────────────────────────── */
@@ -322,6 +336,11 @@ export interface McpServer {
   latencyMs: number;
   calls24h: number;
   errorRate: number;
+  /** Registered from this app: its output stays untrusted until you promote it. */
+  untrusted?: boolean;
+  defaultEffect?: 'ask' | 'allow-read' | 'deny';
+  /** The config exactly as it was reviewed in the wizard. */
+  config?: string;
 }
 
 export interface AcpClient {
