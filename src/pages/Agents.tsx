@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import * as Icons from 'lucide-react';
+import { Bot, Check, ShieldCheck } from 'lucide-react';
+import { ICONS } from '@/lib/icons';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Dot, Mono, Ascii, ListRow, Stat, StatGrid,
   KV, MeterRow, SectionTitle, Empty, Segmented,
@@ -53,7 +54,7 @@ const ESCALATION = [
 ];
 
 function Icon({ name, className }: { name: string; className?: string }) {
-  const C = (Icons as unknown as Record<string, React.ComponentType<{ className?: string }>>)[name] ?? Icons.Bot;
+  const C = ICONS[name] ?? Bot;
   return <C className={className} />;
 }
 
@@ -163,7 +164,7 @@ export default function Agents() {
                   <div className="flex flex-wrap gap-1.5">
                     {a.tools.map((t) => (
                       <span key={t} className="inline-flex items-center gap-1 rounded-xs border border-ok/25 bg-ok/8 px-1.5 py-px text-[11px] text-ok">
-                        <Icons.Check className="size-2.5" />{t}
+                        <Check className="size-2.5" />{t}
                       </span>
                     ))}
                   </div>
@@ -181,7 +182,7 @@ export default function Agents() {
                   <div className="divide-y divide-line">
                     {a.guardrails.map((g) => (
                       <div key={g} className="flex items-start gap-2 px-3.5 py-2">
-                        <Icons.ShieldCheck className="mt-px size-3.5 shrink-0 text-warn" />
+                        <ShieldCheck className="mt-px size-3.5 shrink-0 text-warn" />
                         <span className="text-[12px] text-ink-2">{g}</span>
                       </div>
                     ))}

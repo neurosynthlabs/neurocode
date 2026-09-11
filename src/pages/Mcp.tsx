@@ -2,14 +2,46 @@ import { useMemo, useState } from 'react';
 import { Plus, ShieldAlert, Search, Server } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import {
   Page, PageHeader, PageBody, Panel, Tag, RiskPill, Dot, Mono, ListRow, Toolbar, Field,
-  SelectField, DataTable, Row, Cell, Stat, StatGrid, KV, Empty, Ascii, StatusText,
+  SelectField, DataTable, Row, Cell, Stat, StatGrid, KV, Empty, Ascii, StatusText, Wizard,
 } from '@/components/os';
 import { mcpServers, mcpCallLog, rawConfigs, untrustedSourceIds } from '@/mock/mcp';
 import { agentName } from '@/mock/agents';
 import { cn } from '@/lib/utils';
+
+const GENERIC_LABELS = new Set(['mcp', 'api', 'www', 'app', 'server', 'localhost']);
+
+/** A readable server name from what the operator typed — never the URL's userinfo (it may hold a token). */
+function deriveName(transport: string, raw: string) {
+  const v = raw.trim();
+  if (!v) return 'new-server';
+  let name: string;
+  if (transport !== 'stdio') {
+    try {
+      const labels = new URL(v).hostname.split('.');
+      name = labels.find((l) => l && !GENERIC_LABELS.has(l.toLowerCase())) ?? labels[0] ?? '';
+    } catch {
+      name = '';
+    }
+  } else {
+    // the package is the first argument that is not a flag, a URL or a path
+    const tokens = v.split(/\s+/);
+    const pkg = tokens.slice(1).find((a) => !a.startsWith('-') && !a.includes('://') && !/^[./~]/.test(a)) ?? tokens[0];
+    const scoped = pkg.match(/^@([^/]+)\/(.+)$/);
+    const base = (scoped ? scoped[2] : pkg).replace(/@[\w.-]+$/, '');
+    name = base.match(/^(?:mcp-)?server-(.+)$/)?.[1] ?? base.replace(/-mcp$|^mcp-/, '');
+    // `@playwright/mcp` names nothing on its own — the scope is the real name
+    if ((!name || GENERIC_LABELS.has(name)) && scoped) name = scoped[1];
+  }
+  return name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'new-server';
+}
+
+const TRANSPORTS = [
+  { id: 'stdio', label: 'stdio', note: 'A local process the OS launches and talks to over pipes. Fastest, and the most common.' },
+  { id: 'http', label: 'Streamable HTTP', note: 'A remote server over HTTPS. Needs a URL and usually a token.' },
+  { id: 'sse', label: 'SSE (legacy)', note: 'The older remote transport. Prefer HTTP unless the server only speaks SSE.' },
+];
 
 export default function Mcp() {
   const [q, setQ] = useState('');
@@ -18,6 +50,19 @@ export default function Mcp() {
   const [add, setAdd] = useState(false);
   const [cmd, setCmd] = useState('');
   const [transport, setTransport] = useState('stdio');
+  const [scope, setScope] = useState('project');
+  const [effect, setEffect] = useState('ask');
+
+  // The config the wizard will write, derived live from its inputs.
+  const parts = cmd.trim().split(/\s+/).filter(Boolean);
+  const draftName = deriveName(transport, cmd);
+  const draftConfig = JSON.stringify({
+    mcpServers: {
+      [draftName]: transport === 'stdio'
+        ? { command: parts[0] ?? '', args: parts.slice(1), scope, untrusted: true, defaultEffect: effect }
+        : { url: cmd.trim(), transport, scope, untrusted: true, defaultEffect: effect },
+    },
+  }, null, 2);
 
   const list = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -140,31 +185,92 @@ export default function Mcp() {
         </div>
       </PageBody>
 
-      <Dialog open={add} onOpenChange={setAdd}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Add an MCP server</DialogTitle>
-            <DialogDescription>
-              New servers start disconnected and every tool they expose defaults to <span className="text-ink">ask</span>
-              until you promote it in Permissions.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <SelectField label="Transport" value={transport} onChange={setTransport} options={['stdio', 'http', 'sse']} />
-            <Field label="Launch command or URL" value={cmd} onChange={setCmd} mono
-              placeholder="npx -y @modelcontextprotocol/server-postgres postgres://…" />
-            <div className={cn('rounded-sm border border-warn/30 bg-warn/8 px-3 py-2 text-[11.5px] text-warn')}>
-              This server's output will be treated as untrusted data until you mark it otherwise.
-            </div>
-          </div>
-          <DialogFooter>
-            <Button size="sm" variant="outline" onClick={() => setAdd(false)}>Cancel</Button>
-            <Button size="sm" disabled={!cmd.trim()} onClick={() => { setAdd(false); setCmd(''); toast.success('Server registered', { description: 'Connect it from the list when you are ready.' }); }}>
-              Register
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <Wizard
+        open={add}
+        onOpenChange={setAdd}
+        title="Add an MCP server"
+        description="New servers arrive disconnected, and every tool they expose starts on the default effect you pick here until you promote it in Permissions."
+        finishLabel="Register server"
+        onFinish={() => {
+          setAdd(false);
+          toast.success(`${draftName} registered`, { description: 'Disconnected until you connect it from the list.' });
+          setCmd('');
+          setTransport('stdio');
+          setScope('project');
+          setEffect('ask');
+        }}
+        steps={[
+          {
+            id: 'transport', title: 'Transport', hint: 'how it talks',
+            content: (
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                {TRANSPORTS.map((t) => (
+                  <button key={t.id} type="button" onClick={() => setTransport(t.id)} aria-pressed={transport === t.id}
+                    className={cn('rounded-md border p-3 text-left transition-colors',
+                      transport === t.id ? 'border-brand bg-brand/8' : 'border-line bg-surface hover:border-line-strong')}>
+                    <span className={cn('block font-mono text-[12.5px] font-semibold', transport === t.id ? 'text-brand' : 'text-ink')}>{t.label}</span>
+                    <span className="mt-1 block text-[11px] leading-snug text-soft">{t.note}</span>
+                  </button>
+                ))}
+              </div>
+            ),
+          },
+          {
+            id: 'connection', title: 'Connection', hint: transport === 'stdio' ? 'launch command' : 'endpoint',
+            valid: cmd.trim().length > 0, blocker: 'Enter a command or URL',
+            content: (
+              <div className="space-y-3">
+                <Field
+                  label={transport === 'stdio' ? 'Launch command' : 'Server URL'}
+                  value={cmd} onChange={setCmd} mono
+                  placeholder={transport === 'stdio' ? 'npx -y @modelcontextprotocol/server-postgres postgres://readonly@localhost/erp' : 'https://mcp.example.com/mcp'}
+                />
+                <SelectField label="Scope" value={scope} onChange={setScope}
+                  options={[
+                    { value: 'project', label: 'project — this project only' },
+                    { value: 'global', label: 'global — every project' },
+                    { value: 'local', label: 'local — this machine, never synced' },
+                  ]} />
+              </div>
+            ),
+          },
+          {
+            id: 'trust', title: 'Trust', hint: 'default effect',
+            content: (
+              <div className="space-y-3">
+                <div className="flex items-start gap-2.5 rounded-sm border border-warn/30 bg-warn/8 px-3 py-2.5">
+                  <ShieldAlert className="mt-px size-3.5 shrink-0 text-warn" />
+                  <span className="text-[12px] leading-relaxed text-warn">
+                    <span className="font-semibold">Output is treated as untrusted.</span> Always on for a new server — an
+                    instruction found inside a tool result is surfaced to you, never obeyed. You can mark a server trusted
+                    later, one server at a time.
+                  </span>
+                </div>
+                <SelectField label="Default effect for its tools" value={effect} onChange={setEffect}
+                  options={[
+                    { value: 'ask', label: 'ask — every call is confirmed' },
+                    { value: 'allow-read', label: 'allow read-only tools, ask for the rest' },
+                    { value: 'deny', label: 'deny — nothing runs until reviewed' },
+                  ]} />
+              </div>
+            ),
+          },
+          {
+            id: 'review', title: 'Review', hint: 'generated config',
+            content: (
+              <div className="space-y-3">
+                <div className="rounded-sm border border-line bg-base px-3 py-1.5">
+                  <KV k="Name" v={draftName} mono />
+                  <KV k="Transport" v={transport} />
+                  <KV k="Scope" v={scope} />
+                  <KV k="Default effect" v={effect} />
+                </div>
+                <Ascii className="max-h-[220px] overflow-auto">{draftConfig}</Ascii>
+              </div>
+            ),
+          },
+        ]}
+      />
     </Page>
   );
 }

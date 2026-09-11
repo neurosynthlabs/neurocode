@@ -2,10 +2,10 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Plus, GitBranch, Database, FileCode, Boxes, Check, Brain, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Switch } from '@/components/ui/switch';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Dot, BlockBar, Segmented, Mono,
-  SectionTitle, Empty, KV,
+  SectionTitle, Empty, KV, Field, Wizard,
 } from '@/components/os';
 import { projects } from '@/mock/projects';
 import { onboardingSteps, globalBrain, isolatedMemory } from '@/mock/modules';
@@ -14,6 +14,19 @@ import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
 type Sort = 'active' | 'understood' | 'size';
+
+/* Rules a new project starts life with — each is enforced by a reviewer check or a hook. */
+const SEED_RULES = [
+  { id: 'solid', label: 'Strict SOLID', note: 'One reason to change per class — a blocker at review' },
+  { id: 'naming', label: 'Class-object naming', note: '<Noun>Service / I<Noun>Service / <Noun>Repository — no Helper or Util' },
+  { id: 'repo', label: 'Repository pattern', note: 'No SQL text inside a service file' },
+  { id: 'trans', label: 'Protected tables are append-only', note: 'Direct writes to TRANS_* are refused by a PreToolUse hook' },
+  { id: 'iface', label: 'Interface-first', note: 'Contract and registration before the implementation' },
+  { id: 'deps', label: 'New dependencies need your approval', note: 'Supply chain is your signature, not the agent’s' },
+];
+const DB_STEPS = [5, 6, 7, 8];
+const DEFAULT_EXCLUDED = 'node_modules, bin, obj, dist, **/*.designer.cs';
+const estSeconds = (e: string) => (e.endsWith('m') ? parseFloat(e) * 60 : parseFloat(e));
 
 export default function Projects() {
   const nav = useNavigate();
@@ -24,6 +37,39 @@ export default function Projects() {
   const [sort, setSort] = useState<Sort>('active');
   const [newOpen, setNewOpen] = useState(false);
   const [repo, setRepo] = useState('');
+  const [source, setSource] = useState<'git' | 'local'>('git');
+  const [branch, setBranch] = useState('main');
+  const [excluded, setExcluded] = useState(DEFAULT_EXCLUDED);
+  const [connectDb, setConnectDb] = useState(true);
+  const [mineGit, setMineGit] = useState(true);
+  const [ingestDocs, setIngestDocs] = useState(true);
+  const [seeded, setSeeded] = useState<Set<string>>(() => new Set(SEED_RULES.map((r) => r.id)));
+
+  const scopeToggles = [
+    { label: 'Connect database', note: 'Read-only, against the nightly snapshot — adds schema, procedures and code↔DB links', on: connectDb, set: setConnectDb },
+    { label: 'Mine git history', note: 'Churn, hotspots and bug-fix density per file', on: mineGit, set: setMineGit },
+    { label: 'Ingest docs & tickets', note: 'READMEs, ADRs, Jira exports and meeting notes', on: ingestDocs, set: setIngestDocs },
+  ];
+  const skippedSteps = useMemo(() => new Set([
+    ...(connectDb ? [] : DB_STEPS), ...(mineGit ? [] : [12]), ...(ingestDocs ? [] : [14]),
+  ]), [connectDb, mineGit, ingestDocs]);
+  const activeSteps = onboardingSteps.filter((st) => !skippedSteps.has(st.n));
+  const estMinutes = Math.max(1, Math.round(activeSteps.reduce((n, st) => n + estSeconds(st.est), 0) / 60));
+  const toggleSeed = (id: string) => setSeeded((cur) => {
+    const next = new Set(cur);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const resetDraft = () => {
+    setRepo('');
+    setSource('git');
+    setBranch('main');
+    setExcluded(DEFAULT_EXCLUDED);
+    setConnectDb(true);
+    setMineGit(true);
+    setIngestDocs(true);
+    setSeeded(new Set(SEED_RULES.map((r) => r.id)));
+  };
 
   const list = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -197,62 +243,134 @@ export default function Projects() {
         </div>
       </PageBody>
 
-      {/* Onboarding dialog */}
-      <Dialog open={newOpen} onOpenChange={setNewOpen}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Onboard a repository</DialogTitle>
-            <DialogDescription>
-              The OS reads the codebase end to end before it is allowed to change anything. This runs once per project
-              and produces the architecture graph, the project memory and the rule set.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div>
-              <SectionTitle>Repository</SectionTitle>
-              <input
-                value={repo}
-                onChange={(e) => setRepo(e.target.value)}
-                placeholder="git@github.com:sofscript/careworks-erp.git  ·  or a local path"
-                className="h-8 w-full rounded-sm border border-line bg-base px-2.5 font-mono text-[11.5px] text-ink placeholder:text-dim focus-visible:border-brand focus-visible:outline-none"
-              />
-            </div>
-            <div>
-              <SectionTitle right={<span className="text-[11px] text-dim">est. 24 min for 2.4M lines</span>}>
-                Automatic pipeline · {onboardingSteps.length} steps
-              </SectionTitle>
-              <div className="max-h-[300px] overflow-y-auto rounded-sm border border-line bg-base">
-                {onboardingSteps.map((s) => (
-                  <div key={s.n} className="flex items-center gap-2.5 border-b border-line/60 px-3 py-1.5 last:border-0">
-                    <span className="tnum w-5 shrink-0 text-right font-mono text-[10.5px] text-dim">{s.n}</span>
-                    <Check className="size-3 shrink-0 text-line-strong" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[12px] text-ink-2">{s.label}</span>
-                      <span className="block truncate text-[10.5px] text-dim">{s.detail}</span>
-                    </span>
-                    <span className="shrink-0 text-[10.5px] text-dim">{s.agent}</span>
-                    <span className="tnum w-10 shrink-0 text-right font-mono text-[10.5px] text-soft">{s.est}</span>
-                  </div>
-                ))}
+      {/* Onboarding wizard */}
+      <Wizard
+        open={newOpen}
+        onOpenChange={setNewOpen}
+        title="Onboard a repository"
+        description="The OS reads the codebase end to end before it is allowed to change anything. One pass produces the architecture graph, the project memory and the rule set."
+        finishLabel="Start onboarding"
+        onFinish={() => {
+          setNewOpen(false);
+          toast.success('Onboarding queued', { description: `${activeSteps.length} steps · est. ${estMinutes} min · the Architect reports back at 100%.` });
+          resetDraft();
+        }}
+        steps={[
+          {
+            id: 'repo', title: 'Repository', hint: 'where the code lives',
+            valid: repo.trim().length > 3, blocker: 'Enter a repository to continue',
+            content: (
+              <div className="space-y-3">
+                <Segmented options={[{ id: 'git', label: 'Git remote' }, { id: 'local', label: 'Local path' }]} value={source} onChange={setSource} />
+                <Field
+                  label={source === 'git' ? 'Clone URL' : 'Absolute path'}
+                  value={repo} onChange={setRepo} mono
+                  placeholder={source === 'git' ? 'git@github.com:sofscript/careworks-erp.git' : '/Users/rajat/work/careworks-erp'}
+                />
+                {source === 'git' && <Field label="Branch" value={branch} onChange={setBranch} mono />}
+                <div className="rounded-sm border border-line bg-base px-3 py-1.5">
+                  <KV k="Credentials" v="read-only, against a snapshot replica" />
+                  <KV k="Write access" v="none until you approve the first plan" />
+                </div>
               </div>
-            </div>
-            <div className="rounded-sm border border-line bg-base px-3 py-1.5">
-              <KV k="Credentials" v="read-only, against a snapshot replica" />
-              <KV k="Write access" v="none until you approve the first plan" />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setNewOpen(false)}>Cancel</Button>
-            <Button
-              size="sm"
-              disabled={!repo.trim()}
-              onClick={() => { setNewOpen(false); setRepo(''); toast.success('Onboarding queued', { description: 'Architect + Database Engineer will report at 100%.' }); }}
-            >
-              Start onboarding
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            ),
+          },
+          {
+            id: 'scope', title: 'Scope', hint: 'what gets read',
+            content: (
+              <div className="space-y-3">
+                <div>
+                  <SectionTitle>Detected from the remote</SectionTitle>
+                  <div className="flex flex-wrap gap-1">
+                    {['C# · .NET 8', 'T-SQL', 'TypeScript · React', 'PowerShell', 'YAML'].map((l) => <Tag key={l} tone="neutral">{l}</Tag>)}
+                  </div>
+                  <p className="mt-1 text-[11px] text-dim">From the repository’s language stats — confirmed properly in step 1 of the pipeline.</p>
+                </div>
+                <Field label="Excluded paths — never parsed, embedded or shown to a model" value={excluded} onChange={setExcluded} mono />
+                <div className="divide-y divide-line rounded-sm border border-line">
+                  {scopeToggles.map((t) => (
+                    <div key={t.label} className="flex items-center justify-between gap-4 px-3 py-2">
+                      <span className="min-w-0">
+                        <span className="block text-[12.5px] font-medium text-ink">{t.label}</span>
+                        <span className="block text-[11px] text-dim">{t.note}</span>
+                      </span>
+                      <Switch aria-label={t.label} checked={t.on} onCheckedChange={t.set} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ),
+          },
+          {
+            id: 'rules', title: 'Access & rules', hint: 'what it may do',
+            content: (
+              <div className="space-y-3">
+                <p className="text-[12px] leading-relaxed text-soft">
+                  These become the project’s rule set on day one. Each is enforced by a reviewer check or a hook — not by
+                  asking a model nicely. Edit them any time after onboarding.
+                </p>
+                <div className="divide-y divide-line rounded-sm border border-line">
+                  {SEED_RULES.map((r) => {
+                    const on = seeded.has(r.id);
+                    return (
+                      <button key={r.id} type="button" onClick={() => toggleSeed(r.id)} aria-pressed={on}
+                        className="flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-2">
+                        <span className={cn('mt-0.5 grid size-4 shrink-0 place-items-center rounded-xs border transition-colors',
+                          on ? 'border-brand bg-brand text-brand-ink' : 'border-line-strong bg-surface')}>
+                          {on && <Check className="size-3" strokeWidth={2.6} />}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-[12.5px] font-medium text-ink">{r.label}</span>
+                          <span className="block text-[11px] text-dim">{r.note}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex items-start gap-2 rounded-sm border border-line bg-base px-3 py-2">
+                  <Lock className="mt-px size-3.5 shrink-0 text-warn" />
+                  <p className="text-[11.5px] text-soft">
+                    Memory for this project is isolated. Nothing it learns leaks into other projects — except through the
+                    global brain, and only after you promote it.
+                  </p>
+                </div>
+              </div>
+            ),
+          },
+          {
+            id: 'review', title: 'Review', hint: `${activeSteps.length} of ${onboardingSteps.length} steps`,
+            content: (
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 gap-x-6 rounded-sm border border-line bg-base px-3 py-1.5 sm:grid-cols-2">
+                  <KV k="Source" v={repo.trim() || '—'} mono />
+                  <KV k="Branch" v={source === 'git' ? branch : 'working tree'} mono />
+                  <KV k="Database" v={connectDb ? 'read-only snapshot' : 'skipped'} />
+                  <KV k="Rules seeded" v={`${seeded.size} of ${SEED_RULES.length}`} />
+                </div>
+                <SectionTitle right={<span className="text-[11px] text-dim">est. {estMinutes} min · {activeSteps.length} of {onboardingSteps.length} steps</span>}>
+                  Automatic pipeline
+                </SectionTitle>
+                <div className="max-h-[260px] overflow-y-auto rounded-sm border border-line bg-base">
+                  {onboardingSteps.map((st) => {
+                    const skip = skippedSteps.has(st.n);
+                    return (
+                      <div key={st.n} className={cn('flex items-center gap-2.5 border-b border-line/60 px-3 py-1.5 last:border-0', skip && 'opacity-45')}>
+                        <span className="tnum w-5 shrink-0 text-right font-mono text-[10.5px] text-dim">{st.n}</span>
+                        <span className="min-w-0 flex-1">
+                          <span className={cn('block truncate text-[12px] text-ink-2', skip && 'line-through')}>{st.label}</span>
+                          <span className="block truncate text-[10.5px] text-dim">{skip ? 'skipped — turned off in Scope' : st.detail}</span>
+                        </span>
+                        <span className="shrink-0 text-[10.5px] text-dim">{st.agent}</span>
+                        <span className="tnum w-10 shrink-0 text-right font-mono text-[10.5px] text-soft">{st.est}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ),
+          },
+        ]}
+      />
     </Page>
   );
 }

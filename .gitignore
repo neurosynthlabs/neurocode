@@ -23,3 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 .vercel
+
+# smoke-test screenshots (scripts/smoke.mjs SMOKE_SHOTS)
+shots/

@@ -10,6 +10,8 @@ import type { Risk } from '@/types';
 export const cx = cn;
 
 export { LogoMark, Wordmark } from './Logo';
+export { Wizard } from './Wizard';
+export type { WizardStep } from './Wizard';
 
 /* ── Page scaffolding ─────────────────────────────────────────── */
 export function Page({ children }: { children: ReactNode }) {

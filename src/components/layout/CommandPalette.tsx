@@ -1,14 +1,15 @@
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import * as Icons from 'lucide-react';
+import { Circle } from 'lucide-react';
+import { ICONS } from '@/lib/icons';
 import {
-  CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator,
+  Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator,
 } from '@/components/ui/command';
 import { buildIndex, SEARCH_GROUPS } from '@/lib/search';
 import { Kbd } from '@/components/os';
 
 function Icon({ name }: { name: string }) {
-  const C = (Icons as unknown as Record<string, React.ComponentType<{ className?: string }>>)[name] ?? Icons.Circle;
+  const C = ICONS[name] ?? Circle;
   return <C className="size-3.5 shrink-0 text-dim" />;
 }
 
@@ -21,7 +22,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   );
 
   return (
-    <CommandDialog open={open} onOpenChange={onOpenChange} className="max-w-[620px]">
+    <CommandDialog open={open} onOpenChange={onOpenChange} className="sm:max-w-[620px]">
+      <Command className="rounded-none! bg-transparent p-0">
       <CommandInput placeholder="Search everything — code, memory, tasks, decisions, commits, tests…" />
       <CommandList className="max-h-[440px]">
         <CommandEmpty>
@@ -57,6 +59,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         <span className="flex items-center gap-1.5"><Kbd>↑</Kbd><Kbd>↓</Kbd> navigate <Kbd>↵</Kbd> open <Kbd>esc</Kbd> close</span>
         <span>Indexed: code · database · memory · knowledge · git · tests</span>
       </div>
+      </Command>
     </CommandDialog>
   );
 }

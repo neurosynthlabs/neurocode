@@ -1,53 +1,57 @@
-import { useEffect, useState } from 'react';
-import { Route, Routes } from 'react-router-dom';
+import { lazy, Suspense, useEffect, useState } from 'react';
+import { Route, Routes, useLocation } from 'react-router-dom';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/sonner';
-import { ThemeProvider } from '@/lib/theme';
+import { ThemeProvider, useTheme } from '@/lib/theme';
 import { ProjectProvider, useProject } from '@/lib/project-context';
-import { useTheme } from '@/lib/theme';
 import { cn } from '@/lib/utils';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Topbar } from '@/components/layout/Topbar';
 import { CommandPalette } from '@/components/layout/CommandPalette';
+import { PageSkeleton, RouteBoundary } from '@/components/layout/RouteBoundary';
 
-import Login from '@/pages/Login';
+// The home screen ships in the entry chunk so first paint never waits on a second request.
+// Every other screen is its own chunk, fetched the first time it is opened.
 import CommandCenter from '@/pages/CommandCenter';
-import Projects from '@/pages/Projects';
-import ProjectOverview from '@/pages/ProjectOverview';
-import Memory from '@/pages/Memory';
-import Knowledge from '@/pages/Knowledge';
-import CodeIntelligence from '@/pages/CodeIntelligence';
-import Architecture from '@/pages/Architecture';
-import Agents from '@/pages/Agents';
-import Tasks from '@/pages/Tasks';
-import Plans from '@/pages/Plans';
-import Runs from '@/pages/Runs';
-import Workflows from '@/pages/Workflows';
-import Testing from '@/pages/Testing';
-import Review from '@/pages/Review';
-import Git from '@/pages/Git';
-import DevOps from '@/pages/DevOps';
-import Skills from '@/pages/Skills';
-import Commands from '@/pages/Commands';
-import Hooks from '@/pages/Hooks';
-import Plugins from '@/pages/Plugins';
-import Mcp from '@/pages/Mcp';
-import Acp from '@/pages/Acp';
-import Models from '@/pages/Models';
-import Brainstorm from '@/pages/Brainstorm';
-import Research from '@/pages/Research';
-import ActivityPage from '@/pages/Activity';
-import Sessions from '@/pages/Sessions';
-import Permissions from '@/pages/Permissions';
-import Cost from '@/pages/Cost';
-import Evals from '@/pages/Evals';
-import Settings from '@/pages/Settings';
+
+const Login = lazy(() => import('@/pages/Login'));
+const Projects = lazy(() => import('@/pages/Projects'));
+const ProjectOverview = lazy(() => import('@/pages/ProjectOverview'));
+const Memory = lazy(() => import('@/pages/Memory'));
+const Knowledge = lazy(() => import('@/pages/Knowledge'));
+const CodeIntelligence = lazy(() => import('@/pages/CodeIntelligence'));
+const Architecture = lazy(() => import('@/pages/Architecture'));
+const Agents = lazy(() => import('@/pages/Agents'));
+const Tasks = lazy(() => import('@/pages/Tasks'));
+const Plans = lazy(() => import('@/pages/Plans'));
+const Runs = lazy(() => import('@/pages/Runs'));
+const Workflows = lazy(() => import('@/pages/Workflows'));
+const Testing = lazy(() => import('@/pages/Testing'));
+const Review = lazy(() => import('@/pages/Review'));
+const Git = lazy(() => import('@/pages/Git'));
+const DevOps = lazy(() => import('@/pages/DevOps'));
+const Skills = lazy(() => import('@/pages/Skills'));
+const Commands = lazy(() => import('@/pages/Commands'));
+const Hooks = lazy(() => import('@/pages/Hooks'));
+const Plugins = lazy(() => import('@/pages/Plugins'));
+const Mcp = lazy(() => import('@/pages/Mcp'));
+const Acp = lazy(() => import('@/pages/Acp'));
+const Models = lazy(() => import('@/pages/Models'));
+const Brainstorm = lazy(() => import('@/pages/Brainstorm'));
+const Research = lazy(() => import('@/pages/Research'));
+const ActivityPage = lazy(() => import('@/pages/Activity'));
+const Sessions = lazy(() => import('@/pages/Sessions'));
+const Permissions = lazy(() => import('@/pages/Permissions'));
+const Cost = lazy(() => import('@/pages/Cost'));
+const Evals = lazy(() => import('@/pages/Evals'));
+const Settings = lazy(() => import('@/pages/Settings'));
 
 function Shell() {
   const [collapsed, setCollapsed] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const { projectId, setProjectId } = useProject();
   const { rail } = useTheme();
+  const loc = useLocation();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -73,43 +77,51 @@ function Shell() {
           className={cn('min-h-0 flex-1 overflow-hidden bg-bg', rail === 'flush' ? '' : 'elevated border border-line')}
           style={rail === 'flush' ? undefined : { borderRadius: 'calc(var(--radius) * 1.6)' }}
         >
-          <Routes>
-            <Route path="/" element={<CommandCenter />} />
-            <Route path="/projects" element={<Projects />} />
-            <Route path="/projects/:projectId" element={<ProjectOverview />} />
-            <Route path="/memory" element={<Memory />} />
-            <Route path="/knowledge" element={<Knowledge />} />
-            <Route path="/code" element={<CodeIntelligence />} />
-            <Route path="/architecture" element={<Architecture />} />
-            <Route path="/agents" element={<Agents />} />
-            <Route path="/tasks" element={<Tasks />} />
-            <Route path="/plans" element={<Plans />} />
-            <Route path="/runs" element={<Runs />} />
-            <Route path="/workflows" element={<Workflows />} />
-            <Route path="/testing" element={<Testing />} />
-            <Route path="/review" element={<Review />} />
-            <Route path="/git" element={<Git />} />
-            <Route path="/devops" element={<DevOps />} />
-            <Route path="/skills" element={<Skills />} />
-            <Route path="/commands" element={<Commands />} />
-            <Route path="/hooks" element={<Hooks />} />
-            <Route path="/plugins" element={<Plugins />} />
-            <Route path="/mcp" element={<Mcp />} />
-            <Route path="/acp" element={<Acp />} />
-            <Route path="/models" element={<Models />} />
-            <Route path="/brainstorm" element={<Brainstorm />} />
-            <Route path="/research" element={<Research />} />
-            <Route path="/activity" element={<ActivityPage />} />
-            <Route path="/sessions" element={<Sessions />} />
-            <Route path="/permissions" element={<Permissions />} />
-            <Route path="/cost" element={<Cost />} />
-            <Route path="/evals" element={<Evals />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="*" element={<CommandCenter />} />
-          </Routes>
+          {/* Keyed by path: a crash stays on its own screen and clears the moment you navigate. */}
+          <RouteBoundary key={loc.pathname}>
+            <Suspense fallback={<PageSkeleton />}>
+              <Routes>
+                <Route path="/" element={<CommandCenter />} />
+                <Route path="/projects" element={<Projects />} />
+                <Route path="/projects/:projectId" element={<ProjectOverview />} />
+                <Route path="/memory" element={<Memory />} />
+                <Route path="/knowledge" element={<Knowledge />} />
+                <Route path="/code" element={<CodeIntelligence />} />
+                <Route path="/architecture" element={<Architecture />} />
+                <Route path="/agents" element={<Agents />} />
+                <Route path="/tasks" element={<Tasks />} />
+                <Route path="/plans" element={<Plans />} />
+                <Route path="/runs" element={<Runs />} />
+                <Route path="/workflows" element={<Workflows />} />
+                <Route path="/testing" element={<Testing />} />
+                <Route path="/review" element={<Review />} />
+                <Route path="/git" element={<Git />} />
+                <Route path="/devops" element={<DevOps />} />
+                <Route path="/skills" element={<Skills />} />
+                <Route path="/commands" element={<Commands />} />
+                <Route path="/hooks" element={<Hooks />} />
+                <Route path="/plugins" element={<Plugins />} />
+                <Route path="/mcp" element={<Mcp />} />
+                <Route path="/acp" element={<Acp />} />
+                <Route path="/models" element={<Models />} />
+                <Route path="/brainstorm" element={<Brainstorm />} />
+                <Route path="/research" element={<Research />} />
+                <Route path="/activity" element={<ActivityPage />} />
+                <Route path="/sessions" element={<Sessions />} />
+                <Route path="/permissions" element={<Permissions />} />
+                <Route path="/cost" element={<Cost />} />
+                <Route path="/evals" element={<Evals />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="*" element={<CommandCenter />} />
+              </Routes>
+            </Suspense>
+          </RouteBoundary>
         </main>
       </div>
-      <CommandPalette open={searchOpen} onOpenChange={setSearchOpen} />
+      {/* The palette is an overlay — if it ever throws, drop it rather than take the app down. */}
+      <RouteBoundary fallback={null}>
+        <CommandPalette open={searchOpen} onOpenChange={setSearchOpen} />
+      </RouteBoundary>
     </div>
   );
 }
@@ -120,7 +132,14 @@ export default function App() {
       <ProjectProvider>
         <TooltipProvider>
           <Routes>
-            <Route path="/login" element={<Login />} />
+            <Route
+              path="/login"
+              element={
+                <RouteBoundary>
+                  <Suspense fallback={<PageSkeleton />}><Login /></Suspense>
+                </RouteBoundary>
+              }
+            />
             <Route path="*" element={<Shell />} />
           </Routes>
           <Toaster position="bottom-right" />

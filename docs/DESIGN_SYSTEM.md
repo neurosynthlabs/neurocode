@@ -50,7 +50,8 @@ Every number, log line and name must look like it came from a real day of work o
 **`@/components/os`** — the dense OS kit (read the file, it is short):
 `Page PageHeader PageBody Panel SectionTitle Divider Tag RiskPill Dot StatusText Bar
 MeterRow BlockBar Stat StatGrid KV DataTable Row Cell Segmented ListRow Split Empty
-Ascii Mono Kbd Avatar2 cx TEXT_TONE`
+Ascii Mono Kbd Avatar2 cx TEXT_TONE Field SelectField Toolbar Trend Ring Sparkline MiniBars
+LogoMark Wordmark Wizard`
 
 **`@/components/ui/*`** — shadcn (base-nova style, Base UI primitives), already installed:
 `button card badge tabs dialog command dropdown-menu tooltip scroll-area separator input
@@ -179,6 +180,12 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { toast } from 'sonner';   // toast.success('Merged'), toast('Queued'), toast.error('Blocked')
 ```
 
+**`CommandDialog` does not create the cmdk root.** Always nest a `<Command>` inside it —
+`<CommandDialog><Command><CommandInput/><CommandList>…</CommandList></Command></CommandDialog>` —
+or every `CommandInput`/`CommandItem` throws `reading 'subscribe'` the moment it opens.
+
+**`DialogContent` ships `sm:max-w-sm`.** Widen it with `sm:max-w-2xl`, never plain `max-w-2xl`.
+
 **Select is fiddly on Base UI — do not use `@/components/ui/select`.** For dropdown filters use
 a native element styled with tokens:
 
@@ -198,3 +205,29 @@ meters (`Bar/MeterRow/BlockBar`). Use shadcn only for real interactive primitive
 If unsure an icon name exists, use a common one (Circle, Dot, FileText, Folder, Play,
 Check, X, AlertTriangle, ChevronRight, Search, Filter, Plus, RefreshCw, Terminal, Database,
 GitBranch, Bot, Brain, Clock, Zap, Shield, Settings). Do not grep lucide's dist.
+
+---
+
+# Multi-step flows
+
+Anything that is really several decisions — onboarding a repository, registering an MCP server — is a
+`Wizard` from the OS kit, not a long single form. Steps are data:
+
+```tsx
+<Wizard open={open} onOpenChange={setOpen} title="…" finishLabel="Start" onFinish={…}
+  steps={[
+    { id: 'repo', title: 'Repository', hint: 'where the code lives', valid: repo.length > 3,
+      blocker: 'Enter a repository', content: <…/> },
+    { id: 'review', title: 'Review', content: <…/> },
+  ]} />
+```
+
+`valid: false` disables Next until the step is complete; completed steps stay clickable in the stepper.
+
+# Verify before you ship
+
+- `npx tsc --noEmit -p tsconfig.app.json` — types
+- `npm run smoke` — renders every route in a dark and a light theme and drives the palette, the
+  Appearance sheet, both wizards and a task sheet. Catches render-time throws tsc cannot see.
+- `./scripts/deploy.sh "message"` — builds, commits as `neurosynthlabs` (Vercel blocks any other
+  author on this team), pushes, deploys, and polls until the deployment is READY or fails loudly.

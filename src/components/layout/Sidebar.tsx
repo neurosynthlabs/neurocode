@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { createPortal } from 'react-dom';
-import * as Icons from 'lucide-react';
+import { Activity, ChevronDown, Circle, GripVertical, PanelLeftOpen, Search, X } from 'lucide-react';
+import { ICONS } from '@/lib/icons';
 import { NAV, NAV_GROUPS } from '@/lib/nav';
 import { cn } from '@/lib/utils';
 import { LogoMark, Wordmark } from '@/components/os/Logo';
@@ -17,7 +18,7 @@ const GKEY = 'aios.sidebar.groups';
 type IconProps = { className?: string; style?: React.CSSProperties; strokeWidth?: number };
 
 function Icon({ name, className, style, strokeWidth = 1.75 }: IconProps & { name: string }) {
-  const C = (Icons as unknown as Record<string, React.ComponentType<IconProps>>)[name] ?? Icons.Circle;
+  const C = ICONS[name] ?? Circle;
   return <C className={className} style={style} strokeWidth={strokeWidth} />;
 }
 
@@ -109,7 +110,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
             className="group/rz absolute inset-y-0 right-0 z-10 w-1 cursor-col-resize"
             style={{ background: resizing ? 'var(--rail-accent)' : undefined }}
           >
-            <Icons.GripVertical
+            <GripVertical
               className="absolute top-1/2 right-0 size-4 -translate-y-1/2 opacity-0 transition-opacity group-hover/rz:opacity-60"
               style={{ color: 'var(--rail-dim)' }}
             />
@@ -146,7 +147,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
                     </span>
                     <span className="flex items-center gap-1">
                       {groupActive && !isOpen && <span className="size-1 rounded-full" style={{ background: 'var(--rail-accent)' }} />}
-                      <Icons.ChevronDown strokeWidth={2.4} className={cn('size-3.5 opacity-0 transition-transform group-hover/sec:opacity-60', !isOpen && '-rotate-90')} />
+                      <ChevronDown strokeWidth={2.4} className={cn('size-3.5 opacity-0 transition-transform group-hover/sec:opacity-60', !isOpen && '-rotate-90')} />
                     </span>
                   </button>
                 ) : (
@@ -184,7 +185,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
                     border: '1px solid var(--rail-line)',
                   }}
                 >
-                  <Icons.Search className="size-4 shrink-0" strokeWidth={1.9} style={{ color: 'var(--rail-ink)', opacity: 0.75 }} />
+                  <Search className="size-4 shrink-0" strokeWidth={1.9} style={{ color: 'var(--rail-ink)', opacity: 0.75 }} />
                   <input
                     value={q}
                     onChange={(e) => setQ(e.target.value)}
@@ -194,7 +195,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
                   />
                   {q && (
                     <button onClick={() => setQ('')} style={{ color: 'var(--rail-ink)', opacity: 0.7 }}>
-                      <Icons.X className="size-3.5" strokeWidth={2.2} />
+                      <X className="size-3.5" strokeWidth={2.2} />
                     </button>
                   )}
                 </div>
@@ -210,7 +211,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
                 >
                   <span className="grid size-6 shrink-0 place-items-center rounded-full"
                     style={{ background: 'var(--rail-chip)', color: 'var(--rail-accent)' }}>
-                    <Icons.Activity className="size-3.5" strokeWidth={2.1} />
+                    <Activity className="size-3.5" strokeWidth={2.1} />
                   </span>
                   <span className="min-w-0 flex-1 leading-tight">
                     <span className="block truncate text-[11.5px] font-semibold" style={{ color: 'var(--rail-ink)' }}>4 agents live</span>
@@ -221,7 +222,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
             </>
           ) : (
             <button onClick={onToggle} className="flex w-full justify-center py-2.5" style={{ color: 'var(--rail-ink)', opacity: 0.8 }}>
-              <Icons.PanelLeftOpen className="size-4.5" strokeWidth={1.9} />
+              <PanelLeftOpen className="size-4.5" strokeWidth={1.9} />
             </button>
           )}
         </div>
