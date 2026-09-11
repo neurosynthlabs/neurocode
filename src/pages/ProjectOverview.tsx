@@ -64,11 +64,11 @@ export default function ProjectOverview() {
         }
       >
         <div className="flex flex-wrap items-center gap-3 pb-3">
-          <span className="flex items-center gap-1.5"><Dot state={p.status} pulse={p.status === 'active'} /><span className="text-[12px] text-ink-2 capitalize">{p.status}</span></span>
+          <span className="flex items-center gap-1.5"><Dot state={p.status} pulse={p.status === 'active'} /><span className="text-[13px] text-ink-2 capitalize">{p.status}</span></span>
           <Mono>{p.codename}</Mono>
           <Mono>{p.repo}</Mono>
           <div className="flex flex-wrap gap-1">
-            {p.stack.map((s) => <span key={s} className="rounded-xs border border-line bg-surface-2 px-1.5 py-px text-[10.5px] text-ink-2">{s}</span>)}
+            {p.stack.map((s) => <span key={s} className="rounded-xs border border-line bg-surface-2 px-1.5 py-px text-[11.5px] text-ink-2">{s}</span>)}
           </div>
         </div>
       </PageHeader>
@@ -78,7 +78,7 @@ export default function ProjectOverview() {
         <div className="grid grid-cols-12 gap-3">
           <Panel eyebrow="How well the OS knows this codebase" title={`Project understood: ${p.understoodPct}%`} className="col-span-12 xl:col-span-5">
             {p.coverage.map((c) => <MeterRow key={c.label} label={c.label} pct={c.pct} />)}
-            <p className="mt-2 border-t border-line pt-2 text-[11px] text-dim">
+            <p className="mt-2 border-t border-line pt-2 text-[12px] text-dim">
               Understanding is measured against what the OS can prove — parsed symbols, mapped tables, cited decisions —
               not against how much it has read.
             </p>
@@ -112,10 +112,10 @@ export default function ProjectOverview() {
             onChange={setTab}
           />
           {tab === 'modules' && (
-            <div className="flex h-7 w-72 items-center gap-2 rounded-sm border border-line bg-surface-2 px-2.5 focus-within:border-brand">
+            <div className="flex h-9 w-72 items-center gap-2 rounded-lg border border-line bg-surface-2 px-2.5 focus-within:border-brand">
               <Search className="size-3.5 shrink-0 text-dim" />
               <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter modules, paths, tables…"
-                className="min-w-0 flex-1 bg-transparent text-[12px] text-ink placeholder:text-dim focus-visible:outline-none" />
+                className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-dim focus-visible:outline-none" />
             </div>
           )}
         </div>
@@ -130,15 +130,15 @@ export default function ProjectOverview() {
                   <Row key={m.id} onClick={() => nav('/code')}>
                     <Cell className="font-medium text-ink">
                       {m.name}
-                      <span className="mt-0.5 block max-w-[420px] truncate text-[11px] font-normal text-dim">{m.note}</span>
+                      <span className="mt-0.5 block max-w-[420px] truncate text-[12px] font-normal text-dim">{m.note}</span>
                     </Cell>
                     <Cell mono className="text-dim">{m.path}</Cell>
                     <Cell className="tnum">{(m.loc / 1000).toFixed(1)}k</Cell>
-                    <Cell><span className="flex items-center gap-2"><BlockBar pct={m.understood} width={8} /><span className="tnum text-[11px]">{m.understood}%</span></span></Cell>
-                    <Cell><span className="flex items-center gap-2"><BlockBar pct={m.coverage} width={8} /><span className="tnum text-[11px]">{m.coverage}%</span></span></Cell>
+                    <Cell><span className="flex items-center gap-2"><BlockBar pct={m.understood} width={8} /><span className="tnum text-[12px]">{m.understood}%</span></span></Cell>
+                    <Cell><span className="flex items-center gap-2"><BlockBar pct={m.coverage} width={8} /><span className="tnum text-[12px]">{m.coverage}%</span></span></Cell>
                     <Cell><RiskPill risk={m.risk} bare /></Cell>
                     <Cell><Tag tone={RENEWAL_TONE[m.renewal]}>{m.renewal}</Tag></Cell>
-                    <Cell className="text-[11.5px]">{agentName(m.owner)}</Cell>
+                    <Cell className="text-[12.5px]">{agentName(m.owner)}</Cell>
                     <Cell className={cn('tnum', m.openBugs > 3 ? 'text-danger' : m.openBugs ? 'text-warn' : 'text-dim')}>{m.openBugs}</Cell>
                   </Row>
                 ))}
@@ -155,11 +155,11 @@ export default function ProjectOverview() {
                 <div key={r.id} className="px-3.5 py-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <Tag tone={SEV_TONE[r.severity]}>{r.severity}</Tag>
-                    <span className="text-[12.5px] font-medium text-ink">{r.rule}</span>
-                    {r.violations24h > 0 && <span className="tnum text-[11px] text-warn">{r.violations24h} caught in 24h</span>}
+                    <span className="text-[13.5px] font-medium text-ink">{r.rule}</span>
+                    {r.violations24h > 0 && <span className="tnum text-[12px] text-warn">{r.violations24h} caught in 24h</span>}
                   </div>
-                  <p className="mt-1 text-[11.5px] text-soft">{r.detail}</p>
-                  <p className="mt-1 flex items-center gap-1.5 text-[11px] text-dim"><ShieldAlert className="size-3" />{r.enforcedBy}</p>
+                  <p className="mt-1 text-[12.5px] text-soft">{r.detail}</p>
+                  <p className="mt-1 flex items-center gap-1.5 text-[12px] text-dim"><ShieldAlert className="size-3" />{r.enforcedBy}</p>
                 </div>
               ))}
             </div>
@@ -174,12 +174,12 @@ export default function ProjectOverview() {
                 <div key={a.id} className="px-3.5 py-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <Mono tone="brand">{a.ref}</Mono>
-                    <span className="text-[12.5px] font-medium text-ink">{a.title}</span>
+                    <span className="text-[13.5px] font-medium text-ink">{a.title}</span>
                     <Tag tone={ADR_TONE[a.status]}>{a.status}</Tag>
-                    {a.supersedes && <span className="text-[11px] text-dim">supersedes {a.supersedes}</span>}
+                    {a.supersedes && <span className="text-[12px] text-dim">supersedes {a.supersedes}</span>}
                   </div>
-                  <p className="mt-1 text-[11.5px] text-soft">{a.summary}</p>
-                  <p className="mt-1 flex items-center gap-1.5 text-[11px] text-dim"><Scale className="size-3" />{a.by} · {a.at}</p>
+                  <p className="mt-1 text-[12.5px] text-soft">{a.summary}</p>
+                  <p className="mt-1 flex items-center gap-1.5 text-[12px] text-dim"><Scale className="size-3" />{a.by} · {a.at}</p>
                 </div>
               ))}
             </div>
@@ -195,15 +195,15 @@ export default function ProjectOverview() {
                   <Cell mono className="text-ink-2">{r.path}</Cell>
                   <Cell><RiskPill risk={r.risk} bare /></Cell>
                   <Cell className="tnum">{r.churn}</Cell>
-                  <Cell><span className="flex items-center gap-2"><BlockBar pct={r.complexity} width={8} tone={r.complexity > 80 ? 'danger' : 'warn'} /><span className="tnum text-[11px]">{r.complexity}</span></span></Cell>
-                  <Cell className="max-w-[460px] text-[11.5px] text-soft">{r.reason}</Cell>
+                  <Cell><span className="flex items-center gap-2"><BlockBar pct={r.complexity} width={8} tone={r.complexity > 80 ? 'danger' : 'warn'} /><span className="tnum text-[12px]">{r.complexity}</span></span></Cell>
+                  <Cell className="max-w-[460px] text-[12.5px] text-soft">{r.reason}</Cell>
                   <Cell className="text-dim">{r.lastIncident}</Cell>
                 </Row>
               ))}
             </DataTable>
             <div className="flex items-start gap-2 border-t border-line px-3.5 py-2.5">
               <AlertTriangle className="mt-px size-3.5 shrink-0 text-warn" />
-              <p className="text-[11.5px] text-soft">
+              <p className="text-[12.5px] text-soft">
                 <span className="text-ink-2">Risk here is advisory, not a blocker.</span> The OS uses it to decide how many
                 verification passes a change needs — a CRITICAL path gets three independent reviewers instead of one.
               </p>
@@ -221,9 +221,9 @@ export default function ProjectOverview() {
                 <Cell><span className="flex items-center gap-1.5"><Dot state={t.status} pulse={t.status === 'in_progress'} /><span className="capitalize">{t.status.replace('_', ' ')}</span></span></Cell>
                 <Cell><Tag tone={t.priority === 'URGENT' ? 'danger' : t.priority === 'HIGH' ? 'warn' : 'neutral'}>{t.priority}</Tag></Cell>
                 <Cell><RiskPill risk={t.risk} bare /></Cell>
-                <Cell className="text-[11.5px] text-dim">{t.layers.join(' · ')}</Cell>
-                <Cell className="text-[11.5px]">{t.agents.length ? t.agents.map(agentName).join(', ') : '—'}</Cell>
-                <Cell><span className="flex items-center gap-2"><BlockBar pct={t.progress} width={10} /><span className="tnum text-[11px]">{t.progress}%</span></span></Cell>
+                <Cell className="text-[12.5px] text-dim">{t.layers.join(' · ')}</Cell>
+                <Cell className="text-[12.5px]">{t.agents.length ? t.agents.map(agentName).join(', ') : '—'}</Cell>
+                <Cell><span className="flex items-center gap-2"><BlockBar pct={t.progress} width={10} /><span className="tnum text-[12px]">{t.progress}%</span></span></Cell>
               </Row>
             ))}
           </DataTable>

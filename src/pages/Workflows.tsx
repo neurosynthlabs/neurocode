@@ -75,7 +75,7 @@ export default function Workflows() {
         {/* Live run */}
         <Panel className="accent-top" eyebrow={`${liveRun.ref} · running ${liveRun.elapsed}`}
           title={<span className="flex items-center gap-2"><Dot state="running" pulse />{liveRun.workflow}<Tag tone="brand">phase · {liveRun.phase}</Tag></span>}
-          actions={<span className="text-[11px] text-dim">{liveRun.completed} done · {liveRun.running} running · {liveRun.queued} queued</span>} flush>
+          actions={<span className="text-[12px] text-dim">{liveRun.completed} done · {liveRun.running} running · {liveRun.queued} queued</span>} flush>
           <DataTable head={['Agent', 'Phase', 'State', 'Elapsed', 'Tokens']}>
             {liveRun.agents.map((a) => (
               <Row key={a.label} className={cn(a.state === 'active' && 'sweep')}>
@@ -89,10 +89,10 @@ export default function Workflows() {
           </DataTable>
           <div className="grid grid-cols-1 gap-3 border-t border-line px-3.5 py-2.5 md:grid-cols-2">
             <div>
-              <div className="mb-1 flex justify-between text-[11px]"><span className="text-dim">token budget</span><span className="tnum text-soft">{budgetPct}%</span></div>
+              <div className="mb-1 flex justify-between text-[12px]"><span className="text-dim">token budget</span><span className="tnum text-soft">{budgetPct}%</span></div>
               <Bar pct={budgetPct} tone={budgetPct > 80 ? 'warn' : 'brand'} />
             </div>
-            <p className="text-[11px] text-dim"><span className="text-ink-2">No silent caps.</span> {liveRun.dropped}</p>
+            <p className="text-[12px] text-dim"><span className="text-ink-2">No silent caps.</span> {liveRun.dropped}</p>
           </div>
         </Panel>
 
@@ -110,8 +110,8 @@ export default function Workflows() {
                     <Dot state={x.lastResult === 'success' ? 'ok' : x.lastResult === 'partial' ? 'warn' : 'error'} />
                     <Mono tone={x.id === w.id ? 'brand' : 'neutral'}>{x.name}</Mono>
                   </div>
-                  <p className="mt-1 truncate text-[10.5px] text-dim">{x.trigger}</p>
-                  <div className="mt-1 flex items-center gap-3 text-[10.5px] text-dim">
+                  <p className="mt-1 truncate text-[11.5px] text-dim">{x.trigger}</p>
+                  <div className="mt-1 flex items-center gap-3 text-[11.5px] text-dim">
                     <span>{x.runs} runs</span><span>~{x.avgAgents} agents</span><span>~{x.avgMinutes}m</span>
                     <span className="ml-auto">{x.lastRun}</span>
                   </div>
@@ -125,7 +125,7 @@ export default function Workflows() {
             <Panel eyebrow={`${w.scope} · ${w.trigger}`}
               title={<span className="flex items-center gap-2"><Mono tone="brand">{w.name}</Mono><Tag tone={RES_TONE[w.lastResult]}>last: {w.lastResult}</Tag></span>}
               actions={<Segmented options={[{ id: 'graph', label: 'Phase graph' }, { id: 'script', label: 'Script' }]} value={tab} onChange={setTab} />}>
-              <p className="text-[12.5px] leading-relaxed text-ink-2">{w.description}</p>
+              <p className="text-[13.5px] leading-relaxed text-ink-2">{w.description}</p>
               <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 border-t border-line pt-2.5 xl:grid-cols-4">
                 <KV k="Runs" v={w.runs} />
                 <KV k="Avg agents" v={w.avgAgents} />
@@ -143,14 +143,14 @@ export default function Workflows() {
                   <div className="divide-y divide-line">
                     {w.phases.map((p, i) => (
                       <div key={p.id} className="flex items-start gap-2.5 px-3.5 py-2.5">
-                        <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[10.5px] text-dim">{i + 1}</span>
+                        <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[11.5px] text-dim">{i + 1}</span>
                         <span className="min-w-0 flex-1">
                           <span className="flex flex-wrap items-center gap-1.5">
-                            <span className="text-[12.5px] font-medium text-ink">{p.title}</span>
+                            <span className="text-[13.5px] font-medium text-ink">{p.title}</span>
                             <Tag tone={MODE_TONE[p.mode]}>{p.mode}</Tag>
-                            <span className="text-[10.5px] text-dim">{p.agents ? `${p.agents} agent${p.agents > 1 ? 's' : ''}` : 'plain code'}</span>
+                            <span className="text-[11.5px] text-dim">{p.agents ? `${p.agents} agent${p.agents > 1 ? 's' : ''}` : 'plain code'}</span>
                           </span>
-                          <span className="mt-0.5 block text-[11.5px] text-soft">{p.detail}</span>
+                          <span className="mt-0.5 block text-[12.5px] text-soft">{p.detail}</span>
                         </span>
                         <Dot state={p.state === 'active' ? 'running' : p.state} pulse={p.state === 'active'} className="mt-1.5" />
                       </div>
@@ -174,7 +174,7 @@ export default function Workflows() {
               {wfHistory.map((h) => (
                 <Row key={h.id}>
                   <Cell mono className="text-ink">{h.workflow}</Cell>
-                  <Cell className="text-[11.5px]">{h.trigger}</Cell>
+                  <Cell className="text-[12.5px]">{h.trigger}</Cell>
                   <Cell className="tnum">{h.agents}</Cell>
                   <Cell className="tnum">{Math.floor(h.durationS / 60)}m {h.durationS % 60}s</Cell>
                   <Cell className="tnum">{(h.tokens / 1e6).toFixed(2)}M</Cell>
@@ -189,7 +189,7 @@ export default function Workflows() {
             <SectionTitle>Quality patterns</SectionTitle>
             {patterns.map((p) => (
               <Panel key={p.name} className="hover-lift" title={p.name}>
-                <p className="text-[11.5px] leading-relaxed text-soft">{p.note}</p>
+                <p className="text-[12.5px] leading-relaxed text-soft">{p.note}</p>
               </Panel>
             ))}
           </div>

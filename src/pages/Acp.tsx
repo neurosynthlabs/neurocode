@@ -59,9 +59,9 @@ export default function Acp() {
               <ListRow key={x.id} active={x.id === sel} onClick={() => setSel(x.id)}>
                 <div className="flex items-center gap-2">
                   <Dot state={x.status} pulse={x.status === 'connected'} />
-                  <span className="truncate text-[12.5px] font-medium text-ink">{x.name}</span>
+                  <span className="truncate text-[13.5px] font-medium text-ink">{x.name}</span>
                 </div>
-                <div className="mt-1 flex items-center gap-2 text-[10.5px] text-dim">
+                <div className="mt-1 flex items-center gap-2 text-[11.5px] text-dim">
                   <span className="truncate">{x.editor} {x.version}</span>
                   <span className="ml-auto tnum">{x.messages}</span>
                 </div>
@@ -87,7 +87,7 @@ export default function Acp() {
                     className={cn('rounded-sm border px-2 py-1.5 text-left transition-colors',
                       mode === m.id ? 'border-brand bg-brand/10' : 'border-line bg-surface-2 hover:border-line-strong')}
                   >
-                    <span className={cn('block font-mono text-[11.5px]', mode === m.id ? 'font-semibold text-brand' : 'text-ink-2')}>{m.label}</span>
+                    <span className={cn('block font-mono text-[12.5px]', mode === m.id ? 'font-semibold text-brand' : 'text-ink-2')}>{m.label}</span>
                   </button>
                 ))}
               </div>
@@ -96,8 +96,8 @@ export default function Acp() {
                 if (!m) return null;
                 return (
                   <div className="mt-2.5 space-y-1.5 border-t border-line pt-2.5">
-                    <p className="flex items-start gap-1.5 text-[11.5px] text-ok"><Check className="mt-px size-3 shrink-0" />{m.allows}</p>
-                    <p className="flex items-start gap-1.5 text-[11.5px] text-warn"><X className="mt-px size-3 shrink-0" />{m.blocks}</p>
+                    <p className="flex items-start gap-1.5 text-[12.5px] text-ok"><Check className="mt-px size-3 shrink-0" />{m.allows}</p>
+                    <p className="flex items-start gap-1.5 text-[12.5px] text-warn"><X className="mt-px size-3 shrink-0" />{m.blocks}</p>
                   </div>
                 );
               })()}
@@ -108,15 +108,15 @@ export default function Acp() {
                 <div className="divide-y divide-line">
                   {lifecycle.map((s, i) => (
                     <div key={s.method} className="flex items-start gap-2.5 px-3.5 py-2">
-                      <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[10.5px] text-dim">{i + 1}</span>
+                      <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[11.5px] text-dim">{i + 1}</span>
                       {s.from === 'client'
                         ? <ArrowRight className="mt-px size-3 shrink-0 text-info" />
                         : <ArrowLeft className="mt-px size-3 shrink-0 text-brand" />}
                       <span className="min-w-0 flex-1">
                         <Mono tone={s.from === 'client' ? 'info' : 'brand'}>{s.method}</Mono>
-                        <span className="mt-0.5 block text-[11px] text-dim">{s.note}</span>
+                        <span className="mt-0.5 block text-[12px] text-dim">{s.note}</span>
                       </span>
-                      <span className="tnum shrink-0 font-mono text-[10.5px] text-soft">{s.ms}ms</span>
+                      <span className="tnum shrink-0 font-mono text-[11.5px] text-soft">{s.ms}ms</span>
                     </div>
                   ))}
                 </div>
@@ -130,7 +130,7 @@ export default function Acp() {
                     return (
                       <Row key={cap.name}>
                         <Cell mono>{cap.name}
-                          <span className="mt-0.5 block max-w-[240px] truncate font-sans text-[10.5px] text-dim">{cap.description}</span>
+                          <span className="mt-0.5 block max-w-[240px] truncate font-sans text-[11.5px] text-dim">{cap.description}</span>
                         </Cell>
                         <Cell><Tag tone={cap.side === 'client' ? 'info' : 'brand'}>{cap.side}</Tag></Cell>
                         <Cell><I className={cn('size-3.5', TONE[state])} /></Cell>
@@ -153,7 +153,7 @@ export default function Acp() {
                       <Cell mono className="text-dim">{e.at}</Cell>
                       <Cell>{e.dir === 'in' ? <ArrowRight className="size-3 text-info" /> : <ArrowLeft className="size-3 text-brand" />}</Cell>
                       <Cell mono>{e.method}</Cell>
-                      <Cell className="max-w-[520px] text-[11.5px] text-soft">{e.detail}</Cell>
+                      <Cell className="max-w-[520px] text-[12.5px] text-soft">{e.detail}</Cell>
                     </Row>
                   ))}
                 </DataTable>

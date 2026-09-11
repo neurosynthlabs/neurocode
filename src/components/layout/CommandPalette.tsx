@@ -30,8 +30,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       <CommandList className="max-h-[440px]">
         <CommandEmpty>
           <div className="py-6 text-center">
-            <p className="text-[13px] text-ink-2">Nothing indexed under that term.</p>
-            <p className="mt-1 text-[11.5px] text-dim">Try a module, a stored procedure, a decision ref, or a bug id.</p>
+            <p className="text-[14px] text-ink-2">Nothing indexed under that term.</p>
+            <p className="mt-1 text-[12.5px] text-dim">Try a module, a stored procedure, a decision ref, or a bug id.</p>
           </div>
         </CommandEmpty>
         {grouped.map((g, gi) => (
@@ -47,8 +47,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                 >
                   <Icon name={hit.icon} />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[12.5px] text-ink">{hit.title}</span>
-                    <span className="block truncate text-[11px] text-dim">{hit.subtitle}</span>
+                    <span className="block truncate text-[13.5px] text-ink">{hit.title}</span>
+                    <span className="block truncate text-[12px] text-dim">{hit.subtitle}</span>
                   </span>
                   {hit.meta && <span className="eyebrow shrink-0">{hit.meta}</span>}
                 </CommandItem>
@@ -57,7 +57,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           </div>
         ))}
       </CommandList>
-      <div className="flex items-center justify-between border-t border-line px-3 py-2 text-[11px] text-dim">
+      <div className="flex items-center justify-between border-t border-line px-3 py-2 text-[12px] text-dim">
         <span className="flex items-center gap-1.5"><Kbd>↑</Kbd><Kbd>↓</Kbd> navigate <Kbd>↵</Kbd> open <Kbd>esc</Kbd> close</span>
         <span>{index.length} items · tasks, plans, memory and projects are live</span>
       </div>

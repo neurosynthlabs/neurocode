@@ -38,9 +38,9 @@ export default function Commands() {
               value={q}
               onChange={(e) => setQ(e.target.value.startsWith('/') ? e.target.value : '/' + e.target.value)}
               placeholder="/plan invoice mein tax galat aa raha hai…"
-              className="min-w-0 flex-1 bg-transparent font-mono text-[13px] text-ink placeholder:text-dim focus-visible:outline-none"
+              className="min-w-0 flex-1 bg-transparent font-mono text-[14px] text-ink placeholder:text-dim focus-visible:outline-none"
             />
-            <span className="shrink-0 text-[11px] text-dim">{list.length} match{list.length === 1 ? '' : 'es'}</span>
+            <span className="shrink-0 text-[12px] text-dim">{list.length} match{list.length === 1 ? '' : 'es'}</span>
             <CornerDownLeft className="size-3.5 shrink-0 text-dim" />
           </div>
         </div>
@@ -61,9 +61,9 @@ export default function Commands() {
                 <div className="flex items-center gap-2">
                   <span className={cn('size-1.5 shrink-0 rounded-full', on[x.id] ? 'bg-ok' : 'bg-dim')} />
                   <Mono tone={x.id === c.id ? 'brand' : 'neutral'}>{x.name}</Mono>
-                  <span className="ml-auto shrink-0 tnum text-[10.5px] text-dim">{x.runs}</span>
+                  <span className="ml-auto shrink-0 tnum text-[11.5px] text-dim">{x.runs}</span>
                 </div>
-                <p className="mt-1 line-clamp-2 text-[11px] text-dim">{x.description}</p>
+                <p className="mt-1 line-clamp-2 text-[12px] text-dim">{x.description}</p>
               </ListRow>
             ))}
           </div>
@@ -71,10 +71,10 @@ export default function Commands() {
           <div className="min-w-0 flex-1 space-y-3">
             <Panel
               eyebrow={`${c.scope} scope · last run ${c.lastRun}`}
-              title={<span className="flex items-center gap-2"><Mono tone="brand">{c.name}</Mono><span className="font-mono text-[11.5px] text-dim">{c.args}</span></span>}
+              title={<span className="flex items-center gap-2"><Mono tone="brand">{c.name}</Mono><span className="font-mono text-[12.5px] text-dim">{c.args}</span></span>}
               actions={<Switch checked={on[c.id]} onCheckedChange={(v) => setOn({ ...on, [c.id]: v }, `Command ${c.name} ${v ? 'enabled' : 'disabled'}`)} />}
             >
-              <p className="text-[12.5px] leading-relaxed text-ink-2">{c.description}</p>
+              <p className="text-[13.5px] leading-relaxed text-ink-2">{c.description}</p>
               <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 border-t border-line pt-2.5 xl:grid-cols-4">
                 <KV k="Dispatches to" v={c.agent} />
                 <KV k="Model" v={c.model ? <Mono tone="brand">{c.model}</Mono> : <span className="text-dim">router decides</span>} />
@@ -91,14 +91,14 @@ export default function Commands() {
               <div className="rounded-sm border border-line bg-base p-3">
                 <div className="mb-2 flex items-center gap-2 border-b border-line pb-2">
                   <SquareSlash className="size-3.5 text-brand" />
-                  <span className="font-mono text-[12px] text-ink">{example}</span>
+                  <span className="font-mono text-[13px] text-ink">{example}</span>
                 </div>
                 <pre className="ascii whitespace-pre-wrap">
                   {c.body.replace(/\$ARGUMENTS/g, `«${c.args.replace(/[<>[\]…]/g, '').trim()}»`)}
                 </pre>
               </div>
               <SectionTitle className="mt-3 mb-1.5">Then</SectionTitle>
-              <p className="text-[11.5px] text-soft">
+              <p className="text-[12.5px] text-soft">
                 The resolved prompt goes to <span className="text-ink-2">{c.agent}</span>
                 {c.model ? <> on <Mono tone="brand">{c.model}</Mono>, bypassing the router</> : <>, and the router picks the model for the task class</>}.
                 Project rules are attached by the <Mono>UserPromptSubmit</Mono> hook before it is sent.

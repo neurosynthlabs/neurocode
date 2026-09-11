@@ -65,11 +65,11 @@ export default function Settings() {
             <button
               key={x.id}
               onClick={() => setGroup(x.id)}
-              className={cn('flex w-full items-center justify-between px-3.5 py-[7px] text-left text-[12.5px] transition-colors',
+              className={cn('flex w-full items-center justify-between px-3.5 py-[7px] text-left text-[13.5px] transition-colors',
                 group === x.id ? 'bg-surface-2 font-medium text-ink' : 'text-soft hover:text-ink-2')}
             >
               <span className="truncate">{x.name}</span>
-              <span className="tnum text-[10.5px] text-dim">{x.items.length}</span>
+              <span className="tnum text-[11.5px] text-dim">{x.items.length}</span>
             </button>
           ))}
         </div>
@@ -92,10 +92,10 @@ export default function Settings() {
                           </span>
                           <span className="min-w-0 flex-1">
                             <span className="flex items-center gap-1.5">
-                              <span className="text-[12px] font-medium text-ink">{p.name}</span>
+                              <span className="text-[13px] font-medium text-ink">{p.name}</span>
                               <span className="eyebrow">{p.mode}</span>
                             </span>
-                            <span className="block truncate text-[10.5px] text-dim">{p.note}</span>
+                            <span className="block truncate text-[11.5px] text-dim">{p.note}</span>
                           </span>
                           {t.theme === p.id && <Check className="size-3.5 shrink-0 text-brand" />}
                         </button>
@@ -122,7 +122,7 @@ export default function Settings() {
                         <div className="flex gap-1.5">
                           {[0, 0.25, 0.375, 0.5, 0.75, 1].map((r) => (
                             <button key={r} onClick={() => t.setRadius(r)}
-                              className={cn('flex-1 border px-1 py-1.5 text-[10.5px] transition-colors',
+                              className={cn('flex-1 border px-1 py-1.5 text-[11.5px] transition-colors',
                                 t.radius === r ? 'border-brand bg-brand/10 text-brand' : 'border-line bg-surface text-soft')}
                               style={{ borderRadius: `${Math.max(r * 8, 2)}px` }}>{r}</button>
                           ))}
@@ -143,8 +143,8 @@ export default function Settings() {
                     {g.items.map((i) => (
                       <div key={i.id} className="flex items-start justify-between gap-6 px-3.5 py-3">
                         <div className="min-w-0 flex-1">
-                          <div className="text-[12.5px] font-medium text-ink">{i.label}</div>
-                          <p className="mt-0.5 text-[11.5px] text-soft">{i.description}</p>
+                          <div className="text-[13.5px] font-medium text-ink">{i.label}</div>
+                          <p className="mt-0.5 text-[12.5px] text-soft">{i.description}</p>
                         </div>
                         <div className="w-56 shrink-0">
                           {i.kind === 'toggle' && (
@@ -159,8 +159,8 @@ export default function Settings() {
                             <Field value={String(vals[i.id])} onChange={(v) => set(i.id, v)} mono />
                           )}
                           {i.kind === 'secret' && (
-                            <div className="flex h-7 items-center justify-between gap-2 rounded-sm border border-line bg-surface-2 px-2.5">
-                              <span className="font-mono text-[12px] text-dim">••••••••••••</span>
+                            <div className="flex h-9 items-center justify-between gap-2 rounded-lg border border-line bg-surface-2 px-2.5">
+                              <span className="font-mono text-[13px] text-dim">••••••••••••</span>
                               <Tag tone="ok">keychain</Tag>
                             </div>
                           )}
@@ -176,10 +176,10 @@ export default function Settings() {
                   <div className="divide-y divide-line">
                     {categoryMeta.map((c) => (
                       <div key={c.id} className="flex items-center gap-3 px-3.5 py-1.5">
-                        <span className="w-32 shrink-0 text-[12px] text-ink-2">{c.label}</span>
-                        <span className="tnum w-16 shrink-0 font-mono text-[11px] text-soft">{c.halfLifeDays >= 3650 ? '∞' : `${c.halfLifeDays}d`}</span>
-                        <span className="tnum w-10 shrink-0 font-mono text-[11px] text-ok">+{c.reinforce}</span>
-                        <span className="min-w-0 flex-1 truncate text-[11px] text-dim">{c.note}</span>
+                        <span className="w-32 shrink-0 text-[13px] text-ink-2">{c.label}</span>
+                        <span className="tnum w-16 shrink-0 font-mono text-[12px] text-soft">{c.halfLifeDays >= 3650 ? '∞' : `${c.halfLifeDays}d`}</span>
+                        <span className="tnum w-10 shrink-0 font-mono text-[12px] text-ok">+{c.reinforce}</span>
+                        <span className="min-w-0 flex-1 truncate text-[12px] text-dim">{c.note}</span>
                       </div>
                     ))}
                   </div>
@@ -204,12 +204,12 @@ export default function Settings() {
                 )}
               </Panel>
               <Panel eyebrow="Danger zone" title="Reset" className="border-danger/30">
-                <p className="text-[11.5px] text-soft">
+                <p className="text-[12.5px] text-soft">
                   Resetting appearance is instant and safe. Resetting memory or permissions is not — those hold everything
                   the OS has learned about your codebase and what it is allowed to do with it.
                 </p>
                 <div className="mt-2.5 flex flex-wrap gap-1.5">
-                  <Button size="xs" variant="outline" onClick={() => { t.setTheme('graphite'); t.setRail('tinted'); t.setRadius(0.5); t.setFontFamily('inter'); t.setFontSize('compact'); toast('Appearance reset'); }}>
+                  <Button size="xs" variant="outline" onClick={() => { t.setTheme('graphite'); t.setRail('tinted'); t.setRadius(0.5); t.setFontFamily('system'); t.setFontSize('default'); toast('Appearance reset'); }}>
                     Reset appearance
                   </Button>
                   <Button size="xs" variant="destructive" onClick={() => toast('Refused — memory reset needs a typed confirmation in the real system')}>

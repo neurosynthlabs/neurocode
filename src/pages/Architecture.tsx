@@ -68,7 +68,7 @@ export default function Architecture() {
               <button
                 key={l.id}
                 onClick={() => toggleLayer(l.id)}
-                className={cn('flex items-center gap-1.5 rounded-sm border px-2 py-1 text-[11px] transition-colors',
+                className={cn('flex items-center gap-1.5 rounded-sm border px-2 py-1 text-[12px] transition-colors',
                   hidden.has(l.id) ? 'border-line bg-surface text-dim line-through' : 'border-line-strong bg-surface-2 text-ink-2')}
                 title={l.note}
               >
@@ -78,12 +78,12 @@ export default function Architecture() {
             ))}
             <button
               onClick={() => setShowChanged((v) => !v)}
-              className={cn('ml-2 flex items-center gap-1.5 rounded-sm border px-2 py-1 text-[11px] transition-colors',
+              className={cn('ml-2 flex items-center gap-1.5 rounded-sm border px-2 py-1 text-[12px] transition-colors',
                 showChanged ? 'border-brand bg-brand/10 text-brand' : 'border-line bg-surface text-soft hover:text-ink')}
             >
               <Eye className="size-3" />Recently changed
             </button>
-            <span className="ml-auto text-[11.5px] text-dim">{visible.length} nodes · {visEdges.length} edges</span>
+            <span className="ml-auto text-[12.5px] text-dim">{visible.length} nodes · {visEdges.length} edges</span>
           </Toolbar>
         )}
       </PageHeader>
@@ -96,12 +96,12 @@ export default function Architecture() {
                 <div key={a.id} className="px-3.5 py-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <Mono tone="brand">{a.ref}</Mono>
-                    <span className="text-[12.5px] font-medium text-ink">{a.title}</span>
+                    <span className="text-[13.5px] font-medium text-ink">{a.title}</span>
                     <Tag tone={ADR_TONE[a.status]}>{a.status}</Tag>
-                    {a.supersedes && <span className="text-[11px] text-dim">supersedes {a.supersedes}</span>}
+                    {a.supersedes && <span className="text-[12px] text-dim">supersedes {a.supersedes}</span>}
                   </div>
-                  <p className="mt-1 max-w-4xl text-[11.5px] text-soft">{a.summary}</p>
-                  <p className="mt-1 flex items-center gap-1.5 text-[11px] text-dim"><Scale className="size-3" />{a.by} · {a.at}</p>
+                  <p className="mt-1 max-w-4xl text-[12.5px] text-soft">{a.summary}</p>
+                  <p className="mt-1 flex items-center gap-1.5 text-[12px] text-dim"><Scale className="size-3" />{a.by} · {a.at}</p>
                 </div>
               ))}
             </div>
@@ -187,7 +187,7 @@ export default function Architecture() {
                     })}
                   </svg>
                 </div>
-                <div className="flex flex-wrap items-center gap-3 border-t border-line px-3.5 py-2 text-[10.5px] text-dim">
+                <div className="flex flex-wrap items-center gap-3 border-t border-line px-3.5 py-2 text-[11.5px] text-dim">
                   <span className="flex items-center gap-1.5"><span className="h-px w-5 bg-line-strong" />calls / depends</span>
                   <span className="flex items-center gap-1.5"><span className="h-px w-5 border-t border-dashed border-line-strong" />writes</span>
                   <span className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-danger" />HIGH or CRITICAL risk</span>
@@ -225,7 +225,7 @@ export default function Architecture() {
                         ))}
                       </div>
                     </div>
-                    <p className="mt-3 border-t border-line pt-2.5 text-[11px] text-dim">
+                    <p className="mt-3 border-t border-line pt-2.5 text-[12px] text-dim">
                       Confidence {impact.confidence}% — measured against parsed call edges, not guessed from naming.
                     </p>
                   </Panel>
@@ -253,14 +253,14 @@ export default function Architecture() {
                       {impact.warnings.map((w, i) => (
                         <div key={i} className="flex items-start gap-2 px-3.5 py-2">
                           <TriangleAlert className="mt-px size-3.5 shrink-0 text-warn" />
-                          <span className="text-[12px] text-ink-2">{w}</span>
+                          <span className="text-[13px] text-ink-2">{w}</span>
                         </div>
                       ))}
                     </div>
                   </Panel>
 
                   <Panel eyebrow="What the OS would do" title="Recommendation" className="accent-left">
-                    <p className="text-[12.5px] leading-relaxed text-ink-2">{impact.recommendation}</p>
+                    <p className="text-[13.5px] leading-relaxed text-ink-2">{impact.recommendation}</p>
                     <div className="mt-3 flex gap-2">
                       <Button size="sm" onClick={() => nav('/plans')}>Compile a plan for this</Button>
                       <Button size="sm" variant="outline" onClick={() => nav('/code')}>Open in code intelligence</Button>
@@ -276,7 +276,7 @@ export default function Architecture() {
                   <Mono tone="brand">{pos(sel).label}</Mono>
                   <Tag tone="neutral">{pos(sel).layer}</Tag>
                   <RiskPill risk={pos(sel).risk} bare />
-                  <span className="ml-auto text-[11px] text-dim">
+                  <span className="ml-auto text-[12px] text-dim">
                     {edges.filter((e) => e.to === sel).length} in · {edges.filter((e) => e.from === sel).length} out
                   </span>
                 </div>

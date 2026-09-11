@@ -103,7 +103,7 @@ export default function Mcp() {
           <Field className="w-64" value={q} onChange={setQ} icon={<Search className="size-3.5" />} placeholder="Search servers, tools, commands…" onClear={() => setQ('')} />
           <SelectField className="w-40" value={status} onChange={setStatus}
             options={[{ value: 'all', label: 'Any status' }, { value: 'connected', label: 'connected' }, { value: 'disconnected', label: 'disconnected' }, { value: 'error', label: 'error' }, { value: 'auth_required', label: 'auth required' }]} />
-          <span className="ml-auto text-[11.5px] text-dim">{list.length} of {servers.length} servers · {tools} tools</span>
+          <span className="ml-auto text-[12.5px] text-dim">{list.length} of {servers.length} servers · {tools} tools</span>
         </Toolbar>
       </PageHeader>
 
@@ -117,7 +117,7 @@ export default function Mcp() {
         </StatGrid>
 
         <Panel className="border-warn/30 accent-left" eyebrow="Non-negotiable" title="Tool output is untrusted input">
-          <p className="text-[12.5px] leading-relaxed text-ink-2">
+          <p className="text-[13.5px] leading-relaxed text-ink-2">
             A web page, a GitHub issue, a Jira ticket or a database row can contain text addressed to the agent. The OS
             treats every tool result as <span className="text-ink">data</span>. If a result contains an instruction, the
             agent surfaces it to you and stops — it never acts on it. Servers marked untrusted below carry that label
@@ -134,10 +134,10 @@ export default function Mcp() {
               <ListRow key={m.id} active={m.id === srv.id} onClick={() => setSel(m.id)}>
                 <div className="flex items-center gap-2">
                   <Dot state={m.status} pulse={m.status === 'connected'} />
-                  <span className="truncate text-[12.5px] font-medium text-ink">{m.name}</span>
+                  <span className="truncate text-[13.5px] font-medium text-ink">{m.name}</span>
                   {(m.untrusted || untrustedSourceIds.includes(m.id)) && <ShieldAlert className="ml-auto size-3 text-warn" />}
                 </div>
-                <div className="mt-1 flex items-center gap-2 text-[10.5px] text-dim">
+                <div className="mt-1 flex items-center gap-2 text-[11.5px] text-dim">
                   <Mono>{m.transport}</Mono>
                   <span>{m.tools.length} tools</span>
                   <span className="ml-auto tnum">{m.latencyMs}ms</span>
@@ -170,7 +170,7 @@ export default function Mcp() {
                 {srv.tools.map((t) => (
                   <Row key={t.name}>
                     <Cell mono className="text-brand">{t.name}</Cell>
-                    <Cell className="max-w-[520px] text-[11.5px] text-soft">{t.description}</Cell>
+                    <Cell className="max-w-[520px] text-[12.5px] text-soft">{t.description}</Cell>
                     <Cell><RiskPill risk={t.risk} bare /></Cell>
                   </Row>
                 ))}
@@ -188,7 +188,7 @@ export default function Mcp() {
                       <Row key={i}>
                         <Cell mono className="text-dim">{c.at}</Cell>
                         <Cell mono>{c.tool}</Cell>
-                        <Cell className="text-[11.5px]">{agentName(c.agent)}</Cell>
+                        <Cell className="text-[12.5px]">{agentName(c.agent)}</Cell>
                         <Cell className="tnum">{c.ms}</Cell>
                         <Cell><Tag tone={c.result === 'ok' ? 'ok' : c.result === 'denied' ? 'warn' : 'danger'}>{c.result}</Tag></Cell>
                       </Row>
@@ -236,8 +236,8 @@ export default function Mcp() {
                   <button key={t.id} type="button" onClick={() => setTransport(t.id)} aria-pressed={transport === t.id}
                     className={cn('rounded-md border p-3 text-left transition-colors',
                       transport === t.id ? 'border-brand bg-brand/8' : 'border-line bg-surface hover:border-line-strong')}>
-                    <span className={cn('block font-mono text-[12.5px] font-semibold', transport === t.id ? 'text-brand' : 'text-ink')}>{t.label}</span>
-                    <span className="mt-1 block text-[11px] leading-snug text-soft">{t.note}</span>
+                    <span className={cn('block font-mono text-[13.5px] font-semibold', transport === t.id ? 'text-brand' : 'text-ink')}>{t.label}</span>
+                    <span className="mt-1 block text-[12px] leading-snug text-soft">{t.note}</span>
                   </button>
                 ))}
               </div>
@@ -268,7 +268,7 @@ export default function Mcp() {
               <div className="space-y-3">
                 <div className="flex items-start gap-2.5 rounded-sm border border-warn/30 bg-warn/8 px-3 py-2.5">
                   <ShieldAlert className="mt-px size-3.5 shrink-0 text-warn" />
-                  <span className="text-[12px] leading-relaxed text-warn">
+                  <span className="text-[13px] leading-relaxed text-warn">
                     <span className="font-semibold">Output is treated as untrusted.</span> Always on for a new server — an
                     instruction found inside a tool result is surfaced to you, never obeyed. You can mark a server trusted
                     later, one server at a time.

@@ -119,8 +119,8 @@
    ═══════════════════════════════════════════════════════════════════ */
 :root {
   --radius: 0.5rem;
-  --app-font-family: "Inter Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --app-font-size: 13px;
+  --app-font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Inter Variable", Roboto, sans-serif;
+  --app-font-size: 14px;
 
   --os-bg:          hsl(var(--background));
   --os-base:        color-mix(in srgb, hsl(var(--background)) 94%, hsl(var(--foreground)));
@@ -139,6 +139,11 @@
   --os-brand-2:   color-mix(in srgb, hsl(var(--primary)) 84%, hsl(var(--foreground)));
   --os-brand-dim: color-mix(in srgb, hsl(var(--primary)) 16%, hsl(var(--background)));
   --os-brand-ink: hsl(var(--primary-foreground));
+  --os-ok:        hsl(var(--status-success));
+  --os-warn:      hsl(var(--status-warning));
+  --os-danger:    hsl(var(--status-error));
+  --os-info:      hsl(var(--status-info));
+  --os-violet:    hsl(var(--status-violet));
 
   /* Base palette — overwritten at runtime by the ThemeProvider */
   --background: 0 0% 100%;
@@ -253,8 +258,8 @@
 @layer utilities {
   /* ── Product primitives every screen relies on ─────────────── */
   .eyebrow {
-    font-size: 10px;
-    letter-spacing: 0.09em;
+    font-size: 11px;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     font-weight: 600;
     color: var(--os-dim);
@@ -262,7 +267,7 @@
   .tnum { font-variant-numeric: tabular-nums; }
   .ascii {
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: 12.5px;
     line-height: 1.5;
     white-space: pre;
     color: var(--os-ink-2);
@@ -531,11 +536,7 @@
 
   /* A hairline of brand under a page title */
   .title-rule {
-    background: linear-gradient(90deg,
-      hsl(var(--primary)) 0,
-      hsl(var(--primary) / 0.35) 38px,
-      hsl(var(--border)) 38px,
-      hsl(var(--border)) 100%);
+    background: color-mix(in srgb, hsl(var(--border)) 70%, transparent);
   }
 
   /* Live pulse for anything actually running */
@@ -562,3 +563,34 @@
   svg { shape-rendering: geometricPrecision; }
   .rail-surface svg { vector-effect: non-scaling-stroke; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   macOS-style details. Source-list rows in the sidebar, tinted icon
+   tiles, the segmented-control thumb and the home composer.
+   ═══════════════════════════════════════════════════════════════════ */
+.rail-row { transition: background-color .15s ease, color .15s ease; }
+.rail-row:hover { background: var(--rail-hover); }
+.rail-row.is-active { background: var(--rail-active); }
+.rail-row:focus-visible { outline: 2px solid var(--rail-accent); outline-offset: -2px; }
+
+.nav-tile { background: color-mix(in srgb, var(--tile) 17%, transparent); color: var(--tile); }
+[data-rail="solid"] .nav-tile { background: var(--rail-chip); color: var(--rail-ink); }
+
+.seg-thumb {
+  background: hsl(var(--card));
+  box-shadow: 0 1px 2px hsl(var(--foreground) / 0.08), 0 0 0 0.5px hsl(var(--foreground) / 0.06);
+}
+.dark .seg-thumb {
+  background: var(--os-surface-3);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--os-shadow) 40%, transparent);
+}
+
+.composer {
+  box-shadow: 0 1px 2px hsl(var(--foreground) / 0.04), 0 12px 32px -14px hsl(var(--foreground) / 0.14);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.dark .composer {
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--os-shadow) 50%, transparent),
+              0 14px 36px -16px color-mix(in srgb, var(--os-shadow) 75%, transparent);
+}
+.composer:focus-within { border-color: color-mix(in srgb, var(--os-brand) 45%, var(--os-line)); }

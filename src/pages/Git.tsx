@@ -61,12 +61,12 @@ export default function Git() {
                       <Dot state={w.status} pulse={w.status === 'dirty'} />
                       <Mono className="truncate">{w.branch}</Mono>
                     </div>
-                    <div className="mt-1 flex items-center gap-2 text-[10.5px] text-dim">
+                    <div className="mt-1 flex items-center gap-2 text-[11.5px] text-dim">
                       <span className="truncate">{agentName(w.agent)}</span>
                       <span className="ml-auto text-ok">+{w.additions}</span>
                       <span className="text-danger">−{w.deletions}</span>
                     </div>
-                    <div className="mt-0.5 flex items-center gap-2 text-[10px] text-dim">
+                    <div className="mt-0.5 flex items-center gap-2 text-[11px] text-dim">
                       <span>{w.taskRef}</span>
                       <span className="ml-auto">{w.filesChanged} files · {w.lastCommitAt}</span>
                     </div>
@@ -97,7 +97,7 @@ export default function Git() {
                           <div className="flex items-center gap-2">
                             <Tag tone={f.change === 'A' ? 'ok' : f.change === 'D' ? 'danger' : 'warn'}>{f.change}</Tag>
                             <Mono className="truncate">{f.path}</Mono>
-                            <span className="ml-auto shrink-0 tnum text-[11px]"><span className="text-ok">+{f.additions}</span> <span className="text-danger">−{f.deletions}</span></span>
+                            <span className="ml-auto shrink-0 tnum text-[12px]"><span className="text-ok">+{f.additions}</span> <span className="text-danger">−{f.deletions}</span></span>
                           </div>
                           <pre className="ascii mt-1.5 overflow-x-auto rounded-sm border border-line bg-base p-2.5">
                             {f.hunk.split('\n').map((l, i) => (
@@ -118,7 +118,7 @@ export default function Git() {
                         <Cell mono className="text-dim">{m.target}</Cell>
                         <Cell><Tag tone={m.result === 'clean' ? 'ok' : m.result === 'collides' ? 'danger' : 'warn'}>{m.result}</Tag></Cell>
                         <Cell className="tnum">{m.files}</Cell>
-                        <Cell className="max-w-[420px] text-[11.5px] text-soft">{m.note}{m.onFile && <Mono className="ml-1">{m.onFile}</Mono>}</Cell>
+                        <Cell className="max-w-[420px] text-[12.5px] text-soft">{m.note}{m.onFile && <Mono className="ml-1">{m.onFile}</Mono>}</Cell>
                       </Row>
                     ))}
                   </DataTable>
@@ -139,7 +139,7 @@ export default function Git() {
                       <div className="mb-1.5 flex items-center gap-2">
                         <Tag tone={h.side === 'ours' ? 'info' : 'violet'}>{h.side}</Tag>
                         <Mono>{h.branch}</Mono>
-                        <span className="ml-auto text-[10.5px] text-dim">{agentName(h.agent)} · {h.at}</span>
+                        <span className="ml-auto text-[11.5px] text-dim">{agentName(h.agent)} · {h.at}</span>
                       </div>
                       <pre className="ascii overflow-x-auto">{h.lines}</pre>
                     </div>
@@ -148,11 +148,11 @@ export default function Git() {
                 <SectionTitle className="mt-3 mb-1.5">Orchestrator policy</SectionTitle>
                 <ul className="space-y-1">
                   {c.policy.map((p) => (
-                    <li key={p} className="flex items-start gap-1.5 text-[11.5px] text-soft"><Check className="mt-px size-3 shrink-0 text-brand" />{p}</li>
+                    <li key={p} className="flex items-start gap-1.5 text-[12.5px] text-soft"><Check className="mt-px size-3 shrink-0 text-brand" />{p}</li>
                   ))}
                 </ul>
                 <div className="mt-2.5 flex items-center justify-between gap-3 border-t border-line pt-2.5">
-                  <p className="text-[12px] text-ink-2">{c.resolution}</p>
+                  <p className="text-[13px] text-ink-2">{c.resolution}</p>
                   <Tag tone="neutral">{c.resolvedBy}</Tag>
                 </div>
               </Panel>
@@ -164,7 +164,7 @@ export default function Git() {
           <>
             <Toolbar>
               <Field className="w-72" value={q} onChange={setQ} icon={<Search className="size-3.5" />} placeholder="Search commits, authors, branches…" onClear={() => setQ('')} />
-              <span className="ml-auto text-[11.5px] text-dim">{cmts.length} of {commits.length}</span>
+              <span className="ml-auto text-[12.5px] text-dim">{cmts.length} of {commits.length}</span>
             </Toolbar>
             <Panel flush>
               {cmts.length === 0 ? <Empty title="No commit matches" /> : (
@@ -173,7 +173,7 @@ export default function Git() {
                     <Row key={c.sha}>
                       <Cell mono className="text-brand">{c.sha.slice(0, 7)}</Cell>
                       <Cell className="max-w-[560px] text-ink">{c.message}</Cell>
-                      <Cell className="text-[11.5px]">{c.author}</Cell>
+                      <Cell className="text-[12.5px]">{c.author}</Cell>
                       <Cell mono className="text-dim">{c.branch}</Cell>
                       <Cell className="tnum">{c.files}</Cell>
                       <Cell className="text-dim">{c.at}</Cell>
@@ -190,8 +190,8 @@ export default function Git() {
             {pullRequests.map((p) => (
               <Panel key={p.id} eyebrow={`${p.branch} → ${p.base} · ${p.openedAt}`}
                 title={<span className="flex flex-wrap items-center gap-2"><Mono tone="brand">{p.number}</Mono>{p.title}<Tag tone={PR_TONE[p.state]}>{p.state.replace('_', ' ')}</Tag></span>}
-                actions={<span className="text-[11px] text-dim">{p.files} files · <span className="text-ok">+{p.additions}</span> <span className="text-danger">−{p.deletions}</span> · {p.commits} commits</span>}>
-                <p className="max-w-4xl text-[12px] leading-relaxed text-ink-2">{p.body}</p>
+                actions={<span className="text-[12px] text-dim">{p.files} files · <span className="text-ok">+{p.additions}</span> <span className="text-danger">−{p.deletions}</span> · {p.commits} commits</span>}>
+                <p className="max-w-4xl text-[13px] leading-relaxed text-ink-2">{p.body}</p>
                 <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
                   <div>
                     <SectionTitle>Checks</SectionTitle>
@@ -199,8 +199,8 @@ export default function Git() {
                       {p.checks.map((ch) => (
                         <div key={ch.id} className="flex items-center gap-2 px-2.5 py-1.5">
                           <Dot state={ch.status} pulse={ch.status === 'running'} />
-                          <span className="text-[12px] text-ink-2">{ch.name}</span>
-                          <span className="ml-auto truncate text-[11px] text-dim">{ch.detail}</span>
+                          <span className="text-[13px] text-ink-2">{ch.name}</span>
+                          <span className="ml-auto truncate text-[12px] text-dim">{ch.detail}</span>
                           <Tag tone={CHK_TONE[ch.status]}>{ch.status}</Tag>
                         </div>
                       ))}
@@ -209,7 +209,7 @@ export default function Git() {
                   <div>
                     <SectionTitle>Gate</SectionTitle>
                     <div className="rounded-sm border border-warn/30 bg-warn/8 p-3">
-                      <p className="text-[12px] text-warn">{p.humanGate}</p>
+                      <p className="text-[13px] text-warn">{p.humanGate}</p>
                       <div className="mt-2 flex flex-wrap gap-1">
                         {p.reviewers.map((r) => <Tag key={r} tone="neutral">{r}</Tag>)}
                       </div>

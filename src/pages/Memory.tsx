@@ -105,11 +105,11 @@ export default function Memory() {
             onChange={setTab}
           />
           {tab === 'facts' && (
-            <div className="flex h-7 w-80 items-center gap-2 rounded-sm border border-line bg-surface-2 px-2.5 focus-within:border-brand">
+            <div className="flex h-9 w-80 items-center gap-2 rounded-lg border border-line bg-surface-2 px-2.5 focus-within:border-brand">
               <Search className="size-3.5 shrink-0 text-dim" />
               <input value={q} onChange={(e) => { setQ(e.target.value); setSel(null); }}
                 placeholder="Search memory — “TRANS”, “rounding”, “Hinglish”, MEM-142…"
-                className="min-w-0 flex-1 bg-transparent text-[12px] text-ink placeholder:text-dim focus-visible:outline-none" />
+                className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-dim focus-visible:outline-none" />
             </div>
           )}
           {tab === 'facts' && fts && <Tag tone="brand">FTS5 · ranked</Tag>}
@@ -124,22 +124,22 @@ export default function Memory() {
               <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto py-2">
                 <button
                   onClick={() => setCat('all')}
-                  className={cn('flex w-full items-center justify-between px-3.5 py-1.5 text-[12px] transition-colors',
+                  className={cn('flex w-full items-center justify-between px-3.5 py-1.5 text-[13px] transition-colors',
                     cat === 'all' ? 'bg-surface-2 font-medium text-ink' : 'text-soft hover:text-ink-2')}
                 >
                   <span className="flex items-center gap-2"><Layers className="size-3.5 text-dim" />All categories</span>
-                  <span className="tnum text-[11px] text-dim">{scoped.length}</span>
+                  <span className="tnum text-[12px] text-dim">{scoped.length}</span>
                 </button>
                 <div className="my-1.5 mx-3.5 h-px bg-line" />
                 {categoryMeta.map((c) => (
                   <button
                     key={c.id}
                     onClick={() => { setCat(c.id); setSel(null); }}
-                    className={cn('flex w-full items-center justify-between px-3.5 py-1.5 text-[12px] transition-colors',
+                    className={cn('flex w-full items-center justify-between px-3.5 py-1.5 text-[13px] transition-colors',
                       cat === c.id ? 'bg-surface-2 font-medium text-ink' : 'text-soft hover:text-ink-2')}
                   >
                     <span className="truncate">{c.label}</span>
-                    <span className="tnum text-[11px] text-dim">{counts.get(c.id) ?? 0}</span>
+                    <span className="tnum text-[12px] text-dim">{counts.get(c.id) ?? 0}</span>
                   </button>
                 ))}
               </div>
@@ -157,7 +157,7 @@ export default function Memory() {
                 <button
                   key={c.id}
                   onClick={() => { setCat(c.id as MemoryCategory | 'all'); setSel(null); }}
-                  className={cn('shrink-0 rounded-sm border px-2 py-1 text-[11.5px] transition-colors',
+                  className={cn('shrink-0 rounded-sm border px-2 py-1 text-[12.5px] transition-colors',
                     cat === c.id ? 'border-brand bg-brand/10 font-medium text-brand' : 'border-line bg-surface text-soft')}
                 >
                   {c.label}
@@ -174,12 +174,12 @@ export default function Memory() {
                     {f.pinned && <Pin className="size-3 text-brand" />}
                     <span className="eyebrow ml-auto">{categoryLabel(f.category)}</span>
                   </div>
-                  <p className="mt-1 line-clamp-2 text-[12px] text-ink">{f.title}</p>
+                  <p className="mt-1 line-clamp-2 text-[13px] text-ink">{f.title}</p>
                   <div className="mt-1.5 flex items-center gap-2">
                     <BlockBar pct={f.strength} width={8} tone={f.strength < 70 ? 'warn' : undefined} />
-                    <span className="tnum text-[10.5px] text-dim">{f.strength}</span>
+                    <span className="tnum text-[11.5px] text-dim">{f.strength}</span>
                     <Tag tone={CONF_TONE[f.confidence]}>{f.confidence}</Tag>
-                    <span className="ml-auto text-[10.5px] text-dim">{f.hits} hits</span>
+                    <span className="ml-auto text-[11.5px] text-dim">{f.hits} hits</span>
                   </div>
                 </ListRow>
               ))}
@@ -193,16 +193,16 @@ export default function Memory() {
                     <div className="flex flex-wrap items-center gap-2">
                       <Mono tone="brand">{fact.ref}</Mono>
                       <Tag tone="neutral">{categoryLabel(fact.category)}</Tag>
-                      <Tag tone={CONF_TONE[fact.confidence]}>confidence {fact.confidence}</Tag>
+                      <Tag tone={CONF_TONE[fact.confidence]}>{fact.confidence[0]}{fact.confidence.slice(1).toLowerCase()} confidence</Tag>
                       {fact.projectId === 'global' ? <Tag tone="violet"><Globe className="size-3" />global</Tag> : <Tag tone="neutral">{projectName(fact.projectId)}</Tag>}
                       {fact.pinned && <Tag tone="brand"><Pin className="size-3" />pinned</Tag>}
                     </div>
                     <h2 className="mt-2 text-[16px] leading-snug font-semibold text-ink">{fact.title}</h2>
-                    <p className="mt-1.5 text-[13px] leading-relaxed text-ink-2">{fact.body}</p>
+                    <p className="mt-1.5 text-[14px] leading-relaxed text-ink-2">{fact.body}</p>
                   </div>
 
                   <Panel eyebrow="Why this is true" title="Reason">
-                    <p className="text-[12.5px] leading-relaxed text-ink-2">{fact.reason}</p>
+                    <p className="text-[13.5px] leading-relaxed text-ink-2">{fact.reason}</p>
                     <div className="mt-2.5 border-t border-line pt-2.5">
                       <KV k="Source" v={fact.source} />
                       <KV k="Created" v={fact.createdAt} />
@@ -214,7 +214,7 @@ export default function Memory() {
                   <div className="grid grid-cols-2 gap-3">
                     <Panel eyebrow="Strength" title={`${fact.strength} / 100`}>
                       <Bar pct={fact.strength} tone={fact.strength < 70 ? 'warn' : 'ok'} height="h-1.5" />
-                      <p className="mt-2 text-[11.5px] text-dim">
+                      <p className="mt-2 text-[12.5px] text-dim">
                         {fact.pinned
                           ? 'Pinned — exempt from decay. It will be surfaced regardless of how long it sits unused.'
                           : `Half-life ${categoryMeta.find((c) => c.id === fact.category)?.halfLifeDays ?? 365} days. Each retrieval adds +${categoryMeta.find((c) => c.id === fact.category)?.reinforce ?? 3}.`}
@@ -222,7 +222,7 @@ export default function Memory() {
                     </Panel>
                     <Panel eyebrow="Tags" title="Indexed under">
                       <div className="flex flex-wrap gap-1">
-                        {fact.tags.map((t) => <span key={t} className="rounded-xs border border-line bg-surface-2 px-1.5 py-px font-mono text-[10.5px] text-ink-2">{t}</span>)}
+                        {fact.tags.map((t) => <span key={t} className="rounded-xs border border-line bg-surface-2 px-1.5 py-px font-mono text-[11.5px] text-ink-2">{t}</span>)}
                       </div>
                     </Panel>
                   </div>
@@ -232,7 +232,7 @@ export default function Memory() {
                       {fact.evidence.map((e) => (
                         <div key={e} className="flex items-center gap-2 px-3.5 py-1.5">
                           <FileSearch className="size-3 shrink-0 text-dim" />
-                          <span className="truncate font-mono text-[11.5px] text-ink-2">{e}</span>
+                          <span className="truncate font-mono text-[12.5px] text-ink-2">{e}</span>
                         </div>
                       ))}
                     </div>
@@ -268,11 +268,11 @@ export default function Memory() {
                     <Cell className="tnum">{c.halfLifeDays >= 3650 ? '∞' : `${c.halfLifeDays} d`}</Cell>
                     <Cell className="tnum text-ok">+{c.reinforce}</Cell>
                     <Cell className="tnum">{counts.get(c.id) ?? 0}</Cell>
-                    <Cell className="max-w-[520px] text-[11.5px] text-soft">{c.note}</Cell>
+                    <Cell className="max-w-[520px] text-[12.5px] text-soft">{c.note}</Cell>
                   </Row>
                 ))}
               </DataTable>
-              <p className="border-t border-line px-3.5 py-2.5 text-[11.5px] text-soft">
+              <p className="border-t border-line px-3.5 py-2.5 text-[12.5px] text-soft">
                 <span className="text-ink-2">Pinned facts and HIGH-confidence decisions never decay.</span> Everything else
                 loses strength on a per-category half-life and regains it every time an agent actually uses it — so the
                 memory that matters gets louder and the rest goes quiet on its own.
@@ -285,7 +285,7 @@ export default function Memory() {
                   <Row key={`${h.ref}-${i}`}>
                     <Cell mono className="text-brand">{h.ref}</Cell>
                     <Cell>{agentName(h.agent)}</Cell>
-                    <Cell className="text-[11.5px] text-soft">{h.context}</Cell>
+                    <Cell className="text-[12.5px] text-soft">{h.context}</Cell>
                     <Cell className="text-dim">{h.at}</Cell>
                     <Cell className="tnum text-ok">+{h.delta}</Cell>
                   </Row>
@@ -297,7 +297,7 @@ export default function Memory() {
 
         {tab === 'conflicts' && (
           <div className="space-y-3">
-            <p className="text-[12px] text-soft">
+            <p className="text-[13px] text-soft">
               Two facts cannot both be true. The OS refuses to silently pick a winner — a contradiction is surfaced with
               both claims intact and waits for your ruling.
             </p>
@@ -311,14 +311,14 @@ export default function Memory() {
                     return (
                       <div key={id} className="rounded-sm border border-line bg-base p-3">
                         <div className="eyebrow mb-1">claim {i === 0 ? 'A' : 'B'}{f && <> · <span className="font-mono normal-case">{f.ref}</span></>}</div>
-                        <p className="text-[12px] text-ink-2">{f ? f.title : id}</p>
+                        <p className="text-[13px] text-ink-2">{f ? f.title : id}</p>
                       </div>
                     );
                   })}
                 </div>
-                <p className="mt-2.5 text-[12px] text-soft">{c.detail}</p>
+                <p className="mt-2.5 text-[13px] text-soft">{c.detail}</p>
                 <div className="mt-2.5 flex items-center justify-between gap-3 border-t border-line pt-2.5">
-                  <p className="flex items-start gap-1.5 text-[11.5px] text-ink-2"><Zap className="mt-px size-3 shrink-0 text-brand" />{c.suggestion}</p>
+                  <p className="flex items-start gap-1.5 text-[12.5px] text-ink-2"><Zap className="mt-px size-3 shrink-0 text-brand" />{c.suggestion}</p>
                   <div className="flex shrink-0 gap-1.5">
                     <Button size="xs" variant="outline" onClick={async () => { if (await resolveConflict(c.id, 'a')) toast.success('Kept A', { description: 'B is archived as superseded. Nothing is deleted.' }); }}>Keep A</Button>
                     <Button size="xs" variant="outline" onClick={async () => { if (await resolveConflict(c.id, 'b')) toast.success('Kept B', { description: 'A is archived as superseded. Nothing is deleted.' }); }}>Keep B</Button>

@@ -1,57 +1,99 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import {
+  useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type ReactNode,
+} from 'react';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { createPortal } from 'react-dom';
-import { Activity, ChevronDown, Circle, GripVertical, PanelLeftOpen, Search, X } from 'lucide-react';
+import {
+  ChevronRight, Circle, Cpu, FileText, GripVertical, Lightbulb, ListTodo, PanelLeftClose, PanelLeftOpen,
+  Plug, Puzzle, Rocket, Search, Settings, ShieldCheck, SquarePen,
+} from 'lucide-react';
 import { ICONS } from '@/lib/icons';
-import { NAV, NAV_GROUPS } from '@/lib/nav';
+import { NAV, NAV_SECTIONS, type NavItem, type NavSection } from '@/lib/nav';
 import { cn } from '@/lib/utils';
 import { LogoMark, Wordmark } from '@/components/os/Logo';
 import { useTheme } from '@/lib/theme';
+import { inFlight, useData } from '@/lib/data';
+import { agents } from '@/mock/agents';
 
-const MIN_W = 196;
-const MAX_W = 340;
-const DEF_W = 224;
-const COLLAPSED_W = 56;
-const WKEY = 'aios.sidebar.width';
-const GKEY = 'aios.sidebar.groups';
+/* ═══════════════════════════════════════════════════════════════
+   SIDEBAR — a macOS source list. Quick actions on top, sections
+   with tinted icon tiles, sub-sections that fold behind a
+   disclosure row, count badges, recent plans, and the operator
+   at the bottom. Every colour comes from the rail tokens.
+   ═══════════════════════════════════════════════════════════════ */
 
-type IconProps = { className?: string; style?: React.CSSProperties; strokeWidth?: number };
+const MIN_W = 220;
+const MAX_W = 360;
+const DEF_W = 256;
+const COLLAPSED_W = 60;
+const WKEY = 'nc.sidebar.width';
+const SKEY = 'nc.sidebar.sections';
+const UKEY = 'nc.sidebar.subs';
+const RADIUS = 'calc(var(--radius) * 1.1)';
 
-function Icon({ name, className, style, strokeWidth = 1.75 }: IconProps & { name: string }) {
-  const C = ICONS[name] ?? Circle;
-  return <C className={className} style={style} strokeWidth={strokeWidth} />;
-}
+type Glyph = ComponentType<{ className?: string; style?: CSSProperties; strokeWidth?: number }>;
+type Count = { n: number; alert?: boolean };
 
-const GROUP_ICON: Record<string, string> = {
-  Workspace: 'LayoutDashboard',
-  Intelligence: 'Brain',
-  Execution: 'Cpu',
-  Platform: 'Blocks',
-  Thinking: 'Lightbulb',
-  Governance: 'ShieldCheck',
+/** Each section's tint for its icon tiles. Status tokens, so every theme repaints them. */
+const TONE: Record<NavSection, string> = {
+  Home: 'var(--os-brand)', Build: 'var(--os-info)', Knowledge: 'var(--os-violet)',
+  Platform: 'var(--os-warn)', Governance: 'var(--os-ok)',
+};
+const SUB_ICON: Record<string, Glyph> = {
+  Planning: ListTodo, Execution: Cpu, Quality: ShieldCheck, Delivery: Rocket,
+  Thinking: Lightbulb, Extensions: Puzzle, Connections: Plug,
 };
 
-export function Sidebar({ collapsed, onToggle, variant = 'rail' }: {
+type Block = { kind: 'item'; item: NavItem } | { kind: 'sub'; name: string; items: NavItem[] };
+
+/** A section's items in order, with consecutive items of one sub-section folded into a block. */
+function blocksOf(section: NavSection): Block[] {
+  const out: Block[] = [];
+  for (const item of NAV.filter((n) => n.section === section)) {
+    const last = out[out.length - 1];
+    if (item.sub && last?.kind === 'sub' && last.name === item.sub) last.items.push(item);
+    else if (item.sub) out.push({ kind: 'sub', name: item.sub, items: [item] });
+    else out.push({ kind: 'item', item });
+  }
+  return out;
+}
+const BLOCKS = Object.fromEntries(NAV_SECTIONS.map((s) => [s, blocksOf(s)])) as Record<NavSection, Block[]>;
+
+function load<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function save(key: string, value: unknown) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* private mode */ }
+}
+
+export function Sidebar({ collapsed, onToggle, onSearch, variant = 'rail' }: {
   collapsed: boolean;
   onToggle: () => void;
+  /** Opens ⌘K. */
+  onSearch?: () => void;
   /** 'drawer' renders inside the mobile sheet: full width, no float, no resize, no collapse. */
   variant?: 'rail' | 'drawer';
 }) {
   const drawer = variant === 'drawer';
+  const mini = collapsed && !drawer;
   const loc = useLocation();
+  const nav = useNavigate();
   const { rail } = useTheme();
+  const { tasks, plans, approvals, conflicts, mode } = useData();
   const ref = useRef<HTMLElement>(null);
-  const [q, setQ] = useState('');
   const [resizing, setResizing] = useState(false);
-  const [width, setWidth] = useState(() => {
-    try { return Number(localStorage.getItem(WKEY)) || DEF_W; } catch { return DEF_W; }
-  });
-  const [closed, setClosed] = useState<Set<string>>(() => {
-    try { return new Set(JSON.parse(localStorage.getItem(GKEY) ?? '[]') as string[]); } catch { return new Set(); }
-  });
+  const [width, setWidth] = useState(() => load(WKEY, DEF_W));
+  const [sections, setSections] = useState<Record<string, boolean>>(() => load(SKEY, {}));
+  const [subs, setSubs] = useState<Record<string, boolean>>(() => load(UKEY, {}));
 
-  useEffect(() => { try { localStorage.setItem(WKEY, String(width)); } catch { /* private mode */ } }, [width]);
-  useEffect(() => { try { localStorage.setItem(GKEY, JSON.stringify([...closed])); } catch { /* private mode */ } }, [closed]);
+  useEffect(() => save(WKEY, width), [width]);
+  useEffect(() => save(SKEY, sections), [sections]);
+  useEffect(() => save(UKEY, subs), [subs]);
 
   /* ── drag to resize ─────────────────────────────────────────── */
   const onResize = useCallback((e: MouseEvent) => {
@@ -74,43 +116,40 @@ export function Sidebar({ collapsed, onToggle, variant = 'rail' }: {
     };
   }, [resizing, onResize, stop]);
 
-  const groups = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    return NAV_GROUPS.map((g) => ({
-      group: g,
-      items: NAV.filter((n) => n.group === g && (!s || (n.label + ' ' + n.keywords).toLowerCase().includes(s))),
-    })).filter((g) => g.items.length);
-  }, [q]);
+  // What is waiting behind each screen, so the sidebar says where to look next.
+  const counts = useMemo<Record<string, Count>>(() => ({
+    '/tasks': { n: tasks.filter((t) => t.status === 'in_progress').length },
+    '/plans': { n: plans.filter((p) => !inFlight(p)).length },
+    '/agents': { n: agents.filter((a) => a.status === 'running').length },
+    '/permissions': { n: approvals.filter((a) => a.status === 'pending').length, alert: true },
+    '/memory': { n: conflicts.length, alert: true },
+  }), [tasks, plans, approvals, conflicts]);
 
-  const toggleGroup = (g: string) =>
-    setClosed((c) => {
-      const n = new Set(c);
-      if (n.has(g)) n.delete(g); else n.add(g);
-      return n;
-    });
+  const isActive = (to: string) => (to === '/' ? loc.pathname === '/' : loc.pathname === to || loc.pathname.startsWith(`${to}/`));
+  const compose = () => nav('/', { state: { compose: Date.now() } });
+  const w = mini ? COLLAPSED_W : width;
 
   return (
     <div
       className={cn('h-full shrink-0', drawer ? 'w-full' : [rail !== 'flush' && 'p-2 pr-0', !resizing && 'transition-[width] duration-300 ease-out'])}
-      style={drawer ? undefined : { width: (collapsed ? COLLAPSED_W : width) + (rail === 'flush' ? 0 : 8) }}
+      style={drawer ? undefined : { width: w + (rail === 'flush' ? 0 : 8) }}
     >
       <aside
         ref={ref}
         className={cn(
           'rail-surface relative flex h-full flex-col', !drawer && rail !== 'flush' && 'rail-slab',
-          collapsed ? 'overflow-visible' : 'overflow-hidden',
-          resizing ? '' : 'transition-[width] duration-300 ease-out',
+          mini ? 'overflow-visible' : 'overflow-hidden',
+          !resizing && 'transition-[width] duration-300 ease-out',
         )}
         style={{
-          width: drawer ? '100%' : collapsed ? COLLAPSED_W : width,
+          width: drawer ? '100%' : w,
           borderRadius: drawer || rail === 'flush' ? 0 : 'calc(var(--radius) * 2)',
           borderRight: !drawer && rail === 'flush' ? '1px solid var(--rail-line)' : undefined,
         }}
       >
         <div className="rail-edge pointer-events-none absolute inset-y-0 left-0 w-px" style={{ borderRadius: 'inherit' }} />
 
-        {/* Resize handle */}
-        {!collapsed && !drawer && (
+        {!mini && !drawer && (
           <div
             onMouseDown={(e) => { e.preventDefault(); setResizing(true); }}
             className="group/rz absolute inset-y-0 right-0 z-10 w-1 cursor-col-resize"
@@ -123,112 +162,142 @@ export function Sidebar({ collapsed, onToggle, variant = 'rail' }: {
           </div>
         )}
 
-        {/* Brand — click to collapse */}
-        <button
-          onClick={onToggle}
-          className="group/logo flex shrink-0 items-center gap-2.5 px-3 py-3 select-none"
-          style={{ borderBottom: '1px solid var(--sb-border)' }}
-        >
-          {collapsed
-            ? <span className="transition-transform duration-200 group-hover/logo:scale-105"><LogoMark size={30} /></span>
-            : <Wordmark size={34} onDark className="text-left transition-transform duration-200 group-hover/logo:scale-[1.02]" />}
-        </button>
+        {/* Title row */}
+        <div className={cn('flex shrink-0 items-center gap-2 pt-3.5 pb-2', mini ? 'justify-center px-2' : 'px-3.5')}>
+          {mini ? (
+            <button onClick={onToggle} aria-label="Expand sidebar" className="transition-transform duration-200 hover:scale-105">
+              <LogoMark size={30} />
+            </button>
+          ) : (
+            <>
+              <Link to="/" className="min-w-0 flex-1"><Wordmark size={30} onDark /></Link>
+              {!drawer && (
+                <button
+                  onClick={onToggle} aria-label="Collapse sidebar" title="Collapse sidebar (⌘B)"
+                  className="rail-row grid size-8 shrink-0 place-items-center"
+                  style={{ borderRadius: RADIUS, color: 'var(--rail-soft)' }}
+                >
+                  <PanelLeftClose className="size-[17px]" strokeWidth={1.8} />
+                </button>
+              )}
+            </>
+          )}
+        </div>
 
-        {/* Nav */}
-        <nav className="sb-scroll min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 py-2.5">
-          {groups.map(({ group, items }) => {
-            const isOpen = !closed.has(group) || !!q;
-            const groupActive = items.some((i) => i.to === loc.pathname);
-            return (
-              <div key={group}>
-                {!collapsed ? (
-                  <button
-                    onClick={() => toggleGroup(group)}
-                    className="group/sec flex w-full items-center justify-between px-2 pt-3.5 pb-2 first:pt-1.5"
-                    style={{ color: 'var(--rail-soft)', borderBottom: '1px solid var(--rail-line)' }}
-                  >
-                    <span className="flex items-center gap-1.5 text-[10.5px] font-bold tracking-[0.1em] uppercase">
-                      <Icon name={GROUP_ICON[group] ?? 'Circle'} className="size-3.5" strokeWidth={2.1} />
-                      {group}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      {groupActive && !isOpen && <span className="size-1 rounded-full" style={{ background: 'var(--rail-accent)' }} />}
-                      <ChevronDown strokeWidth={2.4} className={cn('size-3.5 opacity-0 transition-transform group-hover/sec:opacity-60', !isOpen && '-rotate-90')} />
-                    </span>
-                  </button>
-                ) : (
-                  <div className="mx-2 my-2 h-px" style={{ background: 'var(--rail-line)' }} />
-                )}
+        {/* Quick actions */}
+        <div className={cn('shrink-0 space-y-0.5 pb-2', mini ? 'px-2' : 'px-2.5')}>
+          <Action icon={SquarePen} label="New requirement" onClick={compose} mini={mini} accent />
+          {onSearch && <Action icon={Search} label="Search" hint="⌘K" onClick={onSearch} mini={mini} />}
+        </div>
 
-                <div className={cn('grid transition-[grid-template-rows,opacity] duration-200 ease-out',
-                  isOpen || collapsed ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0')}>
-                  <div className="min-h-0 space-y-0.5 overflow-hidden">
-                    {items.map((item) => (
-                      <Item key={item.to} to={item.to} label={item.label} icon={item.icon} collapsed={collapsed} />
+        {/* Navigation */}
+        <nav aria-label="Main" className={cn('sb-scroll min-h-0 flex-1 overflow-y-auto pb-4', mini ? 'px-2' : 'px-2.5')}>
+          {NAV_SECTIONS.map((section, si) => {
+            if (mini) {
+              return (
+                <div key={section}>
+                  {si > 0 && <div className="mx-2 my-2 h-px" style={{ background: 'var(--rail-line)' }} />}
+                  <div className="space-y-0.5">
+                    {NAV.filter((n) => n.section === section).map((n) => (
+                      <Flyout key={n.to} label={n.label}>
+                        <NavLink
+                          to={n.to} end={n.to === '/'} aria-label={n.label}
+                          className={({ isActive: a }) => cn('rail-row relative grid h-9 place-items-center', a && 'is-active')}
+                          style={{ borderRadius: RADIUS }}
+                        >
+                          <Tile icon={ICONS[n.icon] ?? Circle} tone={TONE[section]} />
+                          {(counts[n.to]?.n ?? 0) > 0 && (
+                            <span className="absolute top-1 right-1 size-2 rounded-full"
+                              style={{ background: counts[n.to]?.alert ? 'var(--os-warn)' : 'var(--rail-accent)' }} />
+                          )}
+                        </NavLink>
+                      </Flyout>
                     ))}
                   </div>
                 </div>
+              );
+            }
+
+            const open = sections[section] ?? true;
+            return (
+              <div key={section} className={si > 0 ? 'mt-4' : 'mt-1'}>
+                {section !== 'Home' && (
+                  <button
+                    onClick={() => setSections((s) => ({ ...s, [section]: !open }))}
+                    aria-expanded={open}
+                    className="group/sec mb-0.5 flex w-full items-center justify-between px-2.5 py-1"
+                  >
+                    <span className="text-[12px] font-semibold tracking-[0.01em]" style={{ color: 'var(--rail-dim)' }}>{section}</span>
+                    <ChevronRight
+                      className={cn('size-3.5 opacity-0 transition-[transform,opacity] group-hover/sec:opacity-80', open && 'rotate-90')}
+                      strokeWidth={2.2} style={{ color: 'var(--rail-dim)' }}
+                    />
+                  </button>
+                )}
+                <Fold open={open}>
+                  <div className="space-y-px">
+                    {BLOCKS[section].map((b) => (b.kind === 'item'
+                      ? <Row key={b.item.to} item={b.item} tone={TONE[section]} count={counts[b.item.to]} />
+                      : (
+                        <Sub
+                          key={b.name} name={b.name} items={b.items} tone={TONE[section]} counts={counts}
+                          active={b.items.some((i) => isActive(i.to))}
+                          open={subs[b.name] ?? b.items.some((i) => isActive(i.to))}
+                          onToggle={(v) => setSubs((s) => ({ ...s, [b.name]: v }))}
+                        />
+                      )))}
+                  </div>
+                </Fold>
               </div>
             );
           })}
-          {groups.length === 0 && (
-            <p className="px-3 py-6 text-center text-[11.5px]" style={{ color: 'var(--rail-dim)' }}>
-              Nothing named “{q}”.
-            </p>
+
+          {!mini && plans.length > 0 && (
+            <div className="mt-5">
+              <div className="mb-0.5 px-2.5 py-1 text-[12px] font-semibold" style={{ color: 'var(--rail-dim)' }}>Recent plans</div>
+              <div className="space-y-px">
+                {plans.slice(0, 5).map((p) => (
+                  <Link
+                    key={p.ref} to={`/plans?ref=${p.ref}`} title={p.rawRequirement}
+                    className="rail-row flex h-8 items-center gap-2.5 px-2" style={{ borderRadius: RADIUS }}
+                  >
+                    <FileText className="size-4 shrink-0" strokeWidth={1.8} style={{ color: 'var(--rail-dim)' }} />
+                    <span className="min-w-0 flex-1 truncate text-[13px]" style={{ color: 'var(--rail-item)' }}>{p.rawRequirement}</span>
+                  </Link>
+                ))}
+              </div>
+            </div>
           )}
         </nav>
 
-        {/* Footer */}
-        <div className="shrink-0 pb-2.5" style={{ borderTop: '1px solid var(--rail-line)' }}>
-          {!collapsed ? (
-            <>
-              <div className="px-2.5 pt-2.5 pb-1.5">
-                <div
-                  className="flex h-7 items-center gap-2 px-2.5"
-                  style={{
-                    borderRadius: 'calc(var(--radius) * 1.2)',
-                    background: 'var(--rail-line)',
-                    border: '1px solid var(--rail-line)',
-                  }}
-                >
-                  <Search className="size-4 shrink-0" strokeWidth={1.9} style={{ color: 'var(--rail-ink)', opacity: 0.75 }} />
-                  <input
-                    value={q}
-                    onChange={(e) => setQ(e.target.value)}
-                    placeholder="Filter menu…"
-                    className="min-w-0 flex-1 border-none bg-transparent text-[12px] outline-none placeholder:opacity-70"
-                    style={{ color: 'var(--rail-ink)' }}
-                  />
-                  {q && (
-                    <button onClick={() => setQ('')} style={{ color: 'var(--rail-ink)', opacity: 0.7 }}>
-                      <X className="size-3.5" strokeWidth={2.2} />
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div className="px-2.5">
-                <div
-                  className="flex items-center gap-2 px-2 py-1.5"
-                  style={{
-                    borderRadius: 'calc(var(--radius) * 1.2)',
-                    background: 'var(--rail-hover)',
-                    border: '1px solid var(--rail-line)',
-                  }}
-                >
-                  <span className="grid size-6 shrink-0 place-items-center rounded-full"
-                    style={{ background: 'var(--rail-chip)', color: 'var(--rail-accent)' }}>
-                    <Activity className="size-3.5" strokeWidth={2.1} />
+        {/* The operator */}
+        <div className={cn('shrink-0 py-2.5', mini ? 'px-2' : 'px-2.5')} style={{ borderTop: '1px solid var(--rail-line)' }}>
+          <NavLink
+            to="/settings" title="Settings"
+            className={({ isActive: a }) => cn('rail-row flex items-center gap-2.5 py-1.5', mini ? 'justify-center' : 'px-2', a && 'is-active')}
+            style={{ borderRadius: RADIUS }}
+          >
+            <span className="grid size-8 shrink-0 place-items-center rounded-full text-[12px] font-semibold"
+              style={{ background: 'var(--rail-accent)', color: 'var(--os-brand-ink)' }}>RR</span>
+            {!mini && (
+              <>
+                <span className="min-w-0 flex-1 leading-tight">
+                  <span className="block truncate text-[13.5px] font-semibold" style={{ color: 'var(--rail-ink)' }}>Rajat</span>
+                  <span className="mt-0.5 flex items-center gap-1.5 text-[12px]" style={{ color: 'var(--rail-dim)' }}>
+                    <span className="size-1.5 shrink-0 rounded-full" style={{ background: mode === 'live' ? 'var(--os-ok)' : 'var(--rail-dim)' }} />
+                    <span className="truncate">{mode === 'live' ? 'Saved locally' : mode === 'demo' ? 'Demo data' : 'Connecting…'}</span>
                   </span>
-                  <span className="min-w-0 flex-1 leading-tight">
-                    <span className="block truncate text-[11.5px] font-semibold" style={{ color: 'var(--rail-ink)' }}>4 agents live</span>
-                    <span className="block truncate text-[10px]" style={{ color: 'var(--rail-dim)' }}>71% served locally</span>
-                  </span>
-                </div>
-              </div>
-            </>
-          ) : (
-            <button onClick={onToggle} className="flex w-full justify-center py-2.5" style={{ color: 'var(--rail-ink)', opacity: 0.8 }}>
-              <PanelLeftOpen className="size-4.5" strokeWidth={1.9} />
+                </span>
+                <Settings className="size-4 shrink-0" strokeWidth={1.8} style={{ color: 'var(--rail-dim)' }} />
+              </>
+            )}
+          </NavLink>
+          {mini && (
+            <button
+              onClick={onToggle} aria-label="Expand sidebar"
+              className="rail-row mt-1 grid h-9 w-full place-items-center" style={{ borderRadius: RADIUS, color: 'var(--rail-soft)' }}
+            >
+              <PanelLeftOpen className="size-[17px]" strokeWidth={1.8} />
             </button>
           )}
         </div>
@@ -237,84 +306,152 @@ export function Sidebar({ collapsed, onToggle, variant = 'rail' }: {
   );
 }
 
-/* ── One nav row, with a portal flyout when the rail is collapsed ── */
-function Item({ to, label, icon, collapsed }: { to: string; label: string; icon: string; collapsed: boolean }) {
-  const [fly, setFly] = useState(false);
-  const [pos, setPos] = useState({ top: 0, left: 0 });
-  const ref = useRef<HTMLDivElement>(null);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+/* ── pieces ───────────────────────────────────────────────────── */
 
-  const open = () => {
-    clearTimeout(timer.current);
-    if (ref.current) {
-      const r = ref.current.getBoundingClientRect();
-      setPos({ top: r.top, left: r.right });
-    }
-    setFly(true);
-  };
-  const close = () => { timer.current = setTimeout(() => setFly(false), 120); };
-  useEffect(() => () => clearTimeout(timer.current), []);
+/** Folds its children away. Folded content is inert, so Tab never lands on a hidden link. */
+function Fold({ open, children }: { open: boolean; children: ReactNode }) {
+  return (
+    <div className={cn('grid transition-[grid-template-rows,opacity] duration-200 ease-out',
+      open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0')}>
+      <div className="min-h-0 overflow-hidden" inert={!open}>{children}</div>
+    </div>
+  );
+}
 
-  const row = (
+function Tile({ icon: I, tone }: { icon: Glyph; tone: string }) {
+  return (
+    <span
+      className="nav-tile grid size-[22px] shrink-0 place-items-center"
+      style={{ '--tile': tone, borderRadius: 'calc(var(--radius) * 0.85)' } as CSSProperties}
+    >
+      <I className="size-[13px]" strokeWidth={2.1} />
+    </span>
+  );
+}
+
+function Badge({ n = 0, alert }: { n?: number; alert?: boolean }) {
+  if (!n) return null;
+  return (
+    <span
+      className="tnum min-w-5 shrink-0 rounded-full px-1.5 text-center text-[11px] leading-[18px] font-semibold"
+      style={alert
+        ? { background: 'color-mix(in srgb, var(--os-warn) 20%, transparent)', color: 'var(--os-warn)' }
+        : { background: 'var(--rail-chip)', color: 'var(--rail-soft)' }}
+    >
+      {n}
+    </span>
+  );
+}
+
+function Row({ item, tone, count }: { item: NavItem; tone: string; count?: Count }) {
+  return (
     <NavLink
-      to={to}
-      end={to === '/'}
-      className={cn('group relative flex items-center gap-2.5 px-2.5 py-[7px] text-[13px] transition-colors',
-        collapsed && 'justify-center px-0')}
-      style={{ borderRadius: 'var(--radius)', color: 'var(--rail-ink)' }}
+      to={item.to} end={item.to === '/'}
+      className={({ isActive }) => cn('rail-row flex h-8 items-center gap-2.5 px-2', isActive && 'is-active')}
+      style={{ borderRadius: RADIUS }}
     >
       {({ isActive }) => (
         <>
-          <span
-            className="pointer-events-none absolute inset-0 transition-colors"
-            style={{
-              borderRadius: 'var(--radius)',
-              background: isActive ? 'var(--rail-active)' : fly ? 'var(--rail-hover)' : 'transparent',
-            }}
-          />
-          {isActive && (
-            <span
-              className="absolute top-1/2 left-0 -translate-y-1/2"
-              style={{
-                width: 2, height: '52%', borderRadius: '0 2px 2px 0',
-                background: 'var(--rail-accent)',
-              }}
-            />
-          )}
-          <Icon
-            name={icon}
-            className="relative size-4 shrink-0 transition-colors"
-            strokeWidth={isActive ? 2.15 : 1.75}
-            style={{ color: isActive ? 'var(--rail-accent)' : 'var(--rail-soft)' }}
-          />
-          {!collapsed && (
-            <span
-              className={cn('relative min-w-0 flex-1 truncate tracking-[-0.005em] transition-colors',
-                isActive ? 'font-semibold' : 'font-medium')}
-              style={{ color: isActive ? 'var(--rail-ink)' : 'var(--rail-item)' }}
-            >
-              {label}
-            </span>
-          )}
+          <Tile icon={ICONS[item.icon] ?? Circle} tone={tone} />
+          <span className={cn('min-w-0 flex-1 truncate text-[13.5px]', isActive ? 'font-semibold' : 'font-medium')}
+            style={{ color: isActive ? 'var(--rail-ink)' : 'var(--rail-item)' }}>
+            {item.label}
+          </span>
+          <Badge n={count?.n} alert={count?.alert} />
         </>
       )}
     </NavLink>
   );
+}
 
-  if (!collapsed) return row;
+function Sub({ name, items, tone, counts, open, active, onToggle }: {
+  name: string; items: NavItem[]; tone: string; counts: Record<string, Count>;
+  open: boolean; active: boolean; onToggle: (open: boolean) => void;
+}) {
+  const hidden = items.reduce((n, i) => n + (counts[i.to]?.n ?? 0), 0);
+  const alert = items.some((i) => counts[i.to]?.alert && counts[i.to]?.n);
+  return (
+    <div>
+      <button
+        onClick={() => onToggle(!open)} aria-expanded={open}
+        className="rail-row flex h-8 w-full items-center gap-2.5 px-2" style={{ borderRadius: RADIUS }}
+      >
+        <Tile icon={SUB_ICON[name] ?? Circle} tone={tone} />
+        <span className={cn('min-w-0 flex-1 truncate text-left text-[13.5px]', active ? 'font-semibold' : 'font-medium')}
+          style={{ color: active ? 'var(--rail-ink)' : 'var(--rail-item)' }}>
+          {name}
+        </span>
+        {!open && <Badge n={hidden} alert={alert} />}
+        <ChevronRight className={cn('size-3.5 shrink-0 transition-transform duration-200', open && 'rotate-90')}
+          strokeWidth={2.2} style={{ color: 'var(--rail-dim)' }} />
+      </button>
+      <Fold open={open}>
+        <div className="mt-px ml-[18px] space-y-px border-l py-0.5 pl-2" style={{ borderColor: 'var(--rail-line)' }}>
+          {items.map((i) => (
+            <NavLink
+              key={i.to} to={i.to}
+              className={({ isActive }) => cn('rail-row flex h-[30px] items-center gap-2 px-2.5', isActive && 'is-active')}
+              style={{ borderRadius: RADIUS }}
+            >
+              {({ isActive }) => (
+                <>
+                  <span className={cn('min-w-0 flex-1 truncate text-[13px]', isActive ? 'font-semibold' : 'font-medium')}
+                    style={{ color: isActive ? 'var(--rail-ink)' : 'var(--rail-item)' }}>
+                    {i.label}
+                  </span>
+                  <Badge n={counts[i.to]?.n} alert={counts[i.to]?.alert} />
+                </>
+              )}
+            </NavLink>
+          ))}
+        </div>
+      </Fold>
+    </div>
+  );
+}
 
+function Action({ icon: I, label, hint, onClick, mini, accent }: {
+  icon: Glyph; label: string; hint?: string; onClick: () => void; mini: boolean; accent?: boolean;
+}) {
+  const button = (
+    <button
+      onClick={onClick} aria-label={mini ? label : undefined}
+      className={cn('rail-row flex h-9 w-full items-center gap-2.5', mini ? 'justify-center' : 'px-2')}
+      style={{ borderRadius: RADIUS }}
+    >
+      <span className="grid size-[22px] shrink-0 place-items-center">
+        <I className="size-[17px]" strokeWidth={1.9} style={{ color: accent ? 'var(--rail-accent)' : 'var(--rail-soft)' }} />
+      </span>
+      {!mini && <span className="min-w-0 flex-1 truncate text-left text-[13.5px] font-medium" style={{ color: 'var(--rail-ink)' }}>{label}</span>}
+      {!mini && hint && <kbd className="text-[11.5px] font-medium" style={{ color: 'var(--rail-dim)' }}>{hint}</kbd>}
+    </button>
+  );
+  return mini ? <Flyout label={label}>{button}</Flyout> : button;
+}
+
+/** A label that floats beside a collapsed rail — portalled so the rail never clips it. */
+function Flyout({ label, children }: { label: string; children: ReactNode }) {
+  const [fly, setFly] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const ref = useRef<HTMLDivElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const show = () => {
+    clearTimeout(timer.current);
+    if (ref.current) {
+      const r = ref.current.getBoundingClientRect();
+      setPos({ top: r.top + r.height / 2, left: r.right });
+    }
+    setFly(true);
+  };
+  const hide = () => { timer.current = setTimeout(() => setFly(false), 100); };
+  useEffect(() => () => clearTimeout(timer.current), []);
   return (
     <>
-      <div ref={ref} onMouseEnter={open} onMouseLeave={close}>{row}</div>
+      <div ref={ref} onMouseEnter={show} onMouseLeave={hide}>{children}</div>
       {fly && createPortal(
-        <div
-          className="rail-flyout-enter fixed z-[9999] pl-2"
-          style={{ top: pos.top - 4, left: pos.left }}
-          onMouseEnter={open}
-          onMouseLeave={close}
-        >
-          <div className="rail-flyout px-3 py-1.5" style={{ borderRadius: 'calc(var(--radius) * 1.2)' }}>
-            <span className="text-[12px] font-semibold whitespace-nowrap" style={{ color: 'var(--rail-ink)' }}>{label}</span>
+        <div className="rail-flyout-enter pointer-events-none fixed z-[9999] -translate-y-1/2 pl-2" style={{ top: pos.top, left: pos.left }}>
+          <div className="rail-flyout px-3 py-1.5" style={{ borderRadius: RADIUS }}>
+            <span className="text-[12.5px] font-semibold whitespace-nowrap" style={{ color: 'var(--rail-ink)' }}>{label}</span>
           </div>
         </div>,
         document.body,

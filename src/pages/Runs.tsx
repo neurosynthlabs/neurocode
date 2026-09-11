@@ -89,7 +89,7 @@ export default function Runs() {
         subtitle="Every agent works in its own git worktree, so nothing they do can collide. This is the raw output."
         actions={
           <>
-            <label className="flex items-center gap-2 text-[12px] text-soft">
+            <label className="flex items-center gap-2 text-[13px] text-soft">
               <Switch checked={live} onCheckedChange={setLive} />stream
             </label>
             <Button size="sm" variant="outline" onClick={() => toast('Killing all runs requires a confirmation in the real system')}>
@@ -100,9 +100,9 @@ export default function Runs() {
       >
         <div className="flex flex-wrap items-center gap-3 pb-3">
           <Mono tone="brand">TASK-492</Mono>
-          <span className="text-[12px] text-ink-2">Fix invoice tax calculation — interstate CGST/SGST reversal</span>
+          <span className="text-[13px] text-ink-2">Fix invoice tax calculation — interstate CGST/SGST reversal</span>
           <Tag tone="warn">plan step 6 of 8 · run regression</Tag>
-          <span className="ml-auto flex items-center gap-1.5 text-[11.5px] text-dim">
+          <span className="ml-auto flex items-center gap-1.5 text-[12.5px] text-dim">
             <GitMerge className="size-3.5" />merge gate waits for your approval after review
           </span>
         </div>
@@ -132,14 +132,14 @@ export default function Runs() {
                   <ListRow key={r.id} active={r.id === sel} onClick={() => setSel(r.id)}>
                     <div className="flex items-center gap-2">
                       <Dot state={r.status} pulse={r.status === 'running' && live} />
-                      <span className="truncate text-[12.5px] font-medium text-ink">{r.agentName}</span>
-                      <span className="ml-auto tnum text-[11px] text-soft">{pct}%</span>
+                      <span className="truncate text-[13.5px] font-medium text-ink">{r.agentName}</span>
+                      <span className="ml-auto tnum text-[12px] text-soft">{pct}%</span>
                     </div>
                     <div className="mt-1 flex items-center gap-2">
                       <BlockBar pct={pct} width={16} />
                     </div>
-                    <p className="mt-1 truncate text-[10.5px] text-dim">{r.step}</p>
-                    <div className="mt-1 flex items-center gap-2 text-[10px] text-dim">
+                    <p className="mt-1 truncate text-[11.5px] text-dim">{r.step}</p>
+                    <div className="mt-1 flex items-center gap-2 text-[11px] text-dim">
                       <Mono>{r.worktree}</Mono>
                       <span className="ml-auto">{r.elapsed}</span>
                     </div>
@@ -154,7 +154,7 @@ export default function Runs() {
             <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-line px-3.5 py-2.5">
               <div className="flex min-w-0 items-center gap-2">
                 <Dot state={run.status} pulse={run.status === 'running' && live} />
-                <span className="truncate text-[12.5px] font-semibold text-ink">{run.agentName}</span>
+                <span className="truncate text-[13.5px] font-semibold text-ink">{run.agentName}</span>
                 <Mono>{run.model}</Mono>
                 <Tag tone="neutral">{run.taskRef}</Tag>
               </div>
@@ -170,7 +170,7 @@ export default function Runs() {
               </div>
             </div>
 
-            <div ref={logRef} className="min-h-0 flex-1 overflow-y-auto bg-base px-3.5 py-2.5 font-mono text-[11.5px] leading-[1.6]">
+            <div ref={logRef} className="min-h-0 flex-1 overflow-y-auto bg-base px-3.5 py-2.5 font-mono text-[12.5px] leading-[1.6]">
               {log.length === 0 ? <Empty title="No output at that level" hint="Switch the filter back to all." /> : log.map((l, i) => (
                 <div key={i} className="flex gap-2.5">
                   <span className="shrink-0 text-dim">{l.t}</span>

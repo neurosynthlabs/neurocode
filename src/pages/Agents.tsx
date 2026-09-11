@@ -76,7 +76,7 @@ export default function Agents() {
           <Tag tone="ok"><Dot state="running" pulse />{byStatus('running')} running</Tag>
           <Tag tone="neutral">{byStatus('idle')} idle</Tag>
           <Tag tone="warn">{byStatus('waiting')} waiting</Tag>
-          <span className="ml-2 text-[11.5px] text-dim">
+          <span className="ml-2 text-[12.5px] text-dim">
             concurrency cap 8 · max parallel worktrees 6 · one agent per worktree, never shared
           </span>
         </div>
@@ -91,7 +91,7 @@ export default function Agents() {
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
               {ESCALATION.map((e) => (
                 <Panel key={e.tier} eyebrow={`${e.tier} risk`} title={e.who} className={e.tone === 'danger' ? 'border-danger/35' : undefined}>
-                  <p className="text-[12px] text-soft">{e.what}</p>
+                  <p className="text-[13px] text-soft">{e.what}</p>
                   <div className="mt-2 border-t border-line pt-2">
                     <Tag tone={e.tone}>{e.who}</Tag>
                   </div>
@@ -112,15 +112,15 @@ export default function Agents() {
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-1.5">
-                        <span className="truncate text-[12.5px] font-medium text-ink">{x.name}</span>
+                        <span className="truncate text-[13.5px] font-medium text-ink">{x.name}</span>
                         <Dot state={x.status} pulse={x.status === 'running'} />
                       </span>
-                      <span className="block truncate text-[10.5px] text-dim">{x.role}</span>
+                      <span className="block truncate text-[11.5px] text-dim">{x.role}</span>
                     </span>
                   </div>
                   <div className="mt-1.5 flex items-center gap-2">
                     <Mono>{x.model}</Mono>
-                    <span className="ml-auto tnum text-[10.5px] text-dim">{x.successRate}%</span>
+                    <span className="ml-auto tnum text-[11.5px] text-dim">{x.successRate}%</span>
                   </div>
                 </ListRow>
               ))}
@@ -135,7 +135,7 @@ export default function Agents() {
                   </span>
                   <div>
                     <h2 className="text-[17px] font-semibold text-ink">{a.name}</h2>
-                    <p className="text-[12.5px] text-soft">{a.role}</p>
+                    <p className="text-[13.5px] text-soft">{a.role}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -157,13 +157,13 @@ export default function Agents() {
                   <KV k="Primary" v={<Mono tone="brand">{a.model}</Mono>} />
                   <KV k="Fallback" v={<Mono>{a.fallbackModel ?? '—'}</Mono>} />
                   <KV k="Autonomy" v={a.autonomy} />
-                  <p className="mt-2 text-[11.5px] text-dim">{AUTONOMY[a.autonomy].note}</p>
+                  <p className="mt-2 text-[12.5px] text-dim">{AUTONOMY[a.autonomy].note}</p>
                 </Panel>
 
                 <Panel eyebrow="Capabilities" title="Tools granted">
                   <div className="flex flex-wrap gap-1.5">
                     {a.tools.map((t) => (
-                      <span key={t} className="inline-flex items-center gap-1 rounded-xs border border-ok/25 bg-ok/8 px-1.5 py-px text-[11px] text-ok">
+                      <span key={t} className="inline-flex items-center gap-1 rounded-xs border border-ok/25 bg-ok/8 px-1.5 py-px text-[12px] text-ok">
                         <Check className="size-2.5" />{t}
                       </span>
                     ))}
@@ -183,7 +183,7 @@ export default function Agents() {
                     {a.guardrails.map((g) => (
                       <div key={g} className="flex items-start gap-2 px-3.5 py-2">
                         <ShieldCheck className="mt-px size-3.5 shrink-0 text-warn" />
-                        <span className="text-[12px] text-ink-2">{g}</span>
+                        <span className="text-[13px] text-ink-2">{g}</span>
                       </div>
                     ))}
                   </div>

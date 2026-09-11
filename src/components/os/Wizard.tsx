@@ -78,7 +78,7 @@ export function Wizard({
       <DialogContent className={cn('gap-0 overflow-hidden p-0 sm:max-w-3xl', className)}>
         <DialogHeader className="border-b border-line px-5 pt-5 pb-4">
           <DialogTitle className="text-[15px] font-semibold tracking-[-0.01em] text-ink">{title}</DialogTitle>
-          {description && <DialogDescription className="text-[12px] leading-relaxed text-soft">{description}</DialogDescription>}
+          {description && <DialogDescription className="text-[13px] leading-relaxed text-soft">{description}</DialogDescription>}
         </DialogHeader>
 
         {/* Stepper */}
@@ -99,7 +99,7 @@ export function Wizard({
                   >
                     <span
                       className={cn(
-                        'grid size-6 shrink-0 place-items-center rounded-full border text-[11px] font-semibold transition-colors',
+                        'grid size-6 shrink-0 place-items-center rounded-full border text-[12px] font-semibold transition-colors',
                         done && 'border-brand bg-brand text-brand-ink',
                         current && 'border-brand bg-brand/12 text-brand ring-2 ring-brand/15',
                         !done && !current && 'border-line-strong bg-surface text-dim',
@@ -108,11 +108,11 @@ export function Wizard({
                       {done ? <Check className="size-3.5" strokeWidth={2.6} /> : n + 1}
                     </span>
                     <span className="hidden min-w-0 pt-0.5 sm:block">
-                      <span className={cn('block truncate text-[12px] font-medium',
+                      <span className={cn('block truncate text-[13px] font-medium',
                         current ? 'text-ink' : done ? 'text-ink-2 group-hover:text-ink' : 'text-dim')}>
                         {s.title}
                       </span>
-                      {s.hint && <span className="block truncate text-[10.5px] text-dim">{s.hint}</span>}
+                      {s.hint && <span className="block truncate text-[11.5px] text-dim">{s.hint}</span>}
                     </span>
                   </button>
                   {n < steps.length - 1 && (
@@ -140,9 +140,9 @@ export function Wizard({
 
         {/* Footer */}
         <div className="flex items-center justify-between gap-3 border-t border-line bg-base px-5 py-3">
-          <span className="truncate text-[11px] text-dim">Step {idx + 1} of {steps.length} · {step.title}</span>
+          <span className="truncate text-[12px] text-dim">Step {idx + 1} of {steps.length} · {step.title}</span>
           <div className="flex shrink-0 items-center gap-2">
-            {!canNext && step.blocker && <span className="text-[11px] text-warn">{step.blocker}</span>}
+            {!canNext && step.blocker && <span className="text-[12px] text-warn">{step.blocker}</span>}
             {idx === 0 ? (
               <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
             ) : (

@@ -108,19 +108,19 @@ export default function Projects() {
         actions={<Button size="sm" onClick={() => setNewOpen(true)}><Plus className="size-3.5" />New project</Button>}
       >
         <div className="flex flex-wrap items-center gap-2 pb-3">
-          <div className="flex h-7 w-64 items-center gap-2 rounded-sm border border-line bg-surface-2 px-2.5 focus-within:border-brand">
+          <div className="flex h-9 w-64 items-center gap-2 rounded-lg border border-line bg-surface-2 px-2.5 focus-within:border-brand">
             <Search className="size-3.5 shrink-0 text-dim" />
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search projects, stacks, codenames…"
-              className="min-w-0 flex-1 bg-transparent text-[12px] text-ink placeholder:text-dim focus-visible:outline-none"
+              className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-dim focus-visible:outline-none"
             />
           </div>
-          <select value={kind} onChange={(e) => setKind(e.target.value)} className="h-7 rounded-sm border border-line-strong bg-surface-2 px-2 text-[12px] text-ink-2">
+          <select value={kind} onChange={(e) => setKind(e.target.value)} className="h-9 rounded-lg border border-line-strong bg-surface-2 px-2.5 text-[13px] text-ink-2">
             {['all', 'legacy', 'greenfield', 'platform'].map((k) => <option key={k} value={k} className="bg-surface">{k === 'all' ? 'All kinds' : k}</option>)}
           </select>
-          <select value={status} onChange={(e) => setStatus(e.target.value)} className="h-7 rounded-sm border border-line-strong bg-surface-2 px-2 text-[12px] text-ink-2">
+          <select value={status} onChange={(e) => setStatus(e.target.value)} className="h-9 rounded-lg border border-line-strong bg-surface-2 px-2.5 text-[13px] text-ink-2">
             {['all', 'active', 'onboarding', 'paused', 'archived'].map((k) => <option key={k} value={k} className="bg-surface">{k === 'all' ? 'All statuses' : k}</option>)}
           </select>
           <Segmented
@@ -128,7 +128,7 @@ export default function Projects() {
             value={sort}
             onChange={setSort}
           />
-          <span className="ml-auto text-[11.5px] text-dim">{list.length} of {projects.length}</span>
+          <span className="ml-auto text-[12.5px] text-dim">{list.length} of {projects.length}</span>
         </div>
       </PageHeader>
 
@@ -143,7 +143,7 @@ export default function Projects() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <Dot state={p.status} pulse={p.status === 'active'} />
-                      <h2 className="truncate text-[13.5px] font-semibold text-ink">{p.name}</h2>
+                      <h2 className="truncate text-[14.5px] font-semibold text-ink">{p.name}</h2>
                       {p.id === projectId && <Tag tone="brand">active</Tag>}
                     </div>
                     <div className="mt-1 flex items-center gap-2">
@@ -158,10 +158,10 @@ export default function Projects() {
                 </div>
 
                 <div className="flex-1 px-3.5 py-3">
-                  <p className="mb-2.5 line-clamp-2 text-[11.5px] text-soft">{p.description}</p>
+                  <p className="mb-2.5 line-clamp-2 text-[12.5px] text-soft">{p.description}</p>
                   <div className="mb-3 flex flex-wrap gap-1">
                     {p.stack.map((s) => (
-                      <span key={s} className="rounded-xs border border-line bg-surface-2 px-1.5 py-px text-[10.5px] text-ink-2">{s}</span>
+                      <span key={s} className="rounded-xs border border-line bg-surface-2 px-1.5 py-px text-[11.5px] text-ink-2">{s}</span>
                     ))}
                   </div>
 
@@ -174,7 +174,7 @@ export default function Projects() {
                     ].map(({ icon: Icon, v, l }) => (
                       <div key={l}>
                         <div className="flex items-center gap-1 text-dim"><Icon className="size-3" /><span className="eyebrow">{l}</span></div>
-                        <div className="tnum mt-0.5 text-[13px] font-medium text-ink">{v}</div>
+                        <div className="tnum mt-0.5 text-[14px] font-medium text-ink">{v}</div>
                       </div>
                     ))}
                   </div>
@@ -182,16 +182,16 @@ export default function Projects() {
                   <div className="mt-2.5 space-y-1.5">
                     {p.coverage.slice(0, 3).map((c) => (
                       <div key={c.label} className="flex items-center gap-2">
-                        <span className="w-32 shrink-0 truncate text-[11px] text-soft">{c.label}</span>
+                        <span className="w-32 shrink-0 truncate text-[12px] text-soft">{c.label}</span>
                         <BlockBar pct={c.pct} width={12} />
-                        <span className="tnum w-7 text-right text-[10.5px] text-dim">{c.pct}%</span>
+                        <span className="tnum w-7 text-right text-[11.5px] text-dim">{c.pct}%</span>
                       </div>
                     ))}
                   </div>
                 </div>
 
                 <div className="flex items-center justify-between gap-2 border-t border-line px-3.5 py-2.5">
-                  <div className="flex items-center gap-2.5 text-[11px]">
+                  <div className="flex items-center gap-2.5 text-[12px]">
                     <span className="text-ok">{p.work.running} running</span>
                     <span className="text-warn">{p.work.review} review</span>
                     {p.work.blocked > 0 && <span className="text-danger">{p.work.blocked} blocked</span>}
@@ -218,13 +218,13 @@ export default function Projects() {
               {globalBrain.map((b) => (
                 <div key={b.id} className="px-3.5 py-2.5">
                   <div className="flex items-baseline justify-between gap-3">
-                    <span className="text-[12.5px] font-medium text-ink">{b.label}</span>
-                    <span className="tnum text-[12px] text-brand">{b.count.toLocaleString()}</span>
+                    <span className="text-[13.5px] font-medium text-ink">{b.label}</span>
+                    <span className="tnum text-[13px] text-brand">{b.count.toLocaleString()}</span>
                   </div>
-                  <p className="mt-0.5 text-[11px] text-dim">{b.note}</p>
+                  <p className="mt-0.5 text-[12px] text-dim">{b.note}</p>
                   <ul className="mt-1.5 space-y-0.5">
                     {b.examples.map((e) => (
-                      <li key={e} className="flex items-start gap-1.5 text-[11px] text-soft">
+                      <li key={e} className="flex items-start gap-1.5 text-[12px] text-soft">
                         <span className="mt-1.5 size-1 shrink-0 rounded-full bg-line-strong" />{e}
                       </li>
                     ))}
@@ -241,13 +241,13 @@ export default function Projects() {
                 return (
                   <div key={m.projectId} className="px-3.5 py-2.5">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-[12px] font-medium text-ink">{p?.name ?? m.projectId}</span>
-                      <span className="tnum text-[11.5px] text-soft">{m.facts.toLocaleString()} facts</span>
+                      <span className="text-[13px] font-medium text-ink">{p?.name ?? m.projectId}</span>
+                      <span className="tnum text-[12.5px] text-soft">{m.facts.toLocaleString()} facts</span>
                     </div>
-                    <div className="mt-1 flex gap-3 text-[10.5px] text-dim">
+                    <div className="mt-1 flex gap-3 text-[11.5px] text-dim">
                       <span>{m.rules} rules</span><span>{m.decisions} decisions</span><span>{m.legacy} legacy</span>
                     </div>
-                    <p className="mt-1 text-[11px] text-soft">{m.note}</p>
+                    <p className="mt-1 text-[12px] text-soft">{m.note}</p>
                   </div>
                 );
               })}
@@ -310,15 +310,15 @@ export default function Projects() {
                   <div className="flex flex-wrap gap-1">
                     {['C# · .NET 8', 'T-SQL', 'TypeScript · React', 'PowerShell', 'YAML'].map((l) => <Tag key={l} tone="neutral">{l}</Tag>)}
                   </div>
-                  <p className="mt-1 text-[11px] text-dim">From the repository’s language stats — confirmed properly in step 1 of the pipeline.</p>
+                  <p className="mt-1 text-[12px] text-dim">From the repository’s language stats — confirmed properly in step 1 of the pipeline.</p>
                 </div>
                 <Field label="Excluded paths — never parsed, embedded or shown to a model" value={excluded} onChange={setExcluded} mono />
                 <div className="divide-y divide-line rounded-sm border border-line">
                   {scopeToggles.map((t) => (
                     <div key={t.label} className="flex items-center justify-between gap-4 px-3 py-2">
                       <span className="min-w-0">
-                        <span className="block text-[12.5px] font-medium text-ink">{t.label}</span>
-                        <span className="block text-[11px] text-dim">{t.note}</span>
+                        <span className="block text-[13.5px] font-medium text-ink">{t.label}</span>
+                        <span className="block text-[12px] text-dim">{t.note}</span>
                       </span>
                       <Switch aria-label={t.label} checked={t.on} onCheckedChange={t.set} />
                     </div>
@@ -331,7 +331,7 @@ export default function Projects() {
             id: 'rules', title: 'Access & rules', hint: 'what it may do',
             content: (
               <div className="space-y-3">
-                <p className="text-[12px] leading-relaxed text-soft">
+                <p className="text-[13px] leading-relaxed text-soft">
                   These become the project’s rule set on day one. Each is enforced by a reviewer check or a hook — not by
                   asking a model nicely. Edit them any time after onboarding.
                 </p>
@@ -346,8 +346,8 @@ export default function Projects() {
                           {on && <Check className="size-3" strokeWidth={2.6} />}
                         </span>
                         <span className="min-w-0">
-                          <span className="block text-[12.5px] font-medium text-ink">{r.label}</span>
-                          <span className="block text-[11px] text-dim">{r.note}</span>
+                          <span className="block text-[13.5px] font-medium text-ink">{r.label}</span>
+                          <span className="block text-[12px] text-dim">{r.note}</span>
                         </span>
                       </button>
                     );
@@ -355,7 +355,7 @@ export default function Projects() {
                 </div>
                 <div className="flex items-start gap-2 rounded-sm border border-line bg-base px-3 py-2">
                   <Lock className="mt-px size-3.5 shrink-0 text-warn" />
-                  <p className="text-[11.5px] text-soft">
+                  <p className="text-[12.5px] text-soft">
                     Memory for this project is isolated. Nothing it learns leaks into other projects — except through the
                     global brain, and only after you promote it.
                   </p>
@@ -373,7 +373,7 @@ export default function Projects() {
                   <KV k="Database" v={connectDb ? 'read-only snapshot' : 'skipped'} />
                   <KV k="Rules seeded" v={`${seeded.size} of ${SEED_RULES.length}`} />
                 </div>
-                <SectionTitle right={<span className="text-[11px] text-dim">est. {estMinutes} min · {activeSteps.length} of {onboardingSteps.length} steps</span>}>
+                <SectionTitle right={<span className="text-[12px] text-dim">est. {estMinutes} min · {activeSteps.length} of {onboardingSteps.length} steps</span>}>
                   Automatic pipeline
                 </SectionTitle>
                 <div className="max-h-[260px] overflow-y-auto rounded-sm border border-line bg-base">
@@ -381,13 +381,13 @@ export default function Projects() {
                     const skip = skippedSteps.has(st.n);
                     return (
                       <div key={st.n} className={cn('flex items-center gap-2.5 border-b border-line/60 px-3 py-1.5 last:border-0', skip && 'opacity-45')}>
-                        <span className="tnum w-5 shrink-0 text-right font-mono text-[10.5px] text-dim">{st.n}</span>
+                        <span className="tnum w-5 shrink-0 text-right font-mono text-[11.5px] text-dim">{st.n}</span>
                         <span className="min-w-0 flex-1">
-                          <span className={cn('block truncate text-[12px] text-ink-2', skip && 'line-through')}>{st.label}</span>
-                          <span className="block truncate text-[10.5px] text-dim">{skip ? 'skipped — turned off in Scope' : st.detail}</span>
+                          <span className={cn('block truncate text-[13px] text-ink-2', skip && 'line-through')}>{st.label}</span>
+                          <span className="block truncate text-[11.5px] text-dim">{skip ? 'skipped — turned off in Scope' : st.detail}</span>
                         </span>
-                        <span className="shrink-0 text-[10.5px] text-dim">{st.agent}</span>
-                        <span className="tnum w-10 shrink-0 text-right font-mono text-[10.5px] text-soft">{st.est}</span>
+                        <span className="shrink-0 text-[11.5px] text-dim">{st.agent}</span>
+                        <span className="tnum w-10 shrink-0 text-right font-mono text-[11.5px] text-soft">{st.est}</span>
                       </div>
                     );
                   })}

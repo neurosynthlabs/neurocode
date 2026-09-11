@@ -52,8 +52,8 @@ export default function Sessions() {
                     <Mono>{x.ref}</Mono>
                     <span className="eyebrow ml-auto">{x.status}</span>
                   </div>
-                  <p className="mt-1 truncate text-[12px] font-medium text-ink">{x.title}</p>
-                  <p className="mt-0.5 truncate text-[10.5px] text-dim">{projectName(x.projectId)} · {x.startedAt} · {x.duration}</p>
+                  <p className="mt-1 truncate text-[13px] font-medium text-ink">{x.title}</p>
+                  <p className="mt-0.5 truncate text-[11.5px] text-dim">{projectName(x.projectId)} · {x.startedAt} · {x.duration}</p>
                 </ListRow>
               ))}
             </div>
@@ -63,7 +63,7 @@ export default function Sessions() {
             <Panel eyebrow={`${projectName(s.projectId)} · started ${s.startedAt}`}
               title={<span className="flex items-center gap-2"><Mono tone="brand">{s.ref}</Mono>{s.title}</span>}
               actions={<Button size="xs" variant="outline" onClick={() => toast.success(`Forked ${s.ref}`, { description: 'New session from the latest checkpoint; the original is untouched.' })}><GitFork className="size-3" />Fork</Button>}>
-              <p className="text-[12.5px] leading-relaxed text-ink-2">{s.summary}</p>
+              <p className="text-[13.5px] leading-relaxed text-ink-2">{s.summary}</p>
               <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 border-t border-line pt-2.5 xl:grid-cols-4">
                 <KV k="Duration" v={s.duration} />
                 <KV k="Messages" v={s.messages} />
@@ -82,8 +82,8 @@ export default function Sessions() {
                       <span className={cn('relative z-10 size-2.5 shrink-0 rounded-full border-2',
                         i === s.checkpoints.length - 1 ? 'border-brand bg-brand' : 'border-line-strong bg-surface')} />
                       <span className="min-w-0 flex-1">
-                        <span className="block text-[12px] text-ink">{c.label}</span>
-                        <span className="block text-[10.5px] text-dim">{c.at} · {c.files} files · {(c.tokens / 1000).toFixed(0)}k tokens</span>
+                        <span className="block text-[13px] text-ink">{c.label}</span>
+                        <span className="block text-[11.5px] text-dim">{c.at} · {c.files} files · {(c.tokens / 1000).toFixed(0)}k tokens</span>
                       </span>
                       {i < s.checkpoints.length - 1 && (
                         <Button size="xs" variant="ghost" onClick={() => setRestore(c)}><RotateCcw className="size-3" />Restore</Button>
@@ -95,15 +95,15 @@ export default function Sessions() {
 
               <Panel eyebrow="Context was summarised here" title={<span className="flex items-center gap-1.5"><Archive className="size-3.5 text-brand" />Compaction · {compaction.at}</span>}>
                 <div className="flex items-center gap-3">
-                  <span className="tnum font-mono text-[12px] text-soft">{(compaction.before / 1000).toFixed(0)}k</span>
+                  <span className="tnum font-mono text-[13px] text-soft">{(compaction.before / 1000).toFixed(0)}k</span>
                   <span className="text-dim">→</span>
-                  <span className="tnum font-mono text-[12px] text-ok">{(compaction.after / 1000).toFixed(0)}k tokens</span>
+                  <span className="tnum font-mono text-[13px] text-ok">{(compaction.after / 1000).toFixed(0)}k tokens</span>
                 </div>
                 <SectionTitle className="mt-3 mb-1.5">Preserved in memory</SectionTitle>
                 <ul className="space-y-1">
-                  {compaction.preserved.map((p) => <li key={p} className="flex gap-1.5 text-[11.5px] text-ink-2"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-ok" />{p}</li>)}
+                  {compaction.preserved.map((p) => <li key={p} className="flex gap-1.5 text-[12.5px] text-ink-2"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-ok" />{p}</li>)}
                 </ul>
-                <p className="mt-2.5 border-t border-line pt-2 text-[11px] text-dim">{compaction.note}</p>
+                <p className="mt-2.5 border-t border-line pt-2 text-[12px] text-dim">{compaction.note}</p>
               </Panel>
             </div>
 
@@ -117,10 +117,10 @@ export default function Sessions() {
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-2">
-                        <span className="text-[11.5px] font-semibold text-ink">{m.role === 'you' ? 'You' : 'AI Commander'}</span>
-                        <span className="font-mono text-[10.5px] text-dim">{m.at}</span>
+                        <span className="text-[12.5px] font-semibold text-ink">{m.role === 'you' ? 'You' : 'AI Commander'}</span>
+                        <span className="font-mono text-[11.5px] text-dim">{m.at}</span>
                       </span>
-                      <span className="mt-0.5 block text-[12.5px] leading-relaxed text-ink-2">{m.text}</span>
+                      <span className="mt-0.5 block text-[13.5px] leading-relaxed text-ink-2">{m.text}</span>
                     </span>
                   </div>
                 ))}

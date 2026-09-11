@@ -43,7 +43,7 @@ export default function Plugins() {
         <Toolbar>
           <Field className="w-64" value={q} onChange={setQ} icon={<Search className="size-3.5" />} placeholder="Search plugins, publishers…" onClear={() => setQ('')} />
           <SelectField className="w-44" value={cat} onChange={setCat} options={cats.map((c) => ({ value: c, label: c === 'all' ? 'Any category' : c }))} />
-          <span className="ml-auto text-[11.5px] text-dim">{list.length} shown</span>
+          <span className="ml-auto text-[12.5px] text-dim">{list.length} shown</span>
         </Toolbar>
       </PageHeader>
 
@@ -64,10 +64,10 @@ export default function Plugins() {
                   <div className="flex flex-wrap items-center gap-2">
                     <Mono tone="brand">{c.command}</Mono>
                     <Tag tone="neutral">{c.a}</Tag>
-                    <span className="text-[11px] text-dim">vs</span>
+                    <span className="text-[12px] text-dim">vs</span>
                     <Tag tone="neutral">{c.b}</Tag>
                   </div>
-                  <p className="mt-1 text-[11.5px] text-soft">{c.resolution}</p>
+                  <p className="mt-1 text-[12.5px] text-soft">{c.resolution}</p>
                 </div>
               ))}
             </div>
@@ -82,12 +82,12 @@ export default function Plugins() {
             {list.map((p) => (
               <Panel key={p.id} className="hover-lift cursor-pointer" eyebrow={`${p.publisher} · v${p.version} · ${p.updatedAt}`}
                 title={<span className="flex items-center gap-2">{p.name}<Tag tone="neutral">{p.category}</Tag></span>}
-                actions={<span className="flex items-center gap-1 text-[11px] text-dim"><Star className="size-3" />{p.stars.toLocaleString()}</span>}>
+                actions={<span className="flex items-center gap-1 text-[12px] text-dim"><Star className="size-3" />{p.stars.toLocaleString()}</span>}>
                 <div onClick={() => setOpen(p)}>
-                  <p className="line-clamp-3 min-h-[48px] text-[11.5px] leading-relaxed text-soft">{p.description}</p>
+                  <p className="line-clamp-3 min-h-[48px] text-[12.5px] leading-relaxed text-soft">{p.description}</p>
                   <div className="mt-2.5 flex flex-wrap gap-1 border-t border-line pt-2.5">
                     {(['agents', 'skills', 'commands', 'hooks', 'mcp'] as const).map((k) => p.provides[k] > 0 && (
-                      <span key={k} className="rounded-xs border border-line bg-surface-2 px-1.5 py-px text-[10.5px] text-ink-2">
+                      <span key={k} className="rounded-xs border border-line bg-surface-2 px-1.5 py-px text-[11.5px] text-ink-2">
                         {p.provides[k]} {k}
                       </span>
                     ))}
@@ -122,12 +122,12 @@ export default function Plugins() {
                   {inst[open.id] && <Tag tone="ok">installed</Tag>}
                 </div>
                 <SheetTitle className="mt-2 text-[16px] text-ink">{open.name}</SheetTitle>
-                <SheetDescription className="text-[12px] text-soft">
+                <SheetDescription className="text-[13px] text-soft">
                   {open.publisher} · {open.stars.toLocaleString()} stars · updated {open.updatedAt}
                 </SheetDescription>
               </SheetHeader>
               <div className="space-y-3 p-5">
-                <p className="text-[12.5px] leading-relaxed text-ink-2">{open.description}</p>
+                <p className="text-[13.5px] leading-relaxed text-ink-2">{open.description}</p>
                 <Panel eyebrow="What it registers" title="Contributions" flush>
                   <div className="px-3.5 py-1.5">
                     <KV k="Agents" v={open.provides.agents || '—'} />
@@ -138,7 +138,7 @@ export default function Plugins() {
                   </div>
                 </Panel>
                 <SectionTitle>On install</SectionTitle>
-                <ul className="space-y-1 text-[11.5px] text-soft">
+                <ul className="space-y-1 text-[12.5px] text-soft">
                   <li className="flex gap-1.5"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-brand" />Skills register disabled and load only when their trigger matches.</li>
                   <li className="flex gap-1.5"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-brand" />Hooks that block a tool call require your confirmation before they arm.</li>
                   <li className="flex gap-1.5"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-brand" />MCP servers arrive disconnected with every tool set to ask.</li>

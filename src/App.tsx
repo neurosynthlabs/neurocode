@@ -77,12 +77,12 @@ function Shell() {
   return (
     <div className="flex h-full w-full overflow-hidden bg-base">
       <div className="hidden h-full lg:flex">
-        <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} />
+        <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} onSearch={() => setSearchOpen(true)} />
       </div>
       <Sheet open={navOpen} onOpenChange={setNavOpen}>
         <SheetContent side="left" showCloseButton={false} className="gap-0 p-0 data-[side=left]:w-[288px] data-[side=left]:max-w-[86vw] data-[side=left]:sm:max-w-[288px]">
           <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <Sidebar variant="drawer" collapsed={false} onToggle={() => setNavOpen(false)} />
+          <Sidebar variant="drawer" collapsed={false} onToggle={() => setNavOpen(false)} onSearch={() => { setNavOpen(false); setSearchOpen(true); }} />
         </SheetContent>
       </Sheet>
       <div className={cn('flex min-w-0 flex-1 flex-col', rail === 'flush' ? '' : 'gap-1.5 p-1.5 sm:gap-2 sm:p-2')}>

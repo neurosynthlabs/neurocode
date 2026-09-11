@@ -38,7 +38,7 @@ export default function Brainstorm() {
               onChange={(e) => setIdea(e.target.value)}
               rows={2}
               placeholder="I want to build a taxi marketplace…"
-              className="min-w-0 flex-1 resize-none bg-transparent text-[13px] text-ink placeholder:text-dim focus-visible:outline-none"
+              className="min-w-0 flex-1 resize-none bg-transparent text-[14px] text-ink placeholder:text-dim focus-visible:outline-none"
             />
             <Button size="sm" disabled={!idea.trim()} onClick={run}><Sparkles className="size-3.5" />Brainstorm</Button>
           </div>
@@ -52,10 +52,10 @@ export default function Brainstorm() {
               <div className="flex items-center gap-2">
                 <Mono>{x.ref}</Mono>
                 <Tag tone="neutral">{projectName(x.projectHint)}</Tag>
-                <span className={cn('tnum ml-auto text-[12px] font-semibold', x.score >= 75 ? 'text-ok' : x.score >= 55 ? 'text-warn' : 'text-danger')}>{x.score}</span>
+                <span className={cn('tnum ml-auto text-[13px] font-semibold', x.score >= 75 ? 'text-ok' : x.score >= 55 ? 'text-warn' : 'text-danger')}>{x.score}</span>
               </div>
-              <p className="mt-1 line-clamp-2 text-[12px] text-ink">{x.idea}</p>
-              <p className="mt-1 text-[10.5px] text-dim">{x.createdAt}</p>
+              <p className="mt-1 line-clamp-2 text-[13px] text-ink">{x.idea}</p>
+              <p className="mt-1 text-[11.5px] text-dim">{x.createdAt}</p>
             </ListRow>
           ))}
         </div>
@@ -64,7 +64,7 @@ export default function Brainstorm() {
           <Panel className="accent-top" eyebrow={`${b.ref} · idea`} title={b.idea}>
             <div className="flex items-center gap-4">
               <Ring pct={b.score} size={58} tone={b.score >= 75 ? 'ok' : b.score >= 55 ? 'warn' : 'danger'} />
-              <p className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-ink-2">{b.verdict}</p>
+              <p className="min-w-0 flex-1 text-[13.5px] leading-relaxed text-ink-2">{b.verdict}</p>
             </div>
           </Panel>
 
@@ -72,10 +72,10 @@ export default function Brainstorm() {
           <div className="grid grid-cols-1 gap-3 stagger md:grid-cols-2 2xl:grid-cols-4">
             {b.nodes.map((n, i) => (
               <Panel key={n.id} eyebrow={`${i + 1} · ${n.stage}`} title={n.title} className="hover-lift">
-                {n.items.length === 0 ? <p className="text-[11.5px] text-dim">—</p> : (
+                {n.items.length === 0 ? <p className="text-[12.5px] text-dim">—</p> : (
                   <ul className="space-y-1">
                     {n.items.map((it) => (
-                      <li key={it} className="flex gap-1.5 text-[11.5px] leading-snug text-ink-2">
+                      <li key={it} className="flex gap-1.5 text-[12.5px] leading-snug text-ink-2">
                         <span className="mt-1.5 size-1 shrink-0 rounded-full bg-brand" />{it}
                       </li>
                     ))}
@@ -95,7 +95,7 @@ export default function Brainstorm() {
                 {b.devilsAdvocate.map((o, i) => (
                   <div key={i} className="flex items-start gap-3 px-3.5 py-2.5">
                     <Tag tone={SEV_TONE[o.severity]}>{o.severity}</Tag>
-                    <span className="text-[12.5px] leading-relaxed text-ink-2">{o.text}</span>
+                    <span className="text-[13.5px] leading-relaxed text-ink-2">{o.text}</span>
                   </div>
                 ))}
               </div>
@@ -108,7 +108,7 @@ export default function Brainstorm() {
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
             <Panel eyebrow="The smallest thing worth building" title={<span className="flex items-center gap-1.5"><Flag className="size-3.5 text-brand" />MVP scope</span>}>
               <ul className="space-y-1">
-                {b.mvp.map((m) => <li key={m} className="flex gap-1.5 text-[12px] text-ink-2"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-ok" />{m}</li>)}
+                {b.mvp.map((m) => <li key={m} className="flex gap-1.5 text-[13px] text-ink-2"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-ok" />{m}</li>)}
               </ul>
             </Panel>
             <Panel className="xl:col-span-2" eyebrow="Phased" title="Roadmap" flush>
@@ -117,7 +117,7 @@ export default function Brainstorm() {
                   <Row key={r.phase}>
                     <Cell className="font-medium text-ink">{r.phase}</Cell>
                     <Cell mono>{r.weeks}</Cell>
-                    <Cell className="text-[11.5px] text-soft">{r.items.join(' · ')}</Cell>
+                    <Cell className="text-[12.5px] text-soft">{r.items.join(' · ')}</Cell>
                   </Row>
                 ))}
               </DataTable>

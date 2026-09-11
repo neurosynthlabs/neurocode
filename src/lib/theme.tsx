@@ -91,14 +91,25 @@ const resolveBase = (m: Theme): 'light' | 'dark' => {
   return themeBaseMap[m] ?? 'light';
 };
 
+// A one-time move to the macOS-style defaults: the system font (SF on a Mac) at 14px. Only the old
+// defaults are replaced; a font or size the operator picked on purpose is left alone.
+try {
+  const key = (name: string) => `${K}.${name}`;
+  if (localStorage.getItem(key('defaults')) !== '2') {
+    if ([null, 'inter'].includes(localStorage.getItem(key('font')))) localStorage.setItem(key('font'), 'system');
+    if ([null, 'compact'].includes(localStorage.getItem(key('size')))) localStorage.setItem(key('size'), 'default');
+    localStorage.setItem(key('defaults'), '2');
+  }
+} catch { /* storage is blocked: the in-code defaults below apply */ }
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [preset, setPreset] = useState(() => read('preset', 'graphite'));
   const [mode, setModeState] = useState<Theme>(() => read('mode', 'dark') as Theme);
   const [themeColor, setColorState] = useState(() => read('color', 'zinc'));
   const [surfaceTone, setToneState] = useState(() => read('tone', 'dark-graphite'));
   const [radius, setRadiusState] = useState(() => Number(read('radius', '0.5')) || 0.5);
-  const [fontFamily, setFontState] = useState<FontFamily>(() => read('font', 'inter') as FontFamily);
-  const [fontSize, setSizeState] = useState<FontSize>(() => read('size', 'compact') as FontSize);
+  const [fontFamily, setFontState] = useState<FontFamily>(() => read('font', 'system') as FontFamily);
+  const [fontSize, setSizeState] = useState<FontSize>(() => read('size', 'default') as FontSize);
   const [density, setDensityState] = useState<Density>(() => read('density', 'compact') as Density);
   const [rail, setRailState] = useState<Rail>(() => read('rail', 'tinted') as Rail);
 

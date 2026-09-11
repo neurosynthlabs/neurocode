@@ -41,8 +41,8 @@ export default function Knowledge() {
             <Search className="size-4 shrink-0 text-brand" />
             <input value={search} onChange={(e) => setSearch(e.target.value)}
               placeholder="Ask the corpus — try “customer invoice tax”"
-              className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-dim focus-visible:outline-none" />
-            {search && <button onClick={() => setSearch('')} className="text-[11px] text-dim hover:text-ink">clear</button>}
+              className="min-w-0 flex-1 bg-transparent text-[14px] text-ink placeholder:text-dim focus-visible:outline-none" />
+            {search && <button onClick={() => setSearch('')} className="text-[12px] text-dim hover:text-ink">clear</button>}
           </div>
         </div>
       </PageHeader>
@@ -54,19 +54,19 @@ export default function Knowledge() {
               {results.map((r) => (
                 <Row key={r.ref}>
                   <Cell className="font-medium text-ink">{r.title}<Mono className="mt-0.5 block w-fit">{r.ref}</Mono></Cell>
-                  <Cell><span className="flex items-center gap-2"><Bar className="w-16" pct={r.score * 100} /><span className="tnum text-[11px]">{r.score.toFixed(2)}</span></span></Cell>
+                  <Cell><span className="flex items-center gap-2"><Bar className="w-16" pct={r.score * 100} /><span className="tnum text-[12px]">{r.score.toFixed(2)}</span></span></Cell>
                   <Cell><Tag tone={VIA_TONE[r.via as keyof typeof VIA_TONE]}>{r.via}</Tag></Cell>
-                  <Cell className="max-w-[460px] text-[11.5px] text-soft">{r.why}</Cell>
+                  <Cell className="max-w-[460px] text-[12.5px] text-soft">{r.why}</Cell>
                 </Row>
               ))}
             </DataTable>
             <div className="grid grid-cols-1 gap-x-6 border-t border-line px-3.5 py-2.5 md:grid-cols-2">
               {retrievalDemo.retrievers.map((r) => (
                 <div key={r.name} className="flex items-start gap-2 py-1">
-                  <span className="tnum w-8 shrink-0 text-right text-[11px] text-brand">{r.hits}</span>
+                  <span className="tnum w-8 shrink-0 text-right text-[12px] text-brand">{r.hits}</span>
                   <span className="min-w-0 flex-1">
-                    <span className="block text-[11.5px] text-ink-2">{r.name}</span>
-                    <span className="block text-[10.5px] text-dim">{r.note}</span>
+                    <span className="block text-[12.5px] text-ink-2">{r.name}</span>
+                    <span className="block text-[11.5px] text-dim">{r.note}</span>
                   </span>
                 </div>
               ))}
@@ -86,18 +86,18 @@ export default function Knowledge() {
           {/* Kind rail */}
           <div className="max-h-[30vh] w-full shrink-0 overflow-y-auto rounded-md border border-line bg-surface py-2 lg:max-h-none lg:w-44">
             <button onClick={() => setKind('all')}
-              className={cn('flex w-full items-center justify-between px-3.5 py-1.5 text-[12px]',
+              className={cn('flex w-full items-center justify-between px-3.5 py-1.5 text-[13px]',
                 kind === 'all' ? 'bg-surface-2 font-medium text-ink' : 'text-soft hover:text-ink-2')}>
               <span className="flex items-center gap-2"><Boxes className="size-3.5 text-dim" />All</span>
-              <span className="tnum text-[11px] text-dim">{knowledgeDocs.length}</span>
+              <span className="tnum text-[12px] text-dim">{knowledgeDocs.length}</span>
             </button>
             <div className="mx-3.5 my-1.5 h-px bg-line" />
             {docKinds.map((k) => (
               <button key={k} onClick={() => { setKind(k); setSel(''); }}
-                className={cn('flex w-full items-center justify-between px-3.5 py-1.5 text-[12px] capitalize',
+                className={cn('flex w-full items-center justify-between px-3.5 py-1.5 text-[13px] capitalize',
                   kind === k ? 'bg-surface-2 font-medium text-ink' : 'text-soft hover:text-ink-2')}>
                 <span className="truncate">{k}</span>
-                <span className="tnum text-[11px] text-dim">{knowledgeDocs.filter((x) => x.kind === k).length}</span>
+                <span className="tnum text-[12px] text-dim">{knowledgeDocs.filter((x) => x.kind === k).length}</span>
               </button>
             ))}
           </div>
@@ -114,8 +114,8 @@ export default function Knowledge() {
                   <Mono>{x.ref}</Mono>
                   <span className="eyebrow ml-auto">{x.kind}</span>
                 </div>
-                <p className="mt-1 line-clamp-2 text-[12px] text-ink">{x.title}</p>
-                <p className="mt-1 truncate text-[10.5px] text-dim">{x.source} · {x.addedAt}</p>
+                <p className="mt-1 line-clamp-2 text-[13px] text-ink">{x.title}</p>
+                <p className="mt-1 truncate text-[11.5px] text-dim">{x.source} · {x.addedAt}</p>
               </ListRow>
             ))}
           </div>
@@ -125,7 +125,7 @@ export default function Knowledge() {
             <Panel eyebrow={`${d.kind} · ${projectName(d.projectId)} · added ${d.addedAt}`}
               title={<span className="flex flex-wrap items-center gap-2"><Mono tone="brand">{d.ref}</Mono>{d.title}</span>}
               actions={d.indexed ? <Tag tone="ok">indexed</Tag> : <Tag tone="warn">awaiting index</Tag>}>
-              <p className="text-[12.5px] leading-relaxed text-ink-2">{d.summary}</p>
+              <p className="text-[13.5px] leading-relaxed text-ink-2">{d.summary}</p>
               <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 border-t border-line pt-2.5 xl:grid-cols-4">
                 <KV k="Source" v={d.source} />
                 <KV k="Size" v={d.size} />
@@ -147,10 +147,10 @@ export default function Knowledge() {
               <div className="divide-y divide-line">
                 {ingestPipeline.map((s) => (
                   <div key={s.n} className="flex items-start gap-2.5 px-3.5 py-2">
-                    <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[10.5px] text-dim">{s.n}</span>
+                    <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[11.5px] text-dim">{s.n}</span>
                     <span className="min-w-0 flex-1">
-                      <span className="text-[12px] font-medium text-ink">{s.step}</span>
-                      <span className="block text-[11.5px] text-dim">{s.detail}</span>
+                      <span className="text-[13px] font-medium text-ink">{s.step}</span>
+                      <span className="block text-[12.5px] text-dim">{s.detail}</span>
                     </span>
                   </div>
                 ))}

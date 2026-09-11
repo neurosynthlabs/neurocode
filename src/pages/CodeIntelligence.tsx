@@ -33,7 +33,7 @@ function Tree({ nodes, depth, open, onToggle, sel, onSelect, filter }: {
             <button
               onClick={() => (hasKids ? onToggle(n.id) : onSelect(n.id))}
               className={cn(
-                'flex w-full items-center gap-1.5 py-[3px] pr-2 text-left text-[12px] transition-colors',
+                'flex w-full items-center gap-1.5 py-[3px] pr-2 text-left text-[13px] transition-colors',
                 sel === n.id ? 'bg-surface-2 font-medium text-ink' : 'text-ink-2 hover:bg-surface-2/60',
               )}
               style={{ paddingLeft: 8 + depth * 12 }}
@@ -43,7 +43,7 @@ function Tree({ nodes, depth, open, onToggle, sel, onSelect, filter }: {
                 : <span className="w-3 shrink-0" />}
               <Icon className={cn('size-3.5 shrink-0', n.kind === 'folder' ? 'text-dim' : n.kind === 'sproc' || n.kind === 'table' ? 'text-violet' : 'text-brand')} />
               <span className="min-w-0 flex-1 truncate">{n.name}</span>
-              {n.loc !== undefined && !hasKids && <span className="tnum shrink-0 text-[10px] text-dim">{n.loc}</span>}
+              {n.loc !== undefined && !hasKids && <span className="tnum shrink-0 text-[11px] text-dim">{n.loc}</span>}
               {n.risk && !hasKids && (
                 <span className={cn('size-1.5 shrink-0 rounded-full',
                   n.risk === 'CRITICAL' || n.risk === 'HIGH' ? 'bg-danger' : n.risk === 'MEDIUM' ? 'bg-warn' : 'bg-ok')} />
@@ -90,7 +90,7 @@ export default function CodeIntelligence() {
         title="Code Intelligence"
         subtitle="Tree-sitter AST + LSP references + git history. The OS answers questions about the codebase from a parsed graph, not from a giant context window."
       >
-        <div className="flex flex-wrap items-center gap-3 pb-3 text-[11.5px] text-dim">
+        <div className="flex flex-wrap items-center gap-3 pb-3 text-[12.5px] text-dim">
           <Mono>{indexStatus.parser}</Mono>
           <span>{indexStatus.filesParsed.toLocaleString()} files</span>
           <span>{indexStatus.symbolsIndexed.toLocaleString()} symbols</span>
@@ -104,10 +104,10 @@ export default function CodeIntelligence() {
         {/* Tree */}
         <div className="flex w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[280px] flex-col border-b border-line md:border-b-0 md:border-r overflow-y-auto">
           <div className="shrink-0 border-b border-line p-2.5">
-            <div className="flex h-7 items-center gap-2 rounded-sm border border-line bg-surface-2 px-2.5 focus-within:border-brand">
+            <div className="flex h-9 items-center gap-2 rounded-lg border border-line bg-surface-2 px-2.5 focus-within:border-brand">
               <Search className="size-3.5 shrink-0 text-dim" />
               <input value={q} onChange={(e) => setQ(e.target.value.toLowerCase())} placeholder="Filter files, classes, procedures…"
-                className="min-w-0 flex-1 bg-transparent text-[12px] text-ink placeholder:text-dim focus-visible:outline-none" />
+                className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-dim focus-visible:outline-none" />
             </div>
           </div>
           <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto py-1.5">
@@ -142,7 +142,7 @@ export default function CodeIntelligence() {
               </StatGrid>
 
               <Panel eyebrow="What it actually does" title="Summary" className="mb-4">
-                <p className="text-[12.5px] leading-relaxed text-ink-2">{s.summary}</p>
+                <p className="text-[13.5px] leading-relaxed text-ink-2">{s.summary}</p>
               </Panel>
 
               {/* Question bar */}
@@ -152,7 +152,7 @@ export default function CodeIntelligence() {
                   <button
                     key={qq.id}
                     onClick={() => setPane(qq.pane)}
-                    className={cn('rounded-sm border px-2.5 py-1 text-[11.5px] transition-colors',
+                    className={cn('rounded-sm border px-2.5 py-1 text-[12.5px] transition-colors',
                       pane === qq.pane ? 'border-brand bg-brand/10 font-medium text-brand' : 'border-line bg-surface text-soft hover:border-line-strong hover:text-ink')}
                   >
                     {qq.label}
@@ -164,12 +164,12 @@ export default function CodeIntelligence() {
                 <Panel eyebrow={answer.note} title={answer.title} className="mb-4" flush>
                   <div className="divide-y divide-line">
                     {answer.items.length === 0
-                      ? <div className="px-3.5 py-3 text-[12px] text-dim">Nothing recorded.</div>
+                      ? <div className="px-3.5 py-3 text-[13px] text-dim">Nothing recorded.</div>
                       : answer.items.map((it) => (
                         <div key={it} className="flex items-center gap-2 px-3.5 py-1.5">
                           <answer.icon className={cn('size-3 shrink-0',
                             answer.tone === 'danger' ? 'text-danger' : answer.tone === 'warn' ? 'text-warn' : answer.tone === 'ok' ? 'text-ok' : 'text-violet')} />
-                          <span className="font-mono text-[11.5px] text-ink-2">{it}</span>
+                          <span className="font-mono text-[12.5px] text-ink-2">{it}</span>
                         </div>
                       ))}
                   </div>
@@ -180,26 +180,26 @@ export default function CodeIntelligence() {
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-4">
                 <Panel eyebrow={`${s.dependencies.length}`} title="Dependencies" flush>
                   <div className="divide-y divide-line">
-                    {s.dependencies.length === 0 ? <div className="px-3.5 py-2 text-[11.5px] text-dim">none</div>
-                      : s.dependencies.map((d) => <div key={d} className="truncate px-3.5 py-1.5 font-mono text-[11px] text-ink-2">{d}</div>)}
+                    {s.dependencies.length === 0 ? <div className="px-3.5 py-2 text-[12.5px] text-dim">none</div>
+                      : s.dependencies.map((d) => <div key={d} className="truncate px-3.5 py-1.5 font-mono text-[12px] text-ink-2">{d}</div>)}
                   </div>
                 </Panel>
                 <Panel eyebrow={`${s.usedBy.length}`} title="Used by" flush>
                   <div className="divide-y divide-line">
-                    {s.usedBy.length === 0 ? <div className="px-3.5 py-2 text-[11.5px] text-dim">nothing calls it</div>
-                      : s.usedBy.map((d) => <div key={d} className="truncate px-3.5 py-1.5 font-mono text-[11px] text-ink-2">{d}</div>)}
+                    {s.usedBy.length === 0 ? <div className="px-3.5 py-2 text-[12.5px] text-dim">nothing calls it</div>
+                      : s.usedBy.map((d) => <div key={d} className="truncate px-3.5 py-1.5 font-mono text-[12px] text-ink-2">{d}</div>)}
                   </div>
                 </Panel>
                 <Panel eyebrow={`${s.database.length}`} title="Database" flush>
                   <div className="divide-y divide-line">
-                    {s.database.length === 0 ? <div className="px-3.5 py-2 text-[11.5px] text-dim">no data access</div>
-                      : s.database.map((d) => <div key={d} className="truncate px-3.5 py-1.5 font-mono text-[11px] text-violet">{d}</div>)}
+                    {s.database.length === 0 ? <div className="px-3.5 py-2 text-[12.5px] text-dim">no data access</div>
+                      : s.database.map((d) => <div key={d} className="truncate px-3.5 py-1.5 font-mono text-[12px] text-violet">{d}</div>)}
                   </div>
                 </Panel>
                 <Panel eyebrow={`${s.storedProcedures.length}`} title="Stored procedures" flush>
                   <div className="divide-y divide-line">
-                    {s.storedProcedures.length === 0 ? <div className="px-3.5 py-2 text-[11.5px] text-dim">none</div>
-                      : s.storedProcedures.map((d) => <div key={d} className="truncate px-3.5 py-1.5 font-mono text-[11px] text-violet">{d}</div>)}
+                    {s.storedProcedures.length === 0 ? <div className="px-3.5 py-2 text-[12.5px] text-dim">none</div>
+                      : s.storedProcedures.map((d) => <div key={d} className="truncate px-3.5 py-1.5 font-mono text-[12px] text-violet">{d}</div>)}
                   </div>
                 </Panel>
               </div>
@@ -207,20 +207,20 @@ export default function CodeIntelligence() {
               <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
                 <Panel eyebrow="Coverage" title={<span className="flex items-center gap-1.5"><FlaskConical className="size-3.5 text-ok" />Tests</span>} flush>
                   <div className="divide-y divide-line">
-                    {s.tests.length === 0 ? <div className="px-3.5 py-2 text-[11.5px] text-warn">no test covers this</div>
-                      : s.tests.map((t) => <div key={t} className="px-3.5 py-1.5 text-[11.5px] text-ink-2">{t}</div>)}
+                    {s.tests.length === 0 ? <div className="px-3.5 py-2 text-[12.5px] text-warn">no test covers this</div>
+                      : s.tests.map((t) => <div key={t} className="px-3.5 py-1.5 text-[12.5px] text-ink-2">{t}</div>)}
                   </div>
                 </Panel>
                 <Panel eyebrow="History" title={<span className="flex items-center gap-1.5"><Bug className="size-3.5 text-danger" />Known bugs</span>} flush>
                   <div className="divide-y divide-line">
-                    {s.knownBugs.length === 0 ? <div className="px-3.5 py-2 text-[11.5px] text-dim">clean record</div>
-                      : s.knownBugs.map((b) => <div key={b} className="px-3.5 py-1.5 text-[11.5px] text-ink-2">{b}</div>)}
+                    {s.knownBugs.length === 0 ? <div className="px-3.5 py-2 text-[12.5px] text-dim">clean record</div>
+                      : s.knownBugs.map((b) => <div key={b} className="px-3.5 py-1.5 text-[12.5px] text-ink-2">{b}</div>)}
                   </div>
                 </Panel>
                 <Panel eyebrow="Why it is like this" title={<span className="flex items-center gap-1.5"><Scale className="size-3.5 text-brand" />Decisions</span>} flush>
                   <div className="divide-y divide-line">
-                    {s.decisions.length === 0 ? <div className="px-3.5 py-2 text-[11.5px] text-dim">undocumented</div>
-                      : s.decisions.map((d) => <div key={d} className="px-3.5 py-1.5 text-[11.5px] text-ink-2">{d}</div>)}
+                    {s.decisions.length === 0 ? <div className="px-3.5 py-2 text-[12.5px] text-dim">undocumented</div>
+                      : s.decisions.map((d) => <div key={d} className="px-3.5 py-1.5 text-[12.5px] text-ink-2">{d}</div>)}
                   </div>
                 </Panel>
               </div>
@@ -233,7 +233,7 @@ export default function CodeIntelligence() {
                   <KV k="Last changed" v={s.lastChanged} />
                 </div>
                 <Bar className="mt-2.5" pct={s.complexity} tone={s.complexity > 80 ? 'danger' : 'warn'} height="h-1.5" />
-                <button onClick={() => nav('/architecture')} className="mt-3 text-[12px] text-brand hover:underline">
+                <button onClick={() => nav('/architecture')} className="mt-3 text-[13px] text-brand hover:underline">
                   Run full impact analysis on {s.name} →
                 </button>
               </Panel>

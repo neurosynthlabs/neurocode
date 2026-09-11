@@ -66,7 +66,7 @@ export default function Activity() {
         title="Activity"
         subtitle="Every decision, tool call, hook firing and approval — in order. This is the audit trail and the reason the system feels alive."
         actions={
-          <label className="flex items-center gap-2 text-[12px] text-soft">
+          <label className="flex items-center gap-2 text-[13px] text-soft">
             <Switch checked={!frozen} onCheckedChange={(on) => setFrozen(on ? null : activity)} />
             {frozen
               ? <><Pause className="size-3" />paused{unseen > 0 && <Tag tone="brand">{unseen} new</Tag>}</>
@@ -75,12 +75,12 @@ export default function Activity() {
         }
       >
         <div className="flex flex-wrap items-center gap-2 pb-3">
-          <div className="flex h-7 w-64 items-center gap-2 rounded-sm border border-line bg-surface-2 px-2.5 focus-within:border-brand">
+          <div className="flex h-9 w-64 items-center gap-2 rounded-lg border border-line bg-surface-2 px-2.5 focus-within:border-brand">
             <Search className="size-3.5 shrink-0 text-dim" />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search the log…"
-              className="min-w-0 flex-1 bg-transparent text-[12px] text-ink placeholder:text-dim focus-visible:outline-none" />
+              className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-dim focus-visible:outline-none" />
           </div>
-          <select value={proj} onChange={(e) => setProj(e.target.value)} className="h-7 rounded-sm border border-line-strong bg-surface-2 px-2 text-[12px] text-ink-2">
+          <select value={proj} onChange={(e) => setProj(e.target.value)} className="h-9 rounded-lg border border-line-strong bg-surface-2 px-2.5 text-[13px] text-ink-2">
             <option value="all" className="bg-surface">All projects</option>
             {projects.map((p) => <option key={p.id} value={p.id} className="bg-surface">{p.name}</option>)}
           </select>
@@ -94,7 +94,7 @@ export default function Activity() {
             value={level}
             onChange={(v) => setLevel(v as typeof level)}
           />
-          <span className="ml-auto text-[11.5px] text-dim">{list.length} of {all.length} events</span>
+          <span className="ml-auto text-[12.5px] text-dim">{list.length} of {all.length} events</span>
         </div>
       </PageHeader>
 
@@ -109,28 +109,28 @@ export default function Activity() {
                     <div key={day}>
                       <div className="sticky top-0 z-10 flex items-center justify-between border-y border-line bg-surface-2 px-3.5 py-1.5">
                         <span className="eyebrow">{day}</span>
-                        <span className="tnum text-[11px] text-dim">{events.length} events</span>
+                        <span className="tnum text-[12px] text-dim">{events.length} events</span>
                       </div>
                       <div className="divide-y divide-line/60">
                         {events.map((e) => {
                           const Icon = KIND_ICON[e.actorKind];
                           return (
                             <div key={e.id} className={cn('flex items-start gap-3 px-3.5 py-2', e.level === 'err' && 'bg-danger/5', /^(live|local)-/.test(e.id) && 'animate-slide-up bg-brand/5')}>
-                              <span className="tnum mt-px w-14 shrink-0 font-mono text-[10.5px] text-dim">{timeOf(e.t)}</span>
+                              <span className="tnum mt-px w-14 shrink-0 font-mono text-[11.5px] text-dim">{timeOf(e.t)}</span>
                               <span className={cn('mt-px shrink-0',
                                 e.actorKind === 'human' ? 'text-brand' : e.actorKind === 'hook' ? 'text-warn' : e.actorKind === 'tool' ? 'text-info' : e.actorKind === 'system' ? 'text-violet' : 'text-ok')}>
                                 <Icon className="size-3.5" />
                               </span>
-                              <span className="w-36 shrink-0 truncate text-[11.5px] text-soft">{e.actor}</span>
+                              <span className="hidden w-36 shrink-0 truncate text-[12.5px] text-soft sm:block">{e.actor}</span>
                               <span className="min-w-0 flex-1">
                                 <span className="flex flex-wrap items-center gap-1.5">
                                   <Dot state={e.level === 'err' ? 'error' : e.level} />
-                                  <span className="text-[12px] font-medium text-ink">{e.action}</span>
+                                  <span className="text-[13px] font-medium text-ink">{e.action}</span>
                                   {e.taskRef && <Mono>{e.taskRef}</Mono>}
                                 </span>
-                                <span className="block text-[11.5px] text-dim">{e.detail}</span>
+                                <span className="block text-[12.5px] text-dim"><span className="text-soft sm:hidden">{e.actor} · </span>{e.detail}</span>
                               </span>
-                              <span className="eyebrow shrink-0">{projectName(e.projectId)}</span>
+                              <span className="eyebrow hidden shrink-0 md:inline">{projectName(e.projectId)}</span>
                             </div>
                           );
                         })}
@@ -158,7 +158,7 @@ export default function Activity() {
                     <button key={k} onClick={() => setKind(kind === k ? 'all' : k)}
                       className={cn('flex w-full items-center gap-2.5 px-3.5 py-2 text-left hover:bg-surface-2', kind === k && 'bg-surface-2')}>
                       <Icon className="size-3.5 text-dim" />
-                      <span className="flex-1 text-[12px] text-ink-2 capitalize">{k}</span>
+                      <span className="flex-1 text-[13px] text-ink-2 capitalize">{k}</span>
                       <Tag tone={KIND_TONE[k]}>{n}</Tag>
                     </button>
                   );
@@ -171,8 +171,8 @@ export default function Activity() {
                 {busiest.map(([name, n]) => (
                   <div key={name} className="flex items-center gap-2.5 px-3.5 py-1.5">
                     <Bot className="size-3 text-ok" />
-                    <span className="flex-1 truncate text-[12px] text-ink-2">{name}</span>
-                    <span className="tnum text-[11.5px] text-soft">{n}</span>
+                    <span className="flex-1 truncate text-[13px] text-ink-2">{name}</span>
+                    <span className="tnum text-[12.5px] text-soft">{n}</span>
                   </div>
                 ))}
               </div>
@@ -183,10 +183,10 @@ export default function Activity() {
                 {mine.slice(0, 8).map((e) => (
                   <div key={e.id} className="px-3.5 py-2">
                     <div className="flex items-center gap-2">
-                      <span className="tnum font-mono text-[10.5px] text-dim">{timeOf(e.t)}</span>
-                      <span className="text-[12px] font-medium text-ink">{e.action}</span>
+                      <span className="tnum font-mono text-[11.5px] text-dim">{timeOf(e.t)}</span>
+                      <span className="text-[13px] font-medium text-ink">{e.action}</span>
                     </div>
-                    <p className="mt-0.5 truncate text-[11px] text-dim">{e.detail}</p>
+                    <p className="mt-0.5 truncate text-[12px] text-dim">{e.detail}</p>
                   </div>
                 ))}
               </div>

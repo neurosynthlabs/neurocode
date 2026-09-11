@@ -69,10 +69,10 @@ export default function Permissions() {
             const n = permissionRules.filter((r) => (t.tier === 'HIGH' ? r.risk === 'HIGH' || r.risk === 'CRITICAL' : r.risk === t.tier)).length;
             return (
               <Panel key={t.tier} className={cn('accent-top', t.tone === 'danger' && 'border-danger/35', t.tone === 'warn' && 'border-warn/30')}
-                eyebrow={`${n} rules`} title={<span className="flex items-center gap-2"><I className={cn('size-4', `text-${t.tone}`)} />{t.tier} risk</span>}
+                eyebrow={`${n} rules`} title={<span className="flex items-center gap-2"><I className={cn('size-4', `text-${t.tone}`)} />{t.tier[0]}{t.tier.slice(1).toLowerCase()} risk</span>}
                 actions={<Tag tone={t.tone}>{t.verdict}</Tag>}>
-                <p className="text-[11.5px] text-ink-2">{t.what}</p>
-                <p className="mt-2 border-t border-line pt-2 text-[11.5px] text-dim">{t.why}</p>
+                <p className="text-[12.5px] text-ink-2">{t.what}</p>
+                <p className="mt-2 border-t border-line pt-2 text-[12.5px] text-dim">{t.why}</p>
               </Panel>
             );
           })}
@@ -99,11 +99,11 @@ export default function Permissions() {
                     <SectionTitle>What will run</SectionTitle>
                     <pre className="ascii rounded-sm border border-line bg-base p-3 whitespace-pre-wrap">{a.payload}</pre>
                     <SectionTitle className="mt-3">Why the agent is asking</SectionTitle>
-                    <p className="text-[12.5px] leading-relaxed text-ink-2">{a.reason}</p>
+                    <p className="text-[13.5px] leading-relaxed text-ink-2">{a.reason}</p>
                     <div className="mt-3 flex items-center gap-2 border-t border-line pt-3">
                       <Button size="sm" onClick={() => decide(a.ref, 'approve')}><Check className="size-3.5" />Approve</Button>
                       <Button size="sm" variant="destructive" onClick={() => decide(a.ref, 'deny')}><X className="size-3.5" />Deny</Button>
-                      <span className="ml-auto text-[11px] text-dim">Approving records your name against this exact payload.</span>
+                      <span className="ml-auto text-[12px] text-dim">Approving records your name against this exact payload.</span>
                     </div>
                   </Panel>
                 ))}
@@ -121,7 +121,7 @@ export default function Permissions() {
                         <Row key={a.id}>
                           <Cell mono>{a.ref}</Cell>
                           <Cell className="max-w-[420px] text-ink">{a.title}</Cell>
-                          <Cell className="text-[11.5px]">{a.agent}</Cell>
+                          <Cell className="text-[12.5px]">{a.agent}</Cell>
                           <Cell mono className="text-dim">{a.tool}</Cell>
                           <Cell><RiskPill risk={a.risk} bare /></Cell>
                           <Cell><Tag tone={st === 'approved' ? 'ok' : 'danger'}>{st}</Tag></Cell>
@@ -142,7 +142,7 @@ export default function Permissions() {
               <SelectField className="w-36" value={effect} onChange={setEffect}
                 options={[{ value: 'all', label: 'Any effect' }, { value: 'allow', label: 'allow' }, { value: 'ask', label: 'ask' }, { value: 'deny', label: 'deny' }]} />
               <SelectField className="w-40" value={tool} onChange={setTool} options={tools.map((t) => ({ value: t, label: t === 'all' ? 'Any tool' : t }))} />
-              <span className="ml-auto text-[11.5px] text-dim">{rules.length} of {permissionRules.length}</span>
+              <span className="ml-auto text-[12.5px] text-dim">{rules.length} of {permissionRules.length}</span>
             </Toolbar>
             <Panel flush>
               {rules.length === 0 ? <Empty title="No rule matches" /> : (
@@ -160,7 +160,7 @@ export default function Permissions() {
                       <Cell><RiskPill risk={r.risk} bare /></Cell>
                       <Cell className="text-dim">{r.scope}</Cell>
                       <Cell className="tnum">{r.hits24h.toLocaleString()}</Cell>
-                      <Cell className="max-w-[440px] text-[11.5px] text-soft">{r.note}</Cell>
+                      <Cell className="max-w-[440px] text-[12.5px] text-soft">{r.note}</Cell>
                     </Row>
                   ))}
                 </DataTable>
@@ -173,9 +173,9 @@ export default function Permissions() {
                     <ShieldX className="mt-px size-3.5 shrink-0 text-danger" />
                     <span className="min-w-0 flex-1">
                       <Mono>{r.pattern}</Mono>
-                      <span className="mt-0.5 block text-[11.5px] text-soft">{r.note}</span>
+                      <span className="mt-0.5 block text-[12.5px] text-soft">{r.note}</span>
                     </span>
-                    <span className="shrink-0 tnum text-[11px] text-dim">{r.hits24h} attempts</span>
+                    <span className="shrink-0 tnum text-[12px] text-dim">{r.hits24h} attempts</span>
                   </div>
                 ))}
               </div>
@@ -201,12 +201,12 @@ export default function Permissions() {
                   'Customer data — the snapshot replica is masked; production rows never reach an agent',
                   'The memory store — Qdrant and Postgres are local, and there is no sync target configured',
                 ].map((t) => (
-                  <p key={t} className="flex items-start gap-1.5 text-[11.5px] text-ink-2">
+                  <p key={t} className="flex items-start gap-1.5 text-[12.5px] text-ink-2">
                     <ShieldCheck className="mt-px size-3.5 shrink-0 text-ok" />{t}
                   </p>
                 ))}
               </div>
-              <p className="mt-3 border-t border-line pt-2.5 text-[11px] text-dim">
+              <p className="mt-3 border-t border-line pt-2.5 text-[12px] text-dim">
                 71% of calls are served by local weights, so most work never crosses the network at all — a privacy
                 property that happens to also be the cheap one.
               </p>

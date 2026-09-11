@@ -57,7 +57,7 @@ export default function Testing() {
                     <Cell><StatusText state={s.status} /></Cell>
                     <Cell>
                       <span className="flex items-center gap-2">
-                        <span className="tnum w-20 text-[12px]">{s.passed}/{s.total}</span>
+                        <span className="tnum w-20 text-[13px]">{s.passed}/{s.total}</span>
                         <Bar className="w-28" pct={(s.passed / s.total) * 100} tone={s.status === 'pass' ? 'ok' : 'warn'} />
                       </span>
                     </Cell>
@@ -74,12 +74,12 @@ export default function Testing() {
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <div>
                   <SectionTitle>Reason</SectionTitle>
-                  <p className="text-[12.5px] leading-relaxed text-ink-2">{failures[0].reason}</p>
+                  <p className="text-[13.5px] leading-relaxed text-ink-2">{failures[0].reason}</p>
                   <Mono className="mt-2 inline-block">{failures[0].file}:{failures[0].line}</Mono>
                 </div>
                 <div>
                   <SectionTitle>AI recommendation</SectionTitle>
-                  <p className="rounded-sm border border-warn/30 bg-warn/8 p-2.5 text-[12.5px] leading-relaxed text-warn">
+                  <p className="rounded-sm border border-warn/30 bg-warn/8 p-2.5 text-[13.5px] leading-relaxed text-warn">
                     {failures[0].aiRecommendation}
                   </p>
                 </div>
@@ -92,18 +92,18 @@ export default function Testing() {
                 {visualDiffs.map((v) => (
                   <div key={v.id} className="rounded-sm border border-line bg-base p-2.5">
                     <div className="mb-2 flex items-center justify-between gap-2">
-                      <span className="truncate text-[11.5px] font-medium text-ink">{v.name}</span>
-                      <span className={cn('tnum shrink-0 text-[11px]', v.diff === 0 ? 'text-ok' : v.diff > 10 ? 'text-danger' : 'text-warn')}>{v.diff}%</span>
+                      <span className="truncate text-[12.5px] font-medium text-ink">{v.name}</span>
+                      <span className={cn('tnum shrink-0 text-[12px]', v.diff === 0 ? 'text-ok' : v.diff > 10 ? 'text-danger' : 'text-warn')}>{v.diff}%</span>
                     </div>
                     <div className="grid grid-cols-2 gap-1.5">
                       {[['baseline', v.baseline], ['current', v.current]].map(([k, val]) => (
                         <div key={k} className="rounded-xs border border-line-strong">
-                          <div className="grid-lines flex h-16 items-center justify-center px-1.5 text-center text-[10px] text-dim">{val}</div>
+                          <div className="grid-lines flex h-16 items-center justify-center px-1.5 text-center text-[11px] text-dim">{val}</div>
                           <div className="eyebrow border-t border-line px-1.5 py-1">{k}</div>
                         </div>
                       ))}
                     </div>
-                    <p className="mt-1.5 truncate text-[10.5px] text-soft">{v.verdict}</p>
+                    <p className="mt-1.5 truncate text-[11.5px] text-soft">{v.verdict}</p>
                   </div>
                 ))}
               </div>
@@ -120,10 +120,10 @@ export default function Testing() {
                     x.id === f.id ? 'border-brand bg-brand/8' : 'border-transparent hover:bg-surface-2/70')}>
                   <div className="flex items-center gap-2">
                     <Dot state={x.legacyExpected ? 'warn' : 'error'} />
-                    <span className="truncate text-[12px] font-medium text-ink">{x.suite}</span>
+                    <span className="truncate text-[13px] font-medium text-ink">{x.suite}</span>
                     {x.legacyExpected && <Tag tone="warn" className="ml-auto">legacy</Tag>}
                   </div>
-                  <p className="mt-1 line-clamp-2 font-mono text-[10.5px] text-dim">{x.name}</p>
+                  <p className="mt-1 line-clamp-2 font-mono text-[11.5px] text-dim">{x.name}</p>
                 </button>
               ))}
             </div>
@@ -131,9 +131,9 @@ export default function Testing() {
               <Panel eyebrow={`${f.suite} · ${f.file}:${f.line}`} title={f.name}
                 actions={f.legacyExpected ? <Tag tone="warn">expected</Tag> : <Tag tone="danger">real failure</Tag>}>
                 <SectionTitle>Why it fails</SectionTitle>
-                <p className="text-[12.5px] leading-relaxed text-ink-2">{f.reason}</p>
+                <p className="text-[13.5px] leading-relaxed text-ink-2">{f.reason}</p>
                 <SectionTitle className="mt-3">Recommendation</SectionTitle>
-                <p className={cn('rounded-sm border p-2.5 text-[12.5px] leading-relaxed',
+                <p className={cn('rounded-sm border p-2.5 text-[13.5px] leading-relaxed',
                   f.legacyExpected ? 'border-warn/30 bg-warn/8 text-warn' : 'border-line bg-base text-ink-2')}>
                   {f.aiRecommendation}
                 </p>
@@ -154,13 +154,13 @@ export default function Testing() {
               {coverage.map((c) => <MeterRow key={c.layer} label={c.layer} pct={c.pct} right={`${c.pct}% · ${c.lines}`} />)}
             </Panel>
             <Panel eyebrow="Honesty" title="What coverage does not tell you">
-              <p className="text-[12.5px] leading-relaxed text-ink-2">
+              <p className="text-[13.5px] leading-relaxed text-ink-2">
                 Database procedures sit at 41% because most of them have never had a test written — not because the
                 untested 59% is safe. <span className="text-ink">SP_CalculateTax is 412 lines with nine branches and
                 twelve covering assertions.</span> Infrastructure at 22% is deliberate: the deploy scripts are verified by
                 running them against staging, not by unit tests.
               </p>
-              <p className="mt-3 border-t border-line pt-2.5 text-[11.5px] text-dim">
+              <p className="mt-3 border-t border-line pt-2.5 text-[12.5px] text-dim">
                 The number the OS actually gates on is not coverage — it is whether the specific lines a change touched
                 are covered. For TASK-492 that figure is 100%.
               </p>
@@ -174,13 +174,13 @@ export default function Testing() {
               {runs.map((r) => (
                 <Row key={r.id}>
                   <Cell mono className="text-brand">{r.ref}</Cell>
-                  <Cell className="text-[11.5px]">{r.trigger}</Cell>
+                  <Cell className="text-[12.5px]">{r.trigger}</Cell>
                   <Cell mono className="text-dim">{r.branch}</Cell>
                   <Cell className="tnum">{Math.floor(r.durationS / 60)}m {r.durationS % 60}s</Cell>
                   <Cell>
                     <span className="flex items-center gap-2">
                       <Bar className="w-20" pct={r.pass} tone={r.pass >= 99 ? 'ok' : r.pass >= 95 ? 'warn' : 'danger'} />
-                      <span className={cn('tnum text-[11px]', r.pass >= 99 ? 'text-ok' : r.pass >= 95 ? 'text-warn' : 'text-danger')}>{r.pass}%</span>
+                      <span className={cn('tnum text-[12px]', r.pass >= 99 ? 'text-ok' : r.pass >= 95 ? 'text-warn' : 'text-danger')}>{r.pass}%</span>
                     </span>
                   </Cell>
                   <Cell mono className="text-dim">{r.commit}</Cell>

@@ -1,14 +1,18 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, ChevronDown, Check, Palette, Bell, ShieldAlert, Zap, Command, Menu } from 'lucide-react';
+import { Bell, Check, ChevronDown, Menu, Palette, Search, ShieldAlert } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Kbd, Dot, Tag, BlockBar } from '@/components/os';
+import { BlockBar, Dot } from '@/components/os';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/lib/theme';
-import { ThemeCustomizer } from './ThemeCustomizer';
 import { useProject } from '@/lib/project-context';
 import { useData } from '@/lib/data';
+import { ThemeCustomizer } from './ThemeCustomizer';
 
+const ROUND = { borderRadius: 'calc(var(--radius) * 1.2)' };
+const BTN = 'press flex h-9 items-center gap-2 px-2.5 text-[13px] text-soft transition-colors hover:bg-surface-2 hover:text-ink';
+
+/** A macOS-style toolbar: the project on the left, a few quiet controls on the right. */
 export function Topbar({
   onOpenSearch, onOpenNav, projectId, onProject,
 }: { onOpenSearch: () => void; onOpenNav?: () => void; projectId: string; onProject: (id: string) => void }) {
@@ -17,157 +21,108 @@ export function Topbar({
   const [projOpen, setProjOpen] = useState(false);
   const nav = useNavigate();
   const { all: projects } = useProject();
+  const { approvals } = useData();
   const active = projects.find((p) => p.id === projectId) ?? projects[0];
-  const { approvals, mode } = useData();
   const pending = approvals.filter((a) => a.status === 'pending');
 
   return (
     <header
       className={cn(
-        'flex h-12 shrink-0 items-center gap-1.5 border border-line bg-surface px-2 sm:gap-2 sm:px-2.5',
-        rail === 'flush' ? 'rounded-none border-x-0 border-t-0' : 'elevated',
+        'flex h-14 shrink-0 items-center gap-1 px-2 sm:px-2.5',
+        rail === 'flush' ? 'border-b border-line bg-bg' : 'elevated border border-line/70 bg-surface',
       )}
       style={rail === 'flush' ? undefined : { borderRadius: 'calc(var(--radius) * 1.6)' }}
     >
       {onOpenNav && (
-        <button
-          onClick={onOpenNav}
-          aria-label="Open navigation"
-          className="press flex size-8 shrink-0 items-center justify-center border border-line bg-surface-2 text-soft transition-colors hover:text-ink lg:hidden"
-          style={{ borderRadius: 'calc(var(--radius) * 1.2)' }}
-        >
-          <Menu className="size-4" />
+        <button onClick={onOpenNav} aria-label="Open navigation" className={cn(BTN, 'lg:hidden')} style={ROUND}>
+          <Menu className="size-[18px]" />
         </button>
       )}
 
-      {/* Project switcher */}
+      {/* Project — a popup button */}
       <Popover open={projOpen} onOpenChange={setProjOpen}>
-        <PopoverTrigger
-          className="press flex h-8 items-center gap-2 border border-line bg-surface-2 px-2.5 text-[12px] text-ink transition-colors hover:border-line-strong hover:bg-surface-3"
-          style={{ borderRadius: 'calc(var(--radius) * 1.2)' }}
-        >
-          <span className="grid size-5 shrink-0 place-items-center rounded-xs bg-brand/15 font-mono text-[9.5px] font-bold text-brand">
+        <PopoverTrigger className={cn(BTN, 'min-w-0 text-ink')} style={ROUND}>
+          <span className="grid size-6 shrink-0 place-items-center rounded-md bg-brand/15 text-[10.5px] font-bold text-brand">
             {active.name.slice(0, 2).toUpperCase()}
           </span>
-          <span className="max-w-[92px] truncate font-medium sm:max-w-[150px]">{active.name}</span>
+          <span className="max-w-[120px] truncate text-[14px] font-semibold sm:max-w-[220px]">{active.name}</span>
           <Dot state={active.status} pulse={active.status === 'active'} />
-          <ChevronDown className="size-3 text-dim" />
+          <ChevronDown className="size-3.5 text-dim" />
         </PopoverTrigger>
-        <PopoverContent align="start" className="w-[340px] p-1.5">
-          <div className="eyebrow px-2 py-1.5">Projects · context is fully isolated</div>
+        <PopoverContent align="start" className="w-[360px] p-1.5">
+          <div className="px-2.5 pt-1.5 pb-2 text-[12px] font-medium text-dim">Projects · context never leaks between them</div>
           <div className="space-y-0.5">
             {projects.map((p) => (
               <button
                 key={p.id}
                 onClick={() => { onProject(p.id); setProjOpen(false); }}
-                className={cn('flex w-full items-start gap-2.5 px-2 py-2 text-left transition-colors hover:bg-surface-2',
+                className={cn('flex w-full items-start gap-3 px-2.5 py-2.5 text-left transition-colors hover:bg-surface-2',
                   p.id === projectId && 'bg-surface-2')}
                 style={{ borderRadius: 'var(--radius)' }}
               >
                 <Dot state={p.status} className="mt-1.5" />
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-2">
-                    <span className="truncate text-[12.5px] font-medium text-ink">{p.name}</span>
-                    {p.id === projectId && <Check className="size-3 text-brand" />}
+                    <span className="truncate text-[14px] font-medium text-ink">{p.name}</span>
+                    {p.id === projectId && <Check className="size-3.5 text-brand" />}
                   </span>
-                  <span className="mt-0.5 block truncate text-[11px] text-dim">{p.stack.slice(0, 3).join(' · ')}</span>
-                  <span className="mt-1 flex items-center gap-2">
-                    <BlockBar pct={p.understoodPct} width={10} />
-                    <span className="tnum text-[10px] text-dim">{p.understoodPct}% understood</span>
+                  <span className="mt-0.5 block truncate text-[12.5px] text-dim">{p.stack.slice(0, 3).join(' · ') || p.status}</span>
+                  <span className="mt-1.5 flex items-center gap-2">
+                    <BlockBar pct={p.understoodPct} width={12} />
+                    <span className="tnum text-[12px] text-dim">{p.understoodPct}% understood</span>
                   </span>
                 </span>
               </button>
             ))}
           </div>
-          <div className="mt-1 border-t border-line pt-1">
-            <button onClick={() => { nav('/projects'); setProjOpen(false); }}
-              className="w-full rounded-sm px-2 py-1.5 text-left text-[12px] text-soft hover:bg-surface-2 hover:text-ink">
+          <div className="mt-1 border-t border-line/60 pt-1">
+            <button
+              onClick={() => { nav('/projects'); setProjOpen(false); }}
+              className="w-full px-2.5 py-2 text-left text-[13px] text-soft transition-colors hover:bg-surface-2 hover:text-ink"
+              style={{ borderRadius: 'var(--radius)' }}
+            >
               Manage all projects →
             </button>
           </div>
         </PopoverContent>
       </Popover>
 
-      {/* Global search */}
-      <button
-        onClick={onOpenSearch}
-        className="press flex h-8 min-w-0 flex-1 items-center gap-2 border border-line bg-base px-3 text-left text-[12px] text-dim transition-colors hover:border-brand/40 hover:text-soft"
-        style={{ borderRadius: 'calc(var(--radius) * 1.2)' }}
-      >
-        <Search className="size-3.5 shrink-0" />
-        <span className="hidden truncate md:inline">Search code, memory, tasks, decisions, commits, tests…</span>
-        <span className="ml-auto hidden shrink-0 items-center gap-0.5 md:flex"><Kbd><Command className="size-2.5" /></Kbd><Kbd>K</Kbd></span>
+      <div className="flex-1" />
+
+      {/* The sidebar holds search on a desktop; below that, it lives here. */}
+      <button onClick={onOpenSearch} aria-label="Search" className={cn(BTN, 'lg:hidden')} style={ROUND}>
+        <Search className="size-[18px]" />
       </button>
 
-      {/* Router health */}
-      <div className="hidden h-8 items-center gap-1.5 border border-line bg-surface-2 px-2.5 xl:flex"
-        style={{ borderRadius: 'calc(var(--radius) * 1.2)' }}>
-        <Zap className="size-3 text-ok" />
-        <span className="font-mono text-[10.5px] text-soft">local-first</span>
-        <BlockBar pct={71} width={6} tone="ok" />
-        <span className="tnum font-mono text-[10.5px] text-ok">71%</span>
-      </div>
-
-      {/* Approvals */}
       <button
         onClick={() => nav('/permissions')}
-        className={cn('press relative flex h-8 items-center gap-1.5 border px-2.5 text-[12px] transition-colors',
-          pending.length ? 'border-warn/40 bg-warn/10 text-warn hover:bg-warn/15' : 'border-line bg-surface-2 text-soft hover:text-ink')}
-        style={{ borderRadius: 'calc(var(--radius) * 1.2)' }}
         title={`${pending.length} approvals waiting on you`}
         aria-label={`${pending.length} approvals waiting on you`}
+        className={cn(BTN, pending.length && 'bg-warn/10 text-warn hover:bg-warn/15 hover:text-warn')}
+        style={ROUND}
       >
-        <ShieldAlert className="size-3.5" />
-        {pending.length > 0 && <span className="tnum text-[11px] font-semibold">{pending.length}</span>}
+        <ShieldAlert className="size-[18px]" />
+        {pending.length > 0 && <span className="tnum font-semibold">{pending.length}</span>}
+        <span className="hidden md:inline">{pending.length ? 'to approve' : 'Approvals'}</span>
       </button>
 
-      <button
-        onClick={() => nav('/activity')}
-        aria-label="Activity"
-        title="Activity"
-        className="press hidden h-8 items-center border border-line bg-surface-2 px-2.5 text-soft transition-colors hover:text-ink sm:flex"
-        style={{ borderRadius: 'calc(var(--radius) * 1.2)' }}
-      >
-        <Bell className="size-3.5" />
+      <button onClick={() => nav('/activity')} aria-label="Activity" title="Activity" className={cn(BTN, 'hidden sm:flex')} style={ROUND}>
+        <Bell className="size-[18px]" />
       </button>
 
-      {/* Appearance */}
       <button
         onClick={() => setThemeOpen(true)}
-        className="press flex h-8 items-center gap-2 border border-line bg-surface-2 px-2.5 text-[12px] text-soft transition-colors hover:text-ink"
-        style={{ borderRadius: 'calc(var(--radius) * 1.2)' }}
+        className={BTN}
+        style={ROUND}
         title="Appearance — 248 palettes, 7 modes, radius and type"
       >
-        <Palette className="size-3.5" />
-        <span className="hidden lg:inline">{current.name}</span>
-        <span className="hidden overflow-hidden rounded-xs border border-line-strong sm:flex">
+        <Palette className="size-[18px]" />
+        <span className="hidden xl:inline">{current.name}</span>
+        <span className="hidden overflow-hidden rounded-full ring-1 ring-line sm:flex">
           {current.swatch.map((c, i) => <span key={i} className="size-2.5" style={{ background: c }} />)}
         </span>
       </button>
       <ThemeCustomizer open={themeOpen} onOpenChange={setThemeOpen} />
-
-      {/* Operator */}
-      <div className="flex h-8 shrink-0 items-center gap-2 border border-line bg-surface-2 px-1 md:pr-2.5 md:pl-1.5"
-        style={{ borderRadius: 'calc(var(--radius) * 1.2)' }}>
-        <span className="grid size-6 place-items-center rounded-xs bg-brand text-brand-ink">
-          <span className="font-mono text-[9.5px] font-bold">RR</span>
-        </span>
-        <span className="hidden leading-tight md:block">
-          <span className="block text-[11.5px] font-medium text-ink">AI Project Manager</span>
-          <span className="block text-[9.5px] text-dim">final approver</span>
-        </span>
-        <span
-          className="hidden xl:inline-flex"
-          title={mode === 'live'
-            ? 'Connected to the local API: every change is saved to SQLite'
-            : 'Demo data: changes last until you reload. npm run dev:start runs the local API.'}
-        >
-          <Tag tone={mode === 'live' ? 'ok' : 'neutral'}>
-            <Dot state={mode === 'live' ? 'ok' : 'idle'} pulse={mode === 'live'} />
-            {mode === 'live' ? 'saved locally' : mode === 'demo' ? 'demo data' : 'connecting'}
-          </Tag>
-        </span>
-      </div>
     </header>
   );
 }

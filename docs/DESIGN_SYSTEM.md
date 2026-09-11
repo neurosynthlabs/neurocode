@@ -17,20 +17,28 @@ Every number, log line and name must look like it came from a real day of work o
 
 ## Non-negotiable visual rules
 
-- **Solid colour only.** No gradients, no glassmorphism, no blur, no shadow-heavy cards.
-- **Dense, information-first.** Base font is 13px; most UI text is 11–12.5px. Tight rows.
-  A screen should feel like a terminal-grade console, not a marketing dashboard.
-- **One accent per theme.** Use `text-brand` / `bg-brand` for the single accent. Never
-  introduce a second brand colour. Status colours (`ok/warn/danger/info/violet`) are for
-  status only.
+The product should feel like a native macOS app: calm, roomy and legible. Nothing crammed.
+
+- **Calm, not dense.** Base font is 14px in the system font (SF on a Mac). Body text in cards is
+  13.5–14px, secondary text 12.5–13px, and nothing goes below 11px. Give cards room (`px-5 py-4`)
+  and leave `gap-4`/`gap-5` between them.
+- **Cards are grouped lists, not boxes in boxes.** Use `<Panel>`: its header is text on the card,
+  not a bordered strip. Separate rows inside with hairlines (`divide-y divide-line/60`). Never put a
+  bordered box inside a bordered box.
+- **Capsules, not shouting.** `<Tag>` and `<RiskPill>` are soft, sentence-case capsules. Do not write
+  UPPERCASE labels; the uppercase `eyebrow` class is only for column headers on boards and tables.
+- **Lead with the one thing a screen is for.** Reference material (ASCII trees, raw configs, long
+  logs) goes behind a tab or below the fold, never above the work.
+- **One accent per theme.** `text-brand` / `bg-brand` is the single accent. Status colours
+  (`ok/warn/danger/info/violet`) are for status, and for the sidebar's section tints.
 - **Never hardcode a hex value or a Tailwind palette class** (`bg-zinc-900`, `text-blue-500`).
   Only theme tokens: `bg-bg bg-base bg-surface bg-surface-2 bg-surface-3 border-line
   border-line-strong text-ink text-ink-2 text-soft text-dim text-brand text-ok text-warn
-  text-danger text-info text-violet`. The app has 248 switchable palettes in light and dark
-  modes, and a hardcoded colour breaks every one of them.
-- Small radii (`rounded-xs/sm/md`). Numbers use the `tnum` class. IDs, paths, refs, SHAs,
-  timestamps and commands are `font-mono`.
-- Section labels use the `eyebrow` class (10px uppercase).
+  text-danger text-info text-violet`. In inline styles use the `--os-*` and `--rail-*` variables
+  (`--os-ok`, `--os-warn`, `--os-danger`, `--os-info`, `--os-violet`, `--os-brand`). The app has
+  248 switchable palettes in light and dark modes, and a hardcoded colour breaks every one of them.
+- Radii come from `--radius` (`rounded-lg` for controls, `rounded-xl` for cards). Numbers use the
+  `tnum` class. IDs, paths, refs, SHAs, timestamps and commands are `font-mono`.
 - Desktop-first at 1440px, and every screen must also work at 820px (tablet) and 390px (phone):
   `npm run lint:layout` fails on anything that spills.
 
@@ -39,7 +47,9 @@ Every number, log line and name must look like it came from a real day of work o
 - Pages live at `src/pages/<Name>.tsx` and `export default function <Name>()`.
 - Page-specific mock data lives at `src/mock/<name>.ts`, typed against `src/types/index.ts`.
 - Page-specific sub-components live at `src/components/<area>/<Component>.tsx`.
-- **Never edit** `src/App.tsx`, `src/lib/nav.ts`, `src/index.css`, `src/components/os/index.tsx`,
+- Every screen is listed once in `src/lib/nav.ts`, with its `section` and, when it belongs with
+  others, a `sub`. The sidebar, the smoke test and ⌘K all read that list.
+- **Never edit** `src/App.tsx`, `src/index.css`, `src/components/os/index.tsx`,
   `src/components/ui/*`, `src/types/index.ts`, or another agent's page/mock. Routes already exist.
 - If you need a type that is missing, define it locally in your own mock file. Do not touch `src/types`.
 - No `any`. No unused variables or imports — `tsc` runs with `strict`, `noUnusedLocals`

@@ -40,7 +40,7 @@ export default function Hooks() {
         <Toolbar>
           <SelectField className="w-52" value={ev} onChange={setEv}
             options={[{ value: 'all', label: `All events (${hooks.length})` }, ...EVENTS.map((e) => ({ value: e, label: `${e} (${hooks.filter((h2) => h2.event === e).length})` }))]} />
-          <span className="ml-auto text-[11.5px] text-dim">{list.length} of {hooks.length} hooks · {fires} firings in 24h</span>
+          <span className="ml-auto text-[12.5px] text-dim">{list.length} of {hooks.length} hooks · {fires} firings in 24h</span>
         </Toolbar>
       </PageHeader>
 
@@ -54,7 +54,7 @@ export default function Hooks() {
         </StatGrid>
 
         <Panel className="accent-left" eyebrow="Why hooks and not instructions" title="Rules that cannot be talked out of">
-          <p className="max-w-4xl text-[12.5px] leading-relaxed text-ink-2">
+          <p className="max-w-4xl text-[13.5px] leading-relaxed text-ink-2">
             A system prompt asks a model to behave. A hook is shell code the runtime executes whether the model likes it or
             not. Anything that must never happen — a write to a TRANS_* table, a recursive delete, a commit carrying a
             secret — lives here, not in a prompt.
@@ -85,7 +85,7 @@ export default function Hooks() {
           {h && (
             <Panel eyebrow={`${h.event} · ${h.scope}`} title={<Mono tone="brand">{h.command}</Mono>}
               actions={h.blocking ? <Tag tone="warn">blocking</Tag> : <Tag tone="neutral">advisory</Tag>}>
-              <p className="text-[12.5px] leading-relaxed text-ink-2">{h.description}</p>
+              <p className="text-[13.5px] leading-relaxed text-ink-2">{h.description}</p>
               <div className="mt-3 border-t border-line pt-2.5">
                 <KV k="Matcher" v={h.matcher} mono />
                 <KV k="Exit 0" v="tool call proceeds; stdout is appended to the agent's context" />
@@ -105,8 +105,8 @@ export default function Hooks() {
                   <Dot state={x.lastResult === 'ok' ? 'ok' : x.lastResult === 'blocked' ? 'warn' : 'error'} />
                   <Tag tone="neutral">{x.event}</Tag>
                   <Mono className="min-w-0 flex-1 truncate">{x.command}</Mono>
-                  <span className="shrink-0 tnum text-[11px] text-soft">{x.fires24h}×</span>
-                  <span className="w-20 shrink-0 text-right text-[10.5px] text-dim">{x.lastFired}</span>
+                  <span className="shrink-0 tnum text-[12px] text-soft">{x.fires24h}×</span>
+                  <span className="w-20 shrink-0 text-right text-[11.5px] text-dim">{x.lastFired}</span>
                 </div>
               ))}
             </div>
@@ -118,7 +118,7 @@ export default function Hooks() {
           <div className="flex flex-wrap items-center gap-1.5">
             {['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStop', 'PreCompact', 'Stop', 'Notification'].map((e, i, a) => (
               <span key={e} className="flex items-center gap-1.5">
-                <span className={cn('rounded-sm border px-2 py-1 font-mono text-[11px]',
+                <span className={cn('rounded-sm border px-2 py-1 font-mono text-[12px]',
                   e.startsWith('Pre') ? 'border-warn/30 bg-warn/8 text-warn' : e.startsWith('Post') ? 'border-ok/30 bg-ok/8 text-ok' : 'border-line bg-surface-2 text-ink-2')}>
                   {e}
                 </span>
@@ -126,7 +126,7 @@ export default function Hooks() {
               </span>
             ))}
           </div>
-          <p className="mt-2.5 text-[11.5px] text-dim">
+          <p className="mt-2.5 text-[12.5px] text-dim">
             <span className="text-warn">Pre</span> hooks can refuse. <span className="text-ok">Post</span> hooks observe
             and enrich. Both may write back into the agent's context — which is how project rules reach an agent that never
             asked for them.

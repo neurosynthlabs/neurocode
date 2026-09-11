@@ -67,7 +67,7 @@ export default function Evals() {
                   <Trend value={x.delta} />
                   <span className="ml-auto"><Sparkline points={evalTrend[x.id] ?? []} tone={x.delta < 0 ? 'danger' : 'ok'} /></span>
                 </div>
-                <p className="mt-1 text-[10.5px] text-dim">{x.target} · {x.passed}/{x.cases}</p>
+                <p className="mt-1 text-[11.5px] text-dim">{x.target} · {x.passed}/{x.cases}</p>
               </ListRow>
             ))}
           </div>
@@ -86,7 +86,7 @@ export default function Evals() {
                 </div>
               </div>
               {s.delta < 0 && (
-                <p className="mt-3 border-t border-line pt-2.5 text-[11.5px] text-danger">
+                <p className="mt-3 border-t border-line pt-2.5 text-[12.5px] text-danger">
                   Regressed {Math.abs(s.delta)} points since the last run. Reported, not hidden — the failure analysis below is what feeds the next lesson.
                 </p>
               )}
@@ -100,11 +100,11 @@ export default function Evals() {
                   {cases.map((c) => (
                     <Row key={c.id} className={cn(c.judge.startsWith('Human') && 'bg-warn/5')}>
                       <Cell className="max-w-[240px] text-ink">{c.name}</Cell>
-                      <Cell className="text-[11.5px] text-soft">{c.expected}</Cell>
-                      <Cell className={cn('text-[11.5px]', c.status === 'pass' ? 'text-ok' : c.status === 'fail' ? 'text-danger' : 'text-warn')}>{c.got}</Cell>
+                      <Cell className="text-[12.5px] text-soft">{c.expected}</Cell>
+                      <Cell className={cn('text-[12.5px]', c.status === 'pass' ? 'text-ok' : c.status === 'fail' ? 'text-danger' : 'text-warn')}>{c.got}</Cell>
                       <Cell><Tag tone={CASE_TONE[c.status]}>{c.status}</Tag></Cell>
                       <Cell className="tnum">{c.scoreDelta === 0 ? '—' : c.scoreDelta}</Cell>
-                      <Cell className="max-w-[260px] text-[11px] text-dim">
+                      <Cell className="max-w-[260px] text-[12px] text-dim">
                         {c.judge.startsWith('Human') ? <span className="flex items-start gap-1 text-warn"><Scale className="mt-px size-3 shrink-0" />{c.judge}</span> : c.judge}
                       </Cell>
                     </Row>
@@ -119,9 +119,9 @@ export default function Evals() {
           <div className="divide-y divide-line">
             {lessons.map((l, i) => (
               <div key={i} className="flex items-start gap-3 px-3.5 py-2.5">
-                <span className="w-20 shrink-0 text-[11px] text-dim">{l.at}</span>
+                <span className="w-20 shrink-0 text-[12px] text-dim">{l.at}</span>
                 <Mono className="shrink-0">{l.from}</Mono>
-                <span className="min-w-0 flex-1 text-[12px] text-ink-2">{l.text}</span>
+                <span className="min-w-0 flex-1 text-[13px] text-ink-2">{l.text}</span>
               </div>
             ))}
           </div>

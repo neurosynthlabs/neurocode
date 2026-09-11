@@ -48,7 +48,7 @@ export class RouteBoundary extends Component<Props, State> {
             <TriangleAlert className="size-4 text-danger" />
             <h2 className="text-[14px] font-semibold text-ink">{stale ? 'A newer version is available' : 'This screen crashed'}</h2>
           </div>
-          <p className="mt-2 text-[12.5px] leading-relaxed text-soft">
+          <p className="mt-2 text-[13.5px] leading-relaxed text-soft">
             {stale
               ? 'This screen’s code changed after the tab was opened — a new build was deployed. Reload to pick it up; nothing you did caused this.'
               : 'The rest of the app is fine — the failure was contained to this route. The error below is also in the console.'}

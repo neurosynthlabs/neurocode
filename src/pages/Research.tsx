@@ -43,7 +43,7 @@ export default function Research() {
           <div className="focus-brand flex h-9 items-center gap-2 rounded-md border border-line bg-base px-3">
             <Microscope className="size-4 shrink-0 text-brand" />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="What should I investigate?"
-              className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-dim focus-visible:outline-none" />
+              className="min-w-0 flex-1 bg-transparent text-[14px] text-ink placeholder:text-dim focus-visible:outline-none" />
             <Button size="sm" disabled={!q.trim() || src.size === 0}
               onClick={() => { toast.success('Research queued', { description: `${src.size} source${src.size > 1 ? 's' : ''} · 4 parallel angles` }); setQ(''); }}>
               Research
@@ -53,7 +53,7 @@ export default function Research() {
             <span className="eyebrow mr-1">Sources</span>
             {SOURCES.map(({ id, label, icon: I }) => (
               <button key={id} onClick={() => toggle(id)}
-                className={cn('flex items-center gap-1.5 rounded-sm border px-2 py-1 text-[11.5px] transition-colors',
+                className={cn('flex items-center gap-1.5 rounded-sm border px-2 py-1 text-[12.5px] transition-colors',
                   src.has(id) ? 'border-brand/40 bg-brand/10 text-brand' : 'border-line bg-surface text-dim line-through')}>
                 <I className="size-3" />{label}
               </button>
@@ -69,10 +69,10 @@ export default function Research() {
               <div className="flex items-center gap-2">
                 <Dot state={x.status === 'complete' ? 'ok' : 'running'} pulse={x.status === 'running'} />
                 <Mono>{x.ref}</Mono>
-                <span className="ml-auto tnum text-[10.5px] text-dim">{x.status === 'complete' ? `${x.confidence}%` : x.status}</span>
+                <span className="ml-auto tnum text-[11.5px] text-dim">{x.status === 'complete' ? `${x.confidence}%` : x.status}</span>
               </div>
-              <p className="mt-1 line-clamp-2 text-[12px] text-ink">{x.question}</p>
-              <p className="mt-1 text-[10.5px] text-dim">{x.agents} agents · {x.durationS ? `${Math.round(x.durationS / 60)} min` : 'in progress'} · {x.createdAt}</p>
+              <p className="mt-1 line-clamp-2 text-[13px] text-ink">{x.question}</p>
+              <p className="mt-1 text-[11.5px] text-dim">{x.agents} agents · {x.durationS ? `${Math.round(x.durationS / 60)} min` : 'in progress'} · {x.createdAt}</p>
             </ListRow>
           ))}
         </div>
@@ -85,7 +85,7 @@ export default function Research() {
             ) : (
               <>
                 <SectionTitle>Summary</SectionTitle>
-                <p className="text-[13px] leading-relaxed text-ink-2">{r.summary}</p>
+                <p className="text-[14px] leading-relaxed text-ink-2">{r.summary}</p>
                 <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line pt-2.5">
                   {r.sources.map((s) => <Tag key={s.kind} tone="neutral">{s.count} {s.kind}</Tag>)}
                 </div>
@@ -99,17 +99,17 @@ export default function Research() {
                 <Panel eyebrow="Each angle blind to the others" title="Multi-modal sweep">
                   {r.sweep.map((s) => (
                     <div key={s.angle} className="flex items-center gap-3 py-1">
-                      <span className="w-36 shrink-0 text-[11.5px] text-ink-2">{s.angle}</span>
+                      <span className="w-36 shrink-0 text-[12.5px] text-ink-2">{s.angle}</span>
                       <Bar pct={(s.hits / maxHits) * 100} tone="brand" />
-                      <span className="tnum w-6 shrink-0 text-right text-[11px] text-soft">{s.hits}</span>
+                      <span className="tnum w-6 shrink-0 text-right text-[12px] text-soft">{s.hits}</span>
                     </div>
                   ))}
                 </Panel>
                 <Panel className="border-warn/30" eyebrow="Completeness critic — honesty is the feature"
                   title={<span className="flex items-center gap-1.5"><EyeOff className="size-3.5 text-warn" />Not covered</span>}>
-                  {r.gaps.length === 0 ? <p className="text-[12px] text-ok">No material gaps found.</p> : (
+                  {r.gaps.length === 0 ? <p className="text-[13px] text-ok">No material gaps found.</p> : (
                     <ul className="space-y-1.5">
-                      {r.gaps.map((g) => <li key={g} className="flex gap-1.5 text-[12px] text-ink-2"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-warn" />{g}</li>)}
+                      {r.gaps.map((g) => <li key={g} className="flex gap-1.5 text-[13px] text-ink-2"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-warn" />{g}</li>)}
                     </ul>
                   )}
                 </Panel>
@@ -119,8 +119,8 @@ export default function Research() {
                 <div className="divide-y divide-line">
                   {r.findings.map((f, i) => (
                     <div key={i} className="flex gap-2.5 px-3.5 py-2">
-                      <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[10.5px] text-dim">{i + 1}</span>
-                      <span className="text-[12px] text-ink-2">{f}</span>
+                      <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[11.5px] text-dim">{i + 1}</span>
+                      <span className="text-[13px] text-ink-2">{f}</span>
                     </div>
                   ))}
                 </div>
@@ -131,8 +131,8 @@ export default function Research() {
                   {r.alternatives.map((a) => (
                     <Row key={a.name}>
                       <Cell className="font-medium text-ink">{a.name}</Cell>
-                      <Cell className="text-[11.5px] text-ok">{a.pros.join(' · ')}</Cell>
-                      <Cell className="text-[11.5px] text-danger">{a.cons.join(' · ')}</Cell>
+                      <Cell className="text-[12.5px] text-ok">{a.pros.join(' · ')}</Cell>
+                      <Cell className="text-[12.5px] text-danger">{a.cons.join(' · ')}</Cell>
                       <Cell><Tag tone={VERDICT_TONE[a.verdict.split(' ')[0]] ?? 'neutral'}>{a.verdict}</Tag></Cell>
                     </Row>
                   ))}
@@ -141,27 +141,27 @@ export default function Research() {
 
               <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
                 <Panel eyebrow="Shape of the solution" title="Architecture">
-                  <p className="text-[12.5px] leading-relaxed text-ink-2">{r.architecture}</p>
+                  <p className="text-[13.5px] leading-relaxed text-ink-2">{r.architecture}</p>
                 </Panel>
                 <Panel eyebrow={`${r.risks.length} risks`} title="Risks">
                   <ul className="space-y-1">
-                    {r.risks.map((k) => <li key={k} className="flex gap-1.5 text-[12px] text-ink-2"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-danger" />{k}</li>)}
+                    {r.risks.map((k) => <li key={k} className="flex gap-1.5 text-[13px] text-ink-2"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-danger" />{k}</li>)}
                   </ul>
                 </Panel>
               </div>
 
               <Panel className="accent-left" eyebrow="What the OS would do" title="Recommendation">
-                <p className="text-[13px] leading-relaxed text-ink">{r.recommendation}</p>
+                <p className="text-[14px] leading-relaxed text-ink">{r.recommendation}</p>
               </Panel>
 
               <Panel eyebrow={`${r.citations.length} sources`} title="Citations" flush>
                 <div className="divide-y divide-line">
                   {r.citations.map((c, i) => (
                     <div key={c.url} className="flex items-center gap-2.5 px-3.5 py-2">
-                      <span className="tnum w-5 shrink-0 text-right font-mono text-[10.5px] text-dim">[{i + 1}]</span>
-                      <span className="min-w-0 flex-1 truncate text-[12px] text-ink-2">{c.label}</span>
+                      <span className="tnum w-5 shrink-0 text-right font-mono text-[11.5px] text-dim">[{i + 1}]</span>
+                      <span className="min-w-0 flex-1 truncate text-[13px] text-ink-2">{c.label}</span>
                       <Tag tone="neutral">{c.via}</Tag>
-                      <span className="flex shrink-0 items-center gap-1 font-mono text-[10.5px] text-dim"><ExternalLink className="size-3" />{c.url}</span>
+                      <span className="flex shrink-0 items-center gap-1 font-mono text-[11.5px] text-dim"><ExternalLink className="size-3" />{c.url}</span>
                     </div>
                   ))}
                 </div>

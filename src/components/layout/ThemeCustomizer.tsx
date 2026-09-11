@@ -59,7 +59,7 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
       <SheetContent side="right" className="w-[420px] gap-0 p-0 sm:max-w-none">
         <SheetHeader className="shrink-0 border-b border-line px-4 pt-4 pb-3">
           <SheetTitle className="text-[14px] font-semibold text-ink">Appearance</SheetTitle>
-          <SheetDescription className="text-[12px] text-soft">
+          <SheetDescription className="text-[13px] text-soft">
             {t.availableColors.length} palettes · {t.surfaceTones.length} grounds · 7 modes · live radius and type.
             Everything applies instantly and persists.
           </SheetDescription>
@@ -77,7 +77,7 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
                   key={m.id}
                   onClick={() => t.setMode(m.id)}
                   className={cn(
-                    'flex flex-col items-center gap-1 rounded-sm border px-1.5 py-2 text-[10.5px] transition-colors',
+                    'flex flex-col items-center gap-1 rounded-sm border px-1.5 py-2 text-[11.5px] transition-colors',
                     active
                       ? 'border-brand bg-brand/10 font-medium text-brand'
                       : 'border-line bg-surface-2 text-soft hover:border-line-strong hover:text-ink',
@@ -93,7 +93,7 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
 
         {/* Rail */}
         <div className="shrink-0 border-b border-line px-4 py-3">
-          <SectionTitle right={<span className="text-[10.5px] text-dim">sidebar</span>}>Rail style</SectionTitle>
+          <SectionTitle right={<span className="text-[11.5px] text-dim">sidebar</span>}>Rail style</SectionTitle>
           <div className="grid grid-cols-3 gap-1.5">
             {RAILS.map((r) => {
               const Icon = r.icon;
@@ -104,7 +104,7 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
                   onClick={() => t.setRail(r.id)}
                   title={r.note}
                   className={cn(
-                    'flex flex-col items-center gap-1 rounded-sm border px-1.5 py-2 text-[10.5px] transition-colors',
+                    'flex flex-col items-center gap-1 rounded-sm border px-1.5 py-2 text-[11.5px] transition-colors',
                     active ? 'border-brand bg-brand/10 font-medium text-brand'
                            : 'border-line bg-surface-2 text-soft hover:border-line-strong hover:text-ink',
                   )}
@@ -115,7 +115,7 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
               );
             })}
           </div>
-          <p className="mt-1.5 text-[10.5px] leading-snug text-dim">
+          <p className="mt-1.5 text-[11.5px] leading-snug text-dim">
             {RAILS.find((r) => r.id === t.rail)?.note}
           </p>
         </div>
@@ -151,10 +151,10 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
-                      <span className="text-[12.5px] font-medium text-ink">{p.name}</span>
+                      <span className="text-[13.5px] font-medium text-ink">{p.name}</span>
                       <span className="eyebrow">{p.mode}</span>
                     </span>
-                    <span className="block truncate text-[11px] text-dim">{p.note}</span>
+                    <span className="block truncate text-[12px] text-dim">{p.note}</span>
                   </span>
                   {t.theme === p.id && <Check className="size-3.5 shrink-0 text-brand" />}
                 </button>
@@ -164,15 +164,15 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
 
           {tab === 'colour' && (
             <>
-              <div className="mb-2.5 flex h-7 items-center gap-2 rounded-sm border border-line bg-surface-2 px-2.5 focus-within:border-brand">
+              <div className="mb-2.5 flex h-9 items-center gap-2 rounded-lg border border-line bg-surface-2 px-2.5 focus-within:border-brand">
                 <Search className="size-3.5 shrink-0 text-dim" />
                 <input
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
                   placeholder={`Search ${t.availableColors.length} palettes…`}
-                  className="min-w-0 flex-1 bg-transparent text-[12px] text-ink placeholder:text-dim focus-visible:outline-none"
+                  className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-dim focus-visible:outline-none"
                 />
-                {q && <button onClick={() => setQ('')} className="text-[11px] text-dim hover:text-ink">clear</button>}
+                {q && <button onClick={() => setQ('')} className="text-[12px] text-dim hover:text-ink">clear</button>}
               </div>
               <div className="grid grid-cols-3 gap-1.5">
                 {colours.map((c) => {
@@ -191,14 +191,14 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
                       <span className="flex shrink-0 overflow-hidden rounded-xs border border-line-strong">
                         {sw.map((s, i) => <span key={i} className="size-3" style={{ background: s }} />)}
                       </span>
-                      <span className={cn('min-w-0 flex-1 truncate text-left text-[10.5px]', active ? 'font-medium text-brand' : 'text-ink-2')}>
+                      <span className={cn('min-w-0 flex-1 truncate text-left text-[11.5px]', active ? 'font-medium text-brand' : 'text-ink-2')}>
                         {c.name}
                       </span>
                     </button>
                   );
                 })}
                 {!colours.length && (
-                  <p className="col-span-3 py-6 text-center text-[12px] text-dim">No palette named “{q}”.</p>
+                  <p className="col-span-3 py-6 text-center text-[13px] text-dim">No palette named “{q}”.</p>
                 )}
               </div>
             </>
@@ -206,7 +206,7 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
 
           {tab === 'ground' && (
             <>
-              <p className="mb-2.5 text-[11.5px] text-dim">
+              <p className="mb-2.5 text-[12.5px] text-dim">
                 Ground shades for <span className="text-ink-2">{t.baseMode}</span> mode. These move the page and card
                 surfaces without touching the accent.
               </p>
@@ -224,8 +224,8 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
                     >
                       <span className="size-5 shrink-0 rounded-xs border border-line-strong" style={{ background: `hsl(${s.preview})` }} />
                       <span className="min-w-0 flex-1">
-                        <span className={cn('block truncate text-[11.5px]', active ? 'font-medium text-brand' : 'text-ink-2')}>{s.label}</span>
-                        <span className="block truncate text-[10px] text-dim">{s.description}</span>
+                        <span className={cn('block truncate text-[12.5px]', active ? 'font-medium text-brand' : 'text-ink-2')}>{s.label}</span>
+                        <span className="block truncate text-[11px] text-dim">{s.description}</span>
                       </span>
                     </button>
                   );
@@ -237,7 +237,7 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
           {tab === 'type' && (
             <div className="space-y-4">
               <div>
-                <SectionTitle right={<span className="tnum font-mono text-[11px] text-brand">{t.radius}rem</span>}>
+                <SectionTitle right={<span className="tnum font-mono text-[12px] text-brand">{t.radius}rem</span>}>
                   Corner radius
                 </SectionTitle>
                 <div className="flex gap-1.5">
@@ -252,7 +252,7 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
                       style={{ borderRadius: `${Math.max(r * 8, 2)}px` }}
                     >
                       <span className="size-4 border border-current" style={{ borderRadius: `${r * 10}px` }} />
-                      <span className="tnum text-[10px]">{r}</span>
+                      <span className="tnum text-[11px]">{r}</span>
                     </button>
                   ))}
                 </div>
@@ -274,8 +274,8 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
                           active ? 'border-brand bg-brand/10' : 'border-line bg-surface hover:border-line-strong',
                         )}
                       >
-                        <span className={cn('text-[12px]', active ? 'font-medium text-brand' : 'text-ink-2')}>{f.label}</span>
-                        <span className="truncate text-[11.5px] text-dim" style={{ fontFamily: FONT_PREVIEW[f.value] }}>
+                        <span className={cn('text-[13px]', active ? 'font-medium text-brand' : 'text-ink-2')}>{f.label}</span>
+                        <span className="truncate text-[12.5px] text-dim" style={{ fontFamily: FONT_PREVIEW[f.value] }}>
                           {f.preview}
                         </span>
                       </button>
@@ -300,8 +300,8 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
                           active ? 'border-brand bg-brand/10 text-brand' : 'border-line bg-surface text-soft hover:border-line-strong',
                         )}
                       >
-                        <span className="block text-[11px] font-medium">{s.label}</span>
-                        <span className="tnum block text-[10px] text-dim">{s.size}</span>
+                        <span className="block text-[12px] font-medium">{s.label}</span>
+                        <span className="tnum block text-[11px] text-dim">{s.size}</span>
                       </button>
                     );
                   })}
@@ -337,9 +337,9 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
               </div>
             </div>
             <div className="flex flex-col gap-1.5">
-              <span className="rounded-xs border border-ok/30 bg-ok/10 px-1.5 py-px text-[10.5px] font-medium tracking-wide text-ok uppercase">pass</span>
-              <span className="rounded-xs border border-warn/30 bg-warn/10 px-1.5 py-px text-[10.5px] font-medium tracking-wide text-warn uppercase">review</span>
-              <span className="rounded-xs border border-danger/30 bg-danger/10 px-1.5 py-px text-[10.5px] font-medium tracking-wide text-danger uppercase">blocked</span>
+              <span className="rounded-xs border border-ok/30 bg-ok/10 px-1.5 py-px text-[11.5px] font-medium tracking-wide text-ok uppercase">pass</span>
+              <span className="rounded-xs border border-warn/30 bg-warn/10 px-1.5 py-px text-[11.5px] font-medium tracking-wide text-warn uppercase">review</span>
+              <span className="rounded-xs border border-danger/30 bg-danger/10 px-1.5 py-px text-[11.5px] font-medium tracking-wide text-danger uppercase">blocked</span>
             </div>
             <Button size="sm">Approve</Button>
           </div>

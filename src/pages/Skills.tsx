@@ -47,7 +47,7 @@ export default function Skills() {
             options={skillScopes.map((v) => ({ value: v, label: v === 'all' ? 'Any scope' : v }))} />
           <SelectField className="w-32" value={only} onChange={setOnly}
             options={[{ value: 'all', label: 'All' }, { value: 'on', label: 'Enabled' }, { value: 'off', label: 'Disabled' }]} />
-          <span className="ml-auto text-[11.5px] text-dim">{list.length} of {skills.length}</span>
+          <span className="ml-auto text-[12.5px] text-dim">{list.length} of {skills.length}</span>
         </Toolbar>
       </PageHeader>
 
@@ -61,7 +61,7 @@ export default function Skills() {
         </StatGrid>
 
         <Panel className="accent-left" eyebrow="Why this exists" title="A skill is not a prompt — it is a trigger plus a procedure">
-          <p className="max-w-4xl text-[12.5px] leading-relaxed text-ink-2">
+          <p className="max-w-4xl text-[13.5px] leading-relaxed text-ink-2">
             Loading every rule into every agent burns the context window on instructions that will never apply to the task
             at hand. A skill declares the conditions under which it becomes relevant; the orchestrator matches those
             deterministically and injects only the matching bodies. Twenty-two skills exist here — a typical turn loads two.
@@ -74,11 +74,11 @@ export default function Skills() {
               <ListRow key={x.id} active={x.id === s.id} onClick={() => setSel(x.id)}>
                 <div className="flex items-center gap-2">
                   <span className={cn('size-1.5 shrink-0 rounded-full', on[x.id] ? 'bg-ok' : 'bg-dim')} />
-                  <span className="truncate text-[12.5px] font-medium text-ink">{x.name}</span>
-                  <span className="ml-auto shrink-0 tnum text-[10.5px] text-dim">{x.loads24h}</span>
+                  <span className="truncate text-[13.5px] font-medium text-ink">{x.name}</span>
+                  <span className="ml-auto shrink-0 tnum text-[11.5px] text-dim">{x.loads24h}</span>
                 </div>
                 <Mono className="mt-1 block truncate">{x.slug}</Mono>
-                <p className="mt-1 line-clamp-1 text-[10.5px] text-dim">{x.description}</p>
+                <p className="mt-1 line-clamp-1 text-[11.5px] text-dim">{x.description}</p>
               </ListRow>
             ))}
           </div>
@@ -89,7 +89,7 @@ export default function Skills() {
               title={<span className="flex items-center gap-2">{s.name}<Mono tone="brand">{s.slug}</Mono></span>}
               actions={<Switch checked={on[s.id]} onCheckedChange={(v) => { setOn({ ...on, [s.id]: v }, `Skill ${s.name} ${v ? 'enabled' : 'disabled'}`); toast(`${s.name} ${v ? 'enabled' : 'disabled'}`); }} />}
             >
-              <p className="text-[12.5px] leading-relaxed text-ink-2">{s.description}</p>
+              <p className="text-[13.5px] leading-relaxed text-ink-2">{s.description}</p>
               <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 border-t border-line pt-2.5 xl:grid-cols-4">
                 <KV k="Context cost" v={`${s.tokens.toLocaleString()} tokens`} />
                 <KV k="Loads 24h" v={s.loads24h} />
@@ -107,11 +107,11 @@ export default function Skills() {
                     <div key={i} className="px-3.5 py-2">
                       <div className="flex items-start gap-2">
                         <span className="eyebrow mt-0.5 w-9 shrink-0">when</span>
-                        <span className="text-[11.5px] text-ink-2">{r.when}</span>
+                        <span className="text-[12.5px] text-ink-2">{r.when}</span>
                       </div>
                       <div className="mt-1 flex items-start gap-2">
                         <span className="eyebrow mt-0.5 w-9 shrink-0 text-brand">then</span>
-                        <span className="text-[11.5px] text-soft">{r.then}</span>
+                        <span className="text-[12.5px] text-soft">{r.then}</span>
                       </div>
                     </div>
                   ))}

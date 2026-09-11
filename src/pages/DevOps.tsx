@@ -56,9 +56,9 @@ export default function DevOps() {
                     <KV k="Requests" v={e.requests} />
                   </div>
                   <div className="mt-2.5 space-y-1.5 border-t border-line pt-2.5">
-                    <div className="flex items-center gap-2"><span className="w-8 text-[10.5px] text-dim">CPU</span><Bar pct={e.cpu} /><span className="tnum w-8 text-right text-[10.5px]">{e.cpu}%</span></div>
-                    <div className="flex items-center gap-2"><span className="w-8 text-[10.5px] text-dim">MEM</span><Bar pct={e.mem} /><span className="tnum w-8 text-right text-[10.5px]">{e.mem}%</span></div>
-                    <div className="flex items-center gap-2"><span className="w-8 text-[10.5px] text-dim">ERR</span><Bar pct={Math.min(100, e.errorRate * 20)} tone={e.errorRate > 1 ? 'danger' : 'ok'} /><span className="tnum w-8 text-right text-[10.5px]">{e.errorRate}%</span></div>
+                    <div className="flex items-center gap-2"><span className="w-8 text-[11.5px] text-dim">CPU</span><Bar pct={e.cpu} /><span className="tnum w-8 text-right text-[11.5px]">{e.cpu}%</span></div>
+                    <div className="flex items-center gap-2"><span className="w-8 text-[11.5px] text-dim">MEM</span><Bar pct={e.mem} /><span className="tnum w-8 text-right text-[11.5px]">{e.mem}%</span></div>
+                    <div className="flex items-center gap-2"><span className="w-8 text-[11.5px] text-dim">ERR</span><Bar pct={Math.min(100, e.errorRate * 20)} tone={e.errorRate > 1 ? 'danger' : 'ok'} /><span className="tnum w-8 text-right text-[11.5px]">{e.errorRate}%</span></div>
                   </div>
                 </Panel>
               ))}
@@ -73,7 +73,7 @@ export default function DevOps() {
                   <SectionTitle className="mt-3 mb-1.5">What ships</SectionTitle>
                   <ul className="space-y-1">
                     {productionGate.contains.map((c) => (
-                      <li key={c} className="flex items-start gap-1.5 text-[11.5px] text-ink-2"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-brand" />{c}</li>
+                      <li key={c} className="flex items-start gap-1.5 text-[12.5px] text-ink-2"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-brand" />{c}</li>
                     ))}
                   </ul>
                 </div>
@@ -81,11 +81,11 @@ export default function DevOps() {
                   <SectionTitle className="mb-1.5">Why this is dangerous</SectionTitle>
                   <ul className="space-y-1">
                     {productionGate.risks.map((r) => (
-                      <li key={r} className="flex items-start gap-1.5 text-[11.5px] text-warn"><TriangleAlert className="mt-px size-3 shrink-0" />{r}</li>
+                      <li key={r} className="flex items-start gap-1.5 text-[12.5px] text-warn"><TriangleAlert className="mt-px size-3 shrink-0" />{r}</li>
                     ))}
                   </ul>
                   <SectionTitle className="mt-3 mb-1.5">Rollback</SectionTitle>
-                  <p className="text-[11.5px] text-soft">{productionGate.rollback}</p>
+                  <p className="text-[12.5px] text-soft">{productionGate.rollback}</p>
                 </div>
               </div>
               <div className="mt-3 flex items-center gap-2 border-t border-line pt-3">
@@ -95,7 +95,7 @@ export default function DevOps() {
                     <Button size="sm" onClick={async () => { if (await decideGate('approved', { action: 'Production deploy approved', detail: 'Rolling restart across 3 nodes, rollback armed.', projectId: activeProject, level: 'ok' })) toast.success('Production deploy approved', { description: 'Rolling restart across 3 nodes, rollback armed.' }); }}>
                       <Rocket className="size-3.5" />Approve deployment
                     </Button>
-                    <span className="ml-auto text-[11px] text-dim">Your signature is recorded against this version.</span>
+                    <span className="ml-auto text-[12px] text-dim">Your signature is recorded against this version.</span>
                   </>
                 ) : (
                   <Tag tone={gate === 'approved' ? 'ok' : 'neutral'}>{gate === 'approved' ? 'approved by you · rolling out' : 'cancelled by you'}</Tag>
@@ -113,7 +113,7 @@ export default function DevOps() {
                     <Cell><StatusText state={h.status} /></Cell>
                     <Cell className="tnum">{h.latencyMs}ms</Cell>
                     <Cell className="text-dim">{h.lastRun}</Cell>
-                    <Cell className="max-w-[360px] text-[11.5px] text-soft">{h.note}</Cell>
+                    <Cell className="max-w-[360px] text-[12.5px] text-soft">{h.note}</Cell>
                   </Row>
                 ))}
               </DataTable>
@@ -142,7 +142,7 @@ export default function DevOps() {
                     <Cell><Tag tone={d.env === 'production' ? 'warn' : d.env === 'staging' ? 'info' : 'neutral'}>{d.env}</Tag></Cell>
                     <Cell mono>{d.version}</Cell>
                     <Cell><Tag tone={DEP_TONE[d.status]}>{d.status.replace('_', ' ')}</Tag></Cell>
-                    <Cell className="text-[11.5px]">{d.by}</Cell>
+                    <Cell className="text-[12.5px]">{d.by}</Cell>
                     <Cell className="tnum">{d.durationS}s</Cell>
                     <Cell mono className="text-dim">{d.commit}</Cell>
                     <Cell className="text-dim">{d.at}</Cell>
@@ -159,7 +159,7 @@ export default function DevOps() {
                       <Dot state={d?.status ?? 'info'} className="mt-1.5" />
                       <span className="min-w-0 flex-1">
                         <Mono>{d ? `${d.env} ${d.version}` : id}</Mono>
-                        <span className="ml-2 text-[12px] text-ink-2">{text}</span>
+                        <span className="ml-2 text-[13px] text-ink-2">{text}</span>
                       </span>
                     </div>
                   );
@@ -177,7 +177,7 @@ export default function DevOps() {
                   <Cell className="font-medium text-ink">{c.name}</Cell>
                   <Cell mono className="text-dim">{c.image}</Cell>
                   <Cell><StatusText state={c.status} /></Cell>
-                  <Cell><span className="flex items-center gap-2"><Bar className="w-16" pct={c.cpu} /><span className="tnum text-[11px]">{c.cpu}%</span></span></Cell>
+                  <Cell><span className="flex items-center gap-2"><Bar className="w-16" pct={c.cpu} /><span className="tnum text-[12px]">{c.cpu}%</span></span></Cell>
                   <Cell className="tnum">{c.mem}</Cell>
                   <Cell mono className="text-dim">{c.ports}</Cell>
                 </Row>
@@ -189,7 +189,7 @@ export default function DevOps() {
         {tab === 'pipeline' && (
           <>
             <Panel eyebrow={`${pipelineMeta.ref} · ${pipelineMeta.trigger}`} title="CI pipeline"
-              actions={<span className="text-[11.5px] text-dim">{pipelineMeta.runner} · {pipelineMeta.elapsed}</span>}>
+              actions={<span className="text-[12.5px] text-dim">{pipelineMeta.runner} · {pipelineMeta.elapsed}</span>}>
               <div className="flex flex-wrap items-stretch gap-1.5">
                 {pipeline.map((s, i) => (
                   <div key={s.id} className="flex items-center gap-1.5">
@@ -199,9 +199,9 @@ export default function DevOps() {
                       s.state === 'running' ? 'sweep border-brand/40 bg-brand/8' : 'border-line bg-surface-2')}>
                       <div className="flex items-center gap-1.5">
                         <Dot state={s.state} pulse={s.state === 'running'} />
-                        <span className="text-[11.5px] font-medium text-ink">{s.name}</span>
+                        <span className="text-[12.5px] font-medium text-ink">{s.name}</span>
                       </div>
-                      <div className="tnum mt-1 text-[10.5px] text-dim">{s.durationS ? `${s.durationS}s` : '—'}</div>
+                      <div className="tnum mt-1 text-[11.5px] text-dim">{s.durationS ? `${s.durationS}s` : '—'}</div>
                     </div>
                     {i < pipeline.length - 1 && <span className="text-dim">›</span>}
                   </div>
@@ -210,8 +210,8 @@ export default function DevOps() {
               <div className="mt-3 divide-y divide-line border-t border-line pt-1">
                 {pipeline.map((s) => (
                   <div key={s.id} className="flex items-center gap-3 py-1.5">
-                    <span className="w-24 shrink-0 text-[11.5px] text-ink-2">{s.name}</span>
-                    <span className="min-w-0 flex-1 truncate text-[11.5px] text-dim">{s.detail}</span>
+                    <span className="w-24 shrink-0 text-[12.5px] text-ink-2">{s.name}</span>
+                    <span className="min-w-0 flex-1 truncate text-[12.5px] text-dim">{s.detail}</span>
                     <Tag tone={s.state === 'pass' ? 'ok' : s.state === 'fail' ? 'danger' : s.state === 'running' ? 'info' : 'neutral'}>{s.state}</Tag>
                   </div>
                 ))}
@@ -225,11 +225,11 @@ export default function DevOps() {
             <div className="flex items-center gap-2">
               <SelectField className="w-40" value={level} onChange={setLevel}
                 options={[{ value: 'all', label: 'All levels' }, ...['info', 'ok', 'warn', 'err', 'debug'].map((l) => ({ value: l, label: l }))]} />
-              <span className="ml-auto text-[11.5px] text-dim">{shown.length} of {logs.length} lines</span>
+              <span className="ml-auto text-[12.5px] text-dim">{shown.length} of {logs.length} lines</span>
             </div>
             <Panel eyebrow="tail -f" title={<span className="flex items-center gap-1.5"><Terminal className="size-3.5 text-brand" />Application log</span>} flush>
               {shown.length === 0 ? <Empty title="Nothing at that level" /> : (
-                <div className="max-h-[520px] overflow-y-auto bg-base px-3.5 py-2.5 font-mono text-[11.5px] leading-relaxed">
+                <div className="max-h-[520px] overflow-y-auto bg-base px-3.5 py-2.5 font-mono text-[12.5px] leading-relaxed">
                   {shown.map((l) => (
                     <div key={l.id} className="flex gap-2.5">
                       <span className="shrink-0 text-dim">{l.t}</span>
@@ -248,7 +248,7 @@ export default function DevOps() {
         {tab === 'secrets' && (
           <>
             <Panel className="border-warn/30 accent-left" eyebrow="Rule" title={<span className="flex items-center gap-1.5"><KeyRound className="size-3.5 text-warn" />Agents never see a value</span>}>
-              <p className="text-[12.5px] leading-relaxed text-ink-2">
+              <p className="text-[13.5px] leading-relaxed text-ink-2">
                 Secrets are referenced by name and resolved at process launch by the runtime. No agent, model or log line
                 ever holds the plaintext — permission rule p14 denies reads outright, with no override flag.
               </p>
@@ -259,17 +259,17 @@ export default function DevOps() {
                   <Row key={s.id}>
                     <Cell mono className="text-ink">{s.name}</Cell>
                     <Cell><Tag tone="neutral">{s.scope}</Tag></Cell>
-                    <Cell className="text-[11.5px]">{s.store}</Cell>
+                    <Cell className="text-[12.5px]">{s.store}</Cell>
                     <Cell className="text-dim">{s.lastRotated}</Cell>
                     <Cell className="tnum">{s.rotationDays}d</Cell>
-                    <Cell className="text-[11.5px] text-soft">{s.readers.join(', ')}</Cell>
-                    <Cell className="max-w-[300px] text-[11.5px] text-dim">{s.usedBy}</Cell>
+                    <Cell className="text-[12.5px] text-soft">{s.readers.join(', ')}</Cell>
+                    <Cell className="max-w-[300px] text-[12.5px] text-dim">{s.usedBy}</Cell>
                   </Row>
                 ))}
               </DataTable>
             </Panel>
             <Panel eyebrow="Value column" title={<span className="flex items-center gap-1.5"><Activity className="size-3.5 text-dim" />Deliberately absent</span>}>
-              <p className="text-[12px] text-dim">There is no value column, and there is no reveal button. That is the feature.</p>
+              <p className="text-[13px] text-dim">There is no value column, and there is no reveal button. That is the feature.</p>
             </Panel>
           </>
         )}

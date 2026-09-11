@@ -113,13 +113,13 @@ export default function Plans() {
                   {!inFlight(x) && <Tag tone="neutral">draft</Tag>}
                   <span className="ml-auto"><RiskPill risk={x.risk} bare /></span>
                 </div>
-                <p className="mt-1 line-clamp-2 text-[12px] text-ink">{x.technicalRequirement.split('.')[0]}.</p>
+                <p className="mt-1 line-clamp-2 text-[13px] text-ink">{x.technicalRequirement.split('.')[0]}.</p>
                 <div className="mt-1.5 flex items-center gap-2">
                   <BlockBar pct={(d / x.steps.length) * 100} width={10} />
-                  <span className="tnum text-[10.5px] text-dim">{d}/{x.steps.length}</span>
-                  <span className="ml-auto text-[10.5px] text-dim">conf {x.confidence}%</span>
+                  <span className="tnum text-[11.5px] text-dim">{d}/{x.steps.length}</span>
+                  <span className="ml-auto text-[11.5px] text-dim">conf {x.confidence}%</span>
                 </div>
-                <p className="mt-1 truncate text-[10px] text-dim">{x.taskRef} · {projectName(x.projectId)}</p>
+                <p className="mt-1 truncate text-[11px] text-dim">{x.taskRef} · {projectName(x.projectId)}</p>
               </ListRow>
             );
           })}
@@ -133,7 +133,7 @@ export default function Plans() {
             <Tag tone="neutral">{projectName(p.projectId)}</Tag>
             <RiskPill risk={p.risk} />
             <CompiledBy p={p} />
-            <span className="ml-auto text-[11.5px] text-dim">compiled {p.createdAt}</span>
+            <span className="ml-auto text-[12.5px] text-dim">compiled {p.createdAt}</span>
           </div>
 
           {/* Compiler chain */}
@@ -141,7 +141,7 @@ export default function Plans() {
             {STAGES.map((s, i) => (
               <div key={s.k}>
                 <Panel eyebrow={s.hint} title={s.label} className={i === 0 ? 'border-brand/35' : undefined}>
-                  <p className={cn('leading-relaxed', i === 0 ? 'text-[13px] text-ink' : 'text-[12.5px] text-ink-2')}>
+                  <p className={cn('leading-relaxed', i === 0 ? 'text-[14px] text-ink' : 'text-[13.5px] text-ink-2')}>
                     {p[s.k]}
                   </p>
                 </Panel>
@@ -153,22 +153,22 @@ export default function Plans() {
               <Panel eyebrow={`${p.affectedModules.length} modules`} title={<span className="flex items-center gap-1.5"><Boxes className="size-3.5 text-brand" />Affected modules</span>} flush>
                 <div className="divide-y divide-line">
                   {p.affectedModules.length === 0
-                    ? <div className="px-3.5 py-3 text-[12px] text-dim">None named yet.</div>
-                    : p.affectedModules.map((m) => <div key={m} className="px-3.5 py-1.5 text-[12px] text-ink-2">{m}</div>)}
+                    ? <div className="px-3.5 py-3 text-[13px] text-dim">None named yet.</div>
+                    : p.affectedModules.map((m) => <div key={m} className="px-3.5 py-1.5 text-[13px] text-ink-2">{m}</div>)}
                 </div>
               </Panel>
               <Panel eyebrow={`${p.affectedFiles.length} files`} title={<span className="flex items-center gap-1.5"><FileCode className="size-3.5 text-brand" />Affected files</span>} flush>
                 <div className="divide-y divide-line">
                   {p.affectedFiles.length === 0
-                    ? <div className="px-3.5 py-3 text-[12px] text-dim">None named yet.</div>
-                    : p.affectedFiles.map((f) => <div key={f} className="truncate px-3.5 py-1.5 font-mono text-[11px] text-ink-2" title={f}>{f}</div>)}
+                    ? <div className="px-3.5 py-3 text-[13px] text-dim">None named yet.</div>
+                    : p.affectedFiles.map((f) => <div key={f} className="truncate px-3.5 py-1.5 font-mono text-[12px] text-ink-2" title={f}>{f}</div>)}
                 </div>
               </Panel>
               <Panel eyebrow={`${p.affectedDb.length} objects`} title={<span className="flex items-center gap-1.5"><Database className="size-3.5 text-brand" />Affected database</span>} flush>
                 <div className="divide-y divide-line">
                   {p.affectedDb.length === 0
-                    ? <div className="px-3.5 py-3 text-[12px] text-dim">No database change.</div>
-                    : p.affectedDb.map((d) => <div key={d} className="px-3.5 py-1.5 font-mono text-[11px] text-ink-2">{d}</div>)}
+                    ? <div className="px-3.5 py-3 text-[13px] text-dim">No database change.</div>
+                    : p.affectedDb.map((d) => <div key={d} className="px-3.5 py-1.5 font-mono text-[12px] text-ink-2">{d}</div>)}
                 </div>
               </Panel>
             </div>
@@ -176,7 +176,7 @@ export default function Plans() {
             <div className="flex justify-center py-1.5"><ArrowDown className="size-3.5 text-line-strong" /></div>
 
             <Panel eyebrow="Architecture impact" title="What this changes structurally" className="border-warn/30">
-              <p className="text-[12.5px] leading-relaxed text-ink-2">{p.architectureImpact}</p>
+              <p className="text-[13.5px] leading-relaxed text-ink-2">{p.architectureImpact}</p>
             </Panel>
 
             <div className="flex justify-center py-1.5"><ArrowDown className="size-3.5 text-line-strong" /></div>
@@ -194,16 +194,16 @@ export default function Plans() {
                   const Icon = S.icon;
                   return (
                     <div key={s.id} className={cn('flex items-start gap-3 px-3.5 py-2.5', s.state === 'active' && 'bg-brand/5')}>
-                      <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[11px] text-dim">{s.n}</span>
+                      <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[12px] text-dim">{s.n}</span>
                       <Icon className={cn('mt-px size-3.5 shrink-0', S.cls)} />
                       <span className="min-w-0 flex-1">
-                        <span className={cn('text-[12.5px]', s.state === 'todo' ? 'text-soft' : 'font-medium text-ink')}>{s.label}</span>
-                        <span className="block text-[11.5px] text-dim">{s.detail}</span>
+                        <span className={cn('text-[13.5px]', s.state === 'todo' ? 'text-soft' : 'font-medium text-ink')}>{s.label}</span>
+                        <span className="block text-[12.5px] text-dim">{s.detail}</span>
                       </span>
                       <span className="shrink-0 text-right">
-                        <span className="block text-[11px] text-soft">{s.agent}</span>
+                        <span className="block text-[12px] text-soft">{s.agent}</span>
                         {s.durationS !== undefined && (
-                          <span className="tnum block font-mono text-[10.5px] text-dim">
+                          <span className="tnum block font-mono text-[11.5px] text-dim">
                             {s.durationS >= 60 ? `${Math.floor(s.durationS / 60)}m ${s.durationS % 60}s` : `${s.durationS}s`}
                           </span>
                         )}
@@ -238,7 +238,7 @@ export default function Plans() {
                 )}
               </div>
               <SectionTitle className="mt-3 mb-1.5">Unknown</SectionTitle>
-              <p className="text-[11.5px] text-warn">
+              <p className="text-[12.5px] text-warn">
                 {open > 0
                   ? `${open} business question${open > 1 ? 's' : ''} not documented anywhere in the codebase.`
                   : 'Nothing material is unknown for this plan.'}
@@ -252,7 +252,7 @@ export default function Plans() {
                 <div className="divide-y divide-line">
                   {p.openQuestions.map((q, i) => (
                     <div key={`${p.ref}-${q}`} className="px-3.5 py-2.5">
-                      <p className="text-[12px] text-ink-2">{q}</p>
+                      <p className="text-[13px] text-ink-2">{q}</p>
                       {draft?.index === i ? (
                         <form
                           className="mt-2 space-y-1.5"
@@ -265,7 +265,7 @@ export default function Plans() {
                             onChange={(e) => setDraft({ index: i, text: e.target.value })}
                             aria-label={`Answer: ${q}`}
                             placeholder="Your answer becomes a business rule in memory…"
-                            className="w-full resize-none rounded-sm border border-line bg-base px-2.5 py-1.5 text-[12px] text-ink placeholder:text-dim focus-visible:border-brand focus-visible:outline-none"
+                            className="w-full resize-none rounded-sm border border-line bg-base px-2.5 py-1.5 text-[13px] text-ink placeholder:text-dim focus-visible:border-brand focus-visible:outline-none"
                           />
                           <div className="flex gap-1.5">
                             <Button size="xs" type="submit" disabled={!draft.text.trim()}><Check className="size-3" />Save answer</Button>
@@ -285,11 +285,11 @@ export default function Plans() {
               {(p.answered?.length || p.deferred?.length) ? (
                 <div className="space-y-1.5 border-t border-line px-3.5 py-2.5">
                   {p.answered?.map((a) => (
-                    <p key={a.q} className="text-[11.5px] text-soft">
+                    <p key={a.q} className="text-[12.5px] text-soft">
                       <Check className="mr-1 inline size-3 text-ok" /><span className="text-ink-2">{a.q}</span> → {a.a}
                     </p>
                   ))}
-                  {p.deferred?.map((q) => <p key={q} className="text-[11.5px] text-dim">Deferred: {q}</p>)}
+                  {p.deferred?.map((q) => <p key={q} className="text-[12.5px] text-dim">Deferred: {q}</p>)}
                 </div>
               ) : null}
             </Panel>
@@ -299,8 +299,8 @@ export default function Plans() {
             <div className="divide-y divide-line">
               {p.testPlan.map((t, i) => (
                 <div key={i} className="flex items-start gap-2.5 px-3.5 py-1.5">
-                  <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[10.5px] text-dim">{i + 1}</span>
-                  <span className="text-[12px] text-ink-2">{t}</span>
+                  <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[11.5px] text-dim">{i + 1}</span>
+                  <span className="text-[13px] text-ink-2">{t}</span>
                 </div>
               ))}
             </div>
@@ -316,7 +316,7 @@ export default function Plans() {
               {working === 'recompile' ? 'Re-compiling…' : 'Re-compile'}
             </Button>
             {!underway && open > 0 && (
-              <span className="text-[11px] text-warn">Answer or defer {open} open question{open > 1 ? 's' : ''} to dispatch.</span>
+              <span className="text-[12px] text-warn">Answer or defer {open} open question{open > 1 ? 's' : ''} to dispatch.</span>
             )}
           </div>
         </div>

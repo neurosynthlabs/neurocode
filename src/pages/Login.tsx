@@ -43,7 +43,7 @@ export default function Login() {
                 <span className="font-bold" style={{ color: 'var(--rail-ink)' }}>Neuro</span>
                 <span className="font-semibold" style={{ color: 'var(--rail-accent)' }}>Code</span>
               </span>
-              <span className="mt-1.5 block font-mono text-[11px]" style={{ color: 'var(--rail-dim)' }}>
+              <span className="mt-1.5 block font-mono text-[12px]" style={{ color: 'var(--rail-dim)' }}>
                 AI engineering OS · v{__APP_VERSION__} · self-hosted
               </span>
             </span>
@@ -52,7 +52,7 @@ export default function Login() {
           <h1 className="mt-10 max-w-lg text-[27px] leading-[1.25] font-semibold tracking-[-0.028em]" style={{ color: 'var(--rail-ink)' }}>
             One operator.<br />A whole engineering organisation.
           </h1>
-          <p className="mt-4 max-w-md text-[13.5px] leading-relaxed" style={{ color: 'var(--rail-soft)' }}>
+          <p className="mt-4 max-w-md text-[14.5px] leading-relaxed" style={{ color: 'var(--rail-soft)' }}>
             You write the requirement — in whatever language it arrives in. The OS compiles it, maps the blast radius
             against a parsed call graph, splits it across agents in isolated worktrees, tests it for real, reviews it
             against your own conventions, and stops at your signature.
@@ -60,7 +60,7 @@ export default function Login() {
         </div>
 
         <div className="relative">
-          <Ascii className="border-0 bg-transparent p-0 text-[10.5px]" >{PITCH}</Ascii>
+          <Ascii className="border-0 bg-transparent p-0 text-[11.5px]" >{PITCH}</Ascii>
         </div>
 
         <div className="relative">
@@ -68,11 +68,11 @@ export default function Login() {
             {FACTS.map(([v, l]) => (
               <div key={l}>
                 <div className="figure text-[21px]" style={{ color: 'var(--rail-ink)' }}>{v}</div>
-                <div className="mt-1 text-[10.5px] tracking-[0.04em] uppercase" style={{ color: 'var(--rail-dim)' }}>{l}</div>
+                <div className="mt-1 text-[11.5px] tracking-[0.04em] uppercase" style={{ color: 'var(--rail-dim)' }}>{l}</div>
               </div>
             ))}
           </div>
-          <p className="mt-5 flex items-center gap-1.5 text-[11px]" style={{ color: 'var(--rail-dim)' }}>
+          <p className="mt-5 flex items-center gap-1.5 text-[12px]" style={{ color: 'var(--rail-dim)' }}>
             <ShieldCheck className="size-3.5" />
             Runs on your machine. Source, secrets and customer data never leave it.
           </p>
@@ -90,7 +90,7 @@ export default function Login() {
           </div>
 
           <h2 className="text-[19px] font-semibold tracking-[-0.02em] text-ink">Sign in</h2>
-          <p className="mt-1 text-[12.5px] text-soft">
+          <p className="mt-1 text-[13.5px] text-soft">
             This instance is single-operator. There is one seat, and it is yours.
           </p>
 
@@ -120,9 +120,9 @@ export default function Login() {
           <div className="mt-7 rounded-md border border-line bg-surface p-3.5">
             <div className="flex items-center gap-2">
               <Dot state="ok" pulse />
-              <span className="text-[12px] font-medium text-ink">Local runtime detected</span>
+              <span className="text-[13px] font-medium text-ink">Local runtime detected</span>
             </div>
-            <div className="mt-2 space-y-1 text-[11px] text-dim">
+            <div className="mt-2 space-y-1 text-[12px] text-dim">
               <p className="flex items-center justify-between"><span>Orchestrator</span><Mono>127.0.0.1:8787</Mono></p>
               <p className="flex items-center justify-between"><span>Vector store</span><Mono>qdrant · local</Mono></p>
               <p className="flex items-center justify-between"><span>Models ready</span><Mono>9 of 14</Mono></p>
@@ -142,7 +142,7 @@ export default function Login() {
             </div>
           </div>
 
-          <p className="mt-7 flex items-center gap-1.5 text-[11px] text-dim">
+          <p className="mt-7 flex items-center gap-1.5 text-[12px] text-dim">
             <Tag tone="neutral">prototype</Tag>
             Any credentials open the workspace — this build carries no backend by design.
           </p>

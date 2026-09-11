@@ -61,8 +61,8 @@ export default function Review() {
                   <Mono tone={x.id === sel ? 'brand' : 'neutral'}>{x.ref}</Mono>
                   <Tag tone={VERDICT_TONE[x.verdict]} className="ml-auto">{x.verdict.replace('_', ' ')}</Tag>
                 </div>
-                <p className="mt-1 text-[11.5px] text-ink-2">{x.taskRef} · round {x.round}</p>
-                <div className="mt-1 flex items-center gap-2 text-[10.5px] text-dim">
+                <p className="mt-1 text-[12.5px] text-ink-2">{x.taskRef} · round {x.round}</p>
+                <div className="mt-1 flex items-center gap-2 text-[11.5px] text-dim">
                   <span>{x.filesChanged} files</span>
                   <span className="text-ok">+{x.additions}</span>
                   <span className="text-danger">−{x.deletions}</span>
@@ -75,10 +75,10 @@ export default function Review() {
           <div className="min-w-0 flex-1 space-y-3">
             <Panel eyebrow={`${r.reviewer} · round ${r.round} · ${projectName(r.projectId)} · ${r.createdAt}`}
               title={<span className="flex flex-wrap items-center gap-2"><Mono tone="brand">{r.ref}</Mono>{r.taskRef}<Tag tone={VERDICT_TONE[r.verdict]}>{r.verdict.replace('_', ' ')}</Tag></span>}
-              actions={<span className="text-[11px] text-dim">{r.filesChanged} files · <span className="text-ok">+{r.additions}</span> <span className="text-danger">−{r.deletions}</span></span>}>
+              actions={<span className="text-[12px] text-dim">{r.filesChanged} files · <span className="text-ok">+{r.additions}</span> <span className="text-danger">−{r.deletions}</span></span>}>
               <div className="flex items-start gap-2.5 rounded-sm border border-line bg-base p-3">
                 <Quote className="mt-0.5 size-3.5 shrink-0 text-brand" />
-                <p className="text-[12.5px] leading-relaxed text-ink-2 italic">{r.reviewerNote}</p>
+                <p className="text-[13.5px] leading-relaxed text-ink-2 italic">{r.reviewerNote}</p>
               </div>
               <div className="mt-3 flex items-center gap-2 border-t border-line pt-3">
                 {decided[r.id] ? (
@@ -95,7 +95,7 @@ export default function Review() {
                       onClick={async () => { if (await recordDecision(`review:${r.id}`, 'changes', { action: 'Review sent back', detail: `${r.ref} · the agent gets the findings and re-runs`, projectId: activeProject, level: 'warn' })) toast(`${r.ref} sent back`, { description: 'The agent gets the findings and re-runs.' }); }}>
                       <X className="size-3.5" />Request changes
                     </Button>
-                    {blockers > 0 && <span className="text-[11.5px] text-danger">{blockers} blocker{blockers > 1 ? 's' : ''} must be resolved before this can be accepted.</span>}
+                    {blockers > 0 && <span className="text-[12.5px] text-danger">{blockers} blocker{blockers > 1 ? 's' : ''} must be resolved before this can be accepted.</span>}
                   </>
                 )}
               </div>
@@ -106,7 +106,7 @@ export default function Review() {
                 {r.checks.map((c) => (
                   <div key={c.id} className="flex items-start gap-3 px-3.5 py-2">
                     <span className="w-40 shrink-0"><StatusText state={c.status} label={c.label} /></span>
-                    <span className="min-w-0 flex-1 text-[11.5px] text-soft">{c.note}</span>
+                    <span className="min-w-0 flex-1 text-[12.5px] text-soft">{c.note}</span>
                   </div>
                 ))}
               </div>
@@ -122,8 +122,8 @@ export default function Review() {
                       <Cell><Tag tone={SEV_TONE[x.severity]}>{x.severity}</Tag></Cell>
                       <Cell mono className="text-dim">{x.file.split('/').pop()}:{x.line}</Cell>
                       <Cell mono>{x.rule}</Cell>
-                      <Cell className="max-w-[440px] text-[11.5px] text-ink-2">{x.message}</Cell>
-                      <Cell className="text-[11.5px] text-dim">{x.agent}</Cell>
+                      <Cell className="max-w-[440px] text-[12.5px] text-ink-2">{x.message}</Cell>
+                      <Cell className="text-[12.5px] text-dim">{x.agent}</Cell>
                     </Row>
                   ))}
                 </DataTable>
@@ -135,9 +135,9 @@ export default function Review() {
                 eyebrow={`${f.rule} · raised by ${f.agent}`}
                 title={<span className="flex items-center gap-2"><Tag tone={SEV_TONE[f.severity]}>{f.severity}</Tag><Mono>{f.file}:{f.line}</Mono></span>}>
                 <SectionTitle>Problem</SectionTitle>
-                <p className="text-[12.5px] leading-relaxed text-ink-2">{f.message}</p>
+                <p className="text-[13.5px] leading-relaxed text-ink-2">{f.message}</p>
                 <SectionTitle className="mt-3">Suggested fix</SectionTitle>
-                <p className="rounded-sm border border-line bg-base p-2.5 text-[12.5px] leading-relaxed text-ink-2">{f.suggestion}</p>
+                <p className="rounded-sm border border-line bg-base p-2.5 text-[13.5px] leading-relaxed text-ink-2">{f.suggestion}</p>
               </Panel>
             )}
           </div>
