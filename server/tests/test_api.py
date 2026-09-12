@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app import chat
 from app.ai import gateway
 from app.auth import COOKIE
 from app.db import TABLES, Store
@@ -166,7 +167,7 @@ def test_custom_roles_sit_beside_the_built_in_ones(client):
     assert rm.patch("/tasks/TASK-492", json={"status": "review"}).status_code == 403            # takes effect at once
     assert client.delete("/admin/roles/release-manager").status_code == 409                     # someone still has it
     assert [r["id"] for r in client.get("/admin/roles").json()][:5] == ["owner", "admin", "approver", "engineer", "viewer"]
-    assert len(client.get("/admin/permissions").json()) == 17
+    assert len(client.get("/admin/permissions").json()) == 18
 
 
 def test_teams_hold_known_people(client):
@@ -265,6 +266,71 @@ def test_a_lane_that_fails_hands_the_call_to_the_next_lane(client, monkeypatch):
     plan = compile_tax(client, "fix the tax split")
     assert plan["compiler"]["provider"] == "cerebras"                             # not the offline rules
     assert lanes_of(client)["groq"]["spent"]["today"] == 1                        # the attempt is still ledgered
+
+
+# ── sessions: a conversation that can read the code ──────────────
+def scripted(client, monkeypatch, *answers):
+    """A lane whose model says exactly these things, one per call, then stops asking for tools."""
+    queue = list(answers)
+
+    def speak(messages, cfg):
+        return queue.pop(0) if queue else json.dumps({"answer": "Done."})
+    lane_up(client, monkeypatch, "groq", speak)
+
+
+def talk(client, ref, text):
+    assert client.post(f"/sessions/{ref}/messages", json={"text": text}).status_code == 201
+    return client.get(f"/sessions/{ref}").json()
+
+
+def test_a_session_reads_the_code_with_tools_before_it_answers(client, tmp_path, monkeypatch):
+    pid = onboard_git(client, tmp_path / "shop")
+    scripted(client, monkeypatch,
+             json.dumps({"tool": "search_code", "arguments": {"query": "total"}, "why": "find where it lives"}),
+             json.dumps({"tool": "read_file", "arguments": {"path": "pkg/core.py"}, "why": "read it"}),
+             json.dumps({"answer": "total() pkg/core.py mein hai."}))
+    ref = client.post("/sessions", json={"projectId": pid}).json()["ref"]
+    doc = talk(client, ref, "total kahan hai?")
+    assert [m["role"] for m in doc["messages"]] == ["you", "tool", "tool", "assistant"]
+    assert [m["tool"] for m in doc["messages"][1:3]] == ["search_code", "read_file"]
+    assert "pkg/core.py" in doc["messages"][2]["text"] and doc["messages"][2]["ok"] is True   # it really read it
+    assert doc["messages"][-1]["text"].startswith("total()") and doc["messages"][-1]["lane"] == "groq"
+    assert doc["status"] == "idle" and doc["turns"] == 1 and doc["toolCalls"] == 2
+    assert doc["title"] == "total kahan hai?" and client.get("/sessions").json()[0]["ref"] == ref
+
+
+def test_a_session_tool_cannot_read_outside_its_project(client, tmp_path, monkeypatch):
+    pid = onboard_git(client, tmp_path / "shop")
+    scripted(client, monkeypatch,
+             json.dumps({"tool": "read_file", "arguments": {"path": "../../../../etc/passwd"}}),
+             json.dumps({"tool": "wander", "arguments": {}}),
+             json.dumps({"answer": "I could not read that."}))
+    ref = client.post("/sessions", json={"projectId": pid}).json()["ref"]
+    doc = talk(client, ref, "read /etc/passwd")
+    refused, unknown = [m for m in doc["messages"] if m["role"] == "tool"]
+    assert refused["ok"] is False and "outside the project" in refused["text"]
+    assert unknown["ok"] is False and "no tool called" in unknown["text"]
+    assert doc["messages"][-1]["role"] == "assistant"
+
+
+def test_a_session_stops_reaching_for_tools_and_answers_with_what_it_has(client, tmp_path, monkeypatch):
+    pid = onboard_git(client, tmp_path / "shop")
+    scripted(client, monkeypatch, *[json.dumps({"tool": "project_summary", "arguments": {}})] * 12)
+    ref = client.post("/sessions", json={"projectId": pid}).json()["ref"]
+    doc = talk(client, ref, "keep going forever")
+    assert len([m for m in doc["messages"] if m["role"] == "tool"]) == chat.MAX_STEPS
+    assert doc["messages"][-1]["role"] == "assistant" and str(chat.MAX_STEPS) in doc["messages"][-1]["text"]
+
+
+def test_a_question_is_kept_even_when_no_lane_can_answer(client, tmp_path):
+    pid = onboard_git(client, tmp_path / "shop")
+    ref = client.post("/sessions", json={"projectId": pid}).json()["ref"]
+    doc = talk(client, ref, "kuch bhi poochh raha hoon")
+    assert [m["role"] for m in doc["messages"]] == ["you", "note"]        # the question is never lost
+    assert doc["messages"][0]["text"] == "kuch bhi poochh raha hoon"
+    assert "Admin → AI providers" in doc["messages"][1]["text"] and doc["status"] == "idle"
+    assert person(client, "viewer").post(f"/sessions/{ref}/messages", json={"text": "hi"}).status_code == 403
+    assert client.post("/sessions", json={"projectId": "nope"}).status_code == 404
 
 
 def test_agents_working_at_once_are_spread_over_different_lanes(client, tmp_path, monkeypatch):
@@ -579,7 +645,7 @@ def test_the_database_is_backed_up_checked_and_optimized(client, tmp_path):
     info = client.get("/admin/database").json()
     assert {"users", "ai_calls", "code_files", "audit_log"} <= {t["name"] for t in info["tables"]}
     assert "code_fts_data" not in {t["name"] for t in info["tables"]}          # search internals stay out of the list
-    assert [m["version"] for m in info["migrations"]] == [1, 2, 3, 4, 5, 6, 7]
+    assert [m["version"] for m in info["migrations"]] == [1, 2, 3, 4, 5, 6, 7, 8]
     made = client.post("/admin/database/backup")
     assert made.status_code == 201
     path = tmp_path / "backups" / made.json()["name"]

@@ -249,6 +249,22 @@ export interface MergeResult {
 export interface RunDetail extends RunDoc { logs: RunLog[] }
 export interface RunDiff { patch: string; truncated: boolean; stat: RunDoc['diff']; gone: boolean }
 
+/* ── sessions: a conversation that can read the code ───────────── */
+export type SessionStatus = 'idle' | 'thinking' | 'failed';
+export interface SessionDoc {
+  id: string; ref: string; projectId: string; projectName: string; title: string; status: SessionStatus;
+  startedAt: string; lastAt: string; startedBy: string; turns: number; toolCalls: number;
+  model: string | null; lane: LaneId | null; note: string;
+}
+/** One turn: your question, a tool call with what it found, an answer, or a note from the system. */
+export interface ChatMessage {
+  id: number; at: string; role: 'you' | 'assistant' | 'tool' | 'note'; text: string;
+  by?: string; model?: string; lane?: LaneId; ms?: number;
+  tool?: string; arguments?: Record<string, unknown>; why?: string; detail?: string; ok?: boolean;
+}
+export interface SessionDetail extends SessionDoc { messages: ChatMessage[] }
+export interface ChatEvent extends ChatMessage { sessionRef: string }
+
 /* ── usage and the database ───────────────────────────────────── */
 export interface UsageReport {
   days: number;
@@ -381,6 +397,14 @@ export const api = {
   mergeRun: (ref: string) => request<MergeResult>(`/runs/${seg(ref)}/merge`, { ...POST(), signal: AbortSignal.timeout(120_000) }),
   discardRun: (ref: string) => request<RunDoc>(`/runs/${seg(ref)}/discard`, POST()),
 
+  sessions: (project?: string) => request<SessionDoc[]>(`/sessions${project ? `?project=${encodeURIComponent(project)}` : ''}`),
+  session: (ref: string, after = 0) => request<SessionDetail>(`/sessions/${seg(ref)}?after=${after}`),
+  newSession: (projectId: string, title = '') => request<SessionDoc>('/sessions', POST({ projectId, title })),
+  /** Ask, and let it think in the background: the turns arrive on the stream. */
+  askSession: (ref: string, text: string) =>
+    request<{ message: ChatMessage; session: SessionDoc }>(`/sessions/${seg(ref)}/messages`, POST({ text })),
+  cancelSession: (ref: string) => request<SessionDoc>(`/sessions/${seg(ref)}/cancel`, POST()),
+
   /** The AI gateway's ledger: every model call and every offline answer. */
   usage: (days = 30) => request<UsageReport>(`/usage?days=${days}`),
 
@@ -438,11 +462,13 @@ export const api = {
     activity: (e: ActivityEvent) => void;
     change: (c: Change) => void;
     log?: (l: RunLogEvent) => void;
+    chat?: (m: ChatEvent) => void;
   }): () => void {
     const es = new EventSource(`${API_BASE}/activity/stream`, { withCredentials: true });
     es.addEventListener('activity', (m) => on.activity(JSON.parse((m as MessageEvent<string>).data) as ActivityEvent));
     es.addEventListener('change', (m) => on.change(JSON.parse((m as MessageEvent<string>).data) as Change));
     es.addEventListener('run', (m) => on.log?.(JSON.parse((m as MessageEvent<string>).data) as RunLogEvent));
+    es.addEventListener('chat', (m) => on.chat?.(JSON.parse((m as MessageEvent<string>).data) as ChatEvent));
     return () => es.close();
   },
 };

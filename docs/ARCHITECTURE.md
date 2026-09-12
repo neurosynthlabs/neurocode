@@ -55,6 +55,7 @@ server/app/
   onboarding.py    clone or read a repository and measure it
   codeindex.py     parse the code into files, symbols and edges; search, impact and the module graph
   runtime.py       a worktree per agent: models write files, the branches merge, the tests run, you sign off
+  chat.py          sessions: the tool catalogue and the loop that reads the code and answers
   routes/          auth · admin · work · knowledge · platform · code · runs · ai · system
 ```
 
@@ -163,6 +164,24 @@ TODOs, a diff with no test touched) and says it was read by rules, not a model.
 | Brainstorm | problem, audience, MVP, risks, metrics, roadmap | the same structure as a guided template |
 | Extract facts | facts proposed from pasted text | policy sentences picked by rules |
 
+## Sessions: a conversation that can act
+
+You ask; a model answers, or it reaches for a tool; the tool runs **here**, and what it found goes back
+into the conversation. The model never runs anything itself — it names a tool from a fixed catalogue
+and the arguments are checked before anything happens, the same rule as the runtime, where a model may
+only propose whole files.
+
+The catalogue reads and nothing in it writes: `search_code` (the index), `read_file` (bounded, inside
+the project, never `..` and never `.git`), `list_files`, `impact` (what depends on this, through the
+dependency edges), `search_memory`, `project_summary`. Six tool calls at most per question; on the last
+one the model must answer with what it has, so a session always ends in words. A tool that refuses or
+breaks reports it into the conversation instead of ending it, and the model can correct itself.
+
+Every turn is written to the database the moment it happens — your question **before** the model is
+ever called, each tool call with what it returned, then the answer with the lane that wrote it. A
+session survives a reload, a restart and a crash. With no lane able to answer, the question is still
+kept and the session says so plainly rather than inventing one.
+
 ## Lanes: many small free models instead of one big paid one
 
 A **lane** is a provider and a model together — `groq/llama-3.3-70b`, `cerebras/qwen-3-coder`,
@@ -198,6 +217,7 @@ variable), one per lane, never in the database and never in a log line.
 | `/projects`, `/mcp`, `/agents` | session + the action's permission | the platform |
 | `/projects/{id}/code` | session; `projects:onboard` to re-index | summary, file tree, search, file detail, impact, module graph |
 | `/runs` | session; `runs:run` to stop or discard, `runs:merge` to merge | agent runs, their output, their diff, the merge |
+| `/sessions` | session; `sessions:chat` to ask | conversations, their turns, their tool calls |
 | `/ai` | `ai:use` | ask, brainstorm, extract |
 | `/usage` | session (per-person detail for admins) | the usage ledger, by feature, provider and day |
 | `/activity`, `/health` | session / public | the log, the live stream, liveness |
@@ -210,7 +230,8 @@ variable), one per lane, never in the database and never in a log line.
   and Ask / Brainstorm / Add from text working live, with or without a key; then the database
   hardening (backups, integrity checks, append-only audit, the usage ledger) and the code index behind
   live Code Intelligence, Architecture and impact analysis; then (2026-09-12) the agent runtime, several
-  agents per task in parallel worktrees, and merging from the UI.
+  agents per task in parallel worktrees, merging from the UI, model lanes (many free providers, one
+  router), and sessions: a conversation that reads the code with tools and keeps every turn.
 - **Waiting on you:** a valid DeepSeek key (Admin → AI providers) — without one the runtime opens the
   worktree, runs the tests and reviews, but skips the steps that write code; and the `workflow` scope on
   the GitHub token so CI can be pushed.

@@ -3,7 +3,7 @@ import {
 } from 'react';
 import { toast } from 'sonner';
 import {
-  ApiError, api, type AskAnswer, type BrainstormDoc, type Change, type Collection, type DecisionDoc, type Extracted,
+  ApiError, api, type AskAnswer, type BrainstormDoc, type Change, type ChatEvent, type Collection, type DecisionDoc, type Extracted,
   type FactCandidate, type Health, type McpInput, type MergeResult, type Pref, type ProjectInput, type RunDoc,
   type RunLogEvent,
 } from '@/lib/api';
@@ -94,6 +94,8 @@ export interface DataCtx extends Domain {
   mergeRun: (ref: string) => Promise<MergeResult | null>;
   /** Each line a run writes, as it writes it. Returns the unsubscribe. */
   onRunLog: (listener: (line: RunLogEvent) => void) => () => void;
+  /** Each turn a session writes — your question, a tool call, the answer. Returns the unsubscribe. */
+  onChat: (listener: (message: ChatEvent) => void) => () => void;
 }
 
 const C = createContext<DataCtx | null>(null);
@@ -165,6 +167,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   // deliver the next click, so two quick clicks never act on the same stale snapshot.
   const now = useRef(domain);
   const listeners = useRef(new Set<(line: RunLogEvent) => void>());
+  const chatters = useRef(new Set<(message: ChatEvent) => void>());
   const who = useRef({ can, roleNames, name: user?.name ?? 'You' });
   useLayoutEffect(() => { now.current = domain; }, [domain]);
   useLayoutEffect(() => { who.current = { can, roleNames, name: user?.name ?? 'You' }; }, [can, roleNames, user]);
@@ -185,6 +188,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           activity: (ev) => setDomain((d) => (d.activity.some((e) => e.id === ev.id) ? d : { ...d, activity: [ev, ...d.activity] })),
           change: (c) => setDomain((d) => applyChange(d, c)),
           log: (line) => listeners.current.forEach((cb) => cb(line)),
+          chat: (message) => chatters.current.forEach((cb) => cb(message)),
         });
       } catch (e) {
         if (cancelled) return;
@@ -512,6 +516,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
     return () => { listeners.current.delete(listener); };
   }, []);
 
+  const onChat = useCallback((listener: (message: ChatEvent) => void) => {
+    chatters.current.add(listener);
+    return () => { chatters.current.delete(listener); };
+  }, []);
+
   const reset = useCallback(async () => {
     if (!permitted('workspace:admin')) return false;
     if (!live.current) { setDomain(seed()); return true; }
@@ -530,11 +539,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
     () => ({
       ...domain, mode, health, decide, moveTask, toggleCheck, setPinned, archive, resolveConflict, createProject,
       registerMcp, settleQuestion, dispatchPlan, compile, recompile, searchMemory, reset, setPref, recordDecision,
-      ask, brainstorm, extract, addFacts, cancelRun, discardRun, mergeRun, onRunLog,
+      ask, brainstorm, extract, addFacts, cancelRun, discardRun, mergeRun, onRunLog, onChat,
     }),
     [domain, mode, health, decide, moveTask, toggleCheck, setPinned, archive, resolveConflict, createProject,
       registerMcp, settleQuestion, dispatchPlan, compile, recompile, searchMemory, reset, setPref, recordDecision,
-      ask, brainstorm, extract, addFacts, cancelRun, discardRun, mergeRun, onRunLog],
+      ask, brainstorm, extract, addFacts, cancelRun, discardRun, mergeRun, onRunLog, onChat],
   );
   return <C.Provider value={value}>{children}</C.Provider>;
 }

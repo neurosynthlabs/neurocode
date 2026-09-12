@@ -5022,6 +5022,12 @@
     "description": "Start an agent run in its own worktree, stop it, and discard its branch."
    },
    {
+    "id": "sessions:chat",
+    "group": "Work",
+    "label": "Use sessions",
+    "description": "Ask in a session and let it read this project’s code with the tools."
+   },
+   {
     "id": "approvals:decide",
     "group": "Gates",
     "label": "Approve gated actions",
@@ -5110,6 +5116,7 @@
      "plans:decide",
      "tasks:write",
      "runs:run",
+     "sessions:chat",
      "approvals:decide",
      "runs:merge",
      "decisions:make",
@@ -5134,6 +5141,7 @@
      "plans:decide",
      "tasks:write",
      "runs:run",
+     "sessions:chat",
      "approvals:decide",
      "runs:merge",
      "decisions:make",
@@ -5163,6 +5171,7 @@
      "decisions:make",
      "memory:write",
      "ai:use",
+     "sessions:chat",
      "projects:onboard",
      "mcp:manage",
      "settings:write"
@@ -5177,7 +5186,8 @@
      "tasks:write",
      "runs:run",
      "memory:write",
-     "ai:use"
+     "ai:use",
+     "sessions:chat"
     ]
    },
    {

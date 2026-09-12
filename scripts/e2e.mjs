@@ -316,7 +316,7 @@ try {
     await page.getByText(/neurocode-\d{8}-\d{6}-manual\.db/).first().waitFor({ timeout: 10000 });
     const db = await api('/admin/database');
     expect(db.backups.some((b) => b.name.endsWith('-manual.db')), 'no manual backup is listed');
-    expect(db.migrations.length === 7, `${db.migrations.length} migrations applied`);
+    expect(db.migrations.length === 8, `${db.migrations.length} migrations applied`);
   });
 
   await step('an agent run works in a worktree of its own and stops at your signature', async () => {
@@ -365,6 +365,20 @@ try {
     await page.getByRole('button', { name: /Discard worktree/ }).click();
     await page.waitForTimeout(600);
     expect(!fs.existsSync(run.worktree), 'the worktree is still there after discarding it');
+  });
+
+  await step('a session keeps your question even when no model can answer it', async () => {
+    const projects = await api('/projects');
+    const project = projects.find((p) => p.source) ?? projects[0];
+    const session = await post('/sessions', { projectId: project.id });
+    await open(`/sessions?ref=${session.ref}`);
+    await page.getByPlaceholder(/Ask about/).fill('is project mein tax kahan handle hota hai?');
+    await page.getByRole('button', { name: 'Ask', exact: true }).click();
+    await page.getByText('It could not answer').waitFor({ timeout: 20000 });   // no key here, and it says so
+    const doc = await api(`/sessions/${session.ref}`);
+    expect(doc.messages.map((m) => m.role).join() === 'you,note', `turns: ${doc.messages.map((m) => m.role)}`);
+    expect(doc.messages[0].text.startsWith('is project mein tax'), 'the question was not kept');
+    expect(doc.status === 'idle' && doc.title.startsWith('is project mein tax'), `session ${doc.status}`);
   });
 
   await step('a model key is saved masked, never logged, and can be removed', async () => {

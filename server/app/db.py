@@ -270,6 +270,31 @@ class Store:
             "SELECT id, at, step, level, line FROM run_logs WHERE run_id = ? AND id > ? ORDER BY id LIMIT ?",
             (run_id, after, limit))]
 
+    def next_chat_number(self) -> int:
+        return self._next("SELECT ref FROM chats", 0)
+
+    def insert_chat(self, doc: dict[str, Any]) -> dict[str, Any]:
+        return self.insert("chats", doc, ref=doc["ref"], project_id=doc["projectId"], status=doc["status"],
+                           started=time.time())
+
+    def save_chat(self, doc: dict[str, Any]) -> dict[str, Any]:
+        return self.save("chats", doc, status=doc["status"])
+
+    def add_message(self, chat_id: str, doc: dict[str, Any], cap: int = 2000) -> dict[str, Any]:
+        """One turn of a conversation. The oldest turns go when a chat has grown past the cap."""
+        with self.lock, self.conn:
+            cur = self.conn.execute("INSERT INTO chat_messages(chat_id, at, role, doc) VALUES (?, ?, ?, ?)",
+                                    (chat_id, doc["at"], doc["role"], _j(doc)))
+            self.conn.execute("DELETE FROM chat_messages WHERE chat_id = ? AND id <= "
+                              "(SELECT MAX(id) - ? FROM chat_messages WHERE chat_id = ?)",
+                              (chat_id, cap, chat_id))
+        return {**doc, "id": cur.lastrowid}
+
+    def messages(self, chat_id: str, after: int = 0, limit: int = 500) -> list[dict[str, Any]]:
+        return [{**json.loads(r[1]), "id": r[0]} for r in self.rows(
+            "SELECT id, doc FROM chat_messages WHERE chat_id = ? AND id > ? ORDER BY id LIMIT ?",
+            (chat_id, after, limit))]
+
     def insert_memory(self, doc: dict[str, Any]) -> dict[str, Any]:
         with self.lock, self.conn:
             self._insert_memory(self.conn, doc)
