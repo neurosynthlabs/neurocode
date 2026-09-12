@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowDownToLine, FileDiff, FolderGit2, Loader2, Square, Trash2, TriangleAlert } from 'lucide-react';
+import { ArrowDownToLine, FileDiff, FolderGit2, GitMerge, Loader2, Square, Trash2, TriangleAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Ascii, Dot, Empty, KV, ListRow, Mono, Page, PageBody, PageHeader, Panel, Stat, StatGrid, Tag } from '@/components/os';
-import { api, type RunDoc, type RunLog, type RunStep } from '@/lib/api';
+import { api, type MergeResult, type RunDoc, type RunLog, type RunStep } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useData } from '@/lib/data';
 import { useRemote } from '@/lib/remote';
@@ -17,13 +17,15 @@ const LEVEL_TONE: Record<RunLog['level'], string> = {
   info: 'text-ink-2', ok: 'text-ok', warn: 'text-warn', err: 'text-danger', tool: 'text-brand',
 };
 const LEVEL_MARK: Record<RunLog['level'], string> = { info: '·', ok: '✓', warn: '!', err: '✗', tool: '›' };
-const KIND_LABEL: Record<RunStep['kind'], string> = { edit: 'writes code', test: 'runs the tests', review: 'reads the diff', handoff: 'your signature' };
+const KIND_LABEL: Record<RunStep['kind'], string> = {
+  edit: 'writes code', merge: 'brings a branch in', test: 'runs the tests', review: 'reads the diff', handoff: 'your signature',
+};
 const SEVERITY_TONE: Record<string, 'danger' | 'warn' | 'neutral'> = { HIGH: 'danger', MEDIUM: 'warn', LOW: 'neutral' };
 const done = (s: RunStep) => s.status === 'done' || s.status === 'skipped' || s.status === 'failed';
 const progress = (r: RunDoc) => Math.round((100 * r.steps.filter(done).length) / Math.max(1, r.steps.length));
 
 export function LiveRuns() {
-  const { runs, onRunLog, cancelRun, discardRun } = useData();
+  const { runs, onRunLog, cancelRun, discardRun, mergeRun } = useData();
   const { can } = useAuth();
   const linked = useSearchParams()[0].get('ref');
   const [picked, setPicked] = useState<{ link: string | null; ref: string } | null>(null);
@@ -35,6 +37,9 @@ export function LiveRuns() {
   const [showDiff, setShowDiff] = useState(false);
   const [follow, setFollow] = useState(true);
   const [busy, setBusy] = useState(false);
+  // Merging writes to your real repository, so it takes two clicks.
+  const [armed, setArmed] = useState(false);
+  const [mergeResult, setMergeResult] = useState<MergeResult | null>(null);
   const logBox = useRef<HTMLDivElement>(null);
   const diff = useRemote(showDiff && run ? `diff:${run.ref}:${run.diff.commits}` : null, () => api.runDiff(run?.ref ?? ''));
 
@@ -63,6 +68,23 @@ export function LiveRuns() {
     setBusy(false);
     if (out) toast('Worktree removed', { description: `${out.branch} is gone. The commits stay until git prunes them.` });
   };
+  const merge = async () => {
+    if (!run) return;
+    if (!armed) { setArmed(true); return; }
+    setArmed(false);
+    setBusy(true);
+    const result = await mergeRun(run.ref);
+    setBusy(false);
+    if (!result) return;
+    setMergeResult(result);
+    if (result.merged) toast.success(`Merged into ${result.into}`, { description: `${result.commit} · undo with ${result.undo}` });
+    else toast.error(`${result.conflicts.length} files collide with ${result.into}`, { description: 'Nothing was merged.' });
+  };
+  useEffect(() => {
+    if (!armed) return;
+    const id = window.setTimeout(() => setArmed(false), 4000);
+    return () => window.clearTimeout(id);
+  }, [armed]);
 
   if (!run) {
     return (
@@ -90,6 +112,11 @@ export function LiveRuns() {
           <>
             {can('runs:run') && (working || run.status === 'waiting') && (
               <Button size="sm" variant="outline" onClick={() => void stop()} disabled={busy}><Square className="size-3.5" />Stop</Button>
+            )}
+            {can('runs:merge') && run.status === 'done' && !run.merged && !run.removed && run.diff.files > 0 && (
+              <Button size="sm" onClick={() => void merge()} disabled={busy}>
+                <GitMerge className="size-3.5" />{armed ? 'Click again to merge' : 'Merge'}
+              </Button>
             )}
             {can('runs:run') && !working && run.status !== 'waiting' && !run.removed && (
               <Button size="sm" variant="destructive" onClick={() => void discard()} disabled={busy}><Trash2 className="size-3.5" />Discard worktree</Button>
@@ -151,6 +178,57 @@ export function LiveRuns() {
               <Panel className={run.status === 'done' ? 'accent-left' : 'border-warn/35'} eyebrow={`Run ${run.status}`}
                 title={run.status === 'done' ? 'Finished' : 'Stopped'}>
                 <p className="text-[13.5px] leading-relaxed text-ink-2">{run.note}</p>
+              </Panel>
+            )}
+
+            {run.children.length > 0 && (
+              <Panel flush title="Agents in parallel" eyebrow={`${run.children.length} worktrees, a branch each, merged here`}>
+                <div className="divide-y divide-line/60">
+                  {run.children.map((ref) => {
+                    const child = runs.find((r) => r.ref === ref);
+                    if (!child) return null;
+                    return (
+                      <button key={ref} onClick={() => setPicked({ link: linked, ref })}
+                        className="flex w-full items-center gap-3 px-5 py-2.5 text-left transition-colors hover:bg-surface-2/60">
+                        <Dot state={child.status === 'running' ? 'running' : child.status} pulse={child.status === 'running'} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13.5px] font-medium text-ink">{child.agent ?? child.ref}</span>
+                          <span className="mt-0.5 block truncate font-mono text-[12px] text-dim">{child.branch}</span>
+                        </span>
+                        <span className="tnum shrink-0 text-[12.5px] text-soft">{child.diff.files} files</span>
+                        <Mono>{child.ref}</Mono>
+                      </button>
+                    );
+                  })}
+                </div>
+              </Panel>
+            )}
+
+            {run.parent && (
+              <Panel title="One of several agents" eyebrow="its branch is merged in the run below">
+                <button onClick={() => setPicked({ link: linked, ref: run.parent ?? '' })} className="text-[13px] text-brand hover:underline">
+                  Open {run.parent} →
+                </button>
+              </Panel>
+            )}
+
+            {run.conflicts.length > 0 && (
+              <Panel flush className="border-danger/35" title="Collisions" eyebrow="found at the merge, never half-applied">
+                <div className="divide-y divide-line/60">
+                  {run.conflicts.map((x) => (
+                    <div key={x.branch} className="px-5 py-2.5">
+                      <div className="text-[13px] font-medium text-ink">{x.agent || x.branch}</div>
+                      <div className="mt-1 flex flex-wrap gap-1">{x.files.map((f) => <Mono key={f}>{f}</Mono>)}</div>
+                    </div>
+                  ))}
+                </div>
+              </Panel>
+            )}
+
+            {mergeResult && !mergeResult.merged && (
+              <Panel className="border-danger/35" eyebrow={`Nothing was merged into ${mergeResult.into}`} title="The merge collides">
+                <div className="flex flex-wrap gap-1">{mergeResult.conflicts.map((f) => <Mono key={f}>{f}</Mono>)}</div>
+                <p className="mt-2 text-[12.5px] text-dim">Your repository is untouched. Merge it by hand, or dispatch again from your current branch.</p>
               </Panel>
             )}
 
@@ -218,7 +296,14 @@ export function LiveRuns() {
               <KV k="Worktree" v={run.removed ? 'removed' : run.worktree} mono />
               <KV k="Branched from" v={run.shortBase} mono />
               <KV k="Started" v={`${ago(run.startedAt)} by ${run.requestedBy}`} />
-              {run.status === 'done' && !run.removed && <KV k="To merge" v={<Mono>git merge {run.branch}</Mono>} />}
+              {run.merged ? (
+                <>
+                  <KV k="Merged" v={`into ${run.merged.into} as ${run.merged.commit}, by ${run.merged.by}`} />
+                  <KV k="Undo" v={<Mono>{run.merged.undo}</Mono>} />
+                </>
+              ) : run.status === 'done' && !run.removed && run.diff.files > 0 ? (
+                <KV k="To merge" v={<Mono>git merge {run.branch}</Mono>} />
+              ) : null}
             </Panel>
           </div>
         </div>

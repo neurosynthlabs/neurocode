@@ -32,7 +32,7 @@ from .db import now_iso
 
 WORKTREES = Path(__file__).resolve().parent.parent / ".worktrees"
 MAX_FILES, MAX_FILE_BYTES, MAX_CONTEXT, MAX_DIFF = 20, 256_000, 60_000, 200_000
-TEST_TIMEOUT, TEST_LINES = 600, 400
+TEST_TIMEOUT, TEST_LINES, AGENT_TIMEOUT = 600, 400, 1800
 GATE = re.compile(r"\b(approval|approve|sign[- ]?off|signature)\b", re.I)
 SECRETS = re.compile(r"(sk-[A-Za-z0-9]{10,}|password\s*=\s*['\"][^'\"]{3,}|api[_-]?key\s*=\s*['\"][^'\"]{6,})", re.I)
 LEFTOVERS = re.compile(r"\b(console\.log|debugger|print\()")
@@ -114,21 +114,45 @@ def detect_tests(root: Path) -> dict[str, Any] | None:
 
 
 # ── making a run ─────────────────────────────────────────────────
-def _steps(plan: dict[str, Any], tests: dict[str, Any] | None) -> list[dict[str, Any]]:
-    steps: list[dict[str, Any]] = []
+def _step_doc(n: int, kind: str, label: str, agent: str, detail: str = "", child: str | None = None) -> dict[str, Any]:
+    step = {"n": n, "kind": kind, "label": label, "agent": agent, "status": "todo", "detail": detail, "ms": 0,
+            "startedAt": None, "finishedAt": None}
+    return {**step, "child": child} if child else step
+
+
+def _by_agent(plan: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """The plan's work, grouped by the agent that owns it. A gate step belongs to no agent: you are the gate."""
+    groups: dict[str, list[dict[str, Any]]] = {}
     for s in plan.get("steps", []):
         if GATE.search(s["label"]) or s["agent"] in ("AI Commander", "AI Project Manager"):
-            continue  # your signature is the last step of every run anyway
-        steps.append({"n": len(steps) + 1, "kind": "edit", "label": s["label"], "agent": s["agent"],
-                      "status": "todo", "detail": s.get("detail", ""), "ms": 0, "startedAt": None, "finishedAt": None})
+            continue
+        groups.setdefault(s["agent"], []).append(s)
+    return groups
+
+
+def _edit_steps(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [_step_doc(i + 1, "edit", s["label"], s["agent"], s.get("detail", "")) for i, s in enumerate(items)]
+
+
+def _tail(done: int, tests: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """What every run ends with: the project's tests, a read of the real diff, and your signature."""
+    out: list[dict[str, Any]] = []
     if tests:
-        steps.append({"n": len(steps) + 1, "kind": "test", "label": f"Run the project's tests · {tests['command']}",
-                      "agent": "QA Engineer", "status": "todo", "detail": "", "ms": 0, "startedAt": None, "finishedAt": None})
-    steps.append({"n": len(steps) + 1, "kind": "review", "label": "Review the diff", "agent": "Code Reviewer",
-                  "status": "todo", "detail": "", "ms": 0, "startedAt": None, "finishedAt": None})
-    steps.append({"n": len(steps) + 1, "kind": "handoff", "label": "Your approval", "agent": "You",
-                  "status": "todo", "detail": "", "ms": 0, "startedAt": None, "finishedAt": None})
-    return steps
+        out.append(_step_doc(done + 1, "test", f"Run the project's tests · {tests['command']}", "QA Engineer"))
+    out.append(_step_doc(done + len(out) + 1, "review", "Review the diff", "Code Reviewer"))
+    out.append(_step_doc(done + len(out) + 1, "handoff", "Your approval", "You"))
+    return out
+
+
+def _steps(plan: dict[str, Any], tests: dict[str, Any] | None) -> list[dict[str, Any]]:
+    steps = _edit_steps([s for items in _by_agent(plan).values() for s in items])
+    return [*steps, *_tail(len(steps), tests)]
+
+
+def _merge_steps(children: list[dict[str, Any]], tests: dict[str, Any] | None) -> list[dict[str, Any]]:
+    steps = [_step_doc(i + 1, "merge", f"Merge what {ch['agent']} wrote", "Orchestrator", ch["branch"], ch["ref"])
+             for i, ch in enumerate(children)]
+    return [*steps, *_tail(len(steps), tests)]
 
 
 def _free_branch(repo: Path, wanted: str) -> str:
@@ -139,8 +163,12 @@ def _free_branch(repo: Path, wanted: str) -> str:
     return name
 
 
-def prepare(c: Ctx, plan: dict[str, Any], task: dict[str, Any] | None, project: dict[str, Any], by: str) -> dict[str, Any]:
-    """Everything a run needs, decided before anything moves. Raises Refused with the reason."""
+def _slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:30] or "agent"
+
+
+def _setup(project: dict[str, Any]) -> dict[str, Any]:
+    """Where the code is, what a run branches from, and how the project runs its tests."""
     root = onboarding.source_root(project)
     if root is None or not root.is_dir():
         raise Refused(f"{project['name']} has no code on this machine, so there is nothing to work on. "
@@ -154,24 +182,49 @@ def prepare(c: Ctx, plan: dict[str, Any], task: dict[str, Any] | None, project: 
     head = git(["rev-parse", "HEAD"], repo)
     if head.returncode != 0:
         raise Refused(f"{project['name']} has no commit yet. Make one, and a run can branch from it.")
+    return {"repo": repo, "prefix": prefix, "base": head.stdout.strip(), "tests": detect_tests(root)}
+
+
+def _new_run(c: Ctx, plan: dict[str, Any], task: dict[str, Any] | None, project: dict[str, Any], by: str,
+             setup: dict[str, Any], *, steps: list[dict[str, Any]], role: str, agent: str | None = None,
+             children: list[str] | None = None, suffix: str = "") -> dict[str, Any]:
     n = c.store.next_run_number()
-    ref, base = f"RUN-{n}", head.stdout.strip()
-    tests = detect_tests(root)
+    ref, base, tests = f"RUN-{n}", setup["base"], setup["tests"]
+    stem = f"neurocode/{(task or plan)['ref'].lower()}"
     doc = {
         "id": f"r{n}-{int(time.time())}", "ref": ref, "projectId": project["id"], "projectName": project["name"],
         "taskRef": (task or {}).get("ref"), "planRef": plan["ref"], "requirement": plan.get("rawRequirement", ""),
-        "status": "queued", "branch": _free_branch(repo, f"neurocode/{(task or plan)['ref'].lower()}"),
-        "worktree": str(WORKTREES / project["id"] / ref), "repo": str(repo), "prefix": prefix,
+        "status": "queued", "branch": _free_branch(setup["repo"], f"{stem}-{suffix}" if suffix else stem),
+        "worktree": str(WORKTREES / project["id"] / ref), "repo": str(setup["repo"]), "prefix": setup["prefix"],
         "base": base, "shortBase": base[:7], "startedAt": now_iso(), "finishedAt": None, "requestedBy": by,
         "targets": list(plan.get("affectedFiles", []))[:12],
-        "steps": _steps(plan, tests),
+        "role": role, "agent": agent, "group": (task or plan)["ref"], "parent": None, "children": children or [],
+        "steps": steps,
         "tests": {"command": tests["command"] if tests else None, "argv": tests["argv"] if tests else None,
                   "status": "not run", "summary": ""},
         "review": {"findings": [], "verdict": "", "by": ""},
         "diff": {"files": 0, "insertions": 0, "deletions": 0, "commits": 0},
-        "model": None, "note": "", "removed": False,
+        "conflicts": [], "merged": None, "model": None, "note": "", "removed": False,
     }
     return c.store.insert_run(doc)
+
+
+def plan_runs(c: Ctx, plan: dict[str, Any], task: dict[str, Any] | None, project: dict[str, Any],
+              by: str) -> list[dict[str, Any]]:
+    """One run when one agent owns the work; otherwise an agent per worktree, plus the run that merges
+    them. The run that leads — the one to start — is last. Raises Refused with the reason."""
+    setup = _setup(project)
+    groups = _by_agent(plan)
+    if len(groups) <= 1:
+        return [_new_run(c, plan, task, project, by, setup, steps=_steps(plan, setup["tests"]), role="solo")]
+    children = [_new_run(c, plan, task, project, by, setup, steps=_edit_steps(items), role="agent", agent=agent,
+                         suffix=_slug(agent)) for agent, items in groups.items()]
+    integration = _new_run(c, plan, task, project, by, setup, steps=_merge_steps(children, setup["tests"]),
+                           role="integration", children=[ch["ref"] for ch in children])
+    for ch in children:
+        ch["parent"] = integration["ref"]
+        c.store.save_run(ch)
+    return [*children, integration]
 
 
 # ── running it ───────────────────────────────────────────────────
@@ -193,6 +246,30 @@ def _cancel_flag(c: Ctx, ref: str) -> threading.Event:
     if "cancel" not in state:
         state["cancel"] = threading.Event()
     return state["cancel"]
+
+
+def execute_batch(c: Ctx, ref: str) -> None:
+    """Every agent works at the same time, each in a worktree of its own. When they are done — or have
+    run out of time — the merge run brings the branches together and the usual gates follow."""
+    doc = c.store.one("runs", ref)
+    if doc is None:
+        return
+    children = [ch for ch in (c.store.one("runs", r) for r in doc.get("children", [])) if ch]
+    doc["status"] = "running"
+    _save(c, doc)
+    _log(c, doc, None, "info", f"{len(children)} agents working in parallel: " + ", ".join(ch["agent"] or "?" for ch in children))
+    c.record("Agents started", f"{doc['ref']} · {len(children)} agents, a worktree each", project=doc["projectId"],
+             level="info", actor="Orchestrator", kind="agent", task_ref=doc.get("taskRef"))
+    threads = []
+    for ch in children:
+        worker = threading.Thread(target=execute, args=(c, ch["ref"]), daemon=True, name=f"run-{ch['ref']}")
+        worker.start()
+        threads.append((worker, ch))
+    for worker, ch in threads:
+        worker.join(AGENT_TIMEOUT)
+        if worker.is_alive():
+            _log(c, doc, None, "warn", f"{ch['agent']} ({ch['ref']}) is still working; its branch is left out of the merge")
+    execute(c, ref)
 
 
 def execute(c: Ctx, ref: str, resume_from: int | None = None) -> None:
@@ -244,6 +321,8 @@ def _step(c: Ctx, doc: dict[str, Any], step: dict[str, Any], cancel: threading.E
     try:
         if step["kind"] == "edit":
             paused = _edit(c, doc, step)
+        elif step["kind"] == "merge":
+            paused = _merge_branch(c, doc, step)
         elif step["kind"] == "test":
             paused = _test(c, doc, step, cancel)
         elif step["kind"] == "review":
@@ -310,8 +389,9 @@ def _edit(c: Ctx, doc: dict[str, Any], step: dict[str, Any]) -> bool:
     shown = "\n\n".join(f"--- {rel}\n{text}" for rel, text in files) or "(no file matched; create what the step needs)"
     messages = [
         {"role": "system", "content": EDIT_SYSTEM},
-        {"role": "user", "content": f"Project: {doc['projectName']}\nRequirement: {doc['requirement']}\n"
-                                    f"Step {step['n']}: {step['label']}\n{step['detail']}\n\nFiles you may change:\n{shown}"},
+        {"role": "user", "content": f"You are the {step['agent']}.\nProject: {doc['projectName']}\n"
+                                    f"Requirement: {doc['requirement']}\nStep {step['n']}: {step['label']}\n{step['detail']}\n\n"
+                                    f"Files you may change:\n{shown}"},
     ]
     try:
         result = c.gateway.ask(messages, lambda raw: EditOut.model_validate(extract_json(raw, trim=False)),
@@ -390,6 +470,34 @@ def _commit(c: Ctx, doc: dict[str, Any], step: dict[str, Any], summary: str) -> 
     _stats(doc)
     d = doc["diff"]
     _log(c, doc, step["n"], "ok", f"committed · {d['files']} files +{d['insertions']} −{d['deletions']}")
+
+
+def _merge_branch(c: Ctx, doc: dict[str, Any], step: dict[str, Any]) -> bool:
+    """Bring one agent's branch into the merge run. A collision is reported, never half-applied."""
+    child = c.store.one("runs", step["child"]) if step.get("child") else None
+    branch = child["branch"] if child else step["detail"]
+    if child and child["status"] not in ("done", "failed", "cancelled"):
+        step["status"], step["detail"] = "skipped", f"{child['agent']} is still working; nothing was merged."
+        return False
+    work = Path(doc["worktree"])
+    if git(["rev-list", "--count", f"{doc['base']}..{branch}"], work).stdout.strip() in ("", "0"):
+        step["status"], step["detail"] = "skipped", f"{branch} has no commits to merge."
+        return False
+    out = git(["-c", "user.name=NeuroCode", "-c", "user.email=neurocode@localhost", "-c", "commit.gpgsign=false",
+               "merge", "--no-ff", "-m", f"Merge {branch} into {doc['branch']}", branch], work, timeout=300)
+    if out.returncode != 0:
+        files = [ln for ln in git(["diff", "--name-only", "--diff-filter=U"], work).stdout.splitlines() if ln.strip()]
+        git(["merge", "--abort"], work)
+        doc.setdefault("conflicts", []).append({"branch": branch, "agent": child["agent"] if child else "", "files": files[:20]})
+        step["status"] = "failed"
+        step["detail"] = (f"Collides in {', '.join(files[:3])}{'…' if len(files) > 3 else ''} — the merge was undone, "
+                          "so nothing is half-applied.")
+        _log(c, doc, step["n"], "err", f"conflict merging {branch}: {' '.join(files[:6])}")
+        return False
+    _stats(doc)
+    step["detail"] = f"{branch} merged."
+    _log(c, doc, step["n"], "ok", f"merged {branch} · {doc['diff']['files']} files so far")
+    return False
 
 
 def _test(c: Ctx, doc: dict[str, Any], step: dict[str, Any], cancel: threading.Event) -> bool:
@@ -482,15 +590,19 @@ def _handoff(c: Ctx, doc: dict[str, Any], step: dict[str, Any]) -> bool:
         return False
     high = [f for f in doc["review"]["findings"] if f["severity"] == "HIGH"]
     failed = doc["tests"]["status"] == "failed"
+    conflicts = doc.get("conflicts", [])
     lines = [f"branch {doc['branch']} from {doc['shortBase']}",
              f"{d['files']} files · +{d['insertions']} −{d['deletions']} · {d['commits']} commits",
              f"tests {doc['tests']['status']}{f' · {doc['tests']['summary']}' if doc['tests']['summary'] else ''}",
              f"review by {doc['review']['by'] or 'nobody'}: {doc['review']['verdict'] or '—'}"]
+    if conflicts:
+        lines.append("collisions: " + " · ".join(f"{x['agent'] or x['branch']} in {', '.join(x['files'][:3])}" for x in conflicts))
     return _pause(c, doc, step, title=f"Accept {doc['ref']}: {d['files']} files on {doc['branch']}",
-                  tool=f"Merge({doc['branch']})", risk="HIGH" if (high or failed) else "MEDIUM",
+                  tool=f"Merge({doc['branch']})", risk="HIGH" if (high or failed or conflicts) else "MEDIUM",
                   payload="\n".join(lines),
-                  reason=f"{doc['taskRef'] or doc['planRef']} — approve and the branch is yours to merge; refuse and the "
-                         f"branch and its worktree are removed. Nothing was merged and nothing left the worktree.")
+                  reason=f"{doc['taskRef'] or doc['planRef']} — approve and the branch is yours to merge, from here or "
+                         f"with git; refuse and the branch and its worktree are removed. Nothing has been merged into "
+                         f"your repository, and nothing has left the worktree.")
 
 
 def _pause(c: Ctx, doc: dict[str, Any], step: dict[str, Any], *, title: str, tool: str, risk: str, payload: str,
@@ -545,14 +657,19 @@ def resume(c: Ctx, ref: str, step_n: int, approved: bool) -> None:
 
 
 def cancel(c: Ctx, doc: dict[str, Any]) -> dict[str, Any]:
-    _cancel_flag(c, doc["ref"]).set()
+    for ref in [doc["ref"], *doc.get("children", [])]:  # stopping a merge run stops its agents too
+        _cancel_flag(c, ref).set()
     _log(c, doc, None, "warn", "stop requested")
-    if doc["status"] in ("queued", "waiting"):  # nothing is working, so stop it here
+    if doc["status"] in ("queued", "waiting"):  # nothing is working, so it stops here
         _finish(c, doc, "cancelled", "Stopped by you.")
+    for ref in doc.get("children", []):
+        child = c.store.one("runs", ref)
+        if child and child["status"] in ("queued", "waiting"):
+            _finish(c, child, "cancelled", "Stopped with the rest of the batch.")
     return c.store.one("runs", doc["ref"]) or doc
 
 
-def cleanup(c: Ctx, doc: dict[str, Any]) -> None:
+def cleanup(c: Ctx, doc: dict[str, Any], *, children: bool = True) -> None:
     """Remove the worktree and the branch. The commits stay in the repository until git prunes them."""
     repo, tree = Path(doc["repo"]), Path(doc["worktree"])
     if tree.exists():
@@ -563,6 +680,42 @@ def cleanup(c: Ctx, doc: dict[str, Any]) -> None:
     git(["branch", "-D", doc["branch"]], repo)
     doc["removed"] = True
     _log(c, doc, None, "info", f"worktree and branch {doc['branch']} removed")
+    if children:  # a merge run takes its agents' worktrees with it
+        for ref in doc.get("children", []):
+            child = c.store.one("runs", ref)
+            if child and not child.get("removed"):
+                cleanup(c, child, children=False)
+                c.put("runs", c.store.save_run(child))
+
+
+def merge(c: Ctx, doc: dict[str, Any], by: str) -> dict[str, Any]:
+    """Merge a run's branch into whatever your repository has checked out. Refuses a dirty tree, undoes
+    itself on a collision, and always hands back the command that undoes it."""
+    if doc["status"] != "done":
+        raise Refused(f"{doc['ref']} has not finished, so there is nothing settled to merge.")
+    if doc.get("removed"):
+        raise Refused(f"{doc['ref']}'s branch was removed, so there is nothing to merge.")
+    if doc.get("merged"):
+        raise Refused(f"{doc['ref']} is already merged into {doc['merged']['into']}.")
+    repo = Path(doc["repo"])
+    if git(["status", "--porcelain"], repo).stdout.strip():
+        raise Refused("Your working tree has changes that are not committed. Commit or stash them, then merge.")
+    into = git(["rev-parse", "--abbrev-ref", "HEAD"], repo).stdout.strip()
+    before = git(["rev-parse", "HEAD"], repo).stdout.strip()
+    message = f"Merge {doc['ref']}: {(doc['requirement'] or doc['planRef'])[:80]}\n\nNeuroCode {doc['branch']}"
+    out = git(["-c", "user.name=NeuroCode", "-c", "user.email=neurocode@localhost", "-c", "commit.gpgsign=false",
+               "merge", "--no-ff", "-m", message, doc["branch"]], repo, timeout=300)
+    if out.returncode != 0:
+        files = [ln for ln in git(["diff", "--name-only", "--diff-filter=U"], repo).stdout.splitlines() if ln.strip()]
+        git(["merge", "--abort"], repo)
+        _log(c, doc, None, "err", f"merging into {into} collided in {' '.join(files[:6])} — nothing was merged")
+        return {"merged": False, "into": into, "conflicts": files[:20], "commit": None, "undo": None}
+    sha = git(["rev-parse", "HEAD"], repo).stdout.strip()
+    undo = f"git reset --hard {before[:7]}"
+    doc["merged"] = {"into": into, "commit": sha[:7], "at": now_iso(), "by": by, "undo": undo}
+    _log(c, doc, None, "ok", f"merged into {into} as {sha[:7]} · undo with: {undo}")
+    _save(c, doc)
+    return {"merged": True, "into": into, "conflicts": [], "commit": sha[:7], "undo": undo}
 
 
 def diff_of(doc: dict[str, Any]) -> dict[str, Any]:

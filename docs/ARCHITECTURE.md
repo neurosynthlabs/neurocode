@@ -53,7 +53,7 @@ server/app/
   ai/features.py   ask memory, brainstorm, extract facts from text
   onboarding.py    clone or read a repository and measure it
   codeindex.py     parse the code into files, symbols and edges; search, impact and the module graph
-  runtime.py       a worktree per task: a model writes files, the project's tests run, you sign it off
+  runtime.py       a worktree per agent: models write files, the branches merge, the tests run, you sign off
   routes/          auth · admin · work · knowledge · platform · code · runs · ai · system
 ```
 
@@ -124,8 +124,21 @@ Dispatching a plan starts a run, and a run is real work on real code. It gets a 
 branch of its own (`neurocode/task-492`), branched from the project's current HEAD. Then, step by step:
 a model is asked for the **complete contents** of the files one plan step needs; the files are written
 inside the worktree and committed; the project's own test command runs there; the real diff is reviewed;
-and the run stops at your signature in the approvals inbox. Approve and the branch is yours to merge —
-NeuroCode never merges. Refuse and the branch and worktree are removed.
+and the run stops at your signature in the approvals inbox. Refuse and the branch and worktree are removed.
+
+**Several agents at once.** A plan's steps are grouped by the agent that owns them. One agent, one run.
+More than one, and each agent gets a worktree and a branch of its own (`neurocode/task-492-backend`,
+`…-frontend`) and they all write at the same time; a fourth **integration** run then brings their branches
+in one by one, runs the tests on the combined result, reviews the whole diff and stops at your signature.
+Two agents that touch the same file collide at that merge, never mid-edit: the merge is undone, the
+files that collided are named on the run screen, and the rest still comes in. Stopping or discarding the
+integration run stops and discards its agents with it.
+
+**Merging.** Once a run is accepted, the Merge button on the run screen merges its branch into whatever
+branch your repository has checked out — two clicks, `runs:merge`, and written into the audit log. It
+refuses outright if your working tree has uncommitted changes, undoes itself and names the files if the
+merge collides, and always hands back the command that undoes it (`git reset --hard <sha>`). Nothing is
+ever merged while a run is still working, and nothing is merged twice.
 
 Three rules keep it safe to leave running:
 
@@ -163,7 +176,7 @@ rejects is noted once and not sent again until it changes.
 | `/memory` | session + `memory:write` | facts, search, conflicts |
 | `/projects`, `/mcp`, `/agents` | session + the action's permission | the platform |
 | `/projects/{id}/code` | session; `projects:onboard` to re-index | summary, file tree, search, file detail, impact, module graph |
-| `/runs` | session; `runs:run` to stop or discard | agent runs, their output, their diff |
+| `/runs` | session; `runs:run` to stop or discard, `runs:merge` to merge | agent runs, their output, their diff, the merge |
 | `/ai` | `ai:use` | ask, brainstorm, extract |
 | `/usage` | session (per-person detail for admins) | the usage ledger, by feature, provider and day |
 | `/activity`, `/health` | session / public | the log, the live stream, liveness |
@@ -175,10 +188,10 @@ rejects is noted once and not sent again until it changes.
   accounts, roles and permissions, the audit log, first-run setup, the Admin screens, the AI gateway,
   and Ask / Brainstorm / Add from text working live, with or without a key; then the database
   hardening (backups, integrity checks, append-only audit, the usage ledger) and the code index behind
-  live Code Intelligence, Architecture and impact analysis; then (2026-09-12) the agent runtime.
+  live Code Intelligence, Architecture and impact analysis; then (2026-09-12) the agent runtime, several
+  agents per task in parallel worktrees, and merging from the UI.
 - **Waiting on you:** a valid DeepSeek key (Admin → AI providers) — without one the runtime opens the
   worktree, runs the tests and reviews, but skips the steps that write code; and the `workflow` scope on
   the GitHub token so CI can be pushed.
-- **Next:** several agents per task in parallel worktrees; merging from the UI once a run is accepted;
-  tree-sitter parsers in place of the pattern sets; roles per project; Postgres and a hosted mode;
-  single sign-on.
+- **Next:** pushing a branch and opening a pull request from the run screen; tree-sitter parsers in place
+  of the pattern sets; roles per project; Postgres and a hosted mode; single sign-on.

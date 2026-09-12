@@ -173,7 +173,9 @@ export type ImpactTarget = { path: string } | { module: string } | { object: str
 export type RunStatus = 'queued' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled';
 export interface RunStep {
   n: number;
-  kind: 'edit' | 'test' | 'review' | 'handoff';
+  kind: 'edit' | 'merge' | 'test' | 'review' | 'handoff';
+  /** For a merge step: the agent run whose branch it brings in. */
+  child?: string;
   label: string;
   agent: string;
   status: 'todo' | 'running' | 'waiting' | 'done' | 'skipped' | 'failed';
@@ -197,8 +199,28 @@ export interface RunDoc {
   model: string | null;
   note: string;
   removed: boolean;
+  /** `solo`: one agent. `agent`: one of several working in parallel. `integration`: the run that merges them. */
+  role: 'solo' | 'agent' | 'integration';
+  /** Which agent this run belongs to, when it is one of several. */
+  agent: string | null;
+  /** The task the batch shares. */
+  group: string;
+  parent: string | null;
+  children: string[];
+  /** Branches that could not be merged, with the files that collided. */
+  conflicts: { branch: string; agent: string; files: string[] }[];
+  /** Set once the branch is merged into the repository on this machine. */
+  merged: { into: string; commit: string; at: string; by: string; undo: string } | null;
   /** The approval this run is stopped at. */
   waitingOn?: string;
+}
+export interface MergeResult {
+  merged: boolean;
+  into: string;
+  conflicts: string[];
+  commit: string | null;
+  undo: string | null;
+  run: RunDoc;
 }
 export interface RunDetail extends RunDoc { logs: RunLog[] }
 export interface RunDiff { patch: string; truncated: boolean; stat: RunDoc['diff']; gone: boolean }
@@ -332,6 +354,7 @@ export const api = {
   run: (ref: string, after = 0) => request<RunDetail>(`/runs/${seg(ref)}?after=${after}`),
   runDiff: (ref: string) => request<RunDiff>(`/runs/${seg(ref)}/diff`, { signal: AbortSignal.timeout(15_000) }),
   cancelRun: (ref: string) => request<RunDoc>(`/runs/${seg(ref)}/cancel`, POST()),
+  mergeRun: (ref: string) => request<MergeResult>(`/runs/${seg(ref)}/merge`, { ...POST(), signal: AbortSignal.timeout(120_000) }),
   discardRun: (ref: string) => request<RunDoc>(`/runs/${seg(ref)}/discard`, POST()),
 
   /** The AI gateway's ledger: every model call and every offline answer. */

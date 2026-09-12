@@ -4,7 +4,8 @@ import {
 import { toast } from 'sonner';
 import {
   ApiError, api, type AskAnswer, type BrainstormDoc, type Change, type Collection, type DecisionDoc, type Extracted,
-  type FactCandidate, type Health, type McpInput, type Pref, type ProjectInput, type RunDoc, type RunLogEvent,
+  type FactCandidate, type Health, type McpInput, type MergeResult, type Pref, type ProjectInput, type RunDoc,
+  type RunLogEvent,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import * as offline from '@/lib/offline-ai';
@@ -89,6 +90,8 @@ export interface DataCtx extends Domain {
   cancelRun: (ref: string) => Promise<RunDoc | null>;
   /** Remove a finished run's worktree and branch. */
   discardRun: (ref: string) => Promise<RunDoc | null>;
+  /** Merge an accepted run into the branch the repository has checked out. */
+  mergeRun: (ref: string) => Promise<MergeResult | null>;
   /** Each line a run writes, as it writes it. Returns the unsubscribe. */
   onRunLog: (listener: (line: RunLogEvent) => void) => () => void;
 }
@@ -497,6 +500,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
     return doc;
   }, [attempt, put, permitted]);
 
+  const mergeRun = useCallback(async (ref: string) => {
+    if (!permitted('runs:merge')) return null;
+    const result = await attempt(() => api.mergeRun(ref), 'Nothing was merged');
+    if (result) put('runs', result.run);
+    return result;
+  }, [attempt, put, permitted]);
+
   const onRunLog = useCallback((listener: (line: RunLogEvent) => void) => {
     listeners.current.add(listener);
     return () => { listeners.current.delete(listener); };
@@ -520,11 +530,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
     () => ({
       ...domain, mode, health, decide, moveTask, toggleCheck, setPinned, archive, resolveConflict, createProject,
       registerMcp, settleQuestion, dispatchPlan, compile, recompile, searchMemory, reset, setPref, recordDecision,
-      ask, brainstorm, extract, addFacts, cancelRun, discardRun, onRunLog,
+      ask, brainstorm, extract, addFacts, cancelRun, discardRun, mergeRun, onRunLog,
     }),
     [domain, mode, health, decide, moveTask, toggleCheck, setPinned, archive, resolveConflict, createProject,
       registerMcp, settleQuestion, dispatchPlan, compile, recompile, searchMemory, reset, setPref, recordDecision,
-      ask, brainstorm, extract, addFacts, cancelRun, discardRun, onRunLog],
+      ask, brainstorm, extract, addFacts, cancelRun, discardRun, mergeRun, onRunLog],
   );
   return <C.Provider value={value}>{children}</C.Provider>;
 }

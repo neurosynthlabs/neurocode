@@ -5028,6 +5028,12 @@
     "description": "Sign or refuse migrations, deploys and other high-risk actions."
    },
    {
+    "id": "runs:merge",
+    "group": "Gates",
+    "label": "Merge a run",
+    "description": "Merge an accepted run’s branch into the repository on this machine."
+   },
+   {
     "id": "decisions:make",
     "group": "Gates",
     "label": "Give final verdicts",
@@ -5105,6 +5111,7 @@
      "tasks:write",
      "runs:run",
      "approvals:decide",
+     "runs:merge",
      "decisions:make",
      "memory:write",
      "ai:use",
@@ -5128,6 +5135,7 @@
      "tasks:write",
      "runs:run",
      "approvals:decide",
+     "runs:merge",
      "decisions:make",
      "memory:write",
      "ai:use",
@@ -5151,6 +5159,7 @@
      "tasks:write",
      "runs:run",
      "approvals:decide",
+     "runs:merge",
      "decisions:make",
      "memory:write",
      "ai:use",

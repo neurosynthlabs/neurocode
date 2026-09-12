@@ -166,7 +166,7 @@ def test_custom_roles_sit_beside_the_built_in_ones(client):
     assert rm.patch("/tasks/TASK-492", json={"status": "review"}).status_code == 403            # takes effect at once
     assert client.delete("/admin/roles/release-manager").status_code == 409                     # someone still has it
     assert [r["id"] for r in client.get("/admin/roles").json()][:5] == ["owner", "admin", "approver", "engineer", "viewer"]
-    assert len(client.get("/admin/permissions").json()) == 16
+    assert len(client.get("/admin/permissions").json()) == 17
 
 
 def test_teams_hold_known_people(client):
@@ -675,51 +675,120 @@ def model(monkeypatch, answer):
     monkeypatch.setitem(gateway.CALLS, "deepseek", answer)
 
 
-def test_dispatching_starts_a_run_in_a_worktree_of_its_own(client, tmp_path):
+def agents_of(client, run: dict) -> list[dict]:
+    return [client.get(f"/runs/{ref}").json() for ref in run.get("children", [])]
+
+
+def test_dispatching_starts_agents_in_parallel_worktrees(client, tmp_path):
     pid = onboard_git(client, tmp_path / "shop")
     plan = client.post(f"/plans/{ready_plan(client, pid)}/dispatch").json()
     run = client.get(f"/runs/{plan['runRef']}").json()
-    assert run["status"] == "waiting" and run["branch"].startswith("neurocode/task-")
-    assert (Path(run["worktree"]) / "Makefile").is_file()          # its own checkout, at the base commit
-    assert {s["status"] for s in run["steps"] if s["kind"] == "edit"} == {"skipped"}   # no model: nothing invented
-    assert "no model is configured" in " ".join(line["line"] for line in run["logs"]).lower()
+    agents = agents_of(client, run)
+    assert run["role"] == "integration" and len(agents) >= 2            # the compiler named several agents
+    assert len({a["branch"] for a in agents}) == len(agents)            # a branch each
+    assert len({a["worktree"] for a in agents}) == len(agents)          # and a worktree each
+    assert all(a["status"] == "done" and a["parent"] == run["ref"] for a in agents)
+    assert all({s["status"] for s in a["steps"]} == {"skipped"} for a in agents)  # no model: nothing invented
+    assert "no model is configured" in " ".join(line["line"] for line in agents[0]["logs"]).lower()
 
-    gate = gate_of(client, run["ref"])                              # tests wait for a person, the first time
+    assert run["status"] == "waiting" and (Path(run["worktree"]) / "Makefile").is_file()
+    assert {s["status"] for s in run["steps"] if s["kind"] == "merge"} == {"skipped"}  # nothing was written
+    gate = gate_of(client, run["ref"])                                  # tests wait for a person, the first time
     assert gate["tool"] == "Bash(make test)" and gate["risk"] == "MEDIUM"
     client.post(f"/approvals/{gate['ref']}/approve")
     done = client.get(f"/runs/{run['ref']}").json()
     assert done["status"] == "done" and done["tests"]["status"] == "passed"
     assert "2 passed" in " ".join(line["line"] for line in done["logs"])
-    assert done["steps"][-1]["status"] == "skipped"                 # nothing to accept: no file changed
+    assert done["steps"][-1]["status"] == "skipped"                     # nothing to accept: no file changed
 
 
-def test_the_agent_writes_code_runs_the_tests_and_waits_for_your_signature(client, tmp_path, monkeypatch):
+def writer(files_for_agent, review=None):
+    """A stubbed model: each agent writes its own file, and the reviewer gets its own answer."""
+    def answer(messages, cfg):
+        prompt = messages[1]["content"]
+        if "reviewer" in messages[0]["content"].lower():
+            return review or json.dumps({"findings": [], "verdict": "Fine."})
+        agent = next((a for a in files_for_agent if a in prompt), None)
+        path, content = files_for_agent.get(agent, (None, None))
+        if not path:
+            return json.dumps({"summary": "Nothing to do here.", "files": []})
+        return json.dumps({"summary": f"{agent} wrote {path}.", "files": [{"path": path, "content": content}]})
+    return answer
+
+
+def test_agents_write_in_parallel_and_their_branches_are_merged_for_your_signature(client, tmp_path, monkeypatch):
     pid = onboard_git(client, tmp_path / "shop")
     ref = ready_plan(client, pid)
-    edit = json.dumps({"summary": "Round at invoice level.", "notes": ["Rounding now happens in one place."],
-                       "files": [{"path": "pkg/core.py", "content": "def total(x):\n    return round(x)\n"}]})
-    review = json.dumps({"findings": [{"severity": "MEDIUM", "file": "pkg/core.py", "note": "No test covers rounding."}],
+    plan = next(p for p in client.get("/plans").json() if p["ref"] == ref)
+    names = [a for a in {s["agent"] for s in plan["steps"]} if a not in ("AI Commander", "AI Project Manager")]
+    assert len(names) >= 2
+    files = {name: (f"pkg/{i}.py", f"# {name}\nVALUE = {i}\n") for i, name in enumerate(names)}
+    review = json.dumps({"findings": [{"severity": "MEDIUM", "file": "pkg/0.py", "note": "No test covers this."}],
                          "verdict": "Small and clear."})
-    model(monkeypatch, lambda messages, cfg: (review if "reviewer" in messages[0]["content"].lower() else edit, {"in": 10, "out": 20}))
+    model(monkeypatch, writer(files, review))
 
     run = client.get(f"/runs/{client.post(f'/plans/{ref}/dispatch').json()['runRef']}").json()
-    assert run["status"] == "waiting" and run["model"] == "deepseek-chat"
-    assert run["diff"]["files"] == 1 and run["diff"]["commits"] >= 1
-    assert (Path(run["worktree"]) / "pkg" / "core.py").read_text() == "def total(x):\n    return round(x)\n"
-    client.post(f"/approvals/{gate_of(client, run['ref'])['ref']}/approve")               # allow the tests
+    agents = agents_of(client, run)
+    assert all(a["diff"]["files"] == 1 for a in agents)                      # each agent wrote in its own worktree
+    assert run["diff"]["files"] == len(agents) and run["status"] == "waiting"  # and every branch merged cleanly
+    for name, (path, content) in files.items():
+        assert (Path(run["worktree"]) / path).read_text() == content, name
+    assert not run["conflicts"]
 
+    client.post(f"/approvals/{gate_of(client, run['ref'])['ref']}/approve")   # allow the tests
     waiting = client.get(f"/runs/{run['ref']}").json()
-    assert waiting["status"] == "waiting" and waiting["tests"]["status"] == "passed"
-    assert waiting["review"]["findings"][0]["severity"] == "MEDIUM" and waiting["review"]["by"] == "deepseek-chat"
+    assert waiting["tests"]["status"] == "passed" and waiting["review"]["by"] == "deepseek-chat"
     accept = gate_of(client, run["ref"])
-    assert accept["tool"].startswith("Merge(neurocode/") and accept["risk"] == "MEDIUM"
+    assert accept["tool"].startswith("Merge(neurocode/")
     client.post(f"/approvals/{accept['ref']}/approve")
 
     done = client.get(f"/runs/{run['ref']}").json()
     assert done["status"] == "done" and f"git merge {done['branch']}" in done["note"]
     assert client.get(f"/tasks/{done['taskRef']}").json()["status"] == "review"
-    assert "round(x)" in client.get(f"/runs/{run['ref']}/diff").json()["patch"]
+    assert "VALUE = 0" in client.get(f"/runs/{run['ref']}/diff").json()["patch"]
     assert {f["feature"] for f in client.get("/usage").json()["byFeature"]} >= {"agent", "review"}
+
+
+def test_two_agents_touching_one_file_collide_at_the_merge_not_mid_edit(client, tmp_path, monkeypatch):
+    pid = onboard_git(client, tmp_path / "shop")
+    ref = ready_plan(client, pid)
+    plan = next(p for p in client.get("/plans").json() if p["ref"] == ref)
+    names = [a for a in {s["agent"] for s in plan["steps"]} if a not in ("AI Commander", "AI Project Manager")]
+    files = {name: ("pkg/core.py", f"def total(x):\n    return x + {i}\n") for i, name in enumerate(names)}
+    model(monkeypatch, writer(files))
+
+    run = client.get(f"/runs/{client.post(f'/plans/{ref}/dispatch').json()['runRef']}").json()
+    assert [c["files"] for c in run["conflicts"]] == [["pkg/core.py"]] * len(run["conflicts"])
+    assert len(run["conflicts"]) == len(names) - 1                       # the first branch merged, the rest collide
+    collided = [s for s in run["steps"] if s["kind"] == "merge" and s["status"] == "failed"]
+    assert collided and "the merge was undone" in collided[0]["detail"]
+    assert "<<<<<<<" not in (Path(run["worktree"]) / "pkg" / "core.py").read_text()   # never half-applied
+    assert gate_of(client, run["ref"])["risk"] in ("MEDIUM", "HIGH")
+
+
+def test_an_accepted_run_can_be_merged_from_the_ui(client, tmp_path, monkeypatch):
+    repo = tmp_path / "shop"
+    pid = onboard_git(client, repo)
+    ref = ready_plan(client, pid)
+    plan = next(p for p in client.get("/plans").json() if p["ref"] == ref)
+    names = [a for a in {s["agent"] for s in plan["steps"]} if a not in ("AI Commander", "AI Project Manager")]
+    model(monkeypatch, writer({names[0]: ("pkg/core.py", "def total(x):\n    return round(x)\n")}))
+    run_ref = client.post(f"/plans/{ref}/dispatch").json()["runRef"]
+    client.post(f"/approvals/{gate_of(client, run_ref)['ref']}/approve")      # tests
+    client.post(f"/approvals/{gate_of(client, run_ref)['ref']}/approve")      # your signature
+
+    (repo / "untracked.txt").write_text("not committed\n")                   # a dirty tree is refused outright
+    refused = client.post(f"/runs/{run_ref}/merge")
+    assert refused.status_code == 409 and "not committed" in refused.json()["detail"]
+    (repo / "untracked.txt").unlink()
+
+    merged = client.post(f"/runs/{run_ref}/merge").json()
+    assert merged["merged"] and merged["into"] == "main" and merged["undo"].startswith("git reset --hard ")
+    assert (repo / "pkg" / "core.py").read_text() == "def total(x):\n    return round(x)\n"   # really in the repo
+    assert merged["run"]["merged"]["by"] == "Rajat"
+    assert client.post(f"/runs/{run_ref}/merge").status_code == 409           # only once
+    assert {a["action"] for a in client.get("/admin/audit").json()} >= {"run.merge"}
+    assert person(client, "engineer").post(f"/runs/{run_ref}/merge").status_code == 403
 
 
 def test_the_agent_cannot_write_outside_its_worktree(client, tmp_path, monkeypatch):
@@ -728,8 +797,9 @@ def test_the_agent_cannot_write_outside_its_worktree(client, tmp_path, monkeypat
     escape = json.dumps({"summary": "…", "files": [{"path": "../../escaped.py", "content": "print('out')\n"}]})
     model(monkeypatch, lambda messages, cfg: escape)
     run = client.get(f"/runs/{client.post(f'/plans/{ref}/dispatch').json()['runRef']}").json()
+    steps = [s for r in (run, *agents_of(client, run)) for s in r["steps"]]                 # every agent tried it
     assert not (tmp_path / "escaped.py").exists() and not (tmp_path.parent / "escaped.py").exists()
-    assert any(s["status"] == "failed" and "outside the worktree" in s["detail"] for s in run["steps"])
+    assert any(s["status"] == "failed" and "outside the worktree" in s["detail"] for s in steps)
     assert run["diff"]["files"] == 0
 
 
@@ -739,8 +809,11 @@ def test_a_run_can_be_stopped_and_its_worktree_discarded(client, tmp_path):
     tree = Path(client.get(f"/runs/{ref}").json()["worktree"])
     assert client.post(f"/runs/{ref}/discard").status_code == 409          # it is waiting on a person
     assert client.post(f"/runs/{ref}/cancel").json()["status"] == "cancelled"
-    assert client.post(f"/runs/{ref}/discard").json()["removed"] is True
+    discarded = client.post(f"/runs/{ref}/discard").json()
+    assert discarded["removed"] is True
     assert not tree.exists()
+    for child in agents_of(client, discarded):                            # the agents' worktrees go with it
+        assert child["removed"] is True and not Path(child["worktree"]).exists()
     assert client.post(f"/runs/{ref}/cancel").status_code == 409
     assert person(client, "viewer").post(f"/runs/{ref}/cancel").status_code == 403
     assert client.get("/runs").json()[0]["ref"] == ref

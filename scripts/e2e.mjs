@@ -341,6 +341,12 @@ try {
     }
     expect(run?.status === 'waiting', `the run is ${run?.status}`);   // the first test run needs a person
     expect(fs.existsSync(path.join(run.worktree, 'Makefile')), 'the worktree has no checkout');
+    if (run.role === 'integration') {   // several agents: a worktree and a branch each, merged for you
+      const agents = await Promise.all(run.children.map((r) => api(`/runs/${r}`)));
+      expect(agents.length >= 2 && new Set(agents.map((a) => a.worktree)).size === agents.length,
+        `${agents.length} agents shared ${new Set(agents.map((a) => a.worktree)).size} worktrees`);
+      expect(agents.every((a) => fs.existsSync(a.worktree)), 'an agent has no worktree');
+    }
     expect(!spawnSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }).stdout.trim(), 'the working tree was touched');
 
     await open(`/runs?ref=${run.ref}`);

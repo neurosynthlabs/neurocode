@@ -10,6 +10,7 @@ export const permissions: Permission[] = [
   { id: 'tasks:write',      group: 'Work',      label: 'Move tasks',               description: 'Change a task’s status and tick its checklist.' },
   { id: 'runs:run',         group: 'Work',      label: 'Run agents',               description: 'Start an agent run in its own worktree, stop it, and discard its branch.' },
   { id: 'approvals:decide', group: 'Gates',     label: 'Approve gated actions',    description: 'Sign or refuse migrations, deploys and other high-risk actions.' },
+  { id: 'runs:merge',       group: 'Gates',     label: 'Merge a run',              description: 'Merge an accepted run’s branch into the repository on this machine.' },
   { id: 'decisions:make',   group: 'Gates',     label: 'Give final verdicts',      description: 'Accept a review or send it back, and open or cancel the production gate.' },
   { id: 'memory:write',     group: 'Knowledge', label: 'Curate memory',            description: 'Add, pin and archive facts, and settle conflicts between them.' },
   { id: 'ai:use',           group: 'Knowledge', label: 'Use AI features',          description: 'Ask memory, brainstorm, and extract facts from text.' },
@@ -30,8 +31,8 @@ export const roles: RoleSeed[] = [
   { id: 'admin', name: 'Admin', description: 'Runs the workspace: people, roles, keys and every screen.', permissions: ALL },
   {
     id: 'approver', name: 'AI Project Manager', description: 'Steers the work and signs the gates: the final approver.',
-    permissions: ['plans:compile', 'plans:decide', 'tasks:write', 'runs:run', 'approvals:decide', 'decisions:make',
-      'memory:write', 'ai:use', 'projects:onboard', 'mcp:manage', 'settings:write'],
+    permissions: ['plans:compile', 'plans:decide', 'tasks:write', 'runs:run', 'approvals:decide', 'runs:merge',
+      'decisions:make', 'memory:write', 'ai:use', 'projects:onboard', 'mcp:manage', 'settings:write'],
   },
   { id: 'engineer', name: 'Engineer', description: 'Works the board and curates memory. Cannot sign the gates.', permissions: ['plans:compile', 'tasks:write', 'runs:run', 'memory:write', 'ai:use'] },
   { id: 'viewer', name: 'Viewer', description: 'Reads everything and changes nothing.', permissions: [] },

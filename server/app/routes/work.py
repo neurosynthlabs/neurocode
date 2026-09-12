@@ -252,15 +252,18 @@ async def dispatch(ref: str, jobs: BackgroundTasks, user: User = Depends(require
     project = c.store.get("projects", plan["projectId"])
     if project and user.can("runs:run"):
         try:
-            run = await asyncio.to_thread(runtime.prepare, c, plan, task, project, user.name)
+            made = await asyncio.to_thread(runtime.plan_runs, c, plan, task, project, user.name)
         except runtime.Refused as e:
             c.record("No run started", str(e), project=plan["projectId"], level="warn", actor="Orchestrator", kind="agent")
         else:
-            plan["runRef"] = run["ref"]
-            c.put("runs", run)
-            jobs.add_task(runtime.execute, c, run["ref"])
-            c.act(user, "Run started", f"{run['ref']} · worktree on {run['branch']}", project=plan["projectId"],
-                  level="ok", task_ref=plan["taskRef"])
+            lead = made[-1]  # the solo run, or the one that merges the agents
+            plan["runRef"] = lead["ref"]
+            for run in made:
+                c.put("runs", run)
+            jobs.add_task(runtime.execute_batch if len(made) > 1 else runtime.execute, c, lead["ref"])
+            c.act(user, "Run started",
+                  f"{lead['ref']} · {f'{len(made) - 1} agents in parallel, merging into' if len(made) > 1 else 'worktree on'}"
+                  f" {lead['branch']}", project=plan["projectId"], level="ok", task_ref=plan["taskRef"])
     c.put("plans", c.store.save("plans", plan))
     return plan
 

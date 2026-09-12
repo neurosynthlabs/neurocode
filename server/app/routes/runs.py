@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from .. import runtime
 from ..auth import User, current_user, require
@@ -39,6 +39,26 @@ async def cancel(ref: str, user: User = Depends(require("runs:run")), c: Ctx = D
     c.act(user, "Run stopped", f"{ref} · {doc['branch']} — the worktree stays for you to look at",
           project=doc["projectId"], level="warn", task_ref=doc.get("taskRef"))
     return await asyncio.to_thread(runtime.cancel, c, doc)
+
+
+@router.post("/{ref}/merge")
+async def merge(ref: str, request: Request, user: User = Depends(require("runs:merge")),
+                c: Ctx = Depends(ctx)) -> dict[str, Any]:
+    """Merge an accepted run into the branch your repository has checked out."""
+    doc = need(c.store.one("runs", ref), ref)
+    try:
+        result = await asyncio.to_thread(runtime.merge, c, doc, user.name)
+    except runtime.Refused as e:
+        raise HTTPException(409, str(e)) from e
+    if result["merged"]:
+        c.act(user, "Merged", f"{ref} · {doc['branch']} → {result['into']} as {result['commit']} · undo: {result['undo']}",
+              project=doc["projectId"], level="ok", task_ref=doc.get("taskRef"))
+        c.audit("run.merge", user=user, target=f"{doc['branch']} → {result['into']}",
+                detail={"commit": result["commit"], "run": ref}, request=request)
+    else:
+        c.act(user, "Merge collided", f"{ref} · {len(result['conflicts'])} files collide with {result['into']}; "
+              "nothing was merged", project=doc["projectId"], level="warn", task_ref=doc.get("taskRef"))
+    return {**result, "run": c.store.one("runs", ref)}
 
 
 @router.post("/{ref}/discard")
