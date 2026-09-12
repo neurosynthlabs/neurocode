@@ -12,7 +12,9 @@ export const API_BASE: string = import.meta.env.VITE_API_URL ?? (import.meta.env
 export const SIGNED_OUT = 'nc:signed-out';
 
 export interface CompilerInfo {
-  provider: 'deepseek' | 'ollama' | 'rules';
+  provider: LaneId | 'rules';
+  /** How many lanes could answer right now. */
+  lanes?: number;
   model: string;
   /** Why a configured provider is being skipped, e.g. a rejected key. */
   note?: string;
@@ -80,7 +82,20 @@ export interface AuditEntry {
 }
 export interface WorkspaceInfo { name: string; createdAt: string | null; people: number; roles: number; teams: number }
 
-export type AiPreference = 'auto' | 'deepseek' | 'ollama' | 'rules';
+/** A lane is a provider and a model together. Several answer at once; free ones come first. */
+export type LaneId = 'groq' | 'cerebras' | 'gemini' | 'mistral' | 'openrouter' | 'github' | 'deepseek' | 'ollama';
+export type AiPreference = 'auto' | 'free' | 'local' | 'rules' | LaneId;
+export interface AiLane {
+  id: LaneId; label: string; model: string; baseUrl: string; api: 'openai' | 'ollama';
+  /** What its free tier allows — the router's own cap, editable. 0 means unmetered. */
+  free: boolean; rpm: number; rpd: number; goodAt: ('write' | 'review' | 'plan' | 'chat')[];
+  needsKey: boolean; signup: string; note: string;
+  enabled: boolean; hasKey: boolean; keyMask: string | null; keySource: 'workspace' | 'environment' | null;
+  rejected: boolean;
+  /** Can it take the next call? If not, `blocked` says why in plain words. */
+  ready: boolean; blocked: string | null; allowed: boolean;
+  spent: { minute: number; today: number };
+}
 export interface AiConfig {
   preference: AiPreference;
   /** NEUROCODE_COMPILER is set on the server, and it wins over the workspace setting. */
@@ -91,6 +106,7 @@ export interface AiConfig {
     model: string; baseUrl: string; rejected: boolean;
   };
   ollama: { url: string; model: string; ready: boolean };
+  lanes: AiLane[];
 }
 export interface AiPatch {
   preference?: AiPreference;
@@ -100,6 +116,14 @@ export interface AiPatch {
   deepseekUrl?: string;
   ollamaUrl?: string;
   ollamaModel?: string;
+  /** The lane the fields below are about. */
+  lane?: LaneId;
+  key?: string;
+  model?: string;
+  baseUrl?: string;
+  rpm?: number;
+  rpd?: number;
+  enabled?: boolean;
 }
 export interface AiTestResult { ok: boolean; ms: number; detail: string }
 

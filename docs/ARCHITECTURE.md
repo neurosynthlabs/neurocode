@@ -48,7 +48,8 @@ server/app/
   secrets.py       API keys on disk (0600), only ever reported masked
   auth.py          scrypt passwords, sessions, sign-in throttling, current_user / require()
   rbac.py          the permission catalogue and roles
-  ai/gateway.py    provider choice, keys, breaker, test connection, the usage ledger
+  ai/lanes.py      the lanes: a provider and a model each, with their free limits written down
+  ai/gateway.py    which lane answers, keys, breakers, budgets, test connection, the usage ledger
   ai/compiler.py   requirement → plan
   ai/features.py   ask memory, brainstorm, extract facts from text
   onboarding.py    clone or read a repository and measure it
@@ -162,9 +163,29 @@ TODOs, a diff with no test touched) and says it was read by rules, not a model.
 | Brainstorm | problem, audience, MVP, risks, metrics, roadmap | the same structure as a guided template |
 | Extract facts | facts proposed from pasted text | policy sentences picked by rules |
 
-The order under `auto` is DeepSeek (a key is set), then Ollama (the model is pulled), then the offline
-rules. Keys are set in Admin → AI providers and stored in the secrets file. A key the provider
-rejects is noted once and not sent again until it changes.
+## Lanes: many small free models instead of one big paid one
+
+A **lane** is a provider and a model together — `groq/llama-3.3-70b`, `cerebras/qwen-3-coder`,
+`gemini/2.5-flash`, `mistral`, `openrouter`, `github`, the paid `deepseek`, and `ollama` on this Mac.
+Each lane carries what it is good at (write, review, plan, chat) and the free tier's limits, and every
+one of them speaks the same chat-completions shape, so adding a provider is a row in a table, not a
+client.
+
+The router picks the lane: free first, the paid one only when the free ones are spent, the local model
+last — skipping any lane with no key, with its allowance spent for this minute or this day, that an
+admin switched off, or that refused the key it holds. A call that fails moves to the next lane instead
+of dropping to the offline rules, and only when every lane is spent do the rules answer and say so.
+
+Two things fall out of that. **Agents that work at the same time are spread across different lanes**,
+so four agents are four providers answering at once rather than four requests queued behind one
+rate limit — the real ceiling on parallel work is requests-per-minute, not intelligence. And **the
+reviewer avoids the lane that wrote the code**, so a second model reads the diff: with free lanes, a
+second opinion costs nothing.
+
+Limits are the router's own caps, not promises from a provider: every lane's model, base URL, calls a
+minute and calls a day are editable in Admin → AI providers, where each lane shows whether it can
+answer right now and what it has spent today. Keys live in the secrets file (or an environment
+variable), one per lane, never in the database and never in a log line.
 
 ## API map
 
@@ -193,5 +214,7 @@ rejects is noted once and not sent again until it changes.
 - **Waiting on you:** a valid DeepSeek key (Admin → AI providers) — without one the runtime opens the
   worktree, runs the tests and reviews, but skips the steps that write code; and the `workflow` scope on
   the GitHub token so CI can be pushed.
-- **Next:** pushing a branch and opening a pull request from the run screen; tree-sitter parsers in place
-  of the pattern sets; roles per project; Postgres and a hosted mode; single sign-on.
+- **Next:** retrieval that earns the name — embeddings over the code index, memory and the project's
+  documents, so every agent is grounded in *this* repository rather than in its own recollection;
+  pushing a branch and opening a pull request from the run screen; tree-sitter parsers in place of the
+  pattern sets; roles per project; Postgres and a hosted mode; single sign-on.

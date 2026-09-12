@@ -222,6 +222,62 @@ def test_the_connection_test_says_whether_a_provider_answers(client, monkeypatch
     assert person(client, "approver").post("/admin/ai/test", json={"provider": "rules"}).status_code == 403
 
 
+# ── lanes: several free models instead of one paid one ───────────
+def lane_up(client, monkeypatch, lane_id, answer=None):
+    """Give a lane a key and a stand-in that answers, so a test never reaches a real provider."""
+    monkeypatch.setenv("NEUROCODE_COMPILER", "auto")
+    assert client.put("/admin/ai", json={"lane": lane_id, "key": f"test-{lane_id}-0000"}).status_code == 200
+    monkeypatch.setitem(gateway.CALLS, lane_id, answer or (lambda messages, cfg: '{"ok": true}'))
+
+
+def lanes_of(client) -> dict:
+    return {x["id"]: x for x in client.get("/admin/ai").json()["lanes"]}
+
+
+def test_a_free_lane_takes_a_key_and_answers_without_touching_deepseek(client, monkeypatch):
+    lane_up(client, monkeypatch, "groq")
+    groq = lanes_of(client)["groq"]
+    assert groq["free"] and groq["hasKey"] and groq["keyMask"] == "••••0000" and groq["ready"]
+    assert "test-groq" not in json.dumps(client.get("/admin/audit").json())      # the key never reaches the log
+    assert client.get("/admin/ai").json()["active"]["provider"] == "groq"        # it answers now, with no paid key
+    assert client.put("/admin/ai", json={"lane": "groq", "key": ""}).json()["lanes"][0]["hasKey"] is False
+    assert client.put("/admin/ai", json={"lane": "nothing", "key": "x"}).status_code == 404
+
+
+def test_a_lane_that_spends_its_free_allowance_steps_aside(client, monkeypatch):
+    lane_up(client, monkeypatch, "groq")
+    lane_up(client, monkeypatch, "cerebras")
+    client.put("/admin/ai", json={"lane": "groq", "rpd": 1})
+    assert client.post("/admin/ai/test", json={"provider": "groq"}).json()["ok"]  # that is the whole day's allowance
+    groq = lanes_of(client)["groq"]
+    assert groq["ready"] is False and "today" in groq["blocked"] and groq["spent"]["today"] == 1
+    assert client.get("/admin/ai").json()["active"]["provider"] == "cerebras"     # the work moves to the next lane
+
+
+def test_a_lane_that_fails_hands_the_call_to_the_next_lane(client, monkeypatch):
+    def refuse(messages, cfg):
+        raise gateway.ProviderError(429, "too many requests")
+    good = {"title": "Fix the interstate GST split", "businessRequirement": "b", "technicalRequirement": "t",
+            "risk": "high", "confidence": "80", "layers": ["backend"], "openQuestions": [],
+            "steps": [{"label": "Fix TaxService", "agent": "backend"}, {"label": "Test it", "agent": "QA"}]}
+    lane_up(client, monkeypatch, "groq", refuse)
+    lane_up(client, monkeypatch, "cerebras", lambda messages, cfg: json.dumps(good))
+    plan = compile_tax(client, "fix the tax split")
+    assert plan["compiler"]["provider"] == "cerebras"                             # not the offline rules
+    assert lanes_of(client)["groq"]["spent"]["today"] == 1                        # the attempt is still ledgered
+
+
+def test_agents_working_at_once_are_spread_over_different_lanes(client, tmp_path, monkeypatch):
+    def wrote(messages, cfg):
+        return json.dumps({"summary": "Nothing to change here.", "files": []})
+    lane_up(client, monkeypatch, "groq", wrote)
+    lane_up(client, monkeypatch, "cerebras", wrote)
+    pid = onboard_git(client, tmp_path / "shop")
+    ref = client.post(f"/plans/{ready_plan(client, pid)}/dispatch").json()["runRef"]
+    used = [a["lane"] for a in agents_of(client, client.get(f"/runs/{ref}").json())]
+    assert len(used) >= 2 and len(set(used)) == 2 and set(used) <= {"groq", "cerebras"}
+
+
 # ── AI features ──────────────────────────────────────────────────
 def test_ai_features_work_without_a_key(client):
     r = client.post("/ai/ask", json={"question": "How do we split GST tax on an interstate invoice?", "projectId": "erp"}).json()
@@ -262,7 +318,8 @@ def test_health_counts_match_the_seed(client):
     body = client.get("/health").json()
     for key in TABLES:
         assert body["counts"][key] == len(SEED.get(key, [])), key
-    assert body["compiler"] == {"provider": "rules", "model": "offline planner"} and body["needsSetup"] is False
+    assert body["compiler"]["provider"] == "rules" and body["compiler"]["model"] == "offline planner"
+    assert body["compiler"]["lanes"] == 0 and body["needsSetup"] is False       # no key here, so no lane is open
 
 
 def test_an_older_database_gains_the_new_tables(tmp_path):
@@ -522,7 +579,7 @@ def test_the_database_is_backed_up_checked_and_optimized(client, tmp_path):
     info = client.get("/admin/database").json()
     assert {"users", "ai_calls", "code_files", "audit_log"} <= {t["name"] for t in info["tables"]}
     assert "code_fts_data" not in {t["name"] for t in info["tables"]}          # search internals stay out of the list
-    assert [m["version"] for m in info["migrations"]] == [1, 2, 3, 4, 5, 6]
+    assert [m["version"] for m in info["migrations"]] == [1, 2, 3, 4, 5, 6, 7]
     made = client.post("/admin/database/backup")
     assert made.status_code == 201
     path = tmp_path / "backups" / made.json()["name"]

@@ -6,7 +6,7 @@ import { KeyRound, Loader2, PlugZap } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Cell, DataTable, Dot, Field, KV, Mono, Page, PageBody, PageHeader, Panel, Row, Segmented, Tag } from '@/components/os';
-import { api, type AiConfig, type AiPatch, type AiPreference, type AiTestResult, type CompilerInfo } from '@/lib/api';
+import { api, type AiConfig, type AiLane, type AiPatch, type AiPreference, type AiTestResult, type CompilerInfo, type LaneId } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { attempt, useAdmin } from './load';
@@ -16,17 +16,18 @@ type ProviderId = CompilerInfo['provider'];
 type Test = AiTestResult | 'running';
 
 const DEMO_AI: AiConfig = {
-  preference: 'auto', preferenceLocked: false, active: { provider: 'rules', model: 'offline planner' },
+  preference: 'auto', preferenceLocked: false, active: { provider: 'rules', model: 'offline planner', lanes: 0 },
   deepseek: { hasKey: false, keyMask: null, keySource: null, model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com', rejected: false },
   ollama: { url: 'http://127.0.0.1:11434', model: 'qwen2.5-coder:7b', ready: false },
+  lanes: [],
 };
 const ROUTES: { id: AiPreference; label: string }[] = [
-  { id: 'auto', label: 'Automatic' }, { id: 'deepseek', label: 'DeepSeek' }, { id: 'ollama', label: 'Ollama' }, { id: 'rules', label: 'Offline rules' },
+  { id: 'auto', label: 'Automatic' }, { id: 'free', label: 'Free only' }, { id: 'local', label: 'This Mac only' }, { id: 'rules', label: 'Offline rules' },
 ];
-const ROUTE_NOTE: Record<AiPreference, string> = {
-  auto: 'DeepSeek when a key is set, then a local Ollama model when one is pulled, then the offline rules.',
-  deepseek: 'Only DeepSeek. Without a working key, the offline rules answer instead.',
-  ollama: 'Only the local Ollama model, so nothing leaves this machine.',
+const ROUTE_NOTE: Partial<Record<AiPreference, string>> = {
+  auto: 'Every lane that has a key, free ones first and the paid one only when they are spent. Agents working at the same time are spread across different lanes.',
+  free: 'Only lanes that cost nothing. When the day’s free allowance runs out, the offline rules answer and say so.',
+  local: 'Only the model on this Mac, so nothing leaves the machine.',
   rules: 'No model at all. Every feature answers with its offline rules, instantly and for free.',
 };
 const FEATURES = [
@@ -91,11 +92,17 @@ export default function AiProviders() {
                   onChange={(p) => void update({ preference: p }, `Routing: ${ROUTES.find((r) => r.id === p)?.label}`)}
                 />
               </div>
-              <p className="mt-2.5 text-[13px] text-soft">{ROUTE_NOTE[cfg.preference]}</p>
+              <p className="mt-2.5 text-[13px] text-soft">{ROUTE_NOTE[cfg.preference] ?? `Pinned to ${cfg.preference}.`}</p>
+              <p className="mt-1.5 text-[12.5px] text-dim">
+                {cfg.active.lanes ? `${cfg.active.lanes} ${cfg.active.lanes === 1 ? 'lane can' : 'lanes can'} answer right now.` : 'No lane can answer right now.'}
+              </p>
               {cfg.preferenceLocked && (
                 <p className="mt-1.5 text-[12.5px] text-dim">NEUROCODE_COMPILER is set where the API runs, and it wins over this choice.</p>
               )}
             </Panel>
+
+            <Lanes lanes={cfg.lanes} manage={manage} busy={busy} tests={tests} onTest={(id) => void test(id)}
+              onPatch={(patch, done) => update(patch, done)} />
 
             {live && <Usage />}
 
@@ -176,6 +183,79 @@ export default function AiProviders() {
         )}
       </PageBody>
     </Page>
+  );
+}
+
+/** Every lane, and whether it can answer. A lane is a provider and a model together. */
+function Lanes({ lanes, manage, busy, tests, onTest, onPatch }: {
+  lanes: AiLane[]; manage: boolean; busy: boolean; tests: Partial<Record<ProviderId, Test>>;
+  onTest: (id: LaneId) => void; onPatch: (patch: AiPatch, done: string) => Promise<boolean>;
+}) {
+  const [keys, setKeys] = useState<Partial<Record<LaneId, string>>>({});
+  if (lanes.length === 0) return null;
+  const ready = lanes.filter((l) => l.ready).length;
+  const save = async (lane: AiLane) => {
+    const key = (keys[lane.id] ?? '').trim();
+    if (key && (await onPatch({ lane: lane.id, key }, `${lane.label} key saved`))) setKeys((k) => ({ ...k, [lane.id]: '' }));
+  };
+
+  return (
+    <Panel
+      flush title="Lanes" eyebrow={`${ready} of ${lanes.length} can answer · free first, paid only when the free ones are spent`}
+    >
+      <div className="divide-y divide-line/60">
+        {lanes.map((lane) => (
+          <div key={lane.id} className="px-5 py-3.5">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <Dot state={lane.ready ? 'ok' : lane.rejected ? 'error' : 'idle'} />
+              <span className="text-[13.5px] font-medium text-ink">{lane.label}</span>
+              <Tag tone={lane.free ? 'ok' : 'neutral'}>{lane.free ? 'Free' : 'Paid'}</Tag>
+              <Mono>{lane.model}</Mono>
+              <span className="ml-auto flex items-center gap-2">
+                {lane.rpd > 0 && <span className="tnum text-[12px] text-dim">{lane.spent.today}/{lane.rpd} today</span>}
+                {lane.hasKey && (
+                  <Tag tone={lane.rejected ? 'danger' : 'ok'}>
+                    {lane.rejected ? 'Key refused' : lane.keySource === 'environment' ? 'Key in environment' : 'Key saved'}
+                  </Tag>
+                )}
+                <Button size="sm" variant="outline" disabled={!manage || tests[lane.id] === 'running'} onClick={() => onTest(lane.id)}>
+                  {tests[lane.id] === 'running' ? <Loader2 className="size-3.5 animate-spin" /> : <PlugZap className="size-3.5" />}Test
+                </Button>
+              </span>
+            </div>
+
+            <p className="mt-1.5 text-[12.5px] leading-relaxed text-dim">
+              {lane.ready ? lane.note : <span className="text-warn">{lane.blocked}</span>}
+              {' · '}good at {lane.goodAt.join(', ')}
+            </p>
+
+            {manage && lane.needsKey && !lane.hasKey && (
+              <div className="mt-2.5 flex flex-col gap-2 sm:flex-row sm:items-end">
+                <Field
+                  className="flex-1" label={`${lane.label} key`} type="password" mono autoComplete="off" placeholder="paste it here"
+                  value={keys[lane.id] ?? ''} onChange={(v) => setKeys((k) => ({ ...k, [lane.id]: v }))}
+                  icon={<KeyRound className="size-3.5" />}
+                />
+                <Button size="sm" disabled={busy || !(keys[lane.id] ?? '').trim()} onClick={() => void save(lane)}>Save</Button>
+              </div>
+            )}
+            {lane.signup && (!lane.needsKey || !lane.hasKey) && (
+              <p className="mt-1.5 text-[12px] text-soft">{lane.needsKey ? 'Free key: ' : 'Install: '}<Mono>{lane.signup}</Mono></p>
+            )}
+            {manage && lane.hasKey && lane.keySource === 'workspace' && (
+              <div className="mt-2 flex gap-2">
+                <Button size="sm" variant="ghost" className="text-danger hover:text-danger" disabled={busy}
+                  onClick={() => void onPatch({ lane: lane.id, key: '' }, `${lane.label} key removed`)}>Remove</Button>
+                <Button size="sm" variant="ghost" disabled={busy}
+                  onClick={() => void onPatch({ lane: lane.id, enabled: !lane.enabled }, `${lane.label} ${lane.enabled ? 'switched off' : 'switched on'}`)}>
+                  {lane.enabled ? 'Switch off' : 'Switch on'}
+                </Button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </Panel>
   );
 }
 

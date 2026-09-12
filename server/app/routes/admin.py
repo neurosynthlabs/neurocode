@@ -14,6 +14,8 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from ..ai import lanes
+from ..ai.gateway import PREFERENCES
 from ..auth import User, current_user, require, require_any
 from ..context import Ctx, ctx
 from ..db import TABLES, now_iso
@@ -68,16 +70,24 @@ class WorkspacePatch(BaseModel):
 
 
 class AiPatch(BaseModel):
-    preference: Literal["auto", "deepseek", "ollama", "rules"] | None = None
+    preference: str | None = None
     deepseekKey: str | None = Field(default=None, max_length=300)   # an empty string removes the key
     deepseekModel: str | None = Field(default=None, max_length=80)
     deepseekUrl: str | None = Field(default=None, max_length=300)
     ollamaUrl: str | None = Field(default=None, max_length=300)
     ollamaModel: str | None = Field(default=None, max_length=80)
+    # Any lane, by id: what the rest of these fields are about.
+    lane: str | None = Field(default=None, max_length=40)
+    key: str | None = Field(default=None, max_length=300)           # an empty string removes it
+    model: str | None = Field(default=None, max_length=120)
+    baseUrl: str | None = Field(default=None, max_length=300)
+    rpm: int | None = Field(default=None, ge=0, le=10_000)
+    rpd: int | None = Field(default=None, ge=0, le=1_000_000)
+    enabled: bool | None = None
 
 
 class AiTest(BaseModel):
-    provider: Literal["deepseek", "ollama", "rules"]
+    provider: str = Field(max_length=40)     # a lane id, or "rules"
 
 
 # ── people ───────────────────────────────────────────────────────
@@ -246,6 +256,36 @@ def update_workspace(body: WorkspacePatch, request: Request, actor: User = Depen
 
 
 # ── AI providers ─────────────────────────────────────────────────
+def _lane_patch(c: Ctx, body: AiPatch) -> dict[str, Any]:
+    """Change one lane: its model, its base URL, the limits it holds itself to, its key, or whether it
+    is used at all. The key goes to the secrets file and is never returned, only reported as set."""
+    lane = lanes.BY_ID.get(body.lane or "")
+    if lane is None:
+        raise HTTPException(404, f"there is no lane called {body.lane}")
+    changed: dict[str, Any] = {}
+    saved = dict(c.store.setting(f"ai.lane.{lane.id}", {}) or {})
+    for field, text in (("model", body.model), ("baseUrl", body.baseUrl)):
+        if text is not None:
+            saved[field] = text.strip()
+            changed[f"{lane.id}.{field}"] = text.strip()
+    for field, number in (("rpm", body.rpm), ("rpd", body.rpd)):
+        if number is not None:
+            saved[field] = number
+            changed[f"{lane.id}.{field}"] = number
+    if body.enabled is not None:
+        saved["enabled"] = body.enabled
+        changed[f"{lane.id}.enabled"] = body.enabled
+    if saved:
+        c.store.set_setting(f"ai.lane.{lane.id}", saved)
+    if body.key is not None:
+        if not lane.needs_key:
+            raise HTTPException(400, f"{lane.label} needs no key.")
+        c.secrets.set(lane.secret, body.key.strip() or None)
+        c.gateway.forget_rejection(lane.id)
+        changed[f"{lane.id}.key"] = "set" if body.key.strip() else "removed"   # never the key itself
+    return changed
+
+
 def _ai(c: Ctx) -> dict[str, Any]:
     g = c.gateway
     ds, ol = g.deepseek(), g.ollama()
@@ -256,6 +296,7 @@ def _ai(c: Ctx) -> dict[str, Any]:
         "deepseek": {"hasKey": bool(ds["key"]), "keyMask": Secrets.mask(ds["key"]), "keySource": g.key_source(),
                      "model": ds["model"], "baseUrl": ds["baseUrl"], "rejected": g.rejected()},
         "ollama": {"url": ol["url"], "model": ol["model"], "ready": g.ollama_ready()},
+        "lanes": g.report(),
     }
 
 
@@ -269,8 +310,12 @@ async def update_ai(body: AiPatch, request: Request, actor: User = Depends(requi
                     c: Ctx = Depends(ctx)) -> dict[str, Any]:
     changed: dict[str, Any] = {}
     if body.preference is not None:
+        if body.preference not in PREFERENCES:
+            raise HTTPException(400, f"routing must be one of: {', '.join(PREFERENCES)}")
         c.store.set_setting("ai.preference", body.preference)
         changed["preference"] = body.preference
+    if body.lane is not None:
+        changed.update(_lane_patch(c, body))
     ds = dict(c.store.setting("ai.deepseek", {}) or {})
     for field, key in (("deepseekModel", "model"), ("deepseekUrl", "baseUrl")):
         if (value := getattr(body, field)) is not None:

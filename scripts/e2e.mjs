@@ -316,7 +316,7 @@ try {
     await page.getByText(/neurocode-\d{8}-\d{6}-manual\.db/).first().waitFor({ timeout: 10000 });
     const db = await api('/admin/database');
     expect(db.backups.some((b) => b.name.endsWith('-manual.db')), 'no manual backup is listed');
-    expect(db.migrations.length === 6, `${db.migrations.length} migrations applied`);
+    expect(db.migrations.length === 7, `${db.migrations.length} migrations applied`);
   });
 
   await step('an agent run works in a worktree of its own and stops at your signature', async () => {

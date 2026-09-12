@@ -26,7 +26,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from . import codeindex, onboarding
-from .ai.gateway import NoModel, extract_json
+from .ai.gateway import REVIEW, WRITE, NoModel, extract_json
 from .context import Ctx
 from .db import now_iso
 
@@ -187,7 +187,7 @@ def _setup(project: dict[str, Any]) -> dict[str, Any]:
 
 def _new_run(c: Ctx, plan: dict[str, Any], task: dict[str, Any] | None, project: dict[str, Any], by: str,
              setup: dict[str, Any], *, steps: list[dict[str, Any]], role: str, agent: str | None = None,
-             children: list[str] | None = None, suffix: str = "") -> dict[str, Any]:
+             children: list[str] | None = None, suffix: str = "", lane: str | None = None) -> dict[str, Any]:
     n = c.store.next_run_number()
     ref, base, tests = f"RUN-{n}", setup["base"], setup["tests"]
     stem = f"neurocode/{(task or plan)['ref'].lower()}"
@@ -198,7 +198,8 @@ def _new_run(c: Ctx, plan: dict[str, Any], task: dict[str, Any] | None, project:
         "worktree": str(WORKTREES / project["id"] / ref), "repo": str(setup["repo"]), "prefix": setup["prefix"],
         "base": base, "shortBase": base[:7], "startedAt": now_iso(), "finishedAt": None, "requestedBy": by,
         "targets": list(plan.get("affectedFiles", []))[:12],
-        "role": role, "agent": agent, "group": (task or plan)["ref"], "parent": None, "children": children or [],
+        "role": role, "agent": agent, "lane": lane, "group": (task or plan)["ref"], "parent": None,
+        "children": children or [],
         "steps": steps,
         "tests": {"command": tests["command"] if tests else None, "argv": tests["argv"] if tests else None,
                   "status": "not run", "summary": ""},
@@ -216,9 +217,13 @@ def plan_runs(c: Ctx, plan: dict[str, Any], task: dict[str, Any] | None, project
     setup = _setup(project)
     groups = _by_agent(plan)
     if len(groups) <= 1:
-        return [_new_run(c, plan, task, project, by, setup, steps=_steps(plan, setup["tests"]), role="solo")]
+        return [_new_run(c, plan, task, project, by, setup, steps=_steps(plan, setup["tests"]), role="solo",
+                         lane=c.gateway.spread(1, WRITE)[0])]
+    # A lane each, so the agents really do work at the same time instead of queueing behind one provider.
+    picked = c.gateway.spread(len(groups), WRITE)
     children = [_new_run(c, plan, task, project, by, setup, steps=_edit_steps(items), role="agent", agent=agent,
-                         suffix=_slug(agent)) for agent, items in groups.items()]
+                         suffix=_slug(agent), lane=lane)
+                for (agent, items), lane in zip(groups.items(), picked, strict=True)]
     integration = _new_run(c, plan, task, project, by, setup, steps=_merge_steps(children, setup["tests"]),
                            role="integration", children=[ch["ref"] for ch in children])
     for ch in children:
@@ -395,7 +400,7 @@ def _edit(c: Ctx, doc: dict[str, Any], step: dict[str, Any]) -> bool:
     ]
     try:
         result = c.gateway.ask(messages, lambda raw: EditOut.model_validate(extract_json(raw, trim=False)),
-                               feature="agent", project=doc["projectId"])
+                               feature="agent", project=doc["projectId"], role=WRITE, lane=doc.get("lane"))
     except NoModel as e:
         step["status"] = "skipped"
         step["detail"] = "Needs a model. NeuroCode will not pretend to write code it cannot write."
@@ -567,8 +572,9 @@ def _review(c: Ctx, doc: dict[str, Any], step: dict[str, Any]) -> bool:
     messages = [{"role": "system", "content": REVIEW_SYSTEM},
                 {"role": "user", "content": f"Requirement: {doc['requirement']}\n\nDiff:\n{diff}"}]
     try:
+        # A second opinion is worth more from a different model, and free lanes make that free.
         result = c.gateway.ask(messages, lambda raw: ReviewOut.model_validate(extract_json(raw, trim=False)),
-                               feature="review", project=doc["projectId"])
+                               feature="review", project=doc["projectId"], role=REVIEW, avoid=doc.get("lane"))
         findings = [f.model_dump() for f in result.data.findings][:20]
         verdict, by = result.data.verdict[:300], result.provider.model
     except NoModel:
