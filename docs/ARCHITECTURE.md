@@ -56,6 +56,7 @@ server/app/
   codeindex.py     parse the code into files, symbols and edges; search, impact and the module graph
   runtime.py       a worktree per agent: models write files, the branches merge, the tests run, you sign off
   chat.py          sessions: the tool catalogue and the loop that reads the code and answers
+  retrieval.py     chunks, embeddings and the hybrid search that grounds every answer
   routes/          auth · admin · work · knowledge · platform · code · runs · ai · system
 ```
 
@@ -164,6 +165,32 @@ TODOs, a diff with no test touched) and says it was read by rules, not a model.
 | Brainstorm | problem, audience, MVP, risks, metrics, roadmap | the same structure as a guided template |
 | Extract facts | facts proposed from pasted text | policy sentences picked by rules |
 
+## Retrieval: finding the few pieces that bear on a question
+
+A **chunk** is the smallest piece worth retrieving on its own — a symbol with the lines that follow it,
+a section of a document, a remembered fact. Chunks keep their own text, so an answer can quote them and
+say where they came from (`pkg/tax.py#apply_gst:118`), instead of describing code from memory.
+
+Two searches run over the same rows and are fused by reciprocal rank:
+
+- **lexical**, FTS5 over the text. No key, no model, no waiting. It finds what you can name.
+- **semantic**, cosine over embeddings, when a lane makes them. It finds what you meant but could not
+  name — "where is the interstate tax split" reaching `apply_gst_breakup`.
+
+Fusing them means neither has to win outright, and retrieval keeps working with no model at all: it
+says it is lexical only rather than quietly becoming worse. Embeddings come from whichever lane serves
+them — Gemini, Mistral, GitHub Models, or `nomic-embed-text` in Ollama on this machine — in batches,
+normalised on the way in, stored as float32 blobs, so searching is a dot product and needs no
+numerical library and no vector service.
+
+Retrieval rides on the code index: indexing a project re-chunks it, so the chunks always match the
+code as it is now. A failure there is reported and never loses an index that succeeded.
+
+**Every session is grounded before the model is asked anything.** The question goes to retrieval first,
+and what comes back is written into the conversation as its own turn — so the person can see exactly
+what the model was handed, and the model can quote its refs. `find` is also a tool, so it can search
+again mid-answer with better words.
+
 ## Sessions: a conversation that can act
 
 You ask; a model answers, or it reaches for a tool; the tool runs **here**, and what it found goes back
@@ -216,6 +243,7 @@ variable), one per lane, never in the database and never in a log line.
 | `/memory` | session + `memory:write` | facts, search, conflicts |
 | `/projects`, `/mcp`, `/agents` | session + the action's permission | the platform |
 | `/projects/{id}/code` | session; `projects:onboard` to re-index | summary, file tree, search, file detail, impact, module graph |
+| `/projects/{id}/code/retrieval` | session; `projects:onboard` to build | the chunks, and what bears on a question |
 | `/runs` | session; `runs:run` to stop or discard, `runs:merge` to merge | agent runs, their output, their diff, the merge |
 | `/sessions` | session; `sessions:chat` to ask | conversations, their turns, their tool calls |
 | `/ai` | `ai:use` | ask, brainstorm, extract |
@@ -231,11 +259,12 @@ variable), one per lane, never in the database and never in a log line.
   hardening (backups, integrity checks, append-only audit, the usage ledger) and the code index behind
   live Code Intelligence, Architecture and impact analysis; then (2026-09-12) the agent runtime, several
   agents per task in parallel worktrees, merging from the UI, model lanes (many free providers, one
-  router), and sessions: a conversation that reads the code with tools and keeps every turn.
+  router), sessions (a conversation that reads the code with tools and keeps every turn), and retrieval
+  (chunks, embeddings where a lane makes them, hybrid search grounding every session).
 - **Waiting on you:** a valid DeepSeek key (Admin → AI providers) — without one the runtime opens the
   worktree, runs the tests and reviews, but skips the steps that write code; and the `workflow` scope on
   the GitHub token so CI can be pushed.
-- **Next:** retrieval that earns the name — embeddings over the code index, memory and the project's
-  documents, so every agent is grounded in *this* repository rather than in its own recollection;
-  pushing a branch and opening a pull request from the run screen; tree-sitter parsers in place of the
-  pattern sets; roles per project; Postgres and a hosted mode; single sign-on.
+- **Next:** grounding the compiler and the agents in retrieval the way sessions already are; MCP servers
+  as tools a session can actually reach; pushing a branch and opening a pull request from the run
+  screen; tree-sitter parsers in place of the pattern sets; roles per project; Postgres and a hosted
+  mode; single sign-on.

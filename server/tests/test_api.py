@@ -268,6 +268,65 @@ def test_a_lane_that_fails_hands_the_call_to_the_next_lane(client, monkeypatch):
     assert lanes_of(client)["groq"]["spent"]["today"] == 1                        # the attempt is still ledgered
 
 
+# ── retrieval: finding what bears on a question ──────────────────
+def fake_embeddings(monkeypatch, lane_id="gemini"):
+    """A stand-in embedding lane: a bag of words in 64 dimensions, so meaning here is shared words.
+    Deterministic, and nothing leaves the machine."""
+    def embed(texts, cfg):
+        vectors = []
+        for text in texts:
+            v = [0.0] * 64
+            for word in text.lower().replace("\n", " ").split():
+                v[sum(map(ord, word)) % 64] += 1.0
+            vectors.append(v)
+        return vectors, sum(len(t) for t in texts) // 4
+    monkeypatch.setitem(gateway.EMBEDS, lane_id, embed)
+
+
+def test_retrieval_works_with_no_model_at_all(client, tmp_path):
+    pid = onboard_git(client, tmp_path / "shop")                     # indexing builds retrieval with it
+    state = client.get(f"/projects/{pid}/code/retrieval").json()
+    assert state["built"] and state["chunks"] > 0 and state["semantic"] is False
+    assert "lexical only" in state["note"] and state["byKind"]["memory"] > 0
+    hits = client.get(f"/projects/{pid}/code/retrieval", params={"q": "total"}).json()["results"]
+    assert hits and hits[0]["how"] == "lexical" and any("core.py" in h["ref"] for h in hits)
+    assert all(h["text"] for h in hits)                              # a hit can always be quoted
+
+
+def test_retrieval_finds_by_meaning_once_a_lane_embeds_it(client, tmp_path, monkeypatch):
+    pid = onboard_git(client, tmp_path / "shop")
+    lane_up(client, monkeypatch, "gemini")
+    fake_embeddings(monkeypatch)
+    assert client.post(f"/projects/{pid}/code/retrieval/build").status_code == 202
+    state = client.get(f"/projects/{pid}/code/retrieval").json()
+    assert state["semantic"] and state["embedded"] > 0 and state["lane"] == "gemini" and not state["note"]
+    hits = client.get(f"/projects/{pid}/code/retrieval", params={"q": "total"}).json()["results"]
+    assert hits and any(h["how"] in ("both", "semantic") for h in hits)
+    assert person(client, "viewer").post(f"/projects/{pid}/code/retrieval/build").status_code == 403
+
+
+def test_a_session_is_grounded_before_the_model_is_asked(client, tmp_path, monkeypatch):
+    pid = onboard_git(client, tmp_path / "shop")
+    scripted(client, monkeypatch, json.dumps({"answer": "Dekh liya."}))
+    ref = client.post("/sessions", json={"projectId": pid}).json()["ref"]
+    doc = talk(client, ref, "total kaise nikalta hai?")
+    ground = [m for m in doc["messages"] if m.get("tool") == "grounding"]
+    assert ground and "core.py" in ground[0]["text"] and ground[0]["ok"] is True
+    assert doc["messages"][0]["role"] == "you" and doc["messages"][-1]["text"] == "Dekh liya."
+    assert doc["toolCalls"] == 0                                     # grounding is not the model's doing
+
+
+def test_the_find_tool_quotes_the_pieces_it_found(client, tmp_path, monkeypatch):
+    pid = onboard_git(client, tmp_path / "shop")
+    scripted(client, monkeypatch,
+             json.dumps({"tool": "find", "arguments": {"query": "total"}, "why": "look it up"}),
+             json.dumps({"answer": "pkg/core.py mein hai."}))
+    ref = client.post("/sessions", json={"projectId": pid}).json()["ref"]
+    doc = talk(client, ref, "total?")
+    found = next(m for m in doc["messages"] if m.get("tool") == "find")
+    assert found["ok"] is True and "pkg/core.py#" in found["text"] and "pieces" in found["detail"]
+
+
 # ── sessions: a conversation that can read the code ──────────────
 def scripted(client, monkeypatch, *answers):
     """A lane whose model says exactly these things, one per call, then stops asking for tools."""
@@ -291,10 +350,11 @@ def test_a_session_reads_the_code_with_tools_before_it_answers(client, tmp_path,
              json.dumps({"answer": "total() pkg/core.py mein hai."}))
     ref = client.post("/sessions", json={"projectId": pid}).json()["ref"]
     doc = talk(client, ref, "total kahan hai?")
-    assert [m["role"] for m in doc["messages"]] == ["you", "tool", "tool", "assistant"]
-    assert [m["tool"] for m in doc["messages"][1:3]] == ["search_code", "read_file"]
-    assert "pkg/core.py" in doc["messages"][2]["text"] and doc["messages"][2]["ok"] is True   # it really read it
-    assert doc["messages"][-1]["text"].startswith("total()") and doc["messages"][-1]["lane"] == "groq"
+    turns = [m for m in doc["messages"] if m.get("tool") != "grounding"]      # grounding has its own test
+    assert [m["role"] for m in turns] == ["you", "tool", "tool", "assistant"]
+    assert [m["tool"] for m in turns[1:3]] == ["search_code", "read_file"]
+    assert "pkg/core.py" in turns[2]["text"] and turns[2]["ok"] is True       # it really read it
+    assert turns[-1]["text"].startswith("total()") and turns[-1]["lane"] == "groq"
     assert doc["status"] == "idle" and doc["turns"] == 1 and doc["toolCalls"] == 2
     assert doc["title"] == "total kahan hai?" and client.get("/sessions").json()[0]["ref"] == ref
 
@@ -307,7 +367,7 @@ def test_a_session_tool_cannot_read_outside_its_project(client, tmp_path, monkey
              json.dumps({"answer": "I could not read that."}))
     ref = client.post("/sessions", json={"projectId": pid}).json()["ref"]
     doc = talk(client, ref, "read /etc/passwd")
-    refused, unknown = [m for m in doc["messages"] if m["role"] == "tool"]
+    refused, unknown = [m for m in doc["messages"] if m["role"] == "tool" and m.get("tool") != "grounding"]
     assert refused["ok"] is False and "outside the project" in refused["text"]
     assert unknown["ok"] is False and "no tool called" in unknown["text"]
     assert doc["messages"][-1]["role"] == "assistant"
@@ -318,7 +378,7 @@ def test_a_session_stops_reaching_for_tools_and_answers_with_what_it_has(client,
     scripted(client, monkeypatch, *[json.dumps({"tool": "project_summary", "arguments": {}})] * 12)
     ref = client.post("/sessions", json={"projectId": pid}).json()["ref"]
     doc = talk(client, ref, "keep going forever")
-    assert len([m for m in doc["messages"] if m["role"] == "tool"]) == chat.MAX_STEPS
+    assert len([m for m in doc["messages"] if m["role"] == "tool" and m.get("tool") != "grounding"]) == chat.MAX_STEPS
     assert doc["messages"][-1]["role"] == "assistant" and str(chat.MAX_STEPS) in doc["messages"][-1]["text"]
 
 
@@ -326,9 +386,10 @@ def test_a_question_is_kept_even_when_no_lane_can_answer(client, tmp_path):
     pid = onboard_git(client, tmp_path / "shop")
     ref = client.post("/sessions", json={"projectId": pid}).json()["ref"]
     doc = talk(client, ref, "kuch bhi poochh raha hoon")
-    assert [m["role"] for m in doc["messages"]] == ["you", "note"]        # the question is never lost
-    assert doc["messages"][0]["text"] == "kuch bhi poochh raha hoon"
-    assert "Admin → AI providers" in doc["messages"][1]["text"] and doc["status"] == "idle"
+    turns = [m for m in doc["messages"] if m.get("tool") != "grounding"]
+    assert [m["role"] for m in turns] == ["you", "note"]                  # the question is never lost
+    assert turns[0]["text"] == "kuch bhi poochh raha hoon"
+    assert "Admin → AI providers" in turns[1]["text"] and doc["status"] == "idle"
     assert person(client, "viewer").post(f"/sessions/{ref}/messages", json={"text": "hi"}).status_code == 403
     assert client.post("/sessions", json={"projectId": "nope"}).status_code == 404
 
@@ -645,7 +706,7 @@ def test_the_database_is_backed_up_checked_and_optimized(client, tmp_path):
     info = client.get("/admin/database").json()
     assert {"users", "ai_calls", "code_files", "audit_log"} <= {t["name"] for t in info["tables"]}
     assert "code_fts_data" not in {t["name"] for t in info["tables"]}          # search internals stay out of the list
-    assert [m["version"] for m in info["migrations"]] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert [m["version"] for m in info["migrations"]] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
     made = client.post("/admin/database/backup")
     assert made.status_code == 201
     path = tmp_path / "backups" / made.json()["name"]

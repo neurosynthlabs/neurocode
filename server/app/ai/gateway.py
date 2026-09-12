@@ -97,6 +97,18 @@ def call_openai(messages: list[dict[str, str]], cfg: dict[str, Any]) -> Answer:
                                                      "out": usage.get("completion_tokens", 0)}
 
 
+def embed_openai(texts: list[str], cfg: dict[str, Any]) -> tuple[list[list[float]], int]:
+    """Vectors for a batch of texts, in the shape every OpenAI-compatible lane speaks."""
+    out = _post(f"{cfg['baseUrl']}/embeddings", {"model": cfg["embed"], "input": texts},
+                {"Authorization": f"Bearer {cfg['key']}"}, 120)
+    return [row["embedding"] for row in out["data"]], (out.get("usage") or {}).get("prompt_tokens", 0)
+
+
+def embed_ollama(texts: list[str], cfg: dict[str, Any]) -> tuple[list[list[float]], int]:
+    out = _post(f"{cfg['url']}/api/embed", {"model": cfg["embed"], "input": texts}, {}, 300)
+    return out["embeddings"], out.get("prompt_eval_count", 0)
+
+
 def call_ollama(messages: list[dict[str, str]], cfg: dict[str, Any]) -> Answer:
     body = _post(f"{cfg['url']}/api/chat", {"model": cfg["model"], "messages": messages, "format": "json",
                                             "stream": False, "options": {"temperature": 0.2}}, {}, 300)
@@ -107,6 +119,10 @@ def call_ollama(messages: list[dict[str, str]], cfg: dict[str, Any]) -> Answer:
 CALLS: dict[str, Callable[[list[dict[str, str]], dict[str, Any]], Answer | str]] = {
     **{lane.id: call_openai for lane in lanes.LANES if lane.api == "openai"},
     **{lane.id: call_ollama for lane in lanes.LANES if lane.api == "ollama"}}
+
+# The same, for embeddings. Only some lanes serve them; a test may stand in for any of them.
+EMBEDS: dict[str, Callable[[list[str], dict[str, Any]], tuple[list[list[float]], int]]] = {
+    lane.id: (embed_openai if lane.api == "openai" else embed_ollama) for lane in lanes.LANES if lane.embed}
 
 
 def _split(out: Answer | str) -> Answer:
@@ -362,6 +378,34 @@ class Gateway:
             data, ms = out
             return Result(data, Provider(candidate.id, candidate.model), ms)
         raise ProviderError(502, reason or "every lane failed")
+
+    # ── embeddings ───────────────────────────────────────────────
+    def embed_lane(self) -> Lane | None:
+        """The lane that makes vectors: the first open one that serves an embedding model."""
+        for lane in self.lanes():
+            if lane.embed and lane.id in EMBEDS and self._allowed(lane) and self.why_not(lane) is None:
+                return lane
+        return None
+
+    def embed(self, texts: list[str], *, project: str | None = None, actor: str | None = None,
+              lane: Lane | None = None) -> tuple[list[list[float]], str, str]:
+        """Vectors for these texts, or an empty list when no lane makes them — retrieval still works
+        without vectors, it is only lexical then, and it says so rather than pretending."""
+        chosen = lane or self.embed_lane()
+        if chosen is None or not texts:
+            return [], "", ""
+        cfg = {**lanes.config(chosen, self.secrets), "embed": chosen.embed}
+        provider, t0 = Provider(chosen.id, chosen.embed), time.monotonic()
+        self._recent.setdefault(chosen.id, []).append(time.monotonic())
+        try:
+            vectors, tokens = EMBEDS[chosen.id](texts, cfg)
+        except Exception as e:
+            if isinstance(e, ProviderError) and e.status in (401, 403) and cfg["key"]:
+                self._rejected[chosen.id] = _fp(cfg["key"])
+            self._record("embed", provider, False, _ms(t0), {}, actor, project, f"{type(e).__name__}: {str(e)[:160]}")
+            raise
+        self._record("embed", provider, True, _ms(t0), {"in": tokens, "out": 0}, actor, project)
+        return vectors, chosen.embed, chosen.id
 
     def test(self, lane_id: str, actor: str | None = None) -> dict[str, Any]:
         """One tiny round trip, so the admin screen can say whether a lane really answers."""

@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
-from .. import codeindex, onboarding
+from .. import codeindex, onboarding, retrieval
 from ..auth import User, current_user, require
 from ..context import Ctx, ctx, need
 
@@ -29,6 +29,17 @@ def run_index(c: Ctx, pid: str, root: Path, excluded: list[str], *, found: dict[
     if doc is not None:
         doc.update(codeindex.project_fields(idx, doc, found=found, steps=steps))
         c.put("projects", c.store.save("projects", doc))
+    # Retrieval rides on the index: the chunks are only worth having if they match the code as it is
+    # now. It must never be able to lose an index that succeeded, so it fails quietly and says so.
+    try:
+        built = retrieval.build(c, pid)
+    except Exception as e:
+        c.record("Retrieval failed", onboarding.redact(str(e))[:160] or type(e).__name__, project=pid,
+                 level="warn", actor="Architect", kind="agent")
+    else:
+        c.record("Retrieval ready", f"{built['chunks']} chunks · "
+                 f"{'meaning and words' if built['semantic'] else 'words only, no embedding lane'}",
+                 project=pid, level="ok", actor="Architect", kind="agent")
     return idx
 
 
@@ -87,6 +98,38 @@ async def impact(pid: str, path: str | None = None, module: str | None = None,
 async def graph(pid: str, c: Ctx = Depends(ctx)) -> dict[str, Any]:
     _project(c, pid)
     return await asyncio.to_thread(codeindex.graph, c.store, pid)
+
+
+@router.get("/retrieval", dependencies=[Depends(current_user)])
+async def retrieval_state(pid: str, q: str = "", limit: int = 8, c: Ctx = Depends(ctx)) -> dict[str, Any]:
+    """What retrieval holds for this project, and — with `q` — what it finds. Lexical always; by
+    meaning too when a lane makes embeddings."""
+    _project(c, pid)
+    state = await asyncio.to_thread(retrieval.summary, c.store, pid)
+    results = await asyncio.to_thread(retrieval.search, c, pid, q, min(20, max(1, limit))) if q.strip() else []
+    return {**state, "q": q, "results": results}
+
+
+@router.post("/retrieval/build", status_code=202)
+async def build_retrieval(pid: str, jobs: BackgroundTasks, user: User = Depends(require("projects:onboard")),
+                          c: Ctx = Depends(ctx)) -> dict[str, bool]:
+    doc = _project(c, pid)
+    c.act(user, "Building retrieval", f"{doc['name']} · chunking, then embedding what it can", project=pid)
+    jobs.add_task(_build_retrieval, c, pid)
+    return {"ok": True}
+
+
+def _build_retrieval(c: Ctx, pid: str) -> None:
+    name = (c.store.get("projects", pid) or {}).get("name", pid)
+    try:
+        built = retrieval.build(c, pid)
+    except Exception as e:
+        c.record("Retrieval failed", f"{name} · {onboarding.redact(str(e))[:160] or type(e).__name__}",
+                 project=pid, level="err", actor="Architect", kind="agent")
+        return
+    c.record("Retrieval ready", f"{name} · {built['chunks']} chunks · "
+             f"{'meaning and words' if built['semantic'] else 'words only, no embedding lane'}",
+             project=pid, level="ok", actor="Architect", kind="agent")
 
 
 @router.post("/reindex", status_code=202)

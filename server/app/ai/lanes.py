@@ -39,6 +39,7 @@ class Lane:
     env: str = ""               # the environment variable that stands in for it
     signup: str = ""            # where a free key comes from, shown in the UI
     note: str = ""
+    embed: str = ""             # the embedding model it serves, if it serves one
 
     @property
     def needs_key(self) -> bool:
@@ -57,23 +58,24 @@ LANES: tuple[Lane, ...] = (
     Lane("gemini", "Google Gemini", "openai", "gemini-2.5-flash",
          "https://generativelanguage.googleapis.com/v1beta/openai",
          True, 10, 200, (PLAN, REVIEW, CHAT), "gemini_api_key", "GEMINI_API_KEY", "https://aistudio.google.com/apikey",
-         "Free tier with a large context window. Good at planning and at reading a long diff."),
+         "Free tier with a large context window. Good at planning and at reading a long diff.",
+         embed="text-embedding-004"),
     Lane("mistral", "Mistral", "openai", "mistral-small-latest", "https://api.mistral.ai/v1",
          True, 10, 400, (WRITE, REVIEW), "mistral_api_key", "MISTRAL_API_KEY", "https://console.mistral.ai/api-keys",
-         "Free experimental tier."),
+         "Free experimental tier.", embed="mistral-embed"),
     Lane("openrouter", "OpenRouter", "openai", "deepseek/deepseek-chat-v3.1:free", "https://openrouter.ai/api/v1",
          True, 15, 50, (WRITE, PLAN), "openrouter_api_key", "OPENROUTER_API_KEY", "https://openrouter.ai/keys",
          "One key, many `:free` models. The daily allowance is small — a good overflow lane."),
     Lane("github", "GitHub Models", "openai", "openai/gpt-4.1-mini", "https://models.github.ai/inference",
          True, 10, 120, (REVIEW, CHAT), "github_models_token", "GITHUB_MODELS_TOKEN",
          "github.com/settings/tokens · fine-grained, Models: read",
-         "Free with a GitHub token you already have. Modest limits."),
+         "Free with a GitHub token you already have. Modest limits.", embed="openai/text-embedding-3-small"),
     Lane("deepseek", "DeepSeek", "openai", "deepseek-chat", "https://api.deepseek.com",
          False, 0, 0, (WRITE, REVIEW, PLAN, CHAT), "deepseek_api_key", "DEEPSEEK_API_KEY",
          "https://platform.deepseek.com", "Paid, and the strongest lane here for writing code."),
     Lane("ollama", "Ollama · this Mac", "ollama", "qwen2.5-coder:7b", "http://127.0.0.1:11434",
          True, 0, 0, (WRITE, REVIEW, PLAN, CHAT), "", "", "https://ollama.com/download",
-         "Local, free and unmetered. Slower, and bounded by this machine's memory."),
+         "Local, free and unmetered. Slower, and bounded by this machine's memory.", embed="nomic-embed-text"),
 )
 
 BY_ID: dict[str, Lane] = {lane.id: lane for lane in LANES}

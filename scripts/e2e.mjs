@@ -316,7 +316,7 @@ try {
     await page.getByText(/neurocode-\d{8}-\d{6}-manual\.db/).first().waitFor({ timeout: 10000 });
     const db = await api('/admin/database');
     expect(db.backups.some((b) => b.name.endsWith('-manual.db')), 'no manual backup is listed');
-    expect(db.migrations.length === 8, `${db.migrations.length} migrations applied`);
+    expect(db.migrations.length === 9, `${db.migrations.length} migrations applied`);
   });
 
   await step('an agent run works in a worktree of its own and stops at your signature', async () => {
@@ -376,8 +376,12 @@ try {
     await page.getByRole('button', { name: 'Ask', exact: true }).click();
     await page.getByText('It could not answer').waitFor({ timeout: 20000 });   // no key here, and it says so
     const doc = await api(`/sessions/${session.ref}`);
-    expect(doc.messages.map((m) => m.role).join() === 'you,note', `turns: ${doc.messages.map((m) => m.role)}`);
-    expect(doc.messages[0].text.startsWith('is project mein tax'), 'the question was not kept');
+    // Retrieval grounds the question before any model is asked, so that turn sits in between.
+    const ground = doc.messages.find((m) => m.tool === 'grounding');
+    const turns = doc.messages.filter((m) => m.tool !== 'grounding');
+    expect(turns.map((m) => m.role).join() === 'you,note', `turns: ${doc.messages.map((m) => m.role)}`);
+    expect(!ground || ground.text.length > 0, 'grounding arrived empty');
+    expect(turns[0].text.startsWith('is project mein tax'), 'the question was not kept');
     expect(doc.status === 'idle' && doc.title.startsWith('is project mein tax'), `session ${doc.status}`);
   });
 

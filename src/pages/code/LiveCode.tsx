@@ -131,7 +131,10 @@ export function LiveCode({ project }: { project: Project }) {
                 onPlan={(path) => nav('/', { state: { draft: `Change ${path}: ` } })}
               />
             ) : (
-              <Overview summary={s.data} onOpen={open} onModule={(m) => nav(`/architecture?module=${encodeURIComponent(m)}`)} />
+              <>
+                <Retrieval pid={project.id} stamp={stamp} canBuild={can('projects:onboard')} onOpen={open} />
+                <Overview summary={s.data} onOpen={open} onModule={(m) => nav(`/architecture?module=${encodeURIComponent(m)}`)} />
+              </>
             )}
           </div>
         </PageBody>
@@ -183,6 +186,85 @@ function Dir({ pid, stamp, path, name, depth, count, sel, onSelect }: {
         </>
       ))}
     </div>
+  );
+}
+
+/** Retrieval: the chunks this project holds, and a search over them by meaning as well as by words. */
+function Retrieval({ pid, stamp, canBuild, onOpen }: {
+  pid: string; stamp: string; canBuild: boolean; onOpen: (path: string) => void;
+}) {
+  const [q, setQ] = useState('');
+  const [query, setQuery] = useState('');
+  const [building, setBuilding] = useState(false);
+  useEffect(() => {
+    const id = window.setTimeout(() => setQuery(q.trim()), 200);
+    return () => window.clearTimeout(id);
+  }, [q]);
+  const r = useRemote(`${pid}:${stamp}:rag:${query}`, () => api.code.retrieval(pid, query));
+  const state = r.data;
+
+  const build = async () => {
+    setBuilding(true);
+    try {
+      await api.code.buildRetrieval(pid);
+      toast('Building retrieval', { description: 'Chunking the code and the documents, then embedding what a lane can.' });
+      window.setTimeout(() => { setBuilding(false); r.reload(); }, 5000);
+    } catch (e) {
+      setBuilding(false);
+      toast.error('Not built', { description: e instanceof ApiError ? e.message : 'The local API did not answer.' });
+    }
+  };
+
+  const kinds = Object.entries(state?.byKind ?? {});
+  return (
+    <Panel
+      className="mb-4" title="Retrieval"
+      eyebrow={state?.built ? `${state.chunks.toLocaleString()} chunks · ${state.semantic ? 'meaning and words' : 'words only'}` : 'not built yet'}
+      actions={canBuild && (
+        <Button size="sm" variant="outline" disabled={building} onClick={() => void build()}>
+          {building ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}Rebuild
+        </Button>
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12.5px] text-dim">
+        {kinds.map(([kind, n]) => <span key={kind}>{n.toLocaleString()} {kind}</span>)}
+        {state?.semantic
+          ? <Tag tone="ok">{state.model}{state.lane ? ` · ${state.lane}` : ''}</Tag>
+          : <Tag tone="neutral">lexical only</Tag>}
+        {state?.at && <span className="sm:ml-auto">built {ago(state.at)}</span>}
+      </div>
+      {state?.note && <p className="mt-2 text-[12.5px] text-warn">{state.note}</p>}
+
+      <div className="mt-3 flex h-9 items-center gap-2 rounded-lg border border-line bg-surface-2 px-2.5 focus-within:border-brand">
+        <Search className="size-3.5 shrink-0 text-dim" />
+        <input
+          value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search by meaning"
+          placeholder="Ask by meaning: where is the interstate tax split…"
+          className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-dim focus-visible:outline-none"
+        />
+      </div>
+
+      {query && (
+        <div className="mt-2.5 space-y-1.5">
+          {r.loading && !state ? <p className="text-[12.5px] text-dim">Searching…</p>
+            : !state?.results.length ? <p className="text-[12.5px] text-dim">Nothing here bears on “{query}”.</p>
+              : state.results.map((hit) => (
+                <button
+                  key={hit.ref} onClick={() => hit.kind === 'code' && onOpen(hit.ref.split('#')[0])}
+                  className="flex w-full flex-col rounded-lg border border-line/70 bg-surface-2/40 px-3 py-2 text-left transition-colors hover:bg-surface-2"
+                >
+                  <span className="flex w-full min-w-0 items-center gap-2">
+                    <Tag tone={hit.kind === 'code' ? 'brand' : hit.kind === 'memory' ? 'ok' : 'neutral'}>{hit.kind}</Tag>
+                    <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{hit.title}</span>
+                    <span className="shrink-0 text-[11px] text-dim">{hit.how}</span>
+                  </span>
+                  <Mono>{hit.ref}</Mono>
+                  <span className="mt-1 line-clamp-2 font-mono text-[11.5px] whitespace-pre-wrap text-soft">{hit.text}</span>
+                </button>
+              ))}
+        </div>
+      )}
+    </Panel>
   );
 }
 

@@ -22,7 +22,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from . import codeindex, onboarding
+from . import codeindex, onboarding, retrieval
 from .ai.gateway import CHAT, NoModel, extract_json
 from .context import Ctx
 from .db import now_iso
@@ -95,6 +95,20 @@ def _read_file(c: Ctx, doc: dict[str, Any], args: dict[str, Any]) -> tuple[str, 
     return f"{head}\n{body}", f"{path} · {len(shown)} lines"
 
 
+def _find(c: Ctx, doc: dict[str, Any], args: dict[str, Any]) -> tuple[str, str]:
+    """Retrieval: the pieces of this workspace that bear on a question, by meaning and by words."""
+    q = _text(args, "query", "q", "question")
+    if not q:
+        raise Refused("find needs a query.")
+    found = retrieval.search(c, doc["projectId"], q, 6)
+    if not found:
+        return (f"Retrieval holds nothing about {q!r}. The project may not be indexed yet.",
+                f"{q} · nothing found")
+    body = "\n\n".join(f"[{x['kind']} · {x['ref']}]\n{x['text'][:700]}" for x in found)
+    ways = ", ".join(sorted({x["how"] for x in found}))
+    return f"{len(found)} pieces about {q!r}:\n\n{body}", f"{q} · {len(found)} pieces ({ways})"
+
+
 def _search_code(c: Ctx, doc: dict[str, Any], args: dict[str, Any]) -> tuple[str, str]:
     q = _text(args, "query", "q", "name", "symbol")
     if not q:
@@ -142,6 +156,9 @@ def _project_summary(c: Ctx, doc: dict[str, Any], args: dict[str, Any]) -> tuple
 
 
 TOOLS: tuple[Tool, ...] = (
+    Tool("find", '{"query": "where is the interstate tax split"}',
+         "search this project's code, its documents and the workspace's memory by meaning as well as by "
+         "words — start here when you do not know the name of the thing", _find),
     Tool("search_code", '{"query": "TaxService"}', "find where a name is defined in this project's code", _search_code),
     Tool("read_file", '{"path": "pkg/tax.py", "start": 1, "lines": 200}', "read part of a file, with line numbers", _read_file),
     Tool("list_files", '{"directory": "pkg"}', "list one level of the file tree", _list_files),
@@ -233,6 +250,17 @@ def think(c: Ctx, ref: str, by: str) -> None:
     c.runtime.setdefault(f"chat:{ref}", {})["cancel"] = threading.Event()
     doc["status"] = "thinking"
     _save(c, doc)
+    # Before the model is asked anything, retrieval answers the cheapest question: what does this
+    # workspace already hold about this? Grounding is a turn like any other, so the model replays it
+    # and the person can see exactly what it was given.
+    asked = next((m["text"] for m in reversed(c.store.messages(doc["id"])) if m["role"] == "you"), "")
+    if asked:
+        try:
+            ground, pieces = retrieval.grounding(c, doc["projectId"], asked)
+        except Exception:                                   # retrieval must never stop a conversation
+            ground, pieces = "", 0
+        if ground:
+            say(c, doc, "tool", ground, tool="grounding", detail=f"{pieces} pieces from the index", ok=True)
     try:
         for step in range(MAX_STEPS + 1):
             if _cancelled(c, ref):

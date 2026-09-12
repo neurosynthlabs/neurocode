@@ -144,6 +144,18 @@ export interface Extracted extends AiMeta { facts: FactCandidate[] }
 /* ── the code index ───────────────────────────────────────────── */
 export interface CodeModule { name: string; files: number; lines: number; complexity: number; symbols: number; fanIn: number; fanOut: number }
 export interface DbObject { name: string; kind: string; path: string; readers: number; writers: number; callers: number }
+/** One piece retrieval found, and how it found it. */
+export interface RetrievalHit {
+  ref: string; kind: 'code' | 'doc' | 'memory'; path: string; title: string; line: number;
+  text: string; score: number; how: 'both' | 'lexical' | 'semantic';
+}
+export interface RetrievalState {
+  built: boolean; chunks: number; byKind: Partial<Record<'code' | 'doc' | 'memory', number>>;
+  /** True once a lane has embedded the chunks: search is then by meaning as well as by words. */
+  semantic: boolean;
+  at?: string; ms?: number; embedded?: number; model?: string; lane?: string; note?: string;
+  q: string; results: RetrievalHit[];
+}
 export interface CodeSummary {
   indexed: boolean;
   /** An index is being built right now. */
@@ -387,6 +399,9 @@ export const api = {
       request<Impact>(`/projects/${seg(pid)}/code/impact?${new URLSearchParams(target)}`, { signal: AbortSignal.timeout(15_000) }),
     graph: (pid: string) => request<CodeGraph>(`/projects/${seg(pid)}/code/graph`, { signal: AbortSignal.timeout(15_000) }),
     reindex: (pid: string) => request<{ ok: boolean }>(`/projects/${seg(pid)}/code/reindex`, POST()),
+    retrieval: (pid: string, q = '') => request<RetrievalState>(
+      `/projects/${seg(pid)}/code/retrieval?q=${encodeURIComponent(q)}`, { signal: AbortSignal.timeout(30_000) }),
+    buildRetrieval: (pid: string) => request<{ ok: boolean }>(`/projects/${seg(pid)}/code/retrieval/build`, POST()),
   },
 
   /* agent runs: a worktree of their own, and everything they did in it */
