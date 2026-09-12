@@ -1,0 +1,165 @@
+"""The work: projects, tasks, plans, the gates, and the story of what happened.
+
+The methods here are the questions the screens actually ask. Several of them were loops over parsed
+JSON documents before — "how many tasks is this project carrying, by status" meant reading every task
+in Python. Now they are one statement each, answered by the database with an index behind it.
+"""
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import ColumnElement, Integer, cast, func, select
+
+from ..models import (
+    ActivityEvent,
+    Approval,
+    Decision,
+    Plan,
+    PlanQuestion,
+    Pref,
+    Project,
+    Task,
+    TaskAgent,
+)
+from .base import Page, Repository
+
+
+class ProjectRepository(Repository[Project]):
+    model = Project
+
+    async def all_ordered(self) -> list[Project]:
+        return await self.list(order_by=Project.name, limit=200)
+
+    async def onboarded(self) -> list[Project]:
+        """The ones whose code is on this machine — the only ones an agent can really work in."""
+        return await self.list(Project.source_kind.is_not(None), order_by=Project.name)
+
+    async def task_counts(self) -> dict[str, dict[str, int]]:
+        """project id → {status: how many}. One GROUP BY instead of counting in Python."""
+        stmt = (select(Task.project_id, Task.status, func.count())
+                .group_by(Task.project_id, Task.status))
+        out: dict[str, dict[str, int]] = {}
+        for pid, status, n in (await self.session.execute(stmt)).all():
+            out.setdefault(pid, {})[status] = int(n)
+        return out
+
+
+class TaskRepository(Repository[Task]):
+    model = Task
+
+    async def by_ref(self, ref: str) -> Task | None:
+        return await self.one(Task.ref == ref)
+
+    async def board(self, project_id: str | None = None, *, limit: int | None = None,
+                    offset: int = 0) -> Page[Task]:
+        where: list[ColumnElement[bool]] = [Task.project_id == project_id] if project_id else []
+        return await self.page(*where, order_by=Task.created_at.desc(), limit=limit, offset=offset)
+
+    async def counts_by_status(self, project_id: str | None = None) -> dict[str, int]:
+        stmt = select(Task.status, func.count()).group_by(Task.status)
+        if project_id:
+            stmt = stmt.where(Task.project_id == project_id)
+        return {status: int(n) for status, n in (await self.session.execute(stmt)).all()}
+
+    async def for_agent(self, agent: str, *, limit: int | None = None) -> list[Task]:
+        """What one agent is carrying — a join now, rather than a scan of every task's agent list."""
+        stmt = (select(Task).join(TaskAgent, TaskAgent.task_id == Task.id)
+                .where(TaskAgent.agent == agent, Task.status.not_in(("done",)))
+                .order_by(Task.created_at.desc()).limit(limit or 50))
+        return list((await self.session.execute(stmt)).scalars().unique())
+
+    async def next_ref(self, prefix: str = "TASK-") -> str:
+        """The next reference, worked out by the database: the highest number any ref carries, plus one.
+        Asked in SQL rather than by reading every ref, so two requests cannot land on the same one."""
+        digits = func.nullif(func.regexp_replace(Task.ref, r"\D", "", "g"), "")
+        stmt = select(func.coalesce(func.max(cast(digits, Integer)), 0))
+        return f"{prefix}{int((await self.session.execute(stmt)).scalar_one()) + 1}"
+
+
+class PlanRepository(Repository[Plan]):
+    model = Plan
+
+    async def by_ref(self, ref: str) -> Plan | None:
+        return await self.one(Plan.ref == ref)
+
+    async def newest(self, project_id: str | None = None, *, limit: int | None = None,
+                     offset: int = 0) -> Page[Plan]:
+        where: list[ColumnElement[bool]] = [Plan.project_id == project_id] if project_id else []
+        return await self.page(*where, order_by=Plan.created_at.desc(), limit=limit, offset=offset)
+
+    async def open_questions(self, plan_id: str) -> list[PlanQuestion]:
+        stmt = (select(PlanQuestion)
+                .where(PlanQuestion.plan_id == plan_id, PlanQuestion.answer == "",
+                       PlanQuestion.deferred.is_(False))
+                .order_by(PlanQuestion.n))
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def settled(self, plan_id: str) -> bool:
+        """Nothing left open: the condition for dispatching, asked of the database, not of a document."""
+        return not await self.open_questions(plan_id)
+
+
+class ApprovalRepository(Repository[Approval]):
+    model = Approval
+
+    async def by_ref(self, ref: str) -> Approval | None:
+        return await self.one(Approval.ref == ref)
+
+    async def pending(self, *, limit: int | None = None, offset: int = 0) -> Page[Approval]:
+        return await self.page(Approval.status == "pending", order_by=Approval.created_at.desc(),
+                               limit=limit, offset=offset)
+
+    async def for_run(self, run_ref: str) -> list[Approval]:
+        return await self.list(Approval.run_ref == run_ref, order_by=Approval.created_at)
+
+    async def waiting_on_person(self, run_ref: str) -> Approval | None:
+        return await self.one(Approval.run_ref == run_ref, Approval.status == "pending")
+
+    async def next_ref(self, prefix: str = "APPR-", floor: int = 100) -> str:
+        """The next gate's reference, worked out by the database so two runs cannot claim the same one."""
+        digits = func.nullif(func.regexp_replace(Approval.ref, r"\D", "", "g"), "")
+        stmt = select(func.coalesce(func.max(cast(digits, Integer)), floor))
+        return f"{prefix}{int((await self.session.execute(stmt)).scalar_one()) + 1}"
+
+
+class ActivityRepository(Repository[ActivityEvent]):
+    model = ActivityEvent
+
+    async def recent(self, project_id: str | None = None, *, limit: int | None = None,
+                     offset: int = 0) -> Page[ActivityEvent]:
+        where: list[ColumnElement[bool]] = [ActivityEvent.project_id == project_id] if project_id else []
+        return await self.page(*where, order_by=ActivityEvent.seq.desc(), limit=limit, offset=offset)
+
+    async def since(self, at: datetime, *, limit: int | None = None) -> list[ActivityEvent]:
+        return await self.list(ActivityEvent.at > at, order_by=ActivityEvent.seq, limit=limit)
+
+    async def record(self, *, actor: str, actor_kind: str, action: str, detail: str, level: str = "info",
+                     project_id: str | None = None, task_ref: str | None = None) -> ActivityEvent:
+        event = await self.add(ActivityEvent(actor=actor, actor_kind=actor_kind, action=action,
+                                             detail=detail, level=level, project_id=project_id,
+                                             task_ref=task_ref))
+        # Written and announced in one place, so an event can never be recorded without reaching the
+        # open tabs. A session with no bus — a test, a script — simply publishes nothing.
+        feed = self.session.info.get("bus")
+        if feed is not None:
+            from ..schemas.work import activity_json
+            feed.publish("activity", activity_json(event))
+        return event
+
+
+class DecisionRepository(Repository[Decision]):
+    model = Decision
+
+    async def all_ordered(self) -> list[Decision]:
+        return await self.list(order_by=Decision.created_at, limit=200)
+
+    async def already(self, key: str) -> bool:
+        """A decision is final, so the first question is always whether one was already made."""
+        return await self.exists(Decision.id == key)
+
+
+class PrefRepository(Repository[Pref]):
+    model = Pref
+
+    async def all_ordered(self) -> list[Pref]:
+        return await self.list(order_by=Pref.id, limit=500)
