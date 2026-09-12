@@ -22,7 +22,7 @@ from .context import Ctx
 from .db import Store
 from .events import Bus
 from .rbac import Rbac
-from .routes import admin, code, knowledge, platform, system, work
+from .routes import admin, code, knowledge, platform, runs, system, work
 from .routes import ai as ai_routes
 from .routes import auth as auth_routes
 from .secrets import Secrets
@@ -79,6 +79,6 @@ def create_app(db_path: str | None = None, env_file: Path | None = ENV_FILE) -> 
             return JSONResponse({"detail": "Missing the X-NC-Client header"}, status_code=403)
         return await call_next(request)
 
-    for module in (system, auth_routes, admin, work, knowledge, platform, code, ai_routes):
+    for module in (system, auth_routes, admin, work, knowledge, platform, code, runs, ai_routes):
         app.include_router(module.router)
     return app

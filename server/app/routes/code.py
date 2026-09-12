@@ -3,7 +3,7 @@ and the module graph. Reading needs a session; re-indexing needs `projects:onboa
 from __future__ import annotations
 
 import asyncio
-import os
+
 from pathlib import Path
 from typing import Any
 
@@ -14,14 +14,6 @@ from ..auth import User, current_user, require
 from ..context import Ctx, ctx, need
 
 router = APIRouter(prefix="/projects/{pid}/code")
-
-
-def source_root(doc: dict[str, Any]) -> Path | None:
-    """Where an onboarded project's code lives on this machine. Sample projects have none."""
-    src = doc.get("source")
-    if not src:
-        return None
-    return onboarding.REPOS_DIR / doc["id"] if src["kind"] == "git" else Path(os.path.expanduser(src["repo"]))
 
 
 def run_index(c: Ctx, pid: str, root: Path, excluded: list[str], *, found: dict[str, Any] | None = None,
@@ -59,7 +51,7 @@ def _project(c: Ctx, pid: str) -> dict[str, Any]:
 async def summary(pid: str, c: Ctx = Depends(ctx)) -> dict[str, Any]:
     doc = _project(c, pid)
     found = await asyncio.to_thread(codeindex.summary, c.store, pid)
-    state = {"indexing": pid in c.indexing, "canIndex": source_root(doc) is not None}
+    state = {"indexing": pid in c.indexing, "canIndex": onboarding.source_root(doc) is not None}
     return {**found, **state} if found else {"indexed": False, **state}
 
 
@@ -101,7 +93,7 @@ async def graph(pid: str, c: Ctx = Depends(ctx)) -> dict[str, Any]:
 async def reindex(pid: str, jobs: BackgroundTasks, user: User = Depends(require("projects:onboard")),
                   c: Ctx = Depends(ctx)) -> dict[str, bool]:
     doc = _project(c, pid)
-    root = source_root(doc)
+    root = onboarding.source_root(doc)
     if root is None:
         raise HTTPException(409, f"{doc['name']} is a sample project with no code on this machine. Onboard a repository to index one.")
     if not root.is_dir():

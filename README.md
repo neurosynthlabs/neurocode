@@ -32,7 +32,9 @@ setup, sign-in, and a ⌘K palette that searches code, memory, tasks, decisions,
   and impact analysis reads from it rather than from naming conventions.
 - **The requirement compiler.** Broken Hinglish in, an evidenced plan out — including the open
   questions it refuses to guess at.
-- **Parallel agents, isolated worktrees.** Collisions surface at merge, never mid-edit.
+- **Agents work in isolated worktrees.** A run branches from your HEAD, writes whole files, runs the
+  project's own tests, reviews its real diff and stops at your signature. Nothing is merged for you,
+  and nothing a model says is ever executed.
 - **The human is the scarce resource.** LOW risk runs automatically, MEDIUM needs a reviewer,
   HIGH always stops at your signature. Deny rules cannot be talked past.
 - **Local first.** 71% of calls are served by local weights — which is the cheap option and the

@@ -31,6 +31,7 @@ class Ctx:
     accounts: Accounts
     gateway: Gateway
     indexing: set[str] = field(default_factory=set)  # projects whose code is being indexed right now
+    runtime: dict[str, Any] = field(default_factory=dict)  # runs in flight: their cancel switch
 
     def put(self, collection: str, doc: dict[str, Any]) -> dict[str, Any]:
         """Tell every tab this document changed."""

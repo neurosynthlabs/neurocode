@@ -60,7 +60,7 @@ export default function CommandCenter() {
   const loc = useLocation();
   const { project } = useProject();
   const { user, can } = useAuth();
-  const { tasks, approvals, activity, mode, health, compile: compileRequirement, ask, brainstorm } = useData();
+  const { tasks, approvals, activity, mode, health, runs: agentRuns, compile: compileRequirement, ask, brainstorm } = useData();
   const [kind, setKind] = useState<Kind>('plan');
   // Brainstorm's "Plan the MVP" lands here with the requirement drafted.
   const [req, setReq] = useState(() => (loc.state as { draft?: string } | null)?.draft ?? '');
@@ -77,7 +77,17 @@ export default function CommandCenter() {
   const mine = useMemo(() => tasks.filter((t) => t.projectId === project.id), [tasks, project.id]);
   const active = useMemo(() => mine.filter((t) => ['in_progress', 'review', 'blocked', 'planning'].includes(t.status)), [mine]);
   const pending = useMemo(() => approvals.filter((a) => a.status === 'pending'), [approvals]);
-  const live = useMemo(() => runs.filter((r) => r.status === 'running' || r.status === 'waiting'), []);
+  // Signed in, these are real worktrees; the demo shows the worked example.
+  const live = useMemo(() => (mode === 'live'
+    ? agentRuns.filter((r) => ['running', 'queued', 'waiting'].includes(r.status)).map((r) => ({
+      id: r.id, name: `${r.ref} · ${r.branch.replace('neurocode/', '')}`, state: r.status === 'waiting' ? 'waiting' : 'running',
+      step: r.status === 'waiting' ? `waiting for you · ${r.waitingOn ?? ''}` : r.steps.find((s) => s.status === 'running')?.label ?? 'starting…',
+      pct: Math.round((100 * r.steps.filter((s) => ['done', 'skipped', 'failed'].includes(s.status)).length) / Math.max(1, r.steps.length)),
+      to: `/runs?ref=${r.ref}`,
+    }))
+    : runs.filter((r) => r.status === 'running' || r.status === 'waiting').map((r) => ({
+      id: r.id, name: r.agentName, state: r.status, step: r.step, pct: r.progress, to: '/runs',
+    }))), [mode, agentRuns]);
   const feed = useMemo(() => activity.slice(0, 6), [activity]);
   const running = mine.filter((t) => t.status === 'in_progress').length;
   const agentsLive = agents.filter((a) => a.status === 'running').length;
@@ -304,22 +314,26 @@ export default function CommandCenter() {
             actions={<Button size="sm" variant="ghost" onClick={() => nav('/runs')}>Live runs<ChevronRight className="size-3.5" /></Button>}
             flush
           >
-            <div className="divide-y divide-line/60">
-              {live.map((r) => (
-                <button key={r.id} onClick={() => nav('/runs')}
-                  className="flex w-full items-center gap-3.5 px-5 py-3 text-left transition-colors hover:bg-surface-2/60">
-                  <Dot state={r.status} pulse={r.status === 'running'} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[14px] font-medium text-ink">{r.agentName}</span>
-                    <span className="mt-0.5 block truncate text-[12.5px] text-dim">{r.step}</span>
-                  </span>
-                  <span className="flex shrink-0 items-center gap-2.5">
-                    <BlockBar pct={r.progress} width={10} />
-                    <span className="tnum w-9 text-right text-[12.5px] text-soft">{r.progress}%</span>
-                  </span>
-                </button>
-              ))}
-            </div>
+            {live.length === 0 ? (
+              <Empty title="No agent is working" hint="Dispatch a plan and its run starts here, in a worktree of its own." />
+            ) : (
+              <div className="divide-y divide-line/60">
+                {live.map((r) => (
+                  <button key={r.id} onClick={() => nav(r.to)}
+                    className="flex w-full items-center gap-3.5 px-5 py-3 text-left transition-colors hover:bg-surface-2/60">
+                    <Dot state={r.state} pulse={r.state === 'running'} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[14px] font-medium text-ink">{r.name}</span>
+                      <span className="mt-0.5 block truncate text-[12.5px] text-dim">{r.step}</span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-2.5">
+                      <BlockBar pct={r.pct} width={10} />
+                      <span className="tnum w-9 text-right text-[12.5px] text-soft">{r.pct}%</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
           </Panel>
 
           <Panel

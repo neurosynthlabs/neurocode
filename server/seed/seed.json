@@ -5016,6 +5016,12 @@
     "description": "Change a task’s status and tick its checklist."
    },
    {
+    "id": "runs:run",
+    "group": "Work",
+    "label": "Run agents",
+    "description": "Start an agent run in its own worktree, stop it, and discard its branch."
+   },
+   {
     "id": "approvals:decide",
     "group": "Gates",
     "label": "Approve gated actions",
@@ -5097,6 +5103,7 @@
      "plans:compile",
      "plans:decide",
      "tasks:write",
+     "runs:run",
      "approvals:decide",
      "decisions:make",
      "memory:write",
@@ -5119,6 +5126,7 @@
      "plans:compile",
      "plans:decide",
      "tasks:write",
+     "runs:run",
      "approvals:decide",
      "decisions:make",
      "memory:write",
@@ -5141,6 +5149,7 @@
      "plans:compile",
      "plans:decide",
      "tasks:write",
+     "runs:run",
      "approvals:decide",
      "decisions:make",
      "memory:write",
@@ -5157,6 +5166,7 @@
     "permissions": [
      "plans:compile",
      "tasks:write",
+     "runs:run",
      "memory:write",
      "ai:use"
     ]

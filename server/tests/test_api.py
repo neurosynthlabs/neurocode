@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -165,7 +166,7 @@ def test_custom_roles_sit_beside_the_built_in_ones(client):
     assert rm.patch("/tasks/TASK-492", json={"status": "review"}).status_code == 403            # takes effect at once
     assert client.delete("/admin/roles/release-manager").status_code == 409                     # someone still has it
     assert [r["id"] for r in client.get("/admin/roles").json()][:5] == ["owner", "admin", "approver", "engineer", "viewer"]
-    assert len(client.get("/admin/permissions").json()) == 15
+    assert len(client.get("/admin/permissions").json()) == 16
 
 
 def test_teams_hold_known_people(client):
@@ -521,7 +522,7 @@ def test_the_database_is_backed_up_checked_and_optimized(client, tmp_path):
     info = client.get("/admin/database").json()
     assert {"users", "ai_calls", "code_files", "audit_log"} <= {t["name"] for t in info["tables"]}
     assert "code_fts_data" not in {t["name"] for t in info["tables"]}          # search internals stay out of the list
-    assert [m["version"] for m in info["migrations"]] == [1, 2, 3, 4, 5]
+    assert [m["version"] for m in info["migrations"]] == [1, 2, 3, 4, 5, 6]
     made = client.post("/admin/database/backup")
     assert made.status_code == 201
     path = tmp_path / "backups" / made.json()["name"]
@@ -626,6 +627,133 @@ def test_the_code_index_searches_browses_and_maps_modules(client, tmp_path):
     assert {"m:pkg", "m:tests", "d:ORDERS"} <= {n["id"] for n in g["nodes"]}
     assert any(e["from"] == "m:tests" and e["to"] == "m:pkg" for e in g["edges"])
     assert any(e["from"] == "m:Billing" and e["to"] == "d:ORDERS" and e["kind"] == "writes" for e in g["edges"])
+
+
+# ── the agent runtime ────────────────────────────────────────────
+TINY = {
+    "Makefile": "test:\n\t@echo '2 passed'\n",
+    "pkg/__init__.py": "",
+    "pkg/core.py": "def total(x):\n    return x\n",
+}
+
+
+def git_project(root: Path, files: dict[str, str] | None = None) -> Path:
+    """A small git repository with one commit: what a run branches from."""
+    for rel, text in (files or TINY).items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
+    for args in (["init", "-q", "-b", "main"], ["config", "user.email", "test@neurocode.local"],
+                 ["config", "user.name", "Test"], ["add", "-A"],
+                 ["-c", "commit.gpgsign=false", "commit", "-qm", "start"]):
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    return root
+
+
+def onboard_git(client, root: Path, files: dict[str, str] | None = None) -> str:
+    root.mkdir(parents=True, exist_ok=True)
+    git_project(root, files)
+    r = client.post("/projects", json={"source": "local", "repo": str(root)})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def ready_plan(client, pid: str, requirement: str = TAX) -> str:
+    """A compiled plan with nothing left open, ready to dispatch."""
+    plan = client.post("/plans/compile", json={"requirement": requirement, "projectId": pid}).json()
+    for _ in list(plan["openQuestions"]):
+        client.post(f"/plans/{plan['ref']}/questions/0", json={"defer": True})
+    return plan["ref"]
+
+
+def gate_of(client, run_ref: str) -> dict:
+    return next(a for a in client.get("/approvals", params={"status": "pending"}).json() if a.get("runRef") == run_ref)
+
+
+def model(monkeypatch, answer):
+    monkeypatch.setenv("NEUROCODE_COMPILER", "auto")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setitem(gateway.CALLS, "deepseek", answer)
+
+
+def test_dispatching_starts_a_run_in_a_worktree_of_its_own(client, tmp_path):
+    pid = onboard_git(client, tmp_path / "shop")
+    plan = client.post(f"/plans/{ready_plan(client, pid)}/dispatch").json()
+    run = client.get(f"/runs/{plan['runRef']}").json()
+    assert run["status"] == "waiting" and run["branch"].startswith("neurocode/task-")
+    assert (Path(run["worktree"]) / "Makefile").is_file()          # its own checkout, at the base commit
+    assert {s["status"] for s in run["steps"] if s["kind"] == "edit"} == {"skipped"}   # no model: nothing invented
+    assert "no model is configured" in " ".join(line["line"] for line in run["logs"]).lower()
+
+    gate = gate_of(client, run["ref"])                              # tests wait for a person, the first time
+    assert gate["tool"] == "Bash(make test)" and gate["risk"] == "MEDIUM"
+    client.post(f"/approvals/{gate['ref']}/approve")
+    done = client.get(f"/runs/{run['ref']}").json()
+    assert done["status"] == "done" and done["tests"]["status"] == "passed"
+    assert "2 passed" in " ".join(line["line"] for line in done["logs"])
+    assert done["steps"][-1]["status"] == "skipped"                 # nothing to accept: no file changed
+
+
+def test_the_agent_writes_code_runs_the_tests_and_waits_for_your_signature(client, tmp_path, monkeypatch):
+    pid = onboard_git(client, tmp_path / "shop")
+    ref = ready_plan(client, pid)
+    edit = json.dumps({"summary": "Round at invoice level.", "notes": ["Rounding now happens in one place."],
+                       "files": [{"path": "pkg/core.py", "content": "def total(x):\n    return round(x)\n"}]})
+    review = json.dumps({"findings": [{"severity": "MEDIUM", "file": "pkg/core.py", "note": "No test covers rounding."}],
+                         "verdict": "Small and clear."})
+    model(monkeypatch, lambda messages, cfg: (review if "reviewer" in messages[0]["content"].lower() else edit, {"in": 10, "out": 20}))
+
+    run = client.get(f"/runs/{client.post(f'/plans/{ref}/dispatch').json()['runRef']}").json()
+    assert run["status"] == "waiting" and run["model"] == "deepseek-chat"
+    assert run["diff"]["files"] == 1 and run["diff"]["commits"] >= 1
+    assert (Path(run["worktree"]) / "pkg" / "core.py").read_text() == "def total(x):\n    return round(x)\n"
+    client.post(f"/approvals/{gate_of(client, run['ref'])['ref']}/approve")               # allow the tests
+
+    waiting = client.get(f"/runs/{run['ref']}").json()
+    assert waiting["status"] == "waiting" and waiting["tests"]["status"] == "passed"
+    assert waiting["review"]["findings"][0]["severity"] == "MEDIUM" and waiting["review"]["by"] == "deepseek-chat"
+    accept = gate_of(client, run["ref"])
+    assert accept["tool"].startswith("Merge(neurocode/") and accept["risk"] == "MEDIUM"
+    client.post(f"/approvals/{accept['ref']}/approve")
+
+    done = client.get(f"/runs/{run['ref']}").json()
+    assert done["status"] == "done" and f"git merge {done['branch']}" in done["note"]
+    assert client.get(f"/tasks/{done['taskRef']}").json()["status"] == "review"
+    assert "round(x)" in client.get(f"/runs/{run['ref']}/diff").json()["patch"]
+    assert {f["feature"] for f in client.get("/usage").json()["byFeature"]} >= {"agent", "review"}
+
+
+def test_the_agent_cannot_write_outside_its_worktree(client, tmp_path, monkeypatch):
+    pid = onboard_git(client, tmp_path / "shop")
+    ref = ready_plan(client, pid)
+    escape = json.dumps({"summary": "…", "files": [{"path": "../../escaped.py", "content": "print('out')\n"}]})
+    model(monkeypatch, lambda messages, cfg: escape)
+    run = client.get(f"/runs/{client.post(f'/plans/{ref}/dispatch').json()['runRef']}").json()
+    assert not (tmp_path / "escaped.py").exists() and not (tmp_path.parent / "escaped.py").exists()
+    assert any(s["status"] == "failed" and "outside the worktree" in s["detail"] for s in run["steps"])
+    assert run["diff"]["files"] == 0
+
+
+def test_a_run_can_be_stopped_and_its_worktree_discarded(client, tmp_path):
+    pid = onboard_git(client, tmp_path / "shop")
+    ref = client.post(f"/plans/{ready_plan(client, pid)}/dispatch").json()["runRef"]
+    tree = Path(client.get(f"/runs/{ref}").json()["worktree"])
+    assert client.post(f"/runs/{ref}/discard").status_code == 409          # it is waiting on a person
+    assert client.post(f"/runs/{ref}/cancel").json()["status"] == "cancelled"
+    assert client.post(f"/runs/{ref}/discard").json()["removed"] is True
+    assert not tree.exists()
+    assert client.post(f"/runs/{ref}/cancel").status_code == 409
+    assert person(client, "viewer").post(f"/runs/{ref}/cancel").status_code == 403
+    assert client.get("/runs").json()[0]["ref"] == ref
+
+
+def test_a_project_with_no_code_here_dispatches_without_a_run(client):
+    plan = compile_tax(client)
+    for _ in list(plan["openQuestions"]):
+        client.post(f"/plans/{plan['ref']}/questions/0", json={"defer": True})
+    out = client.post(f"/plans/{plan['ref']}/dispatch").json()
+    assert out["status"] == "dispatched" and "runRef" not in out
+    assert any(e["action"] == "No run started" for e in client.get("/activity", params={"limit": 6}).json())
+    assert client.get("/runs").json() == []
 
 
 def test_reindexing_needs_code_on_this_machine_and_the_permission(client, tmp_path):

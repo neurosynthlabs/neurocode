@@ -28,7 +28,8 @@ export interface Health {
 
 /** The collections the server streams changes for. Every document in them has an `id`. */
 export type Collection =
-  | 'approvals' | 'tasks' | 'memory' | 'projects' | 'plans' | 'mcp' | 'conflicts' | 'prefs' | 'decisions' | 'brainstorms';
+  | 'approvals' | 'tasks' | 'memory' | 'projects' | 'plans' | 'mcp' | 'conflicts' | 'prefs' | 'decisions'
+  | 'brainstorms' | 'runs';
 
 /** A saved screen setting. */
 export interface Pref { id: string; value: unknown }
@@ -168,6 +169,40 @@ export interface CodeGraph {
 }
 export type ImpactTarget = { path: string } | { module: string } | { object: string };
 
+/* ── agent runs ───────────────────────────────────────────────── */
+export type RunStatus = 'queued' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled';
+export interface RunStep {
+  n: number;
+  kind: 'edit' | 'test' | 'review' | 'handoff';
+  label: string;
+  agent: string;
+  status: 'todo' | 'running' | 'waiting' | 'done' | 'skipped' | 'failed';
+  detail: string;
+  ms: number;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+export interface RunLog { id: number; at: string; step: number | null; level: 'info' | 'ok' | 'warn' | 'err' | 'tool'; line: string }
+/** A log line as it arrives on the stream. */
+export interface RunLogEvent extends RunLog { runRef: string }
+export interface RunDoc {
+  id: string; ref: string; projectId: string; projectName: string; taskRef: string | null; planRef: string;
+  requirement: string; status: RunStatus; branch: string; worktree: string; repo: string; prefix: string;
+  base: string; shortBase: string; startedAt: string; finishedAt: string | null; requestedBy: string;
+  targets: string[];
+  steps: RunStep[];
+  tests: { command: string | null; argv: string[] | null; status: string; summary: string };
+  review: { findings: { severity: string; file: string; note: string }[]; verdict: string; by: string };
+  diff: { files: number; insertions: number; deletions: number; commits: number };
+  model: string | null;
+  note: string;
+  removed: boolean;
+  /** The approval this run is stopped at. */
+  waitingOn?: string;
+}
+export interface RunDetail extends RunDoc { logs: RunLog[] }
+export interface RunDiff { patch: string; truncated: boolean; stat: RunDoc['diff']; gone: boolean }
+
 /* ── usage and the database ───────────────────────────────────── */
 export interface UsageReport {
   days: number;
@@ -292,6 +327,13 @@ export const api = {
     reindex: (pid: string) => request<{ ok: boolean }>(`/projects/${seg(pid)}/code/reindex`, POST()),
   },
 
+  /* agent runs: a worktree of their own, and everything they did in it */
+  runs: () => request<RunDoc[]>('/runs'),
+  run: (ref: string, after = 0) => request<RunDetail>(`/runs/${seg(ref)}?after=${after}`),
+  runDiff: (ref: string) => request<RunDiff>(`/runs/${seg(ref)}/diff`, { signal: AbortSignal.timeout(15_000) }),
+  cancelRun: (ref: string) => request<RunDoc>(`/runs/${seg(ref)}/cancel`, POST()),
+  discardRun: (ref: string) => request<RunDoc>(`/runs/${seg(ref)}/discard`, POST()),
+
   /** The AI gateway's ledger: every model call and every offline answer. */
   usage: (days = 30) => request<UsageReport>(`/usage?days=${days}`),
 
@@ -344,11 +386,16 @@ export const api = {
   activity: () => request<ActivityEvent[]>('/activity?limit=1000'),
   reset: () => request<Health>('/admin/reset', { method: 'POST', headers: { 'X-Confirm': 'reset' } }),
 
-  /** Server-Sent Events: each log line, and each document that changed. Returns the unsubscribe. */
-  stream(on: { activity: (e: ActivityEvent) => void; change: (c: Change) => void }): () => void {
+  /** Server-Sent Events: each log line, each document that changed, and an agent run's output. */
+  stream(on: {
+    activity: (e: ActivityEvent) => void;
+    change: (c: Change) => void;
+    log?: (l: RunLogEvent) => void;
+  }): () => void {
     const es = new EventSource(`${API_BASE}/activity/stream`, { withCredentials: true });
     es.addEventListener('activity', (m) => on.activity(JSON.parse((m as MessageEvent<string>).data) as ActivityEvent));
     es.addEventListener('change', (m) => on.change(JSON.parse((m as MessageEvent<string>).data) as Change));
+    es.addEventListener('run', (m) => on.log?.(JSON.parse((m as MessageEvent<string>).data) as RunLogEvent));
     return () => es.close();
   },
 };

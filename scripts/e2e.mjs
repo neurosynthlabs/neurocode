@@ -52,6 +52,10 @@ async function api(p, init = {}) {
   if (!r.ok) throw new Error(`${init.method ?? 'GET'} ${p} → ${r.status}`);
   return r.json();
 }
+const post = (p, body) => api(p, {
+  method: 'POST',
+  ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+});
 async function tokenFor(email, password) {
   const r = await fetch(`${API}/auth/login`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }),
@@ -312,7 +316,49 @@ try {
     await page.getByText(/neurocode-\d{8}-\d{6}-manual\.db/).first().waitFor({ timeout: 10000 });
     const db = await api('/admin/database');
     expect(db.backups.some((b) => b.name.endsWith('-manual.db')), 'no manual backup is listed');
-    expect(db.migrations.length === 5, `${db.migrations.length} migrations applied`);
+    expect(db.migrations.length === 6, `${db.migrations.length} migrations applied`);
+  });
+
+  await step('an agent run works in a worktree of its own and stops at your signature', async () => {
+    const repo = path.join(TMP, 'tiny');
+    fs.mkdirSync(path.join(repo, 'pkg'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'Makefile'), 'test:\n\t@echo "2 passed"\n');
+    fs.writeFileSync(path.join(repo, 'pkg', 'core.py'), 'def total(x):\n    return x\n');
+    for (const args of [['init', '-q', '-b', 'main'], ['config', 'user.email', 'e2e@test'], ['config', 'user.name', 'E2E'],
+      ['add', '-A'], ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'start']]) {
+      spawnSync('git', args, { cwd: repo });
+    }
+    const project = await post('/projects', { source: 'local', repo });
+    const plan = await post('/plans/compile', { requirement: 'Round invoice totals in one place.', projectId: project.id });
+    for (let i = 0; i < plan.openQuestions.length; i++) await post(`/plans/${plan.ref}/questions/0`, { defer: true });
+    const dispatched = await post(`/plans/${plan.ref}/dispatch`);
+    expect(dispatched.runRef, 'the onboarded repository started no run');
+
+    let run;
+    for (const t0 = Date.now(); Date.now() - t0 < 20000; await new Promise((r) => setTimeout(r, 300))) {
+      run = await api(`/runs/${dispatched.runRef}`);
+      if (run.status === 'waiting') break;
+    }
+    expect(run?.status === 'waiting', `the run is ${run?.status}`);   // the first test run needs a person
+    expect(fs.existsSync(path.join(run.worktree, 'Makefile')), 'the worktree has no checkout');
+    expect(!spawnSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }).stdout.trim(), 'the working tree was touched');
+
+    await open(`/runs?ref=${run.ref}`);
+    await page.getByText(`Waiting for you · ${run.waitingOn}`).first().waitFor({ timeout: 20000 });
+    await page.getByText('worktree ready').first().waitFor({ timeout: 10000 });
+
+    await post(`/approvals/${run.waitingOn}/approve`);
+    let done;
+    for (const t0 = Date.now(); Date.now() - t0 < 30000; await new Promise((r) => setTimeout(r, 300))) {
+      done = await api(`/runs/${run.ref}`);
+      if (['done', 'failed', 'cancelled'].includes(done.status)) break;
+    }
+    expect(done.status === 'done' && done.tests.status === 'passed', `run ${done?.status}, tests ${done?.tests?.status}`);
+    await open(`/runs?ref=${run.ref}`);
+    await page.getByText('2 passed').first().waitFor({ timeout: 15000 });
+    await page.getByRole('button', { name: /Discard worktree/ }).click();
+    await page.waitForTimeout(600);
+    expect(!fs.existsSync(run.worktree), 'the worktree is still there after discarding it');
   });
 
   await step('a model key is saved masked, never logged, and can be removed', async () => {

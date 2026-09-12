@@ -8,10 +8,11 @@ import re
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi import Path as PathParam
 from pydantic import BaseModel, Field, field_validator
 
+from .. import runtime
 from ..ai.compiler import AGENTS, Context, PlanOut, compile_plan
 from ..ai.gateway import Result
 from ..auth import User, current_user, require
@@ -104,8 +105,8 @@ async def approvals(status: str | None = None, c: Ctx = Depends(ctx)) -> list[di
 
 
 @router.post("/approvals/{ref}/{decision}")
-async def decide(ref: str, decision: Literal["approve", "deny"], user: User = Depends(require("approvals:decide")),
-                 c: Ctx = Depends(ctx)) -> dict[str, Any]:
+async def decide(ref: str, decision: Literal["approve", "deny"], jobs: BackgroundTasks,
+                 user: User = Depends(require("approvals:decide")), c: Ctx = Depends(ctx)) -> dict[str, Any]:
     a = need(c.store.one("approvals", ref), ref)
     if a["status"] != "pending":
         raise HTTPException(409, f"{ref} was already {a['status']} — a decision is final")
@@ -115,6 +116,8 @@ async def decide(ref: str, decision: Literal["approve", "deny"], user: User = De
     c.put("approvals", c.store.save_approval(a))
     c.act(user, "Approved" if decision == "approve" else "Denied", f"{ref} · {a['title']}", project=a["projectId"],
           level="ok" if decision == "approve" else "warn")
+    if a.get("runRef"):  # a run is waiting on this decision
+        jobs.add_task(runtime.resume, c, a["runRef"], a.get("step", 0), decision == "approve")
     return a
 
 
@@ -226,7 +229,8 @@ async def settle_question(ref: str, index: int, body: AnswerIn, user: User = Dep
 
 
 @router.post("/plans/{ref}/dispatch")
-async def dispatch(ref: str, user: User = Depends(require("plans:decide")), c: Ctx = Depends(ctx)) -> dict[str, Any]:
+async def dispatch(ref: str, jobs: BackgroundTasks, user: User = Depends(require("plans:decide")),
+                   c: Ctx = Depends(ctx)) -> dict[str, Any]:
     plan = need(c.store.one("plans", ref), ref)
     if in_flight(plan):
         raise HTTPException(409, f"{ref} is already under way")
@@ -235,7 +239,6 @@ async def dispatch(ref: str, user: User = Depends(require("plans:decide")), c: C
                                  f"Answer or defer {'them' if n > 1 else 'it'} first; the plan does not guess.")
     plan["status"] = "dispatched"
     plan["steps"][0]["state"] = "active"
-    c.put("plans", c.store.save("plans", plan))
     task = c.store.one("tasks", plan["taskRef"])
     if task and task["status"] in ("backlog", "planning"):
         task.update(status="in_progress", updatedAt="just now")
@@ -243,6 +246,22 @@ async def dispatch(ref: str, user: User = Depends(require("plans:decide")), c: C
     first = plan["steps"][0]
     c.act(user, "Plan dispatched", f"{ref} → {plan['taskRef']} · {first['agent']} starts: {first['label']}",
           project=plan["projectId"], level="ok", task_ref=plan["taskRef"])
+
+    # With the project's code on this machine, the agent runtime takes it from here: its own worktree,
+    # its own branch, and your signature at the end.
+    project = c.store.get("projects", plan["projectId"])
+    if project and user.can("runs:run"):
+        try:
+            run = await asyncio.to_thread(runtime.prepare, c, plan, task, project, user.name)
+        except runtime.Refused as e:
+            c.record("No run started", str(e), project=plan["projectId"], level="warn", actor="Orchestrator", kind="agent")
+        else:
+            plan["runRef"] = run["ref"]
+            c.put("runs", run)
+            jobs.add_task(runtime.execute, c, run["ref"])
+            c.act(user, "Run started", f"{run['ref']} · worktree on {run['branch']}", project=plan["projectId"],
+                  level="ok", task_ref=plan["taskRef"])
+    c.put("plans", c.store.save("plans", plan))
     return plan
 
 

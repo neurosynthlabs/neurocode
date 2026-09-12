@@ -42,6 +42,10 @@ class Result(Generic[T]):
         return {"provider": self.provider.id, "model": self.provider.model, "ms": self.ms}
 
 
+class NoModel(RuntimeError):
+    """Nothing can answer: no key is set, and no local model is pulled."""
+
+
 class ProviderError(RuntimeError):
     """A provider answered with an HTTP error. 401 or 403 means the key itself is bad."""
 
@@ -88,12 +92,14 @@ def _split(out: Answer | str) -> Answer:
     return (out[0], out[1] or {}) if isinstance(out, tuple) else (out, {})
 
 
-def extract_json(raw: str) -> dict[str, Any]:
-    """The first JSON object in a model's answer, even when it is wrapped in prose or a code fence."""
+def extract_json(raw: str, trim: bool = True) -> dict[str, Any]:
+    """The first JSON object in a model's answer, even when it is wrapped in prose or a code fence.
+    `trim` bounds what we store; code an agent wrote is kept whole and bounded by the runtime instead."""
     start, end = raw.find("{"), raw.rfind("}")
     if start < 0 or end <= start:
         raise ValueError("the answer holds no JSON object")
-    return clip(json.loads(raw[start:end + 1]))
+    parsed = json.loads(raw[start:end + 1])
+    return clip(parsed) if trim else parsed
 
 
 def clip(v: Any) -> Any:
@@ -211,6 +217,26 @@ class Gateway:
         t1 = time.monotonic()
         result = Result(fallback(), Provider("rules", offline), _ms(t0), reason)
         self._record(feature, result.provider, True, _ms(t1), {}, actor, project)
+        return result
+
+    def ask(self, messages: list[dict[str, str]], parse: Callable[[str], T], *, feature: str = "agent",
+            actor: str | None = None, project: str | None = None) -> Result[T]:
+        """For work with no honest offline version — writing code, reviewing a diff. A model answers or
+        this raises; nothing is ever invented to fill the gap."""
+        provider = self.pick()
+        if provider is None:
+            raise NoModel("No model is configured. Set a key in Admin → AI providers, or pull an Ollama model.")
+        t0, usage = time.monotonic(), {}
+        try:
+            raw, usage = _split(CALLS[provider.id](messages, self.config(provider.id)))
+            data = parse(raw)
+        except Exception as e:
+            if isinstance(e, ProviderError) and e.status in (401, 403) and provider.id == "deepseek":
+                self._rejected = _fp(self.deepseek()["key"] or "")
+            self._record(feature, provider, False, _ms(t0), usage, actor, project, f"{type(e).__name__}: {str(e)[:160]}")
+            raise
+        result = Result(data, provider, _ms(t0))
+        self._record(feature, provider, True, result.ms, usage, actor, project)
         return result
 
     def test(self, provider_id: str, actor: str | None = None) -> dict[str, Any]:

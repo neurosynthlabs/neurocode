@@ -38,3 +38,4 @@ server/secrets.json
 server/secrets.json.tmp
 server/*.db-*
 server/backups/
+server/.worktrees/

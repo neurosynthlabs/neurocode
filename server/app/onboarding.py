@@ -39,6 +39,14 @@ TABLE = re.compile(rb"\bcreate\s+table\b", re.I)
 PROC = re.compile(rb"\bcreate\s+(?:or\s+alter\s+)?proc(?:edure)?\b", re.I)
 
 
+def source_root(project: dict[str, Any]) -> Path | None:
+    """Where an onboarded project's code lives on this machine. Sample projects have none."""
+    src = project.get("source")
+    if not src:
+        return None
+    return REPOS_DIR / project["id"] if src["kind"] == "git" else Path(os.path.expanduser(src["repo"]))
+
+
 def redact(text: str) -> str:
     """Strip credentials from every URL in the text: https://user:token@host → https://***@host."""
     return USERINFO.sub(r"\1***@", text)

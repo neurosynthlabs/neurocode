@@ -8,8 +8,16 @@ import {
   Stat, StatGrid, Segmented, Empty,
 } from '@/components/os';
 import { runs as seedRuns, streamPool } from '@/mock/runs';
+import { useData } from '@/lib/data';
 import { cn } from '@/lib/utils';
 import type { RunLogLine } from '@/types';
+import { LiveRuns } from './runs/LiveRuns';
+
+/** Signed in, these are real worktrees; the demo keeps the worked example of a parallel batch. */
+export default function Runs() {
+  const { mode } = useData();
+  return mode === 'live' ? <LiveRuns /> : <SampleRuns />;
+}
 
 const LEVEL_TONE: Record<RunLogLine['level'], string> = {
   info: 'text-ink-2', ok: 'text-ok', warn: 'text-warn', err: 'text-danger', tool: 'text-brand',
@@ -23,7 +31,7 @@ const clock = (base: string, step: number) => {
     .map((n) => String(n).padStart(2, '0')).join(':');
 };
 
-export default function Runs() {
+function SampleRuns() {
   const [live, setLive] = useState(true);
   const [follow, setFollow] = useState(true);
   const [levels, setLevels] = useState<'all' | RunLogLine['level']>('all');

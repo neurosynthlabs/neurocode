@@ -53,7 +53,8 @@ server/app/
   ai/features.py   ask memory, brainstorm, extract facts from text
   onboarding.py    clone or read a repository and measure it
   codeindex.py     parse the code into files, symbols and edges; search, impact and the module graph
-  routes/          auth · admin · work · knowledge · platform · code · ai · system
+  runtime.py       a worktree per task: a model writes files, the project's tests run, you sign it off
+  routes/          auth · admin · work · knowledge · platform · code · runs · ai · system
 ```
 
 ## Data model
@@ -73,6 +74,8 @@ server/app/
 | `code_files`, `code_symbols`, `code_edges` | relational, STRICT | the code index: files, what they declare, and what depends on what |
 | `code_fts` | FTS5 | search over file paths and symbol names, camelCase split into words |
 | `code_index_runs` | relational, STRICT | one row per project: when it was indexed, by which parsers, how much |
+| `runs` | document | an agent run: its branch, worktree, steps, tests, review and diff |
+| `run_logs` | relational, STRICT | everything a run wrote, oldest lines dropped past the cap |
 | `schema_migrations` | relational | which migrations ran |
 
 ## Keeping the data safe
@@ -115,6 +118,28 @@ notice and the data touched. Re-indexing replaces a project's rows in one transa
 - **First run:** with no users, the app opens the Setup wizard. It names the workspace and creates
   the first Owner, who then creates everyone else.
 
+## The agent runtime
+
+Dispatching a plan starts a run, and a run is real work on real code. It gets a git worktree and a
+branch of its own (`neurocode/task-492`), branched from the project's current HEAD. Then, step by step:
+a model is asked for the **complete contents** of the files one plan step needs; the files are written
+inside the worktree and committed; the project's own test command runs there; the real diff is reviewed;
+and the run stops at your signature in the approvals inbox. Approve and the branch is yours to merge —
+NeuroCode never merges. Refuse and the branch and worktree are removed.
+
+Three rules keep it safe to leave running:
+
+- **Nothing touches your working tree.** Every change happens in the worktree, on a new branch.
+- **Nothing a model says is ever executed.** It may only propose file contents. Paths that are absolute,
+  climb out with `..` or point into `.git` are refused outright, and files are capped in size and number.
+- **One command, with your permission.** The only thing that runs is the project's own test command
+  (`make test`, `pytest`, `npm test`, `go test`, `dotnet test`), detected from the repository. The first
+  time a project would run it, the run pauses for your approval, and your answer is remembered.
+
+With no model configured, the writing steps are skipped and say so, and the run still opens the worktree,
+runs the tests and reviews what is there. The review falls back to rules (secrets, debugging leftovers,
+TODOs, a diff with no test touched) and says it was read by rules, not a model.
+
 ## AI features
 
 | Feature | With a model | Offline (no key) |
@@ -138,6 +163,7 @@ rejects is noted once and not sent again until it changes.
 | `/memory` | session + `memory:write` | facts, search, conflicts |
 | `/projects`, `/mcp`, `/agents` | session + the action's permission | the platform |
 | `/projects/{id}/code` | session; `projects:onboard` to re-index | summary, file tree, search, file detail, impact, module graph |
+| `/runs` | session; `runs:run` to stop or discard | agent runs, their output, their diff |
 | `/ai` | `ai:use` | ask, brainstorm, extract |
 | `/usage` | session (per-person detail for admins) | the usage ledger, by feature, provider and day |
 | `/activity`, `/health` | session / public | the log, the live stream, liveness |
@@ -149,9 +175,10 @@ rejects is noted once and not sent again until it changes.
   accounts, roles and permissions, the audit log, first-run setup, the Admin screens, the AI gateway,
   and Ask / Brainstorm / Add from text working live, with or without a key; then the database
   hardening (backups, integrity checks, append-only audit, the usage ledger) and the code index behind
-  live Code Intelligence, Architecture and impact analysis.
-- **Waiting on you:** a valid DeepSeek key (Admin → AI providers) for model answers, and the
-  `workflow` scope on the GitHub token so CI can be pushed.
-- **Next:** the agent runtime (a real worktree per task, a model writing the diff, tests run in the
-  worktree, review of the real diff, all through the approvals gate); tree-sitter parsers in place of
-  the pattern sets; roles per project; Postgres and a hosted mode; single sign-on.
+  live Code Intelligence, Architecture and impact analysis; then (2026-09-12) the agent runtime.
+- **Waiting on you:** a valid DeepSeek key (Admin → AI providers) — without one the runtime opens the
+  worktree, runs the tests and reviews, but skips the steps that write code; and the `workflow` scope on
+  the GitHub token so CI can be pushed.
+- **Next:** several agents per task in parallel worktrees; merging from the UI once a run is accepted;
+  tree-sitter parsers in place of the pattern sets; roles per project; Postgres and a hosted mode;
+  single sign-on.

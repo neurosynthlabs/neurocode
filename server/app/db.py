@@ -27,7 +27,7 @@ KEEP_BACKUPS = 20
 # Document tables, seeded from seed.json one at a time, so a database made by an older version gains
 # the tables it is missing and keeps every change it already holds.
 TABLES = ("projects", "agents", "tasks", "approvals", "memory", "plans", "conflicts", "mcp", "prefs", "decisions",
-          "brainstorms", "activity")
+          "brainstorms", "runs", "activity")
 
 # Words that carry no meaning for relevance, English and Hinglish alike.
 STOP = set("""the and for with when that this from into are was were not but should must have has had then than
@@ -130,6 +130,8 @@ class Store:
                     col = "ref, " if t == "plans" else ""
                     c.executemany(f"INSERT INTO {t}(id, {col}project_id, created, doc) VALUES (?, {'?, ' if col else ''}?, 0, ?)",
                                   [((x["id"], x["ref"]) if col else (x["id"],)) + (x.get("projectId"), _j(x)) for x in rows])
+                elif t == "runs":
+                    pass  # nothing to seed: a run only exists for work that really happened
                 elif t == "conflicts":
                     c.executemany("INSERT INTO conflicts(id, status, doc) VALUES (?, 'open', ?)", [(x["id"], _j(x)) for x in rows])
                 elif t == "activity":
@@ -220,8 +222,17 @@ class Store:
         return max((int(m.group()) for r in refs if (m := re.search(r"\d+$", r))), default=500) + 1
 
     def next_memory_number(self) -> int:
-        refs = [r[0] for r in self.rows("SELECT ref FROM memory")]
-        return max((int(m.group()) for r in refs if (m := re.search(r"\d+$", r))), default=0) + 1
+        return self._next("SELECT ref FROM memory", 0)
+
+    def next_run_number(self) -> int:
+        return self._next("SELECT ref FROM runs", 0)
+
+    def next_approval_number(self) -> int:
+        return self._next("SELECT ref FROM approvals", 100)
+
+    def _next(self, sql: str, floor: int) -> int:
+        refs = [r[0] for r in self.rows(sql)]
+        return max((int(m.group()) for r in refs if (m := re.search(r"\d+$", r))), default=floor) + 1
 
     # ── domain ───────────────────────────────────────────────────
     def insert_task(self, doc: dict[str, Any]) -> dict[str, Any]:
@@ -238,6 +249,26 @@ class Store:
 
     def insert_brainstorm(self, doc: dict[str, Any]) -> dict[str, Any]:
         return self.insert("brainstorms", doc, project_id=doc.get("projectId"), created=time.time())
+
+    def insert_run(self, doc: dict[str, Any]) -> dict[str, Any]:
+        return self.insert("runs", doc, ref=doc["ref"], project_id=doc["projectId"], status=doc["status"], started=time.time())
+
+    def save_run(self, doc: dict[str, Any]) -> dict[str, Any]:
+        return self.save("runs", doc, status=doc["status"])
+
+    def add_run_log(self, run_id: str, step: int | None, level: str, line: str, cap: int = 4000) -> dict[str, Any]:
+        """One line of a run's output. The oldest lines go when a run has written too many."""
+        with self.lock, self.conn:
+            cur = self.conn.execute("INSERT INTO run_logs(run_id, at, step, level, line) VALUES (?, ?, ?, ?, ?)",
+                                    (run_id, now_iso(), step, level, line[:2000]))
+            self.conn.execute("DELETE FROM run_logs WHERE run_id = ? AND id <= "
+                              "(SELECT MAX(id) - ? FROM run_logs WHERE run_id = ?)", (run_id, cap, run_id))
+        return {"id": cur.lastrowid, "at": now_iso(), "step": step, "level": level, "line": line[:2000]}
+
+    def run_logs(self, run_id: str, after: int = 0, limit: int = 1000) -> list[dict[str, Any]]:
+        return [{"id": r[0], "at": r[1], "step": r[2], "level": r[3], "line": r[4]} for r in self.rows(
+            "SELECT id, at, step, level, line FROM run_logs WHERE run_id = ? AND id > ? ORDER BY id LIMIT ?",
+            (run_id, after, limit))]
 
     def insert_memory(self, doc: dict[str, Any]) -> dict[str, Any]:
         with self.lock, self.conn:

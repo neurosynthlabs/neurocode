@@ -4,7 +4,7 @@ import {
 import { toast } from 'sonner';
 import {
   ApiError, api, type AskAnswer, type BrainstormDoc, type Change, type Collection, type DecisionDoc, type Extracted,
-  type FactCandidate, type Health, type McpInput, type Pref, type ProjectInput,
+  type FactCandidate, type Health, type McpInput, type Pref, type ProjectInput, type RunDoc, type RunLogEvent,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import * as offline from '@/lib/offline-ai';
@@ -48,6 +48,8 @@ interface Domain {
   decisions: DecisionDoc[];
   /** Briefs made by Brainstorm, newest first. */
   brainstorms: BrainstormDoc[];
+  /** Agent runs, newest first: each one a git worktree of its own. */
+  runs: RunDoc[];
   /** Newest first, the order every feed renders in. */
   activity: ActivityEvent[];
 }
@@ -83,6 +85,12 @@ export interface DataCtx extends Domain {
   /** Candidate facts found in pasted text. Nothing is stored until addFacts. */
   extract: (text: string, projectId?: string) => Promise<Extracted | null>;
   addFacts: (projectId: string, facts: FactCandidate[]) => Promise<MemoryFact[] | null>;
+  /** Stop a run. Its worktree stays for you to look at. */
+  cancelRun: (ref: string) => Promise<RunDoc | null>;
+  /** Remove a finished run's worktree and branch. */
+  discardRun: (ref: string) => Promise<RunDoc | null>;
+  /** Each line a run writes, as it writes it. Returns the unsubscribe. */
+  onRunLog: (listener: (line: RunLogEvent) => void) => () => void;
 }
 
 const C = createContext<DataCtx | null>(null);
@@ -98,15 +106,16 @@ const seed = (): Domain => ({
   prefs: [],
   decisions: [],
   brainstorms: [],
+  runs: [],
   activity: [...seedActivity].reverse().concat(activityExtra),
 });
 
 async function load(): Promise<Domain> {
-  const [approvals, tasks, memory, projects, plans, mcp, conflicts, prefs, decisions, brainstorms, activity] = await Promise.all([
+  const [approvals, tasks, memory, projects, plans, mcp, conflicts, prefs, decisions, brainstorms, runs, activity] = await Promise.all([
     api.approvals(), api.tasks(), api.memory(), api.projects(), api.plans(), api.mcp(), api.conflicts(), api.prefs(),
-    api.decisions(), api.brainstorms(), api.activity(),
+    api.decisions(), api.brainstorms(), api.runs(), api.activity(),
   ]);
-  return { approvals, tasks, memory, projects, plans, mcp, conflicts, prefs, decisions, brainstorms, activity };
+  return { approvals, tasks, memory, projects, plans, mcp, conflicts, prefs, decisions, brainstorms, runs, activity };
 }
 
 /** One document into or out of a collection. The server streams these; demo actions make their own. */
@@ -152,6 +161,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   // Actions read the latest state through refs. A layout effect syncs them before the browser can
   // deliver the next click, so two quick clicks never act on the same stale snapshot.
   const now = useRef(domain);
+  const listeners = useRef(new Set<(line: RunLogEvent) => void>());
   const who = useRef({ can, roleNames, name: user?.name ?? 'You' });
   useLayoutEffect(() => { now.current = domain; }, [domain]);
   useLayoutEffect(() => { who.current = { can, roleNames, name: user?.name ?? 'You' }; }, [can, roleNames, user]);
@@ -171,6 +181,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         unsubscribe = api.stream({
           activity: (ev) => setDomain((d) => (d.activity.some((e) => e.id === ev.id) ? d : { ...d, activity: [ev, ...d.activity] })),
           change: (c) => setDomain((d) => applyChange(d, c)),
+          log: (line) => listeners.current.forEach((cb) => cb(line)),
         });
       } catch (e) {
         if (cancelled) return;
@@ -472,6 +483,25 @@ export function DataProvider({ children }: { children: ReactNode }) {
     return docs;
   }, [attempt, put, log, permitted]);
 
+  const cancelRun = useCallback(async (ref: string) => {
+    if (!permitted('runs:run')) return null;
+    const doc = await attempt(() => api.cancelRun(ref), 'The run did not stop');
+    if (doc) put('runs', doc);
+    return doc;
+  }, [attempt, put, permitted]);
+
+  const discardRun = useCallback(async (ref: string) => {
+    if (!permitted('runs:run')) return null;
+    const doc = await attempt(() => api.discardRun(ref), 'The worktree was not removed');
+    if (doc) put('runs', doc);
+    return doc;
+  }, [attempt, put, permitted]);
+
+  const onRunLog = useCallback((listener: (line: RunLogEvent) => void) => {
+    listeners.current.add(listener);
+    return () => { listeners.current.delete(listener); };
+  }, []);
+
   const reset = useCallback(async () => {
     if (!permitted('workspace:admin')) return false;
     if (!live.current) { setDomain(seed()); return true; }
@@ -490,11 +520,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
     () => ({
       ...domain, mode, health, decide, moveTask, toggleCheck, setPinned, archive, resolveConflict, createProject,
       registerMcp, settleQuestion, dispatchPlan, compile, recompile, searchMemory, reset, setPref, recordDecision,
-      ask, brainstorm, extract, addFacts,
+      ask, brainstorm, extract, addFacts, cancelRun, discardRun, onRunLog,
     }),
     [domain, mode, health, decide, moveTask, toggleCheck, setPinned, archive, resolveConflict, createProject,
       registerMcp, settleQuestion, dispatchPlan, compile, recompile, searchMemory, reset, setPref, recordDecision,
-      ask, brainstorm, extract, addFacts],
+      ask, brainstorm, extract, addFacts, cancelRun, discardRun, onRunLog],
   );
   return <C.Provider value={value}>{children}</C.Provider>;
 }

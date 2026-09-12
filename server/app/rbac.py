@@ -20,11 +20,15 @@ class Rbac:
         self.store = store
         self.catalogue: list[dict[str, Any]] = seed["permissions"]
         self.order = {p["id"]: i for i, p in enumerate(self.catalogue)}
-        if not store.row("SELECT 1 FROM roles LIMIT 1"):
-            with store.tx() as c:
-                for r in seed["roles"]:
-                    c.execute("INSERT INTO roles(id, name, description, builtin) VALUES (?, ?, ?, 1)",
-                              (r["id"], r["name"], r["description"]))
+        # Built-in roles follow the catalogue on every start, so a version that adds a permission grants
+        # it at once. Custom roles are never touched.
+        with store.tx() as c:
+            for r in seed["roles"]:
+                c.execute("INSERT INTO roles(id, name, description, builtin) VALUES (?, ?, ?, 1) "
+                          "ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description "
+                          "WHERE roles.builtin = 1", (r["id"], r["name"], r["description"]))
+                if c.execute("SELECT builtin FROM roles WHERE id = ?", (r["id"],)).fetchone()[0]:
+                    c.execute("DELETE FROM role_permissions WHERE role_id = ?", (r["id"],))
                     c.executemany("INSERT INTO role_permissions VALUES (?, ?)", [(r["id"], p) for p in r["permissions"]])
 
     # ── reading ──────────────────────────────────────────────────
