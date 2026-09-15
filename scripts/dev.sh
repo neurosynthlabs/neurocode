@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# NeuroCode local stack: the web app (Vite) and the local API (FastAPI + SQLite), together.
+# NeuroCode local stack: the web app (Vite) and the local API (FastAPI + Postgres), together.
 #   ./scripts/dev.sh start | stop | restart | status | logs [web|api]
 # Ports: web 5180 (5173 is usually taken by another project here), API 8787.
 # NC_API=0 starts the web app alone. It then runs on seed data, exactly like the public demo.
@@ -21,7 +21,7 @@ descendants() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do echo "$c"; de
 launch() {
   case $1 in
     web) npm run dev -- --port "$WEB_PORT" --strictPort ;;
-    api) uv run --project server uvicorn app.main:create_app --factory --app-dir server --host 127.0.0.1 --port "$API_PORT" ;;
+    api) uv run --project server uvicorn app.api.app:create_api --factory --app-dir server --host 127.0.0.1 --port "$API_PORT" ;;
   esac
 }
 
@@ -72,6 +72,11 @@ start() {
     printf '▸ NC_API=0: web app only, on seed data\n'
   elif ! command -v uv >/dev/null 2>&1; then
     printf '▸ uv not found: web app only, on seed data. Install uv for the local API: https://docs.astral.sh/uv/\n'
+  elif ! trouble=$(uv run --project server --directory server python -m app.data.check); then
+    # Asked before uvicorn, because no server, no database and no migrations all look the same in
+    # its log — and each has a different one-line fix, which this prints.
+    printf '✗ api: %s\n' "$trouble"
+    printf '▸ continuing without the API. The web app falls back to seed data.\n'
   else
     start_one api || printf '▸ continuing without the API. The web app falls back to seed data.\n'
   fi

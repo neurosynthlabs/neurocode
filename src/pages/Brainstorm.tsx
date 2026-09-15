@@ -13,6 +13,7 @@ import { useProject } from '@/lib/project-context';
 import { brainstorms as samples } from '@/mock/thinking';
 import { projectName } from '@/mock/projects';
 import { cn } from '@/lib/utils';
+import { ago } from '@/lib/time';
 
 const SEV_TONE = { HIGH: 'danger', MEDIUM: 'warn', LOW: 'neutral' } as const;
 const DOT: Record<Tone, string> = {
@@ -86,7 +87,7 @@ export default function Brainstorm() {
               <div className="flex items-center gap-2">
                 <Mono>{x.ref}</Mono>
                 {x.projectId && <Tag tone="neutral">{projectName(x.projectId)}</Tag>}
-                <span className="ml-auto shrink-0 text-[11.5px] text-dim">{x.createdAt}</span>
+                <span className="ml-auto shrink-0 text-[11.5px] text-dim">{ago(x.createdAt)}</span>
               </div>
               <p className="mt-1 line-clamp-2 text-[13px] text-ink">{x.brief.title}</p>
               <p className="mt-1 text-[11.5px] text-dim">{x.compiler.provider === 'rules' ? 'Offline template' : x.compiler.model}</p>
@@ -101,7 +102,7 @@ export default function Brainstorm() {
                 <span className={cn('tnum ml-auto text-[13px] font-semibold', x.score >= 75 ? 'text-ok' : x.score >= 55 ? 'text-warn' : 'text-danger')}>{x.score}</span>
               </div>
               <p className="mt-1 line-clamp-2 text-[13px] text-ink">{x.idea}</p>
-              <p className="mt-1 text-[11.5px] text-dim">{x.createdAt}</p>
+              <p className="mt-1 text-[11.5px] text-dim">{ago(x.createdAt)}</p>
             </ListRow>
           ))}
         </div>
@@ -119,7 +120,7 @@ function BriefView({ doc, onPlan }: { doc: BrainstormDoc; onPlan: () => void }) 
   return (
     <div className="min-w-0 flex-1 space-y-4 overflow-y-auto p-5">
       <Panel
-        className="accent-top" eyebrow={`${doc.ref} · ${doc.createdAt} · ${doc.by}`} title={b.title}
+        className="accent-top" eyebrow={`${doc.ref} · ${ago(doc.createdAt)} · ${doc.by}`} title={b.title}
         actions={<Button size="sm" onClick={onPlan}><GitBranchPlus className="size-3.5" />Plan the MVP</Button>}
       >
         <p className="text-[14px] leading-relaxed text-ink-2">{b.problem}</p>

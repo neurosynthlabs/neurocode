@@ -198,12 +198,12 @@ export default function Settings() {
                 <Ascii className="max-h-[420px] overflow-auto">{exported}</Ascii>
               </Panel>
               <Panel eyebrow="Where this lives" title="Storage">
-                <KV k="Preferences" v={data.mode === 'live' ? 'SQLite · prefs table' : 'this tab only'} mono />
+                <KV k="Preferences" v={data.mode === 'live' ? 'Postgres · prefs table' : 'this tab only'} mono />
                 <KV k="Project rules" v=".os/rules/*.md" mono />
                 <KV k="Model keys" v="server/secrets.json · owner-only" mono />
-                <KV k="Memory" v={data.mode === 'live' ? 'SQLite + FTS5 · local' : 'seed data · this tab only'} mono />
-                <KV k="Operational data" v={data.mode === 'live' ? 'SQLite + FTS5 · local API' : 'seed data · this tab only'} mono />
-                {data.health && <KV k="Database file" v={data.health.db.split('/').slice(-2).join('/')} mono />}
+                <KV k="Memory" v={data.mode === 'live' ? 'Postgres · full-text + pgvector' : 'seed data · this tab only'} mono />
+                <KV k="Operational data" v={data.mode === 'live' ? 'Postgres · local API' : 'seed data · this tab only'} mono />
+                {data.health?.db && <KV k="Database" v={data.health.db} mono />}
                 {data.health?.compiler && (
                   <KV k="Requirement compiler" v={data.health.compiler.note ?? (data.health.compiler.provider === 'rules' ? 'offline planner' : data.health.compiler.model)} />
                 )}

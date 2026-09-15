@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from ..settings import Settings, settings
+from . import changes  # noqa: F401  — importing it is what registers the change listeners
 
 log = logging.getLogger(__name__)
 

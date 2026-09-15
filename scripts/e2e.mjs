@@ -82,11 +82,22 @@ try {
   const sync = spawnSync('uv', ['sync', '--project', 'server', '--quiet'], { cwd: ROOT, stdio: 'inherit' });
   if (sync.error || sync.status !== 0) throw new Error('uv sync failed. Is uv installed? https://docs.astral.sh/uv/');
 
+  // The run starts at the setup wizard, so it needs a database with nothing in it — not the one the
+  // app is using. Emptied and migrated here, every time, so a run can never pass on yesterday's rows.
+  const E2E_DB = 'postgresql+asyncpg://neurocode:neurocode@127.0.0.1:5432/neurocode_e2e';
+  const pg = (args, env) => {
+    const r = spawnSync(path.join(ROOT, 'server/.venv/bin/python'), args,
+      { cwd: path.join(ROOT, 'server'), stdio: 'inherit', env: { ...process.env, ...env } });
+    if (r.error || r.status !== 0) throw new Error(`${args.join(' ')} failed`);
+  };
+  pg([path.join(ROOT, 'scripts/bootstrap-db.py'), '--reset', 'neurocode_e2e']);
+  pg(['-m', 'alembic', 'upgrade', 'head'], { NEUROCODE_DATABASE_URL: E2E_DB });
+
   // Both servers are spawned directly (not through uv run / npm) so killing them really stops them.
   run('api', path.join(ROOT, 'server/.venv/bin/python'),
-    ['-m', 'uvicorn', 'app.main:create_app', '--factory', '--app-dir', 'server', '--host', '127.0.0.1', '--port', String(API_PORT)],
+    ['-m', 'uvicorn', 'app.api.app:create_api', '--factory', '--app-dir', 'server', '--host', '127.0.0.1', '--port', String(API_PORT)],
     // No server/.env and no key from this shell: the run must not depend on, or reach, a real model.
-    { NEUROCODE_DB: path.join(TMP, 'e2e.db'), NEUROCODE_COMPILER: 'rules', NEUROCODE_ENV_FILE: '', DEEPSEEK_API_KEY: '' });
+    { NEUROCODE_DATABASE_URL: E2E_DB, NEUROCODE_COMPILER: 'rules', NEUROCODE_ENV_FILE: '', DEEPSEEK_API_KEY: '' });
   run('web', process.execPath,
     [path.join(ROOT, 'node_modules/vite/bin/vite.js'), '--port', String(WEB_PORT), '--strictPort', '--host', '127.0.0.1'],
     { NC_API_PORT: String(API_PORT) });

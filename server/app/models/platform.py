@@ -109,6 +109,10 @@ class AiCall(Base):
     ms: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     tokens_in: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     tokens_out: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    #: The agent that asked for it, when one did — plain text, because the roster is editable and an
+    #: entry in the ledger must outlive the agent it describes. Without it there was no honest answer
+    #: to "what has this agent spent", so the screen showed a zero that looked like a measurement.
+    agent: Mapped[str] = mapped_column(String(60), nullable=False, server_default="")
     user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
     error: Mapped[str] = mapped_column(Text, nullable=False, server_default="")

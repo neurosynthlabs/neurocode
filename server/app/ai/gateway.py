@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import sqlite3
 import time
 import urllib.error
 import urllib.request
@@ -22,9 +21,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
-from ..db import Store, now_iso
 from ..secrets import Secrets
 from . import lanes
+from .ledger import Ledger
 from .lanes import CHAT, PLAN, REVIEW, WRITE, Lane
 
 T = TypeVar("T")
@@ -159,8 +158,8 @@ def _ms(t0: float) -> int:
 
 
 class Gateway:
-    def __init__(self, store: Store, secrets: Secrets) -> None:
-        self.store, self.secrets = store, secrets
+    def __init__(self, ledger: Ledger, secrets: Secrets) -> None:
+        self.store, self.secrets = ledger, secrets
         self._rejected: dict[str, str] = {}          # lane id → fingerprint of the key it refused
         self._recent: dict[str, list[float]] = {}    # lane id → when it was called, this last minute
         self._ollama_seen: tuple[float, str, bool] = (-1e9, "", False)
@@ -228,9 +227,7 @@ class Gateway:
         return len(recent)
 
     def _today(self, lane_id: str) -> int:
-        row = self.store.row("SELECT COUNT(*) FROM ai_calls WHERE lane = ? AND substr(at, 1, 10) = ?",
-                             (lane_id, now_iso()[:10]))
-        return int(row[0]) if row else 0
+        return self.store.calls_today(lane_id)
 
     def spent(self, lane: Lane) -> dict[str, int]:
         return {"minute": self._this_minute(lane.id), "today": self._today(lane.id)}
@@ -323,7 +320,7 @@ class Gateway:
 
     # ── calls ────────────────────────────────────────────────────
     def _try(self, provider: Provider, messages: list[dict[str, str]], parse: Callable[[str], T], feature: str,
-             actor: str | None, project: str | None) -> tuple[T, int] | str:
+             actor: str | None, project: str | None, agent: str = "") -> tuple[T, int] | str:
         """One lane, one attempt. Returns the answer, or the reason it could not be used."""
         t0, usage = time.monotonic(), {}
         self._recent.setdefault(provider.id, []).append(time.monotonic())
@@ -336,21 +333,22 @@ class Gateway:
                 if key:
                     self._rejected[provider.id] = _fp(key)
             reason = f"{provider.model} failed ({type(e).__name__}: {str(e)[:160]})"
-            self._record(feature, provider, False, _ms(t0), usage, actor, project, reason)
+            self._record(feature, provider, False, _ms(t0), usage, actor, project, reason, agent)
             return reason
         ms = _ms(t0)
-        self._record(feature, provider, True, ms, usage, actor, project)
+        self._record(feature, provider, True, ms, usage, actor, project, agent=agent)
         return data, ms
 
     def run(self, messages: list[dict[str, str]], parse: Callable[[str], T], fallback: Callable[[], T], *,
             offline: str = "offline planner", feature: str = "compile", actor: str | None = None,
             project: str | None = None, role: str | None = None, lane: str | None = None,
-            avoid: str | None = None) -> Result[T]:
+            avoid: str | None = None, agent: str = "") -> Result[T]:
         """Ask the best lane and validate its answer. A lane that fails hands the call to the next one;
         when every lane is spent or silent, the rules stand in and say so. Every attempt is ledgered."""
         t0, reason = time.monotonic(), None
         for candidate in self.chain(role=role, lane=lane, avoid=avoid):
-            out = self._try(Provider(candidate.id, candidate.model), messages, parse, feature, actor, project)
+            out = self._try(Provider(candidate.id, candidate.model), messages, parse, feature, actor,
+                            project, agent)
             if isinstance(out, str):
                 reason = out
                 continue
@@ -358,12 +356,12 @@ class Gateway:
             return Result(data, Provider(candidate.id, candidate.model), ms)
         t1 = time.monotonic()
         result = Result(fallback(), Provider("rules", offline), _ms(t0), reason)
-        self._record(feature, result.provider, True, _ms(t1), {}, actor, project)
+        self._record(feature, result.provider, True, _ms(t1), {}, actor, project, agent=agent)
         return result
 
     def ask(self, messages: list[dict[str, str]], parse: Callable[[str], T], *, feature: str = "agent",
             actor: str | None = None, project: str | None = None, role: str | None = None,
-            lane: str | None = None, avoid: str | None = None) -> Result[T]:
+            lane: str | None = None, avoid: str | None = None, agent: str = "") -> Result[T]:
         """For work with no honest offline version — writing code, reviewing a diff. A lane answers,
         or the next lane does, or this raises; nothing is ever invented to fill the gap."""
         chain = self.chain(role=role, lane=lane, avoid=avoid)
@@ -371,7 +369,8 @@ class Gateway:
             raise NoModel("No model is configured. Add a free key in Admin → AI providers, or pull an Ollama model.")
         reason = ""
         for candidate in chain:
-            out = self._try(Provider(candidate.id, candidate.model), messages, parse, feature, actor, project)
+            out = self._try(Provider(candidate.id, candidate.model), messages, parse, feature, actor,
+                            project, agent)
             if isinstance(out, str):
                 reason = out
                 continue
@@ -434,13 +433,11 @@ class Gateway:
             return {"ok": False, "ms": _ms(t0), "detail": detail}
 
     def _record(self, feature: str, provider: Provider, ok: bool, ms: int, usage: Usage, actor: str | None,
-                project: str | None, error: str = "") -> None:
+                project: str | None, error: str = "", agent: str = "") -> None:
         """One line in the usage ledger. The ledger must never break the feature it measures."""
         try:
-            self.store.execute(
-                "INSERT INTO ai_calls(at, feature, lane, provider, model, ok, ms, tokens_in, tokens_out, "
-                "user_id, project_id, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (now_iso(), feature, provider.id, provider.id, provider.model, int(ok), ms,
-                 int(usage.get("in") or 0), int(usage.get("out") or 0), actor, project, error[:300]))
-        except sqlite3.Error:
+            self.store.record(feature=feature, lane=provider.id, model=provider.model, ok=ok, ms=ms,
+                              tokens_in=int(usage.get("in") or 0), tokens_out=int(usage.get("out") or 0),
+                              user_id=actor, project_id=project, agent=agent, error=error)
+        except Exception:                        # noqa: BLE001 — a ledger outage must not fail the call
             pass

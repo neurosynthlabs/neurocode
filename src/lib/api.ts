@@ -22,9 +22,10 @@ export interface CompilerInfo {
 
 export interface Health {
   ok: boolean;
+  /** Which database is answering, as `host:port/name`. */
   db: string;
+  /** Row counts per table — the planner's estimates, so a status panel need not scan anything. */
   counts: Record<string, number>;
-  needsSetup?: boolean;
   compiler?: CompilerInfo;
 }
 
@@ -289,12 +290,20 @@ export interface UsageReport {
   byPerson?: { name: string; calls: number; tokens: number }[];
 }
 export interface BackupInfo { name: string; bytes: number; at: string }
+export interface IndexHealth { count: number; unused: number; invalid: number }
 export interface DatabaseInfo {
-  path: string; sqlite: string; pageSize: number; pages: number; freePages: number; journalMode: string;
+  /** Which database is answering, as `host:port/name`. */
+  path: string;
+  /** "PostgreSQL", and the server version it reports. */
+  engine: string; version: string;
+  pageSize: number; pages: number; freePages: number;
+  /** Postgres' `wal_level`: minimal · replica · logical. */
+  walLevel: string;
   sizeBytes: number; walBytes: number; tables: { name: string; rows: number }[];
-  /** Full-text search indexes. */
+  /** Every index in the schema, and how many are unused or invalid. */
   indexes: number;
-  migrations: { version: number; name: string; appliedAt: string }[];
+  indexHealth: IndexHealth;
+  migrations: { version: number; name: string; appliedAt: string | null; revision: string }[];
   backups: BackupInfo[];
   backupDir: string | null;
 }
@@ -469,7 +478,7 @@ export const api = {
   recordDecision: (key: string, body: { value: string; action: string; detail: string; projectId: string; level: string }) =>
     request<DecisionDoc>(`/decisions/${seg(key)}`, POST(body)),
 
-  activity: () => request<ActivityEvent[]>('/activity?limit=1000'),
+  activity: () => request<ActivityEvent[]>('/activity?limit=500'),   // the server's own ceiling; ask for more and it quietly gives you this
   reset: () => request<Health>('/admin/reset', { method: 'POST', headers: { 'X-Confirm': 'reset' } }),
 
   /** Server-Sent Events: each log line, each document that changed, and an agent run's output. */

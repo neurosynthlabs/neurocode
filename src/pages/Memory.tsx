@@ -18,6 +18,7 @@ import { useData } from '@/lib/data';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { MemoryCategory, Confidence, MemoryFact } from '@/types';
+import { ago } from '@/lib/time';
 
 const CONF_TONE: Record<Confidence, 'ok' | 'warn' | 'danger'> = { HIGH: 'ok', MEDIUM: 'warn', LOW: 'danger' };
 const SEV_TONE = { HIGH: 'danger', MEDIUM: 'warn', LOW: 'neutral' } as const;
@@ -211,8 +212,8 @@ export default function Memory() {
                     <p className="text-[13.5px] leading-relaxed text-ink-2">{fact.reason}</p>
                     <div className="mt-2.5 border-t border-line pt-2.5">
                       <KV k="Source" v={fact.source} />
-                      <KV k="Created" v={fact.createdAt} />
-                      <KV k="Last used" v={fact.lastUsed} />
+                      <KV k="Created" v={ago(fact.createdAt)} />
+                      <KV k="Last used" v={ago(fact.lastUsed)} />
                       <KV k="Retrieval hits" v={fact.hits} />
                     </div>
                   </Panel>

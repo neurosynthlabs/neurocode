@@ -76,6 +76,12 @@ class Settings(BaseSettings):
         """The same database for tools that cannot speak async — Alembic's offline mode, psql URLs."""
         return self.database_url.replace("+asyncpg", "")
 
+    @property
+    def blocking_database_url(self) -> str:
+        """The same database again, for the one component that is blocking by nature: the AI gateway
+        waits on model providers from a worker thread, so it speaks psycopg rather than asyncpg."""
+        return self.database_url.replace("+asyncpg", "+psycopg")
+
 
 @lru_cache(maxsize=1)
 def settings() -> Settings:

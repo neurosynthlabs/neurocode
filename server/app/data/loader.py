@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -65,12 +65,33 @@ def count(value: Any) -> int:
     return int(n * SIZES.get((m.group(2) or "").lower(), 1))
 
 
+#: "2 min ago", "3 h ago", "6 d ago" — how the seed was written, back when these were display strings
+#: kept in a document and never compared to anything.
+AGO = re.compile(r"^\s*(\d+)\s*(min|minute|minutes|h|hour|hours|d|day|days|w|week|weeks)\s+ago\s*$", re.I)
+AGO_UNITS = {"min": "minutes", "minute": "minutes", "minutes": "minutes", "h": "hours", "hour": "hours",
+             "hours": "hours", "d": "days", "day": "days", "days": "days", "w": "weeks",
+             "week": "weeks", "weeks": "weeks"}
+
+
 def when(value: Any) -> datetime | None:
-    """A real timestamp, or nothing. "2h ago" is a way of showing a time, not of storing one."""
+    """A real timestamp, or nothing.
+
+    The seed still says "2 min ago", because in the old store these were strings a screen printed and
+    nothing ever sorted or filtered by. Dropping them — which is what returning None did — left every
+    project with no last-active date and all 47 facts with no last-used date, so the columns existed
+    and were empty. They are read relative to now instead: approximate, and true enough to sort by,
+    which is the whole reason the column is there.
+    """
     if not isinstance(value, str) or not value.strip():
         return None
+    text = value.strip()
+    if text.lower() in ("just now", "now"):
+        return datetime.now(UTC)
+    ago = AGO.match(text)
+    if ago:
+        return datetime.now(UTC) - timedelta(**{AGO_UNITS[ago.group(2).lower()]: int(ago.group(1))})
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
@@ -122,6 +143,8 @@ async def load_seed(session: AsyncSession, data: dict[str, Any] | None = None) -
     written["agents"] = len(data.get("agents", []))
     await session.flush()
 
+    #: A plan names its task by reference, not by id; the tasks are loaded first, so this is the map.
+    task_ids = {row["ref"]: row["id"] for row in data.get("tasks", []) if row.get("ref")}
     for row in data.get("tasks", []):
         session.add(Task(
             id=row["id"], ref=row["ref"], title=row["title"], project_id=row["projectId"],
@@ -146,6 +169,9 @@ async def load_seed(session: AsyncSession, data: dict[str, Any] | None = None) -
         deferred = set(row.get("deferred", []))
         session.add(Plan(
             id=row["id"], ref=row["ref"], project_id=row["projectId"],
+            # Every seeded plan names the task it came from, and the column for it was simply never
+            # filled — so the relationship resolved to None and a plan looked unattached to its work.
+            task_id=task_ids.get(row.get("taskRef", "")),
             status=row.get("status", "draft"), risk=row.get("risk", "LOW"),
             confidence=count(row.get("confidence")), raw_requirement=row.get("rawRequirement", ""),
             business_requirement=row.get("businessRequirement", ""),
@@ -190,12 +216,14 @@ async def load_seed(session: AsyncSession, data: dict[str, Any] | None = None) -
         for tag in dict.fromkeys(row.get("tags", [])):
             session.add(MemoryTag(fact_id=row["id"], tag=tag))
     written["memory"] = len(data.get("memory", []))
+    # A conflict points at the two facts by key now, so the facts have to exist before it is written.
+    await session.flush()
 
     for row in data.get("conflicts", []):
         session.add(MemoryConflict(
             id=row["id"], topic=row.get("topic", ""), status=row.get("status", "open"),
             severity=row.get("severity", "MEDIUM"), detail=row.get("detail", ""),
-            suggestion=row.get("suggestion", ""), a=row.get("a", {}), b=row.get("b", {}),
+            suggestion=row.get("suggestion", ""), a=row["a"], b=row["b"],
         ))
     written["conflicts"] = len(data.get("conflicts", []))
 
@@ -239,12 +267,16 @@ async def sync_roles(session: AsyncSession, data: dict[str, Any] | None = None) 
     A custom role someone made is left exactly as it is."""
     rbac = (data or load_seed_file()).get("rbac", {})
     roles = rbac.get("roles", [])
-    for row in roles:
+    for n, row in enumerate(roles):
         role = await session.get(Role, row["id"])
         if role is None:
             role = Role(id=row["id"])
             session.add(role)
         role.name, role.description, role.builtin = row["name"], row.get("description", ""), True
+        # The catalogue's order is the ladder the access screen shows, so it is carried rather than
+        # re-derived: written in one transaction, these rows all share a timestamp and cannot be
+        # ordered by when they arrived.
+        role.rank = n
         await session.flush()
         await session.execute(delete(RolePermission).where(RolePermission.role_id == role.id))
         for permission in dict.fromkeys(row.get("permissions", [])):

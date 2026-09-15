@@ -40,6 +40,11 @@ class Lane:
     signup: str = ""            # where a free key comes from, shown in the UI
     note: str = ""
     embed: str = ""             # the embedding model it serves, if it serves one
+    #: US dollars per million tokens, in and out. Zero is the honest figure for every free lane in
+    #: the catalogue below — which is all of them but one — and it is what makes a cost of $0 on a
+    #: usage screen a fact rather than a placeholder. A paid lane fills these in with its own price.
+    usd_per_m_in: float = 0.0
+    usd_per_m_out: float = 0.0
 
     @property
     def needs_key(self) -> bool:
@@ -96,6 +101,11 @@ def _apply(fields: dict[str, Any], saved: dict[str, Any], mapping: dict[str, str
         elif field in ("rpm", "rpd") and isinstance(value, int) and not isinstance(value, bool) and value >= 0:
             fields[field] = value
 
+
+def price_of(lane_id: str) -> tuple[float, float]:
+    """What a million tokens cost on this lane, in and out. An unknown lane costs nothing known."""
+    lane = next((x for x in LANES if x.id == lane_id), None)
+    return (lane.usd_per_m_in, lane.usd_per_m_out) if lane else (0.0, 0.0)
 
 def settled(store: Store, lane_id: str, environ: dict[str, str] | None = None) -> Lane | None:
     """The lane as this workspace has it: the catalogue, then what an admin saved, then the

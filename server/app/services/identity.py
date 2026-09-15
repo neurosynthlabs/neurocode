@@ -9,6 +9,8 @@ Nothing in this file knows what HTTP is, and nothing in it writes SQL.
 """
 from __future__ import annotations
 
+import asyncio
+
 import re
 import secrets as pysecrets
 from dataclasses import dataclass
@@ -24,6 +26,16 @@ from ..repositories import AuditRepository, RoleRepository, SessionRepository, U
 from ..settings import Settings, settings as get_settings
 from .errors import Denied, Refused
 from .security import hash_password, new_token, token_hash, verify_password
+
+#: scrypt is meant to be expensive — about a fifth of a second of pure CPU at these parameters, which
+#: is the whole point — so it runs on a worker thread. On the event loop it stopped every other
+#: request in the process for that long, on every sign-in and every password an admin set.
+async def _hash(password: str) -> str:
+    return await asyncio.to_thread(hash_password, password)
+
+
+async def _verify(password: str, stored: str) -> bool:
+    return await asyncio.to_thread(verify_password, password, stored)
 
 MIN_PASSWORD = 10
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -102,7 +114,7 @@ class IdentityService:
         if await self.users.by_email(email) is not None:
             raise Refused("Someone already uses that email.")
         user = await self.users.add(UserRow(id="u_" + pysecrets.token_hex(6), email=email.strip(),
-                                            name=name.strip(), password_hash=hash_password(password)))
+                                            name=name.strip(), password_hash=await _hash(password)))
         await self.users.set_roles(user.id, roles)
         return await self.need(user.id)
 
@@ -141,7 +153,7 @@ class IdentityService:
         """A new password ends every other session that person has open. `keep` spares this one."""
         self.check(password=password)
         row = await self.users.require(user_id)
-        row.password_hash = hash_password(password)
+        row.password_hash = await _hash(password)
         await self.session.flush()
         for open_session in await self.sessions.open_for(user_id):
             if not keep or open_session.token_hash != token_hash(keep):
@@ -149,7 +161,7 @@ class IdentityService:
 
     async def verify(self, user_id: str, password: str) -> bool:
         row = await self.users.get(user_id)
-        return bool(row) and verify_password(password, row.password_hash)
+        return bool(row) and await _verify(password, row.password_hash)
 
     # ── signing in ───────────────────────────────────────────────
     async def _locked(self, email: str) -> bool:
@@ -171,7 +183,7 @@ class IdentityService:
             raise Refused(f"Too many attempts. Wait {self.config.lockout_seconds} seconds and try again.",
                           status=429)
         row = await self.users.by_email(email)
-        if row is None or not verify_password(password, row.password_hash):
+        if row is None or not await _verify(password, row.password_hash):
             await self._attempt(email, ok=False, ip=ip)
             raise Refused("Wrong email or password.", status=401)
         if row.status != "active":

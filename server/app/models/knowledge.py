@@ -94,9 +94,11 @@ class MemoryConflict(Base, Mixin):
     suggestion: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
                                                   nullable=False)
-    #: The two sides, exactly as they were when the conflict was spotted.
-    a: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
-    b: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    #: The two facts that disagree. They were JSON before, and were always plain fact ids inside it —
+    #: which meant nothing checked that the ids pointed at anything, and the resolver, written for
+    #: documents, never found the fact it was supposed to archive. A column and a key say what is true.
+    a: Mapped[str] = mapped_column(ForeignKey("memory_facts.id", ondelete="CASCADE"), nullable=False)
+    b: Mapped[str] = mapped_column(ForeignKey("memory_facts.id", ondelete="CASCADE"), nullable=False)
     resolution: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
 
 
@@ -105,7 +107,10 @@ class Chunk(Base):
 
     __tablename__ = "chunks"
     __table_args__ = (
-        UniqueConstraint("project_id", "kind", "ref"),
+        # NULLS NOT DISTINCT because a null project_id is a real scope here — the workspace's own
+        # memory — not an unknown. Left to its default, two identical workspace chunks were both
+        # unique as far as Postgres was concerned, so the one rule meant to dedupe them never applied.
+        UniqueConstraint("project_id", "kind", "ref", postgresql_nulls_not_distinct=True),
         Index("ix_chunks_search", "search", postgresql_using="gin"),
         Index("ix_chunks_embedding", "embedding", postgresql_using="hnsw",
               postgresql_with={"m": 16, "ef_construction": 64},

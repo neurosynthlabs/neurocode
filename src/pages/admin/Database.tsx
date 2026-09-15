@@ -9,16 +9,30 @@ import { bytes } from '@/pages/code/format';
 import { attempt, useAdmin, when } from './load';
 import { DemoNote, LoadError, Loading } from './kit';
 
+/* Alembic records which revision a database stands on, never when it got there, so `appliedAt` is
+   honestly null — the server sends it that way too. */
 const MIGRATIONS = [
-  { version: 1, name: '0001_documents', appliedAt: '2026-09-11T14:31:00' },
-  { version: 2, name: '0002_access', appliedAt: '2026-09-11T19:20:00' },
-  { version: 3, name: '0003_ai', appliedAt: '2026-09-11T19:20:00' },
-  { version: 4, name: '0004_hardening', appliedAt: '2026-09-11T22:40:00' },
-  { version: 5, name: '0005_code_index', appliedAt: '2026-09-11T22:40:00' },
+  { version: 1, name: 'initial relational schema', revision: '20fb0c814e83', appliedAt: null },
+  { version: 2, name: 'login attempts', revision: 'ba71ca7751e2', appliedAt: null },
+  { version: 3, name: 'a run log can be a tool call', revision: 'c3f1a9d24b70', appliedAt: null },
+  { version: 4, name: 'memory conflicts point at facts', revision: '037e1c34f71c', appliedAt: null },
+  { version: 5, name: 'the audit log refuses to be rewritten', revision: 'b95c70ab289a', appliedAt: null },
+  { version: 6, name: 'a workspace chunk is unique too', revision: '0d132a2d78a9', appliedAt: null },
+  { version: 7, name: 'the ledger records which agent asked', revision: 'b589e3c9d161', appliedAt: null },
+  { version: 8, name: 'roles keep the catalogue order', revision: 'd226f409c8fa', appliedAt: null },
 ];
+/** What Postgres' `wal_level` means, for a screen read by someone deciding whether to act. */
+const WAL: Record<string, string> = {
+  minimal: 'minimal: crash recovery only, no replicas and no point-in-time restore',
+  replica: 'replica: enough to recover to a moment in time, and to feed a standby',
+  logical: 'logical: replica, plus row-level streaming to another system',
+};
+
 const DEMO: DatabaseInfo = {
-  path: 'server/neurocode.db', sqlite: '3.50.4', pageSize: 4096, pages: 1188, freePages: 34, journalMode: 'wal',
-  sizeBytes: 4_866_048, walBytes: 0, indexes: 2, migrations: MIGRATIONS, backups: [], backupDir: null,
+  path: '127.0.0.1:5432/neurocode', engine: 'PostgreSQL', version: '16.12', pageSize: 8192, pages: 594,
+  freePages: 34, walLevel: 'replica', sizeBytes: 4_866_048, walBytes: 0,
+  indexes: 93, indexHealth: { count: 93, unused: 41, invalid: 0 },
+  migrations: MIGRATIONS, backups: [], backupDir: null,
   tables: [
     { name: 'activity', rows: 91 }, { name: 'ai_calls', rows: 0 }, { name: 'approvals', rows: 6 }, { name: 'audit_log', rows: 6 },
     { name: 'code_files', rows: 0 }, { name: 'memory', rows: 47 }, { name: 'plans', rows: 8 }, { name: 'projects', rows: 5 },
@@ -80,7 +94,7 @@ export default function DatabasePage() {
           <div className="space-y-5">
             <StatGrid cols={4}>
               <Stat label="On disk" value={bytes(db.sizeBytes + db.walBytes)} sub={`${db.pages.toLocaleString()} pages of ${bytes(db.pageSize)}`} />
-              <Stat label="Tables" value={db.tables.length} sub={`${rows.toLocaleString()} rows · ${db.indexes} search indexes`} />
+              <Stat label="Tables" value={db.tables.length} sub={`${rows.toLocaleString()} rows · ${db.indexes} indexes`} />
               <Stat label="Schema" value={`v${latest?.version ?? 0}`} sub={latest?.name ?? 'no migrations'} />
               <Stat label="Backups" value={db.backups.length} tone={db.backups.length ? 'ok' : 'warn'}
                 sub={db.backups[0] ? `latest ${when(db.backups[0].at)}` : 'none yet'} />
@@ -88,10 +102,14 @@ export default function DatabasePage() {
 
             <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
               <Panel title="Health" eyebrow="What keeps the data sound">
-                <KV k="Engine" v={`SQLite ${db.sqlite}`} />
-                <KV k="Journal" v={db.journalMode === 'wal' ? 'write-ahead log: readers never wait for writes' : db.journalMode} />
+                <KV k="Engine" v={`${db.engine} ${db.version}`} />
+                <KV k="Write-ahead log" v={WAL[db.walLevel] ?? db.walLevel} />
                 <KV k="Foreign keys" v="enforced on every write" />
-                <KV k="Audit log" v="append-only, enforced by the database" />
+                <KV k="Audit log" v="append-only, enforced by a trigger" />
+                {db.indexHealth && (
+                  <KV k="Indexes" v={`${db.indexHealth.count} · ${db.indexHealth.unused} never used`
+                    + (db.indexHealth.invalid ? ` · ${db.indexHealth.invalid} invalid` : '')} />
+                )}
                 <KV k="Free pages" v={`${db.freePages.toLocaleString()} (${bytes(db.freePages * db.pageSize)})`} />
                 {check && (
                   <div className="mt-3 flex items-start gap-2 rounded-lg border border-line bg-surface-2/50 px-3 py-2.5">
@@ -130,8 +148,8 @@ export default function DatabasePage() {
                   </DataTable>
                 )}
                 <p className="border-t border-line/60 px-5 py-3 text-[12.5px] leading-relaxed text-dim">
-                  Backups use SQLite’s online backup, so nothing stops while one is made. To restore, stop the API, copy a
-                  backup over <Mono>neurocode.db</Mono>, and start it again.
+                  Backups are <Mono>pg_dump</Mono>, taken while the database stays in use, so nothing stops while one is
+                  made. To restore, stop the API and run <Mono>pg_restore --clean --if-exists</Mono> against the dump.
                 </p>
               </Panel>
             </div>

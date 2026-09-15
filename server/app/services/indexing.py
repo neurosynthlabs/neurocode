@@ -53,12 +53,25 @@ async def save_index(session: AsyncSession, project_id: str, root: str, idx: cod
     await session.flush()
 
 
+#: Projects whose code is being read right now. One process serves one workspace, so a set is the
+#: whole of it — and it is what stops a second re-index starting on top of the first.
+#:
+#: It lives here, next to the work, because it used to live next to one of the two callers: onboarding
+#: indexed without ever entering the set, so the screen showed a project as idle while it was being
+#: read and the re-index guard would happily start a second pass on top of the first.
+INDEXING: set[str] = set()
+
+
 async def build_index(session: AsyncSession, project_id: str, root: Path,
                       excluded: list[str]) -> codeindex.Index:
     """Read the code on a worker thread, then write what it found. Returns the index for the log line."""
-    idx = await asyncio.to_thread(codeindex.build, root, excluded)
-    await save_index(session, project_id, str(root), idx)
-    return idx
+    INDEXING.add(project_id)
+    try:
+        idx = await asyncio.to_thread(codeindex.build, root, excluded)
+        await save_index(session, project_id, str(root), idx)
+        return idx
+    finally:
+        INDEXING.discard(project_id)
 
 
 def index_fields(idx: codeindex.Index) -> dict[str, Any]:

@@ -31,6 +31,25 @@ from .deps import current_person, database, gateway, require, session
 router = APIRouter()
 
 
+class RuleIn(BaseModel):
+    id: str = Field(max_length=40)
+    label: str = Field(max_length=120)
+    note: str = Field(default="", max_length=300)
+
+
+class ProjectIn(BaseModel):
+    """What the onboarding wizard sends. Checked here; nothing touches git until it passes."""
+
+    source: Literal["git", "local"]
+    repo: str = Field(min_length=1, max_length=500)
+    branch: str = Field(default="main", max_length=100)
+    excluded: list[str] = Field(default_factory=list, max_length=50)
+    connectDb: bool = True
+    mineGit: bool = True
+    ingestDocs: bool = True
+    rules: list[RuleIn] = Field(default_factory=list, max_length=20)
+
+
 class McpIn(BaseModel):
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,39}$")
     transport: Literal["stdio", "http", "sse"]

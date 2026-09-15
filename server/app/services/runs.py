@@ -342,6 +342,8 @@ async def _context(session: AsyncSession, run: Run, step: RunStep, work: Path) -
         .distinct().limit(6))).scalars()
     wanted += list(rows)
 
+    refused: list[str] = []
+
     def read() -> list[tuple[str, str]]:
         files: list[tuple[str, str]] = []
         seen: set[str] = set()
@@ -350,7 +352,14 @@ async def _context(session: AsyncSession, run: Run, step: RunStep, work: Path) -
             if rel in seen or len(files) >= 8:
                 continue
             seen.add(rel)
-            f = work / rel
+            # These paths come from the compiler — a model wrote them — so they are checked exactly
+            # the way a write is. Reading is not the harmless half: whatever is read here is sent to
+            # a provider, so "../../../.ssh/id_rsa" would be an exfiltration, not a bad diff.
+            try:
+                f = work / agent.safe_path(rel)
+            except agent.Refused:
+                refused.append(rel)
+                continue
             if not f.is_file():
                 continue
             try:
@@ -363,7 +372,14 @@ async def _context(session: AsyncSession, run: Run, step: RunStep, work: Path) -
             files.append((rel, text))
         return files
 
-    return await asyncio.to_thread(read)
+    found = await asyncio.to_thread(read)
+    if refused:
+        # Said out loud rather than dropped: a plan that names a path outside the worktree is worth
+        # seeing in the run's log, whether it was a hallucination or something worse.
+        await RunLogRepository(session).write(
+            run.id, level="warn", step=step.n,
+            line=f"ignored {len(refused)} path(s) outside the worktree: {', '.join(refused[:5])}")
+    return found
 
 
 async def _pause(db: Database, ref: str, step_n: int, *, title: str, tool: str, risk: str, payload: str,
@@ -406,11 +422,12 @@ async def _edit(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool:
         ]
         lane, run_id, base = run.lane, run.id, run.base
         project_id, label, worktree = run.project_id, step.label, run.worktree
+        who = step.agent or run.agent or ""
 
     try:
         result = await asyncio.to_thread(
             gateway.ask, prompt, lambda raw: EditOut.model_validate(extract_json(raw, trim=False)),
-            feature="agent", project=project_id, role=WRITE, lane=lane)
+            feature="agent", project=project_id, role=WRITE, lane=lane, agent=who)
     except NoModel as e:
         async with db.session() as s:
             run = await RunRepository(s).by_ref(ref)
@@ -577,6 +594,7 @@ async def _review(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool
     async with db.read() as s:
         run = await RunRepository(s).by_ref(ref)
         tree, base, requirement, lane, project_id = Path(run.worktree), run.base, run.requirement, run.lane, run.project_id
+        reviewer = next((x.agent for x in run.steps if x.n == step_n), "") or "Code Reviewer"
 
     diff = (await asyncio.to_thread(agent.diff, tree, base))[:MAX_DIFF]
     if not diff.strip():
@@ -591,7 +609,7 @@ async def _review(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool
         # A second opinion is worth more from a different model, and free lanes make that free.
         result = await asyncio.to_thread(
             gateway.ask, prompt, lambda raw: ReviewOut.model_validate(extract_json(raw, trim=False)),
-            feature="review", project=project_id, role=REVIEW, avoid=lane)
+            feature="review", project=project_id, role=REVIEW, avoid=lane, agent=reviewer)
         findings = [f.model_dump() for f in result.data.findings][:20]
         verdict, by = result.data.verdict[:300], result.provider.model
     except NoModel:

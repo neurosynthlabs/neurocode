@@ -17,6 +17,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     func,
@@ -66,6 +67,9 @@ class Role(Base, Mixin):
     description: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     #: Built-in roles are re-synced from the permission catalogue on every start.
     builtin: Mapped[bool] = mapped_column(nullable=False, server_default="false")
+    #: Where it sits on the access screen. The built-in roles are a ladder — Owner, Admin, Approver,
+    #: Engineer, Viewer — and that order is the catalogue's, not the alphabet's.
+    rank: Mapped[int] = mapped_column(Integer, nullable=False, server_default="100")
 
     permissions: Mapped[list[RolePermission]] = relationship(back_populates="role",
                                                              cascade="all, delete-orphan", lazy="selectin")

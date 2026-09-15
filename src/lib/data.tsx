@@ -115,12 +115,35 @@ const seed = (): Domain => ({
   activity: [...seedActivity].reverse().concat(activityExtra),
 });
 
-async function load(): Promise<Domain> {
-  const [approvals, tasks, memory, projects, plans, mcp, conflicts, prefs, decisions, brainstorms, runs, activity] = await Promise.all([
-    api.approvals(), api.tasks(), api.memory(), api.projects(), api.plans(), api.mcp(), api.conflicts(), api.prefs(),
-    api.decisions(), api.brainstorms(), api.runs(), api.activity(),
-  ]);
-  return { approvals, tasks, memory, projects, plans, mcp, conflicts, prefs, decisions, brainstorms, runs, activity };
+/* Every collection the workspace opens with, and where each one comes from. Fetched together but
+   settled apart: one endpoint being down used to reject the whole batch, which dropped the entire app
+   into demo mode — a real database sitting behind a screen full of sample data. Now a collection that
+   cannot be fetched is the only thing that is empty, and the app says which ones. */
+const COLLECTIONS = {
+  approvals: api.approvals, tasks: api.tasks, memory: api.memory, projects: api.projects,
+  plans: api.plans, mcp: api.mcp, conflicts: api.conflicts, prefs: api.prefs,
+  decisions: api.decisions, brainstorms: api.brainstorms, runs: api.runs, activity: api.activity,
+} as const;
+
+type LoadResult = { domain: Domain; missing: string[] };
+
+async function load(): Promise<LoadResult> {
+  const names = Object.keys(COLLECTIONS) as (keyof typeof COLLECTIONS)[];
+  const settled = await Promise.allSettled(names.map((name) => COLLECTIONS[name]()));
+
+  // A 401 is not a collection being unavailable — it is nobody being signed in, and the whole load
+  // has to fail so the caller shows the sign-in screen rather than an empty workspace.
+  const unauthorized = settled.find((r) => r.status === 'rejected' && r.reason instanceof ApiError && r.reason.status === 401);
+  if (unauthorized && unauthorized.status === 'rejected') throw unauthorized.reason;
+
+  // A collection that could not be fetched is empty, not stale: showing one screen's sample data
+  // beside eleven screens of real data is the confusing half of both worlds.
+  const missing = names.filter((_, i) => settled[i].status === 'rejected');
+  const domain = Object.fromEntries(names.map((name, i) => {
+    const result = settled[i];
+    return [name, result.status === 'fulfilled' ? result.value : []];
+  })) as unknown as Domain;
+  return { domain, missing };
 }
 
 /** One document into or out of a collection. The server streams these; demo actions make their own. */
@@ -178,12 +201,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
     let unsubscribe: (() => void) | undefined;
     (async () => {
       try {
-        const [h, data] = await Promise.all([api.health(), load()]);
+        const [h, loaded] = await Promise.all([api.health(), load()]);
         if (cancelled) return;
-        setDomain(data);
+        setDomain(loaded.domain);
         setHealth(h);
         live.current = true;
         setMode('live');
+        if (loaded.missing.length) {
+          toast.warning('Some of the workspace did not load', {
+            description: `${loaded.missing.join(', ')} came back empty. Everything else is live.`,
+          });
+        }
         unsubscribe = api.stream({
           activity: (ev) => setDomain((d) => (d.activity.some((e) => e.id === ev.id) ? d : { ...d, activity: [ev, ...d.activity] })),
           change: (c) => setDomain((d) => applyChange(d, c)),
@@ -526,7 +554,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     if (!live.current) { setDomain(seed()); return true; }
     try {
       const h = await api.reset();
-      setDomain(await load());
+      setDomain((await load()).domain);
       setHealth(h);
       return true;
     } catch (e) {

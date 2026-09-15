@@ -12,11 +12,12 @@ part in one transaction and fail together.
 """
 from __future__ import annotations
 
+import zlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
-from sqlalchemy import ColumnElement, Select, delete, func, select
+from sqlalchemy import ColumnElement, Integer, Select, cast, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..data.base import Base
@@ -25,6 +26,9 @@ M = TypeVar("M", bound=Base)
 
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 500
+#: The most rows `everything()` will walk to. A workspace with more people than this has outgrown a
+#: single-page admin screen, and saying so beats scrolling forever or stopping without a word.
+EVERYTHING_CAP = 5_000
 
 
 class NotFound(LookupError):
@@ -54,7 +58,9 @@ class Page(Generic[M]):
 
 
 def bounded(limit: int | None) -> int:
-    return max(1, min(limit or DEFAULT_LIMIT, MAX_LIMIT))
+    """`None` means "you did not say"; 0 means "none of them", which clamps to one rather than
+    falling through to the default — `limit or DEFAULT_LIMIT` read a deliberate 0 as an absence."""
+    return max(1, min(DEFAULT_LIMIT if limit is None else limit, MAX_LIMIT))
 
 
 class Repository(Generic[M]):
@@ -92,6 +98,28 @@ class Repository(Generic[M]):
         items = await self.list(*where, order_by=order_by, limit=size, offset=start)
         return Page(items=items, total=await self.count(*where), limit=size, offset=start)
 
+    async def everything(self, fetch: Any, *, cap: int = EVERYTHING_CAP) -> tuple[list[M], bool]:
+        """Walk a paged query to its end, and say whether it reached one.
+
+        The rule elsewhere is that nothing returns everything, and it is the right rule: a list a
+        screen scrolls must not be able to become a scan. The admin lists are the exception the rule
+        was never about — everyone in the workspace, every role, every team — and a *silent* stop at
+        500 was the worst of both: the screen said "500 people" next to a header saying 601, and a
+        team member past the cut rendered as a raw id.
+
+        So they are walked to the end, with a ceiling of their own, and the caller is told plainly
+        whether it got everything. `fetch` is any `(limit, offset) -> Page` — a repository method.
+        """
+        found: list[M] = []
+        offset = 0
+        while len(found) < cap:
+            page: Page[M] = await fetch(limit=MAX_LIMIT, offset=offset)
+            found.extend(page.items)
+            if not page.more or not page.items:
+                return found, True
+            offset = page.next_offset or (offset + len(page.items))
+        return found[:cap], False
+
     async def count(self, *where: ColumnElement[bool]) -> int:
         stmt = select(func.count()).select_from(self.model).where(*where)
         return int((await self.session.execute(stmt)).scalar_one())
@@ -99,6 +127,24 @@ class Repository(Generic[M]):
     async def exists(self, *where: ColumnElement[bool]) -> bool:
         return (await self.session.execute(select(1).select_from(self.model).where(*where).limit(1))
                 ).scalar_one_or_none() is not None
+
+    async def next_ref(self, column: Any, prefix: str) -> str:
+        """The next reference of its kind: the highest number any ref carries, plus one.
+
+        Worked out by the database rather than by reading every ref into Python — and taken under a
+        lock, because "read the maximum, then insert it" is a race however fast the read is. Two
+        requests arriving together both saw the same maximum and both tried to claim it; the unique
+        index then failed the second one, so a perfectly ordinary second click became a 500.
+
+        The lock is per kind of reference and is held only to the end of this transaction, so tasks
+        and runs never wait on each other and nothing can be left locked by a request that died.
+        """
+        key = zlib.crc32(prefix.encode()) - 2 ** 31              # advisory keys are signed 32-bit
+        await self.session.execute(select(func.pg_advisory_xact_lock(key)))
+        digits = func.nullif(func.regexp_replace(column, r"\D", "", "g"), "")
+        highest = (await self.session.execute(
+            select(func.coalesce(func.max(cast(digits, Integer)), 0)))).scalar_one()
+        return f"{prefix}{int(highest) + 1}"
 
     # ── writing ──────────────────────────────────────────────────
     async def add(self, obj: M) -> M:

@@ -10,13 +10,16 @@ and how every AI feature reaches a model.
 Browser  ── React 19 + Vite, one store (src/lib/data.tsx), auth (src/lib/auth.tsx)
    │  same-origin /api in dev (Vite proxy); VITE_API_URL in a build
    ▼
-FastAPI (server/app) ── routers → services → Store
-   ├── SQLite, WAL mode: documents, identity, audit, usage, code index (server/neurocode.db)
-   │     └── online backups, newest 20 kept (server/backups/)
+FastAPI (server/app/api) ── routes → services → repositories → Postgres
+   ├── Postgres 16: every table, related and typed, migrated by Alembic
+   │     ├── pgvector  embeddings, cosine distance under an HNSW index
+   │     ├── tsvector  full text, generated columns, ranked by ts_rank
+   │     └── pg_trgm + citext  fuzzy matching, and names that compare without case
    ├── secrets file, mode 0600: model API keys (server/secrets.json)
    ├── code index ─▶ Python ast · patterns for TS/JS, C#, Java, Go, T-SQL · git history
-   └── AI gateway ─▶ DeepSeek (key set) · Ollama (model pulled) · offline rules (always)
-                    └── every call written to the usage ledger
+   └── AI gateway ─▶ eight lanes: free tiers first, then paid, then a local model, then rules
+                     its own blocking pool (psycopg), because it waits on providers from a thread
+                     every call written to the usage ledger
 ```
 
 The public demo (Vercel) is the same web app with no API. It runs on the seed data inside the tab,
@@ -24,14 +27,23 @@ signed in as a demo owner, and never makes a request.
 
 ## Why these choices
 
-- **SQLite in WAL mode.** One machine, zero operations, FTS5 built in, and concurrent reads while the
-  API writes. The schema is plain SQL in numbered migrations, so moving to Postgres when the API is
-  hosted for a team is a driver change, not a redesign.
-- **Documents for the domain, relations for access.** Tasks, plans, memory and the rest are JSON
-  documents shaped exactly like the frontend's types, with the fields the API filters on lifted into
-  columns. Users, roles, sessions and the audit log are strictly relational, with foreign keys on.
-- **One gateway for every model call.** Keys, routing, time-outs, the rejected-key breaker and the
-  fallback all live in one place. A feature never talks to a provider directly.
+- **Postgres, not SQLite.** The first version kept the domain as JSON documents in SQLite with the
+  filtered fields lifted into columns. It worked, and it hid things: a project's task counts were a
+  stored number that drifted from the truth, "which tasks is this agent carrying" was a scan of every
+  task, and nothing stopped a task pointing at a project that had been deleted. Postgres answers those
+  questions itself — a `GROUP BY` with an index behind it, a join, a foreign key — and brings the three
+  things retrieval actually needs in one server: full text, vectors, and trigram matching.
+- **Relational throughout.** Every entity is a table with real columns, real foreign keys and real
+  constraints. `JSONB` is used only where the shape genuinely varies — a compiler's own report, a
+  review's findings — never as a substitute for modelling something.
+- **Layers, and only downwards.** `settings → data → models → repositories → services → api`. A route
+  parses and permits; a service decides; a repository is the only thing that knows any SQL. It is what
+  lets a service be tested against a throwaway database without changing a line.
+- **One transaction per request.** The session dependency *is* the unit of work: everything a request
+  does commits together, and a request that raises rolls back whole. The old store committed each
+  statement on its own, which meant a failure halfway through left half a change behind.
+- **One gateway for every model call.** Keys, routing, time-outs, the rejected-key breaker, the free-tier
+  budgets and the fallback all live in one place. A feature never talks to a provider directly.
 - **Local first, honest always.** Every AI feature works with no key. Output made by rules, not a
   model, is labelled as such in the UI.
 
@@ -39,59 +51,78 @@ signed in as a demo owner, and never makes a request.
 
 ```
 server/app/
-  main.py          app factory: config, store, middleware, routers
-  context.py       what routes share: store, bus, secrets, accounts, gateway, record(), audit()
-  db.py            the Store: migrations runner, documents, settings, FTS search
-  migrations/      0001 documents · 0002 identity, access, audit, settings · 0003 AI records
-                   0004 hot-path indexes, append-only audit, usage ledger · 0005 code index
-  events.py        in-process fan-out to open tabs (Server-Sent Events)
-  secrets.py       API keys on disk (0600), only ever reported masked
-  auth.py          scrypt passwords, sessions, sign-in throttling, current_user / require()
-  rbac.py          the permission catalogue and roles
+  settings.py      every knob, typed and validated once (NEUROCODE_*, server/.env)
+  data/            engine and pooling · the declarative Base · the seed loader · a readiness check
+  models/          43 tables in six files: identity · work · knowledge · code · runtime · platform
+  repositories/    the questions the screens ask, answered in SQL; nothing here commits
+  services/        the decisions: identity, work and its gates, plans, runs, chat, retrieval,
+                   onboarding, indexing, and the errors a route turns into a status code
+  api/             deps.py (session, who is asking, require(...)) · errors.py · app.py
+                   routes_auth · _work · _plans · _knowledge · _platform · _sessions · _runs
+                   routes_code · _ai · _system · _admin · _admin_system · stream.py (SSE)
+  agent/git.py     git as plain blocking functions: worktrees, safe paths, merges, tests
   ai/lanes.py      the lanes: a provider and a model each, with their free limits written down
-  ai/gateway.py    which lane answers, keys, breakers, budgets, test connection, the usage ledger
+  ai/gateway.py    which lane answers, keys, breakers, budgets, test connection
+  ai/ledger.py     the four things the gateway asks of a database, and who answers them
   ai/compiler.py   requirement → plan
   ai/features.py   ask memory, brainstorm, extract facts from text
-  onboarding.py    clone or read a repository and measure it
-  codeindex.py     parse the code into files, symbols and edges; search, impact and the module graph
-  runtime.py       a worktree per agent: models write files, the branches merge, the tests run, you sign off
-  chat.py          sessions: the tool catalogue and the loop that reads the code and answers
-  retrieval.py     chunks, embeddings and the hybrid search that grounds every answer
-  routes/          auth · admin · work · knowledge · platform · code · runs · ai · system
+  events.py        in-process fan-out to open tabs (Server-Sent Events)
+  secrets.py       API keys on disk (0600), only ever reported masked
+server/alembic/    the migrations, and the only thing that creates a schema
 ```
+
+The AI gateway is the one component that is not async, and deliberately: it spends its time waiting
+on model providers, always from a worker thread, and a thread cannot hold the request's session. It is
+given a four-method port instead — read a setting, write a setting, how much has this lane spent today,
+append a line — implemented over a small blocking psycopg pool against the same database.
 
 ## Data model
 
-| Table | Kind | Holds |
+43 tables, all related, all typed, in six groups. Every one is created by Alembic — the schema is never
+written by hand, and a test that passes against a hand-made schema proves nothing.
+
+| Group | Tables | Holds |
 |---|---|---|
-| `projects`, `agents`, `tasks`, `approvals`, `plans`, `conflicts`, `mcp`, `prefs`, `decisions`, `brainstorms` | document | the domain, shaped like `src/types` |
-| `memory` + `memory_fts` | document + FTS5 | facts, searchable by prefix and ranked |
-| `activity` | document | the work log that streams to every tab |
-| `workspace` | relational | the single workspace: name, creation date |
-| `users`, `roles`, `role_permissions`, `user_roles` | relational | identity and access |
-| `teams`, `team_members` | relational | groups of people |
-| `sessions` | relational | SHA-256 of each session token, never the token |
-| `audit_log` | relational, append-only | sign-ins and every change to access, keys, settings or the database |
-| `settings` | relational | workspace settings (AI routing, provider options) |
-| `ai_calls` | relational, STRICT | the usage ledger: every model attempt and every offline answer, with tokens and time |
-| `code_files`, `code_symbols`, `code_edges` | relational, STRICT | the code index: files, what they declare, and what depends on what |
-| `code_fts` | FTS5 | search over file paths and symbol names, camelCase split into words |
-| `code_index_runs` | relational, STRICT | one row per project: when it was indexed, by which parsers, how much |
-| `runs` | document | an agent run: its branch, worktree, steps, tests, review and diff |
-| `run_logs` | relational, STRICT | everything a run wrote, oldest lines dropped past the cap |
-| `schema_migrations` | relational | which migrations ran |
+| **identity** (11) | `workspace`, `users`, `roles`, `role_permissions`, `user_roles`, `teams`, `team_members`, `sessions`, `audit_log`, `login_attempts`, `settings` | who exists, what they may do, and every attempt to sign in |
+| **work** (12) | `projects`, `agents`, `tasks`, `task_checklist`, `task_agents`, `plans`, `plan_steps`, `plan_questions`, `approvals`, `decisions`, `prefs`, `activity` | the domain, and the log that streams to every open tab |
+| **knowledge** (5) | `memory_facts`, `memory_tags`, `memory_conflicts`, `chunks`, `retrieval_runs` | what is remembered, and what can be retrieved |
+| **code** (4) | `code_files`, `code_symbols`, `code_edges`, `code_index_runs` | the index: files, what they declare, what depends on what |
+| **runtime** (6) | `runs`, `run_steps`, `run_conflicts`, `run_logs`, `chats`, `chat_messages` | agent runs and sessions, turn by turn |
+| **platform** (5) | `mcp_servers`, `mcp_tools`, `permission_rules`, `brainstorms`, `ai_calls` | the tools it can reach, and the usage ledger behind every budget |
+
+Types that do work, rather than being decoration:
+
+- `citext` for emails and names, so `Rajat` and `rajat` are one person and the unique index says so.
+- `tsvector`, generated and stored, over memory facts and chunks; ranked with `ts_rank`.
+- `vector(1536)` for embeddings, under an HNSW index with `vector_cosine_ops`. Shorter vectors are
+  padded, so changing the embedding model does not mean changing the schema.
+- `pg_trgm` for the searches where a person half-remembers a name.
+- `JSONB` only where the shape genuinely varies — a compiler's report, a review's findings, a run's
+  targets — never as a place to avoid modelling something.
+- Enum types for the small closed sets (a run's status, a log's level). Alembic does not diff enum
+  *values*, so adding one is a hand-written migration; there is one in the tree that says so.
+
+Two rules hold in `repositories/`: **nothing returns everything** — every list is paged, with a ceiling
+the caller cannot raise — and **nothing commits**, because the unit of work belongs to the request.
 
 ## Keeping the data safe
 
-- **Backups** use SQLite's online backup API, so nothing stops while one is made. One is taken before
-  every reset and before any migration runs on a database that already holds data; admins can take
-  one from Admin → Database. The newest 20 are kept, readable only by the account running the API.
-- **Integrity**: foreign keys are on for every connection, new tables are `STRICT`, and Admin → Database
-  runs SQLite's integrity check plus a foreign-key check on demand.
-- **The audit log is append-only**: triggers make the database itself refuse to change or delete an entry.
-- **Compaction**: "Optimize & compact" refreshes the planner's statistics, merges the search indexes,
-  vacuums the file and folds the write-ahead log back in.
+- **Backups** are `pg_dump` into `server/backups/`, taken before every reset and on demand from
+  Admin → Database, readable only by the account running the API.
+- **Integrity** is the database's own job now: foreign keys with the right `ON DELETE` on every
+  relationship, unique constraints where a duplicate would be a bug, and checks on the ranges.
+  Admin → Database confirms the connection, that the schema is at Alembic head, and that nothing
+  violates a constraint.
+- **The audit log is append-only** and outlives the accounts it describes: deleting a user sets the
+  entry's `user_id` to null rather than erasing what they did.
+- **Sign-in throttling is a table.** It used to be a dictionary in the process, which forgot everything
+  on a restart and protected nothing at all once there were two workers.
+- **Compaction**: "Optimize & compact" runs `VACUUM ANALYZE` and reindexes, on its own connection —
+  `VACUUM` cannot run inside a transaction.
 - **Expired sessions** are removed every time the API starts.
+- **Coming from the old stack**: `scripts/import-sqlite.py` carries a running workspace across.
+  Passwords come over untouched — both stacks store `scrypt$n$r$p$salt$digest`, parameters and all — so
+  everyone signs in afterwards with the password they already have.
 
 ## The code index
 

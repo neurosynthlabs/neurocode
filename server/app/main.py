@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .ai.gateway import Gateway
+from .ai.ledger import SqliteLedger
 from .auth import COOKIE, Accounts
 from .context import Ctx
 from .db import Store
@@ -55,7 +56,7 @@ def create_app(db_path: str | None = None, env_file: Path | None = ENV_FILE) -> 
     store = Store(path)
     secrets = Secrets(Path(os.environ.get("NEUROCODE_SECRETS") or Path(path).with_name("secrets.json")))
     rbac = Rbac(store)
-    c = Ctx(store=store, bus=Bus(), secrets=secrets, rbac=rbac, accounts=Accounts(store, rbac), gateway=Gateway(store, secrets))
+    c = Ctx(store=store, bus=Bus(), secrets=secrets, rbac=rbac, accounts=Accounts(store, rbac), gateway=Gateway(SqliteLedger(store), secrets))
 
     app = FastAPI(title="NeuroCode API", version="0.3.0")
     app.state.ctx = c

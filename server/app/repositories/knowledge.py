@@ -6,11 +6,29 @@ so it cannot fall behind — and ranking is `ts_rank` with pinned facts first, i
 """
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import ColumnElement, Integer, cast, func, select
 
 from ..models import MemoryConflict, MemoryFact, MemoryTag
 from .base import Page, Repository
 
+
+#: Words too common to narrow anything, dropped before an "any" query so they cannot match everything.
+NOISE = frozenset("a an and are as at be by do does for from has have how in is it of on or that the "
+                  "their them then there these this to was what when where which who why will "
+                  "with would you your".split())
+
+
+def _tsquery(q: str, mode: str):
+    """The query itself. "all" is what a person typing into a search box means; "any" is what a
+    person asking a question means, because a question carries words the answer will not."""
+    if mode != "any":
+        return func.websearch_to_tsquery("english", q.strip())
+    words = [w for w in re.findall(r"[\w']+", q.lower()) if len(w) > 2 and w not in NOISE]
+    if not words:
+        return func.websearch_to_tsquery("english", q.strip())
+    return func.to_tsquery("english", " | ".join(words))
 
 class MemoryRepository(Repository[MemoryFact]):
     model = MemoryFact
@@ -19,8 +37,14 @@ class MemoryRepository(Repository[MemoryFact]):
         return await self.one(MemoryFact.ref == ref)
 
     async def search(self, q: str = "", *, category: str | None = None, project: str | None = None,
-                     include_archived: bool = False, limit: int | None = None) -> list[MemoryFact]:
-        """Words if there are any, otherwise everything that matches the filters — pinned first."""
+                     include_archived: bool = False, limit: int | None = None,
+                     mode: str = "all") -> list[MemoryFact]:
+        """Words if there are any, otherwise everything that matches the filters — pinned first.
+
+        `mode` is the difference between a search box and a question. Someone typing into the box
+        means every word ("all"); someone asking "where does invoice rounding happen, and why there?"
+        does not, and requiring all of it returns nothing at all. Ask memory passes "any".
+        """
         where: list[ColumnElement[bool]] = []
         if not include_archived:
             where.append(MemoryFact.archived.is_(False))
@@ -33,7 +57,7 @@ class MemoryRepository(Repository[MemoryFact]):
 
         stmt = select(MemoryFact).where(*where)
         if q.strip():
-            query = func.websearch_to_tsquery("english", q.strip())
+            query = _tsquery(q, mode)
             stmt = stmt.where(MemoryFact.search.op("@@")(query)).order_by(
                 MemoryFact.pinned.desc(), func.ts_rank(MemoryFact.search, query).desc())
         else:
@@ -42,11 +66,7 @@ class MemoryRepository(Repository[MemoryFact]):
         return list((await self.session.execute(stmt)).scalars().unique())
 
     async def next_ref(self, prefix: str = "MEM-") -> str:
-        """The highest number any ref carries, plus one — worked out by the database, not by reading
-        every ref into Python."""
-        digits = func.nullif(func.regexp_replace(MemoryFact.ref, r"\D", "", "g"), "")
-        stmt = select(func.coalesce(func.max(cast(digits, Integer)), 0))
-        return f"{prefix}{int((await self.session.execute(stmt)).scalar_one()) + 1}"
+        return await super().next_ref(MemoryFact.ref, prefix)
 
     async def tag(self, fact_id: str, tags: list[str]) -> None:
         for tag in dict.fromkeys(t.strip() for t in tags if t.strip()):

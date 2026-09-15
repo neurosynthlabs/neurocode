@@ -39,9 +39,7 @@ class RunRepository(Repository[Run]):
         return await self.list(Run.status == "waiting", order_by=Run.created_at)
 
     async def next_ref(self, prefix: str = "RUN-") -> str:
-        digits = func.nullif(func.regexp_replace(Run.ref, r"\D", "", "g"), "")
-        stmt = select(func.coalesce(func.max(cast(digits, Integer)), 0))
-        return f"{prefix}{int((await self.session.execute(stmt)).scalar_one()) + 1}"
+        return await super().next_ref(Run.ref, prefix)
 
 
 class RunLogRepository(Repository[RunLog]):
@@ -98,6 +96,4 @@ class ChatRepository(Repository[Chat]):
         return said
 
     async def next_ref(self, prefix: str = "CHAT-") -> str:
-        digits = func.nullif(func.regexp_replace(Chat.ref, r"\D", "", "g"), "")
-        stmt = select(func.coalesce(func.max(cast(digits, Integer)), 0))
-        return f"{prefix}{int((await self.session.execute(stmt)).scalar_one()) + 1}"
+        return await super().next_ref(Chat.ref, prefix)

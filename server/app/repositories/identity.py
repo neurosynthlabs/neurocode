@@ -6,14 +6,25 @@ which is both faster and harder to get subtly wrong when someone wears three rol
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy import delete, func, select
 
 from ..data.base import utcnow
-from ..models import AuditEntry, Role, RolePermission, Session, User, UserRole, Workspace
-from .base import Page, Repository
+from ..models import (
+    AuditEntry,
+    Role,
+    RolePermission,
+    Session,
+    Team,
+    TeamMember,
+    User,
+    UserRole,
+    Workspace,
+)
+from .base import MAX_LIMIT, Page, Repository, bounded
 
 
 class UserRepository(Repository[User]):
@@ -25,6 +36,30 @@ class UserRepository(Repository[User]):
 
     async def active(self, *, limit: int | None = None, offset: int = 0) -> Page[User]:
         return await self.page(User.status == "active", order_by=User.name, limit=limit, offset=offset)
+
+    async def directory(self, *, limit: int | None = None, offset: int = 0) -> Page[User]:
+        """Everyone, oldest account first — the order the people screen has always listed them in.
+        A workspace with more people than the ceiling is paged, not silently cut in half."""
+        return await self.page(order_by=[User.created_at, User.id], limit=limit or MAX_LIMIT,
+                               offset=offset)
+
+    async def existing(self, user_ids: Sequence[str]) -> set[str]:
+        """Which of these people are really here — the check before a team is given its members."""
+        if not user_ids:
+            return set()
+        stmt = select(User.id).where(User.id.in_(list(dict.fromkeys(user_ids))))
+        return set((await self.session.execute(stmt)).scalars())
+
+    async def roles_by_user(self, user_ids: Sequence[str]) -> dict[str, list[str]]:
+        """Every listed person's roles in one statement, rather than one round trip each."""
+        if not user_ids:
+            return {}
+        stmt = (select(UserRole.user_id, UserRole.role_id)
+                .where(UserRole.user_id.in_(list(user_ids))).order_by(UserRole.role_id))
+        out: dict[str, list[str]] = {}
+        for user_id, role_id in (await self.session.execute(stmt)).all():
+            out.setdefault(user_id, []).append(role_id)
+        return out
 
     async def permissions(self, user_id: str) -> set[str]:
         """Everything this person may do, from every role they wear, in one statement."""
@@ -97,23 +132,80 @@ class WorkspaceRepository(Repository[Workspace]):
 class RoleRepository(Repository[Role]):
     model = Role
 
-    async def all_ordered(self) -> list[Role]:
-        return await self.list(order_by=Role.name, limit=200)
+    async def builtin_first(self, *, limit: int | None = None, offset: int = 0) -> Page[Role]:
+        """The order the access screen reads: what the workspace ships with, then what it grew."""
+        # `rank` and not `created_at`: the built-in roles are written in one transaction, so every
+        # one of them carries the same timestamp and the tie fell through to the id — which put Admin
+        # above Owner on a screen whose whole meaning is that Owner comes first.
+        return await self.page(order_by=[Role.builtin.desc(), Role.rank, Role.id],
+                               limit=limit or MAX_LIMIT, offset=offset)
+
+    async def members_by_role(self) -> dict[str, int]:
+        """role id → how many people wear it. One GROUP BY behind every "12 people" on the screen."""
+        stmt = select(UserRole.role_id, func.count()).group_by(UserRole.role_id)
+        return {role_id: int(n) for role_id, n in (await self.session.execute(stmt)).all()}
 
     async def permissions(self, role_id: str) -> set[str]:
         stmt = select(RolePermission.permission).where(RolePermission.role_id == role_id)
         return set((await self.session.execute(stmt)).scalars())
 
-    async def set_permissions(self, role_id: str, permissions: list[str]) -> None:
-        await self.session.execute(delete(RolePermission).where(RolePermission.role_id == role_id))
+        await self.session.flush()
+
+    async def replace_permissions(self, role: Role, permissions: Sequence[str]) -> None:
+        """What a role may do, rewritten whole.
+
+        Through the relationship rather than a bare DELETE, so what the role carries in memory and
+        what the database holds cannot disagree — the answer a screen gets back is the one that was
+        stored. The removals are flushed first: re-granting a permission would otherwise insert the
+        row that is still on its way out.
+        """
+        role.permissions.clear()
+        await self.session.flush()
         for permission in dict.fromkeys(permissions):
-            self.session.add(RolePermission(role_id=role_id, permission=permission))
+            role.permissions.append(RolePermission(permission=permission))
         await self.session.flush()
 
     async def worn_by(self, role_id: str) -> int:
         """How many people wear it — the check before a role is deleted."""
         stmt = select(func.count()).select_from(UserRole).where(UserRole.role_id == role_id)
         return int((await self.session.execute(stmt)).scalar_one())
+
+
+class TeamRepository(Repository[Team]):
+    model = Team
+
+    async def all_ordered(self, *, limit: int | None = None, offset: int = 0) -> Page[Team]:
+        return await self.page(order_by=Team.name, limit=limit or MAX_LIMIT, offset=offset)
+
+    async def by_name(self, name: str) -> Team | None:
+        """Case-insensitive, like the column: two teams cannot differ by a capital letter."""
+        return await self.one(Team.name == name.strip())
+
+    async def teams_of(self, user_id: str) -> list[str]:
+        stmt = (select(TeamMember.team_id).where(TeamMember.user_id == user_id)
+                .order_by(TeamMember.team_id))
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def teams_by_user(self, user_ids: Sequence[str]) -> dict[str, list[str]]:
+        """Every listed person's teams in one statement — the people screen shows them per row."""
+        if not user_ids:
+            return {}
+        stmt = (select(TeamMember.user_id, TeamMember.team_id)
+                .where(TeamMember.user_id.in_(list(user_ids))).order_by(TeamMember.team_id))
+        out: dict[str, list[str]] = {}
+        for user_id, team_id in (await self.session.execute(stmt)).all():
+            out.setdefault(user_id, []).append(team_id)
+        return out
+
+    async def set_members(self, team: Team, user_ids: Sequence[str]) -> None:
+        """Membership replaced whole, through the relationship and in two flushes — the departures
+        reach the database before the arrivals, so re-adding someone who is already there cannot
+        collide with the row being deleted."""
+        team.members.clear()
+        await self.session.flush()
+        for user_id in dict.fromkeys(user_ids):
+            team.members.append(TeamMember(user_id=user_id))
+        await self.session.flush()
 
 
 class SessionRepository(Repository[Session]):
@@ -151,6 +243,22 @@ class AuditRepository(Repository[AuditEntry]):
                      offset: int = 0) -> Page[AuditEntry]:
         where = [AuditEntry.action == action] if action else []
         return await self.page(*where, order_by=AuditEntry.seq.desc(), limit=limit, offset=offset)
+
+    async def newest(self, *, before: int | None = None,
+                     limit: int | None = None) -> list[tuple[AuditEntry, str | None]]:
+        """The log with each entry's author, newest first, paged by the last `seq` a screen has seen.
+
+        A cursor rather than an offset, because the log grows while it is being read: a sign-in
+        during the scroll would shift every later page by one and quietly hide an entry. The join is
+        an outer one — the record outlives the account, so a deleted person leaves a nameless line
+        rather than none at all.
+        """
+        stmt = (select(AuditEntry, User.name)
+                .join(User, User.id == AuditEntry.user_id, isouter=True)
+                .order_by(AuditEntry.seq.desc()).limit(bounded(limit)))
+        if before is not None:
+            stmt = stmt.where(AuditEntry.seq < before)
+        return [(entry, name) for entry, name in (await self.session.execute(stmt)).all()]
 
     async def since(self, at: datetime, *, limit: int | None = None) -> list[AuditEntry]:
         return await self.list(AuditEntry.at > at, order_by=AuditEntry.seq, limit=limit)

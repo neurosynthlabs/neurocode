@@ -20,9 +20,11 @@ export function Topbar({
   const [themeOpen, setThemeOpen] = useState(false);
   const [projOpen, setProjOpen] = useState(false);
   const nav = useNavigate();
-  const { all: projects } = useProject();
+  const { all: projects, project } = useProject();
   const { approvals } = useData();
-  const active = projects.find((p) => p.id === projectId) ?? projects[0];
+  // From the context rather than picked again here: a workspace with nothing onboarded yet has an
+  // empty list, and `projects[0]` brought the whole app down on the first screen after sign-up.
+  const active = projects.find((p) => p.id === projectId) ?? project;
   const pending = approvals.filter((a) => a.status === 'pending');
 
   return (

@@ -108,13 +108,16 @@ class MemoryService:
             sides = {"a": (conflict.a, conflict.b), "b": (conflict.b, conflict.a)}
             if keep not in sides:
                 raise Refused("Keep 'a', keep 'b', or escalate to an ADR.", status=422)
-            kept, lost = sides[keep]
-            loser = await self.facts.get(str(lost.get("id") or lost)) if isinstance(lost, dict) else None
+            kept_id, lost_id = sides[keep]
+            # Both sides are fact ids, and a foreign key says so — so the loser is simply fetched.
+            # This read for a document with an "id" inside it, which a plain id never had, so the
+            # losing fact was never actually archived and the conflict resolved to nothing.
+            winner, loser = await self.facts.get(kept_id), await self.facts.get(lost_id)
             if loser is not None:
                 await self.facts.archive(loser)
             await self.activity.record(
                 actor=by, actor_kind="human", action="Conflict resolved",
-                detail=f"{conflict.topic} · kept {kept.get('ref', keep) if isinstance(kept, dict) else keep}"
+                detail=f"{conflict.topic} · kept {winner.ref if winner else keep}"
                        f"{f', archived {loser.ref} as superseded' if loser else ''}", level="ok")
         conflict.status, conflict.resolution = "resolved", {"keep": keep, "by": by}
         await self.session.flush()

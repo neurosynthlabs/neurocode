@@ -11,6 +11,7 @@ import { onboardingSteps, globalBrain, isolatedMemory } from '@/mock/modules';
 import { useProject } from '@/lib/project-context';
 import { useData } from '@/lib/data';
 import { cn } from '@/lib/utils';
+import { ago } from '@/lib/time';
 import { toast } from 'sonner';
 
 type Sort = 'active' | 'understood' | 'size';
@@ -195,7 +196,7 @@ export default function Projects() {
                     <span className="text-ok">{p.work.running} running</span>
                     <span className="text-warn">{p.work.review} review</span>
                     {p.work.blocked > 0 && <span className="text-danger">{p.work.blocked} blocked</span>}
-                    <span className="text-dim">· {p.lastActive}</span>
+                    <span className="text-dim">· {ago(p.lastActive)}</span>
                   </div>
                   <div className="flex items-center gap-1.5">
                     {p.id !== projectId && (

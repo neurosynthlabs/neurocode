@@ -44,7 +44,7 @@ class FactsIn(BaseModel):
 
 
 @router.get("/memory", dependencies=[Depends(current_person)])
-async def memory(q: str = "", category: str | None = None, project: str | None = None,
+async def memory(q: str = "", category: Category | None = None, project: str | None = None,
                  include_archived: bool = False,
                  open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
     found = await MemoryService(open_session).search(q, category=category, project=project,

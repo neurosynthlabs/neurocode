@@ -1,0 +1,888 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+  :root { color-scheme: light dark; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  body { margin: 0; font: 14px system-ui, -apple-system, sans-serif; background: #f6f4ef; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>NeuroCode</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;1,6..72,300;1,6..72,400&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --ground:      #F6F4EF;
+    --surface:     #FFFFFF;
+    --surface-2:   #EFEDE6;
+    --ink:         #15181D;
+    --ink-2:       #343A44;
+    --slate:       #666E7B;
+    --line:        #E1DED6;
+    --line-soft:   #EBE8E1;
+    --accent:      #0D6B74;
+    --accent-soft: #D9EAEB;
+    --amber:       #8A6218;
+    --amber-soft:  #F0E6CF;
+    --shadow:      0 1px 2px rgba(21, 24, 29, .05), 0 8px 24px -14px rgba(21, 24, 29, .18);
+
+    --serif: 'Newsreader', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+    --sans:  'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    --mono:  'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+    --col: 68ch;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #111319;
+      --surface:     #1A1D25;
+      --surface-2:   #21252E;
+      --ink:         #E9EBEF;
+      --ink-2:       #C3C8D1;
+      --slate:       #8D95A3;
+      --line:        #272C36;
+      --line-soft:   #202530;
+      --accent:      #4CC2CE;
+      --accent-soft: #10323A;
+      --amber:       #D8A84A;
+      --amber-soft:  #2E2517;
+      --shadow:      0 1px 2px rgba(0, 0, 0, .35), 0 10px 28px -16px rgba(0, 0, 0, .7);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #111319;
+    --surface:     #1A1D25;
+    --surface-2:   #21252E;
+    --ink:         #E9EBEF;
+    --ink-2:       #C3C8D1;
+    --slate:       #8D95A3;
+    --line:        #272C36;
+    --line-soft:   #202530;
+    --accent:      #4CC2CE;
+    --accent-soft: #10323A;
+    --amber:       #D8A84A;
+    --amber-soft:  #2E2517;
+    --shadow:      0 1px 2px rgba(0, 0, 0, .35), 0 10px 28px -16px rgba(0, 0, 0, .7);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16.5px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 1180px;
+    margin-inline: auto;
+    padding-inline: 24px;
+    padding-block: 0 96px;
+  }
+
+  /* ── type ────────────────────────────────────────────── */
+  h1, h2, h3 { font-family: var(--serif); font-weight: 400; text-wrap: balance; margin: 0; }
+  h1 { font-size: clamp(2.6rem, 7vw, 4.1rem); line-height: 1.02; letter-spacing: -.022em; }
+  h2 { font-size: clamp(1.65rem, 3.6vw, 2.25rem); line-height: 1.15; letter-spacing: -.012em; }
+  h3 { font-size: 1.12rem; font-weight: 500; line-height: 1.35; }
+  p  { margin: 0; }
+  a  { color: var(--accent); text-underline-offset: 3px; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    font-weight: 500;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--slate);
+  }
+  .lede { font-size: 1.16rem; line-height: 1.6; color: var(--ink-2); max-width: var(--col); }
+  .prose { display: flex; flex-direction: column; gap: 18px; max-width: var(--col); color: var(--ink-2); }
+  .prose strong { color: var(--ink); font-weight: 600; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  code {
+    font-family: var(--mono);
+    font-size: .875em;
+    background: var(--surface-2);
+    padding: .12em .38em;
+    border-radius: 3px;
+  }
+
+  /* ── masthead ────────────────────────────────────────── */
+  .masthead {
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+    padding-block: clamp(56px, 9vw, 92px) 40px;
+  }
+  .mark {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .mark .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--accent);
+    align-self: center;
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
+  .thesis { max-width: 30ch; }
+  .sub { max-width: 58ch; font-size: 1.2rem; line-height: 1.55; color: var(--ink-2); }
+
+  /* ── instrument strip ────────────────────────────────── */
+  .strip {
+    border-block: 1px solid var(--line);
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  }
+  .strip .cell {
+    padding: 18px 20px 20px;
+    border-left: 1px solid var(--line-soft);
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .strip .cell:first-child { border-left: 0; padding-left: 0; }
+  .strip .n {
+    font-family: var(--mono);
+    font-size: 1.42rem;
+    font-weight: 500;
+    letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+  .strip .k { font-size: 12.5px; color: var(--slate); line-height: 1.35; }
+  .strip .note {
+    grid-column: 1 / -1;
+    border-left: 0;
+    border-top: 1px solid var(--line-soft);
+    padding: 12px 0 14px;
+    font-size: 12.5px;
+    color: var(--slate);
+  }
+
+  /* ── sections ────────────────────────────────────────── */
+  section { padding-block: clamp(48px, 7vw, 76px) 0; }
+  .head { display: flex; flex-direction: column; gap: 12px; margin-bottom: 26px; }
+
+  .split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 300px);
+    gap: 44px;
+    align-items: start;
+  }
+
+  /* the spec rail: what the prose beside it is actually made of */
+  .rail {
+    border-top: 2px solid var(--ink);
+    padding-top: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .rail .title {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink);
+    padding-bottom: 10px;
+  }
+  .rail .row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 16px;
+    padding: 9px 0;
+    border-top: 1px solid var(--line-soft);
+    font-size: 13.5px;
+  }
+  .rail .row span:first-child { color: var(--slate); }
+  .rail .row span:last-child {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+    text-align: right;
+  }
+
+  /* ── the loop: a real ordered pipeline ───────────────── */
+  .loop { display: flex; flex-direction: column; gap: 0; max-width: 920px; }
+  .stepr {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr);
+    gap: 20px;
+    padding: 18px 0;
+    border-top: 1px solid var(--line-soft);
+    align-items: start;
+  }
+  .stepr:first-child { border-top: 1px solid var(--line); }
+  .stepr .idx {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: .06em;
+    color: var(--accent);
+    padding-top: 4px;
+  }
+  .stepr .body { display: flex; flex-direction: column; gap: 5px; }
+  .stepr .body p { font-size: 14.5px; color: var(--slate); line-height: 1.55; }
+  .stepr .gate {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    margin-top: 4px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--amber);
+    background: var(--amber-soft);
+    padding: 3px 8px;
+    border-radius: 3px;
+  }
+
+  /* ── lanes table ─────────────────────────────────────── */
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 520px; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 14px 10px 0; border-top: 1px solid var(--line-soft); }
+  thead th {
+    border-top: 0;
+    border-bottom: 1px solid var(--ink);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--slate);
+    padding-bottom: 9px;
+  }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; padding-right: 0; }
+  th.num { text-align: right; padding-right: 0; }
+  tbody tr:last-child td { border-bottom: 1px solid var(--line); }
+  tfoot td {
+    border-top: 1px solid var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding-top: 11px;
+    color: var(--ink);
+  }
+  .tag {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 3px;
+  }
+  .tag.free { color: var(--accent); background: var(--accent-soft); }
+  .tag.paid { color: var(--amber); background: var(--amber-soft); }
+
+  /* ── cards ───────────────────────────────────────────── */
+  .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1px; background: var(--line-soft); border: 1px solid var(--line-soft); }
+  .grid3 .cardx { background: var(--ground); padding: 20px 22px 22px; display: flex; flex-direction: column; gap: 7px; }
+  .grid3 .cardx .eyebrow { color: var(--accent); }
+  .grid3 .cardx p { font-size: 14px; color: var(--slate); line-height: 1.55; }
+
+  /* ── quote ───────────────────────────────────────────── */
+  .quote {
+    border-left: 2px solid var(--accent);
+    padding: 4px 0 4px 26px;
+    max-width: 44ch;
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: clamp(1.3rem, 3vw, 1.62rem);
+    line-height: 1.38;
+    color: var(--ink);
+  }
+  .quote cite {
+    display: block;
+    margin-top: 14px;
+    font-family: var(--mono);
+    font-style: normal;
+    font-size: 11.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--slate);
+  }
+
+  /* ── terminal ────────────────────────────────────────── */
+  .term {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    max-width: 700px;
+  }
+  .term .bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--surface-2);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--slate);
+  }
+  .term pre {
+    margin: 0;
+    padding: 16px 18px 18px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.85;
+    overflow-x: auto;
+    color: var(--ink-2);
+  }
+  .term .p { color: var(--accent); }
+  .term .c { color: var(--slate); }
+
+  /* ── status list ─────────────────────────────────────── */
+  .status { display: flex; flex-direction: column; gap: 0; max-width: 820px; }
+  .status .item {
+    display: grid;
+    grid-template-columns: 100px minmax(0, 1fr);
+    gap: 18px;
+    padding: 13px 0;
+    border-top: 1px solid var(--line-soft);
+    align-items: baseline;
+  }
+  .status .item:first-child { border-top: 1px solid var(--line); }
+  .status .item:last-child { border-bottom: 1px solid var(--line); }
+  .status .s {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+  }
+  .status .s.on  { color: var(--accent); }
+  .status .s.off { color: var(--slate); }
+  .status .t { font-size: 14.5px; color: var(--ink-2); }
+  .status .t b { color: var(--ink); font-weight: 600; }
+
+  footer {
+    margin-top: clamp(56px, 8vw, 88px);
+    border-top: 1px solid var(--line);
+    padding-top: 22px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 28px;
+    align-items: baseline;
+    font-size: 13px;
+    color: var(--slate);
+  }
+
+  @media (max-width: 860px) {
+    .split { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+  }
+  @media (max-width: 560px) {
+    .strip .cell { border-left: 0; padding-inline: 0; }
+    .stepr { grid-template-columns: 34px minmax(0, 1fr); gap: 14px; }
+    .status .item { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+</head>
+<body>
+<div class="page">
+
+  <header class="masthead">
+    <div class="mark">
+      <span class="dot"></span>
+      <span class="eyebrow">Engineering&nbsp;OS · runs on your machine</span>
+    </div>
+    <h1 class="thesis">The work an agent does should survive the agent.</h1>
+    <p class="sub">
+      NeuroCode is a workspace where AI agents plan, write and review code inside your repository —
+      each in its own git worktree, each stopping at a change you sign. Nothing it learns is lost
+      when a session ends.
+    </p>
+  </header>
+
+  <div class="strip" role="group" aria-label="What is built today">
+    <div class="cell"><span class="n">86</span><span class="k">API endpoints</span></div>
+    <div class="cell"><span class="n">43</span><span class="k">Postgres tables</span></div>
+    <div class="cell"><span class="n">40</span><span class="k">screens</span></div>
+    <div class="cell"><span class="n">8</span><span class="k">model lanes</span></div>
+    <div class="cell"><span class="n">213</span><span class="k">backend tests</span></div>
+    <div class="cell"><span class="n">23</span><span class="k">end-to-end checks</span></div>
+    <div class="note mono">All figures are what the repository builds and passes today — not a roadmap.</div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────── -->
+  <section>
+    <div class="head">
+      <span class="eyebrow">Why it exists</span>
+      <h2>Coding agents are brilliant and forgetful.</h2>
+    </div>
+    <div class="split">
+      <div class="prose">
+        <p>
+          Anyone who has worked with a coding agent for a week knows the shape of the problem. You
+          explain the codebase. It writes something good. The session ends. Tomorrow you explain the
+          codebase again. The decision you made on Tuesday — why tax rounds at line level and not on
+          the invoice total — is gone, so on Friday it rounds the other way and nobody notices until
+          a customer does.
+        </p>
+        <p>
+          The work is also <strong>manual in the places it should not be</strong>. One agent at a
+          time. One model, rate-limited, while five free ones sit idle. Changes applied straight into
+          your checkout, so a bad run means <code>git reset</code> and a lost afternoon. No record of
+          who approved what.
+        </p>
+        <p>
+          NeuroCode is the answer to that, built as an operating system rather than a chat window:
+          <strong>a database that remembers, a runtime that isolates, and a gate you control</strong>.
+        </p>
+      </div>
+      <div class="rail">
+        <div class="title">What gets lost today</div>
+        <div class="row"><span>Context between sessions</span><span>every time</span></div>
+        <div class="row"><span>Decisions and their reasons</span><span>not stored</span></div>
+        <div class="row"><span>Agents working at once</span><span>1</span></div>
+        <div class="row"><span>Free model capacity used</span><span>~0%</span></div>
+        <div class="row"><span>Record of what was approved</span><span>none</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────── -->
+  <section>
+    <p class="quote">
+      I got tired of re-teaching a machine the same codebase every morning, and of losing work to a
+      run I could not undo. So I built the thing that keeps both.
+      <cite>Rajat Rajawat · why he started</cite>
+    </p>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────── -->
+  <section>
+    <div class="head">
+      <span class="eyebrow">What it is</span>
+      <h2>Six surfaces over one memory.</h2>
+      <p class="lede">
+        Every screen reads the same Postgres database, so a fact learned while reviewing a diff is
+        available the next time someone writes a plan. Nothing is a separate tool.
+      </p>
+    </div>
+
+    <div class="grid3">
+      <div class="cardx">
+        <span class="eyebrow">Home</span>
+        <h3>Command Center</h3>
+        <p>Type a requirement in plain words. It compiles into a plan with steps, open questions and
+          the files it expects to touch — and asks you the questions before anything runs.</p>
+      </div>
+      <div class="cardx">
+        <span class="eyebrow">Build</span>
+        <h3>Plans, tasks, runs</h3>
+        <p>A board of real work, and the live view of agents writing in their own worktrees, with
+          their logs, their diffs and their tests streaming as they go.</p>
+      </div>
+      <div class="cardx">
+        <span class="eyebrow">Knowledge</span>
+        <h3>Memory and code intelligence</h3>
+        <p>Facts with sources and confidence, the conflicts between them, and an index of your
+          repository: every symbol, what depends on what, and what breaks if this changes.</p>
+      </div>
+      <div class="cardx">
+        <span class="eyebrow">Platform</span>
+        <h3>Projects, MCP, models</h3>
+        <p>Onboard a repository from git or a local folder. Register MCP servers — whose output stays
+          untrusted until a person promotes it. Watch what every model call cost.</p>
+      </div>
+      <div class="cardx">
+        <span class="eyebrow">Governance</span>
+        <h3>Approvals and decisions</h3>
+        <p>An inbox of things waiting for a human, and a record of decisions that were made once and
+          should not be re-argued.</p>
+      </div>
+      <div class="cardx">
+        <span class="eyebrow">Admin</span>
+        <h3>People, roles, database</h3>
+        <p>Accounts, 32 permissions across five built-in roles, an append-only audit log, and the
+          database's own health — size, indexes, migrations, backups.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────── -->
+  <section>
+    <div class="head">
+      <span class="eyebrow">The loop</span>
+      <h2>From a sentence to a change you signed.</h2>
+      <p class="lede">
+        This is one ordered pipeline, and every run takes all of it. The two amber gates are the
+        points where nothing proceeds without a person.
+      </p>
+    </div>
+
+    <ol class="loop">
+      <li class="stepr">
+        <span class="idx">01</span>
+        <div class="body">
+          <h3>You describe the change</h3>
+          <p>Plain language, in the project's own terms. No prompt engineering.</p>
+        </div>
+      </li>
+      <li class="stepr">
+        <span class="idx">02</span>
+        <div class="body">
+          <h3>It compiles a plan</h3>
+          <p>Business requirement, technical requirement, architecture impact, ordered steps with an
+            agent for each, the files it expects to touch, and a test plan. It cites the memory facts
+            it leaned on.</p>
+        </div>
+      </li>
+      <li class="stepr">
+        <span class="idx">03</span>
+        <div class="body">
+          <h3>It asks what it does not know</h3>
+          <p>Open questions are answered or deliberately deferred. A plan with an unanswered question
+            cannot dispatch.</p>
+          <span class="gate">Gate · your answers</span>
+        </div>
+      </li>
+      <li class="stepr">
+        <span class="idx">04</span>
+        <div class="body">
+          <h3>Agents dispatch in parallel</h3>
+          <p>One git worktree and one branch per agent, so several work at once without seeing each
+            other's half-finished files. Your checkout is never touched.</p>
+        </div>
+      </li>
+      <li class="stepr">
+        <span class="idx">05</span>
+        <div class="body">
+          <h3>They write, and the tests run</h3>
+          <p>The model returns whole files, never a patch that might half-apply. The project's own
+            test command runs in the worktree, and its output is part of the record.</p>
+        </div>
+      </li>
+      <li class="stepr">
+        <span class="idx">06</span>
+        <div class="body">
+          <h3>A different model reviews the diff</h3>
+          <p>The reviewer is routed to a lane the writer did not use — a second opinion is worth more
+            from a second model, and free tiers make that free. With no key configured, an offline
+            rule set reviews instead and says so.</p>
+        </div>
+      </li>
+      <li class="stepr">
+        <span class="idx">07</span>
+        <div class="body">
+          <h3>You read the real diff and sign</h3>
+          <p>Not a summary of the change — the change. Accept, and the branch is yours. Discard, and
+            the branch and the worktree are removed as if it never happened.</p>
+          <span class="gate">Gate · your signature</span>
+        </div>
+      </li>
+      <li class="stepr">
+        <span class="idx">08</span>
+        <div class="body">
+          <h3>Merge from the screen</h3>
+          <p>Merged into your checkout only when it is clean, undone whole on a conflict, and it
+            always hands back the one command that reverses it.</p>
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────── -->
+  <section>
+    <div class="head">
+      <span class="eyebrow">Model routing</span>
+      <h2>Many small free models instead of one big paid one.</h2>
+      <p class="lede">
+        The real ceiling on parallel agents is not intelligence — it is one provider's requests per
+        minute. Six free lanes are six times the road, and the router spreads agents across them
+        deliberately so they never queue behind each other.
+      </p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Lane</th>
+            <th>Model</th>
+            <th>Cost</th>
+            <th class="num">Per min</th>
+            <th class="num">Per day</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Groq</td><td class="mono">llama-3.3-70b</td><td><span class="tag free">Free</span></td><td class="num">28</td><td class="num">900</td></tr>
+          <tr><td>Cerebras</td><td class="mono">qwen-3-coder-480b</td><td><span class="tag free">Free</span></td><td class="num">20</td><td class="num">500</td></tr>
+          <tr><td>OpenRouter</td><td class="mono">deepseek-chat-v3.1</td><td><span class="tag free">Free</span></td><td class="num">15</td><td class="num">50</td></tr>
+          <tr><td>Google Gemini</td><td class="mono">gemini-2.5-flash</td><td><span class="tag free">Free</span></td><td class="num">10</td><td class="num">200</td></tr>
+          <tr><td>Mistral</td><td class="mono">mistral-small</td><td><span class="tag free">Free</span></td><td class="num">10</td><td class="num">400</td></tr>
+          <tr><td>GitHub Models</td><td class="mono">gpt-4.1-mini</td><td><span class="tag free">Free</span></td><td class="num">10</td><td class="num">120</td></tr>
+          <tr><td>DeepSeek</td><td class="mono">deepseek-chat</td><td><span class="tag paid">Paid</span></td><td class="num">—</td><td class="num">—</td></tr>
+          <tr><td>Ollama</td><td class="mono">on this machine</td><td><span class="tag free">Local</span></td><td class="num">—</td><td class="num">—</td></tr>
+        </tbody>
+        <tfoot>
+          <tr><td colspan="3">Free capacity, before a rupee is spent</td><td class="num">93</td><td class="num">2,170</td></tr>
+        </tfoot>
+      </table>
+    </div>
+
+    <div class="split" style="margin-top: 34px;">
+      <div class="prose">
+        <p>
+          Each lane carries its own free-tier limits, and the budget that keeps it inside them is a
+          query over the usage ledger — not a counter someone remembers to increment. A lane that has
+          spent its allowance is treated as <strong>busy, not broken</strong>: the next call goes to
+          the next lane.
+        </p>
+        <p>
+          A key that a provider rejects trips a breaker so the same dead key is not tried fifty more
+          times. And every feature still works with <strong>no key at all</strong> — an offline rule
+          set answers, and the interface says plainly that rules wrote it, never a model.
+        </p>
+      </div>
+      <div class="rail">
+        <div class="title">Order of preference</div>
+        <div class="row"><span>1 · Free lanes</span><span>by role fit</span></div>
+        <div class="row"><span>2 · Paid lane</span><span>backstop</span></div>
+        <div class="row"><span>3 · Local model</span><span>never runs out</span></div>
+        <div class="row"><span>4 · Offline rules</span><span>always available</span></div>
+        <div class="row"><span>Reviewer lane</span><span>≠ writer's</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────── -->
+  <section>
+    <div class="head">
+      <span class="eyebrow">Memory</span>
+      <h2>It reads your codebase the way a colleague would.</h2>
+    </div>
+    <div class="split">
+      <div class="prose">
+        <p>
+          Onboarding a repository indexes it: every file's language, size and complexity; every symbol
+          it declares; every edge between them. Python is parsed by its own syntax tree, so its
+          imports are exact. C#, Java, Go, TypeScript and T-SQL are read by pattern, and the index
+          records which parser read which language rather than pretending they are equal.
+        </p>
+        <p>
+          <strong>Impact analysis</strong> walks those edges backwards eight steps deep and answers
+          the question that actually matters before a change: what uses this, what is reached through
+          those, which modules are crossed, and which database objects get touched.
+        </p>
+        <p>
+          On top of that sits retrieval. A question is answered from the few pieces that bear on it —
+          found both by <strong>meaning</strong> (embeddings, cosine distance under an HNSW index) and
+          by <strong>words</strong> (Postgres full text, ranked). The two rankings are fused, so a
+          piece that either method is confident about surfaces.
+        </p>
+        <p>
+          And memory is a first-class thing, not a scratchpad: facts carry a source, a confidence and
+          a strength, they are pinned or archived, and when two facts contradict each other the
+          workspace says so and asks someone to settle it.
+        </p>
+      </div>
+      <div class="rail">
+        <div class="title">Retrieval, concretely</div>
+        <div class="row"><span>Lexical</span><span>tsvector · ts_rank</span></div>
+        <div class="row"><span>Semantic</span><span>pgvector · cosine</span></div>
+        <div class="row"><span>Vector index</span><span>HNSW m=16</span></div>
+        <div class="row"><span>Fusion</span><span>RRF, k=60</span></div>
+        <div class="row"><span>Fuzzy names</span><span>pg_trgm</span></div>
+        <div class="row"><span>Impact depth</span><span>8 hops</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────── -->
+  <section>
+    <div class="head">
+      <span class="eyebrow">Trust</span>
+      <h2>Everything is written down, and the database enforces it.</h2>
+    </div>
+    <div class="split">
+      <div class="prose">
+        <p>
+          A tool that lets machines change your code has to be auditable, and auditable cannot mean
+          "we remembered to log it". The audit log here <strong>refuses</strong> to be updated or
+          deleted — a trigger in the database says no, to the application and to anyone at a psql
+          prompt alike. Deleting an account clears its id from the entries and leaves the record of
+          what they did.
+        </p>
+        <p>
+          Every request is one transaction: everything it does commits together, and a request that
+          fails rolls back whole. Sign-in throttling is a table rather than a dictionary in the
+          process, so it survives a restart. Model keys live in a file readable only by the account
+          running the API, and are only ever reported masked.
+        </p>
+        <p>
+          A repository an agent works in is never written outside its worktree, and paths the model
+          chooses are checked on the way in <em>and</em> on the way out — what gets read is what gets
+          sent to a provider.
+        </p>
+      </div>
+      <div class="rail">
+        <div class="title">Guarantees</div>
+        <div class="row"><span>Audit log</span><span>append-only</span></div>
+        <div class="row"><span>Per request</span><span>1 transaction</span></div>
+        <div class="row"><span>Passwords</span><span>scrypt n=2¹⁴</span></div>
+        <div class="row"><span>Permissions</span><span>32 · 5 roles</span></div>
+        <div class="row"><span>MCP output</span><span>untrusted by default</span></div>
+        <div class="row"><span>Your checkout</span><span>never written to</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────── -->
+  <section>
+    <div class="head">
+      <span class="eyebrow">Using it</span>
+      <h2>Three commands, and it is running on your laptop.</h2>
+      <p class="lede">
+        There is no account to create, no cloud to sign into, and no key required to start. The web
+        app runs on port 5180 and the API on 8787, both on localhost.
+      </p>
+    </div>
+
+    <div class="term">
+      <div class="bar">Terminal · first run</div>
+<pre><span class="c"># make the database and enable its extensions</span>
+<span class="p">$</span> uv run python scripts/bootstrap-db.py
+
+<span class="c"># build the schema from the migrations</span>
+<span class="p">$</span> cd server &amp;&amp; uv run alembic upgrade head
+
+<span class="c"># start the web app and the API together</span>
+<span class="p">$</span> ./scripts/dev.sh start
+  <span class="c">✓ api  http://127.0.0.1:8787/health</span>
+  <span class="c">✓ web  http://localhost:5180/</span></pre>
+    </div>
+
+    <div class="prose" style="margin-top: 30px;">
+      <p>
+        The first screen is a three-step wizard: name the workspace, create the owner account, and —
+        optionally — paste a free API key. Skip that step and everything still works; the offline
+        rules answer and every screen tells you they did.
+      </p>
+      <p>
+        Then onboard a repository from <strong>Projects</strong>. It clones or reads the folder,
+        measures it, indexes the code, and mines the git history. From that point on, typing a
+        requirement into the Command Center is the whole workflow.
+      </p>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────── -->
+  <section>
+    <div class="head">
+      <span class="eyebrow">Under it</span>
+      <h2>Boring where it should be boring.</h2>
+    </div>
+    <div class="split">
+      <div class="prose">
+        <p>
+          A React 19 front end on Vite, TypeScript in strict mode, and a FastAPI back end over
+          Postgres 16 with SQLAlchemy and Alembic. Forty-three tables, all related, all typed, every
+          one created by a migration — the schema is never written by hand.
+        </p>
+        <p>
+          The first version of the back end kept the domain as JSON documents and it hid things: a
+          project's task counts were a stored number that drifted from the truth, and nothing stopped
+          a task pointing at a project that had been deleted. It was rebuilt relational for exactly
+          that reason, and Postgres brings the three things retrieval needs — full text, vectors and
+          trigram matching — in one server rather than three.
+        </p>
+        <p>
+          It runs as one process serving one workspace, on your machine. That is a deliberate
+          constraint, not a limitation waiting to be fixed: it is what makes "your code never leaves
+          this laptop" a true statement rather than a promise.
+        </p>
+      </div>
+      <div class="rail">
+        <div class="title">Stack</div>
+        <div class="row"><span>Interface</span><span>React 19 · Vite</span></div>
+        <div class="row"><span>API</span><span>FastAPI · async</span></div>
+        <div class="row"><span>Database</span><span>Postgres 16</span></div>
+        <div class="row"><span>Vectors</span><span>pgvector</span></div>
+        <div class="row"><span>Migrations</span><span>Alembic · 8</span></div>
+        <div class="row"><span>Isolation</span><span>git worktrees</span></div>
+        <div class="row"><span>Live updates</span><span>server-sent events</span></div>
+        <div class="row"><span>Code, app + API</span><span>~34,700 lines</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────── -->
+  <section>
+    <div class="head">
+      <span class="eyebrow">Where it stands</span>
+      <h2>What is real today, and what is not.</h2>
+      <p class="lede">
+        Worth being exact about, because a demo that quietly runs on sample data is how people get
+        misled.
+      </p>
+    </div>
+
+    <div class="status">
+      <div class="item"><span class="s on">Live</span><span class="t"><b>The whole engineering loop</b> — requirement, plan, questions, dispatch, parallel worktrees, tests, review, approval, merge.</span></div>
+      <div class="item"><span class="s on">Live</span><span class="t"><b>Memory, retrieval and the code index</b> — against real repositories, with real embeddings and real full-text ranking.</span></div>
+      <div class="item"><span class="s on">Live</span><span class="t"><b>Accounts, roles, approvals and the audit log</b> — enforced by the database, not by convention.</span></div>
+      <div class="item"><span class="s on">Live</span><span class="t"><b>Model routing and the usage ledger</b> — eight lanes, real budgets, every call recorded with its tokens and its time.</span></div>
+      <div class="item"><span class="s on">Live</span><span class="t"><b>Sessions</b> — a conversation that can read the code and answer, saved turn by turn so a crash loses nothing.</span></div>
+      <div class="item"><span class="s off">Designed</span><span class="t"><b>Fourteen screens still render sample data</b> — workflows, evals, DevOps, plugins, research, skills, hooks and others. The interface is built; the back end behind them is not.</span></div>
+      <div class="item"><span class="s off">Designed</span><span class="t"><b>Teams beyond one machine</b> — the data model has teams and roles, but it runs as a single process serving a single workspace.</span></div>
+      <div class="item"><span class="s off">Not yet</span><span class="t"><b>A hosted version</b> — the public demo is the interface alone, running on sample data in the browser. It never makes a request.</span></div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────── -->
+  <section>
+    <div class="head">
+      <span class="eyebrow">Position</span>
+      <h2>Not another chat window.</h2>
+    </div>
+    <div class="prose">
+      <p>
+        The tools people reach for today are good at the middle of the job — writing the code. They
+        are weakest at both ends: knowing what the change should be, and proving it was safe. A chat
+        window has no memory of Tuesday, no record of who agreed, no way to run four agents without
+        four terminals, and no answer when someone asks what a model cost this month.
+      </p>
+      <p>
+        NeuroCode treats those ends as the product. The database is the memory. The worktree is the
+        safety. The approval is the record. The model is an interchangeable part — which is exactly
+        why it can use six free ones and keep working when all of them are down.
+      </p>
+      <p>
+        It is a prototype, built by one person, and everything above is what the repository does when
+        you clone it and run those three commands.
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    <span class="mono">NeuroCode · v0.9.4</span>
+    <span>Local-first AI engineering workspace</span>
+    <span>Built by Rajat Rajawat</span>
+  </footer>
+
+</div>
+</body>
+</html>

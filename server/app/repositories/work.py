@@ -69,11 +69,7 @@ class TaskRepository(Repository[Task]):
         return list((await self.session.execute(stmt)).scalars().unique())
 
     async def next_ref(self, prefix: str = "TASK-") -> str:
-        """The next reference, worked out by the database: the highest number any ref carries, plus one.
-        Asked in SQL rather than by reading every ref, so two requests cannot land on the same one."""
-        digits = func.nullif(func.regexp_replace(Task.ref, r"\D", "", "g"), "")
-        stmt = select(func.coalesce(func.max(cast(digits, Integer)), 0))
-        return f"{prefix}{int((await self.session.execute(stmt)).scalar_one()) + 1}"
+        return await super().next_ref(Task.ref, prefix)
 
 
 class PlanRepository(Repository[Plan]):
@@ -116,10 +112,9 @@ class ApprovalRepository(Repository[Approval]):
         return await self.one(Approval.run_ref == run_ref, Approval.status == "pending")
 
     async def next_ref(self, prefix: str = "APPR-", floor: int = 100) -> str:
-        """The next gate's reference, worked out by the database so two runs cannot claim the same one."""
-        digits = func.nullif(func.regexp_replace(Approval.ref, r"\D", "", "g"), "")
-        stmt = select(func.coalesce(func.max(cast(digits, Integer)), floor))
-        return f"{prefix}{int((await self.session.execute(stmt)).scalar_one()) + 1}"
+        """Gates start numbering at 100, so the first one does not read like a task."""
+        ref = await super().next_ref(Approval.ref, prefix)
+        return ref if int(ref.removeprefix(prefix)) > floor else f"{prefix}{floor + 1}"
 
 
 class ActivityRepository(Repository[ActivityEvent]):

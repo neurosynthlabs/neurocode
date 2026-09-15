@@ -75,6 +75,12 @@ class TaskService:
         ticked = sum(1 for i in task.checklist if i.done)
         task.progress = round(100 * ticked / len(task.checklist)) if task.checklist else task.progress
         await self.session.flush()
+        # Its sibling above records a move, and the old stack recorded this too. Ticking an item is a
+        # person saying a piece of work is finished, which is exactly the kind of thing the feed is for.
+        await self.activity.record(
+            actor=actor.name, actor_kind="human", action="Checklist updated",
+            detail=f"{task.ref} · {'✓' if done else '○'} {item.label} · {ticked}/{len(task.checklist)}",
+            level="ok" if done else "info", project_id=task.project_id, task_ref=task.ref)
         return task
 
 
@@ -101,15 +107,3 @@ class PlanQuestions:
         await self.session.flush()
         return plan
 
-    async def dispatchable(self, ref: str) -> Plan:
-        """The plan, if nothing is left open. This is the one gate before agents start working."""
-        plan = await self.plans.by_ref(ref)
-        if plan is None:
-            raise NotFound(f"plan {ref}")
-        if plan.status == "dispatched":
-            raise Refused(f"{ref} was already dispatched.")
-        open_questions = await self.plans.open_questions(plan.id)
-        if open_questions:
-            first = open_questions[0].question
-            raise Refused(f"{len(open_questions)} question(s) are still open, starting with: {first}")
-        return plan

@@ -14,6 +14,7 @@ import { inFlight, useData } from '@/lib/data';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { Plan, PlanStepState } from '@/types';
+import { ago } from '@/lib/time';
 
 const STATE_ICON: Record<PlanStepState, { icon: typeof Circle; cls: string; mark: string }> = {
   done:    { icon: CircleCheck, cls: 'text-ok',     mark: '✓' },
@@ -133,7 +134,7 @@ export default function Plans() {
             <Tag tone="neutral">{projectName(p.projectId)}</Tag>
             <RiskPill risk={p.risk} />
             <CompiledBy p={p} />
-            <span className="ml-auto text-[12.5px] text-dim">compiled {p.createdAt}</span>
+            <span className="ml-auto text-[12.5px] text-dim">compiled {ago(p.createdAt)}</span>
           </div>
 
           {/* Compiler chain */}

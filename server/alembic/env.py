@@ -28,7 +28,11 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", settings().database_url)
+# A caller that has already chosen a database keeps it — the test fixtures set this option before
+# running `upgrade`, and overwriting it here pointed every test run at the *live* database instead.
+# Only when nobody has chosen does this fall back to the application's own URL.
+if not (config.get_main_option("sqlalchemy.url", "") or "").strip():
+    config.set_main_option("sqlalchemy.url", settings().database_url)
 target_metadata = Base.metadata
 
 # Tables the old SQLite-era runner made. They are not in the models, and autogenerate must not try to
