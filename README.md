@@ -6,9 +6,10 @@ You are the AI Project Manager and the final approver. Everything else — plann
 coding, testing, review, DevOps, legacy analysis, memory and knowledge management — is done by
 twelve specialist agents working in isolated git worktrees.
 
-This repository holds the web app (32 screens and an Admin section) and a local API: FastAPI over one
-SQLite file, with accounts, roles and permissions, an audit log and an AI gateway. `docs/ARCHITECTURE.md`
-has the whole shape. The public demo runs the same app on sample data, with no server behind it.
+This repository holds the web app (40 screens, with an Admin section) and a local API: FastAPI over
+Postgres 16, with accounts, roles and permissions, an append-only audit log, an agent runtime that works in
+git worktrees, and an AI gateway that routes across free model lanes. `docs/ARCHITECTURE.md` has the whole
+shape. The public demo runs the same app on sample data, with no server behind it.
 
 ## What is in here
 
@@ -48,14 +49,20 @@ React 19 · Vite 8 · TypeScript · Tailwind v4 · shadcn/ui (Base UI) · React 
 
 248 palettes × 7 modes × 64 ground tones, plus live corner radius, six font families, four base
 sizes and three sidebar styles — all driven by CSS variables written at runtime, so every one of the
-32 screens repaints without a rebuild.
+40 screens repaints without a rebuild.
 
 ## Run it
 
 ```bash
 npm install
+brew install postgresql@16 pgvector && brew services start postgresql@16   # once
+uv run --project server python scripts/bootstrap-db.py                    # once: databases + extensions
+(cd server && uv run alembic upgrade head)                                  # after every pull
 npm run dev:start   # web on http://localhost:5180, API on 127.0.0.1:8787 (the API needs uv)
 ```
+
+Coming from the SQLite version? `uv run --project server python scripts/import-sqlite.py` carries the
+workspace across, accounts and passwords included.
 
 The first visit opens the setup wizard: name the workspace and create the Owner account. Every AI
 feature works with no key (offline rules, labelled as such); add a DeepSeek key or a local Ollama

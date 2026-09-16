@@ -19,7 +19,7 @@ from ..schemas import plan_json, task_json
 from ..services import runs as runtime
 from ..services.identity import Person
 from ..services.plans import PlanService
-from .deps import current_person, database, gateway, require, session
+from .deps import current_person, database, gateway, hand_off, require, session
 
 router = APIRouter()
 
@@ -58,6 +58,6 @@ async def dispatch(ref: str, jobs: BackgroundTasks, who: Person = Depends(requir
     if made:
         lead = made[-1]
         starter = runtime.execute_batch if len(made) > 1 else runtime.execute
-        jobs.add_task(starter, db, gw, lead.ref)
+        await hand_off(open_session, jobs, starter, db, gw, lead.ref)
         return {**plan_json(plan), "runRef": lead.ref}
     return plan_json(plan)

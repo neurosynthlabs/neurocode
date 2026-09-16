@@ -1,7 +1,12 @@
 import { useMemo, useState } from 'react';
-import { Cable, ArrowRight, ArrowLeft, Check, X, Minus } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Cable, ArrowRight, ArrowLeft, Check, X, Minus, MessagesSquare } from 'lucide-react';
 import { toast } from 'sonner';
-import { usePref } from '@/lib/data';
+import { Button } from '@/components/ui/button';
+import { api } from '@/lib/api';
+import { useData, usePref } from '@/lib/data';
+import { useProject } from '@/lib/project-context';
+import { useRemote } from '@/lib/remote';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Dot, Mono, ListRow, Ascii, KV, Stat, StatGrid,
   DataTable, Row, Cell, Empty, SectionTitle, StatusText,
@@ -25,7 +30,13 @@ const TONE = { yes: 'text-ok', no: 'text-dim', partial: 'text-warn' };
 
 const ACP_MODES: Record<string, string> = Object.fromEntries(acpClients.map((c) => [c.id, c.permissionMode]));
 
+/** Live: nothing speaks ACP yet, so the page says what it is and where the same conversation lives today. */
 export default function Acp() {
+  const { mode } = useData();
+  return mode === 'live' ? <LiveAcp /> : <SampleAcp />;
+}
+
+function SampleAcp() {
   const [sel, setSel] = useState(acpClients[0].id);
   const [modes, setModes] = usePref('acp.modes', ACP_MODES);
   const c = useMemo(() => acpClients.find((x) => x.id === sel) ?? acpClients[0], [sel]);
@@ -161,6 +172,71 @@ export default function Acp() {
             </Panel>
           </div>
         </div>
+      </PageBody>
+    </Page>
+  );
+}
+
+/* ── live ─────────────────────────────────────────────────────── */
+
+/** Protocol reference, not data: each ACP method against what already exists in NeuroCode. */
+const MAPPING: { method: string; from: 'client' | 'agent'; here: string }[] = [
+  { method: 'initialize · authenticate', from: 'client', here: 'A bearer-token session, the way scripts sign in today.' },
+  { method: 'session/new', from: 'client', here: 'Starts a session on a project, as the Sessions screen does.' },
+  { method: 'session/prompt', from: 'client', here: 'Asks it a question, answered from retrieval and the read-only tools.' },
+  { method: 'session/update', from: 'agent', here: 'Each turn as it is written: the grounding, every tool call, the answer.' },
+  { method: 'session/request_permission', from: 'agent', here: 'An approval in the inbox, decided under the permission rules.' },
+  { method: 'session/cancel', from: 'client', here: 'Stops the answer in flight, like Stop in a session.' },
+];
+
+function LiveAcp() {
+  const nav = useNavigate();
+  const { project } = useProject();
+  const sessions = useRemote(`acp:sessions:${project.id}`, () => api.sessions(project.id));
+  const count = sessions.data?.length;
+
+  return (
+    <Page>
+      <PageHeader
+        title="ACP Bridge"
+        subtitle="Agent Client Protocol — how an editor would drive NeuroCode. The counterpart to MCP: one wires the editor in, the other wires the tools out."
+        actions={<Tag tone="neutral"><Dot state="neutral" />not connected</Tag>}
+      />
+
+      <PageBody className="space-y-4">
+        <Panel>
+          <Empty
+            icon={<Cable className="size-6" />}
+            title="No editor is connected. NeuroCode does not speak the Agent Client Protocol yet."
+            hint="An editor (Zed, Neovim, JetBrains) would start a session here, ask it questions and answer its permission requests. Until that bridge exists, the same conversation lives in Sessions."
+            action={
+              <Button size="sm" variant="outline" onClick={() => nav('/sessions')}>
+                <MessagesSquare className="size-3.5" />Open Sessions
+                {count !== undefined && <span className="tnum text-dim">· {count} on {project.name}</span>}
+              </Button>
+            }
+          />
+        </Panel>
+
+        <Panel eyebrow="Where ACP sits" title="Two protocols, two directions">
+          <Ascii>{DIAGRAM}</Ascii>
+        </Panel>
+
+        <Panel eyebrow="Reference, not traffic" title="How it would map onto what exists" flush>
+          <div className="divide-y divide-line">
+            {MAPPING.map((x) => (
+              <div key={x.method} className="flex items-start gap-2.5 px-5 py-2.5">
+                {x.from === 'client'
+                  ? <ArrowRight className="mt-0.5 size-3.5 shrink-0 text-info" />
+                  : <ArrowLeft className="mt-0.5 size-3.5 shrink-0 text-brand" />}
+                <span className="min-w-0 flex-1">
+                  <Mono tone={x.from === 'client' ? 'info' : 'brand'}>{x.method}</Mono>
+                  <span className="mt-1 block text-[12.5px] text-soft">{x.here}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </Panel>
       </PageBody>
     </Page>
   );

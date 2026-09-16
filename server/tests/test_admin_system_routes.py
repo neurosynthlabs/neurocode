@@ -7,7 +7,6 @@ this test's own, so a key set here is written for real and taken away with the t
 from __future__ import annotations
 
 import json
-import shutil
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -28,7 +27,7 @@ from app.data.loader import load_seed, sync_roles
 from app.repositories.identity import AuditRepository
 from app.secrets import Secrets
 from app.services.identity import IdentityService
-from app.services.maintenance import COLLECTIONS
+from app.services.maintenance import COLLECTIONS, find_pg_dump
 from app.settings import Settings
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
@@ -160,13 +159,17 @@ async def test_the_check_says_what_it_actually_checked(client: AsyncClient):
 
 async def test_a_backup_with_no_pg_dump_is_refused_in_words(client: AsyncClient,
                                                             monkeypatch: pytest.MonkeyPatch):
-    """The failure that actually happens: the API runs where the Postgres client tools do not."""
+    """The failure that actually happens: the API runs where the Postgres client tools do not — not on
+    PATH, and not in any of the places they are usually installed either."""
+    from app.services import maintenance
+
     monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(maintenance, "PG_BIN_GLOBS", ())
     refused = await client.post("/admin/database/backup")
     assert refused.status_code == 409 and "pg_dump" in refused.json()["detail"]
 
 
-@pytest.mark.skipif(shutil.which("pg_dump") is None, reason="pg_dump is not on PATH")
+@pytest.mark.skipif(find_pg_dump(16) is None, reason="no pg_dump for PostgreSQL 16 on this machine")
 async def test_a_backup_is_a_file_the_report_then_lists(client: AsyncClient, tmp_path: Path):
     made = await client.post("/admin/database/backup")
     assert made.status_code == 201
@@ -304,3 +307,25 @@ async def test_none_of_this_is_open_to_a_stranger(api: FastAPI, client: AsyncCli
     async with AsyncClient(transport=transport, base_url="http://api", headers=HEADERS) as nobody:
         refused = await nobody.request(method, path, json={} if method in ("POST", "PUT") else None)
     assert refused.status_code == 401
+
+
+def test_pg_dump_is_found_off_path_where_homebrew_puts_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Homebrew's postgresql@16 is keg-only, so pg_dump was never on PATH on the commonest Mac install
+    and a backup could not be taken on exactly the machine this runs on."""
+    from app.services import maintenance
+
+    keg = tmp_path / "opt" / "postgresql@16" / "bin"
+    keg.mkdir(parents=True)
+    fake = keg / "pg_dump"
+    fake.write_text("#!/bin/sh\necho 'pg_dump (PostgreSQL) 16.12'\n")
+    fake.chmod(0o755)
+    old = tmp_path / "old" / "bin"
+    old.mkdir(parents=True)
+    stale = old / "pg_dump"
+    stale.write_text("#!/bin/sh\necho 'pg_dump (PostgreSQL) 14.9'\n")
+    stale.chmod(0o755)
+
+    monkeypatch.setenv("PATH", str(old))                        # an older client is on PATH
+    monkeypatch.setattr(maintenance, "PG_BIN_GLOBS", (str(tmp_path / "opt" / "postgresql@*" / "bin"),))
+    assert find_pg_dump(16) == str(fake)                          # too old to dump 16, so the keg wins
+    assert find_pg_dump(17) is None                               # and nothing new enough is invented

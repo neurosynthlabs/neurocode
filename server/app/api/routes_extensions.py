@@ -1,0 +1,48 @@
+"""The extension screens: skills, plugins, commands and hooks, discovered on disk and switched on or off.
+
+Every route here reads. What is found comes off disk on each request (in a thread), so a skill written a
+minute ago shows up without anything being imported; the switches themselves are prefs, written through
+`PUT /prefs/{key}` like every other screen setting. A key the screen sends back is looked up among what
+discovery found — it is never turned into a path.
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..services.extensions import ExtensionService
+from .deps import current_person, session
+
+router = APIRouter(prefix="/extensions", dependencies=[Depends(current_person)])
+
+PROJECT = Query(alias="projectId", min_length=1, max_length=80)
+
+
+@router.get("/skills")
+async def skills(project_id: str = PROJECT, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    """Every skill this project's sessions can see, with the loads sessions really made."""
+    return await ExtensionService(open_session).skills(project_id)
+
+
+@router.get("/skills/detail")
+async def skill(project_id: str = PROJECT, key: str = Query(min_length=1, max_length=400),
+                open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    return await ExtensionService(open_session).skill(project_id, key)
+
+
+@router.get("/commands")
+async def commands(project_id: str = PROJECT, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    return await ExtensionService(open_session).commands(project_id)
+
+
+@router.get("/hooks")
+async def hooks(project_id: str = PROJECT, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    """The hooks Claude Code would run here, with anything that looks like a secret taken out."""
+    return await ExtensionService(open_session).hooks(project_id)
+
+
+@router.get("/plugins")
+async def plugins(project_id: str = PROJECT, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    return await ExtensionService(open_session).plugins(project_id)

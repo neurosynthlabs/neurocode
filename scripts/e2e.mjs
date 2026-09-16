@@ -95,7 +95,9 @@ try {
 
   // Both servers are spawned directly (not through uv run / npm) so killing them really stops them.
   run('api', path.join(ROOT, 'server/.venv/bin/python'),
-    ['-m', 'uvicorn', 'app.api.app:create_api', '--factory', '--app-dir', 'server', '--host', '127.0.0.1', '--port', String(API_PORT)],
+    ['-m', 'uvicorn', 'app.api.app:create_api', '--factory', '--app-dir', 'server', '--host', '127.0.0.1', '--port', String(API_PORT),
+      // An open event stream or a job still running must not hold the run open forever once it is over.
+      '--timeout-graceful-shutdown', '5'],
     // No server/.env and no key from this shell: the run must not depend on, or reach, a real model.
     { NEUROCODE_DATABASE_URL: E2E_DB, NEUROCODE_COMPILER: 'rules', NEUROCODE_ENV_FILE: '', DEEPSEEK_API_KEY: '' });
   run('web', process.execPath,
@@ -311,12 +313,12 @@ try {
     await page.locator('[data-slot="popover-content"]').getByRole('button', { name: /^Server/ }).click();
     await page.getByRole('link', { name: 'Code Intelligence', exact: true }).click();
     await page.getByText('Python · python-ast').waitFor({ timeout: 10000 });
-    await page.getByLabel('Search the code').fill('create_app');
-    await page.getByRole('button', { name: /create_app/ }).first().click();
-    await page.getByText('If main.py changes…').waitFor({ timeout: 10000 });
+    await page.getByLabel('Search the code').fill('create_api');
+    await page.getByRole('button', { name: /create_api/ }).first().click();
+    await page.getByText('If app.py changes…').waitFor({ timeout: 10000 });
     await page.getByRole('button', { name: /Show in Architecture/ }).click();
     await page.getByText('Module graph').waitFor({ timeout: 10000 });
-    await page.getByText('If main.py changes…').waitFor({ timeout: 10000 });
+    await page.getByText('If app.py changes…').waitFor({ timeout: 10000 });
     await page.getByRole('button', { name: 'app', exact: true }).first().click();
     await page.getByText('If app changes…').waitFor({ timeout: 10000 });
   });
@@ -324,10 +326,12 @@ try {
   await step('a database backup is made from Admin → Database', async () => {
     await open('/admin/database');
     await page.getByRole('button', { name: /Back up now/ }).click();
-    await page.getByText(/neurocode-\d{8}-\d{6}-manual\.db/).first().waitFor({ timeout: 10000 });
+    // pg_dump's custom format now, and Alembic's history: one migration per script in the tree.
+    await page.getByText(/neurocode-\d{8}-\d{6}-manual\.dump/).first().waitFor({ timeout: 20000 });
     const db = await api('/admin/database');
-    expect(db.backups.some((b) => b.name.endsWith('-manual.db')), 'no manual backup is listed');
-    expect(db.migrations.length === 9, `${db.migrations.length} migrations applied`);
+    expect(db.backups.some((b) => b.name.endsWith('-manual.dump')), 'no manual backup is listed');
+    const scripts = fs.readdirSync(path.join(ROOT, 'server/alembic/versions')).filter((f) => f.endsWith('.py')).length;
+    expect(db.migrations.length === scripts, `${db.migrations.length} of ${scripts} migrations applied`);
   });
 
   await step('an agent run works in a worktree of its own and stops at your signature', async () => {

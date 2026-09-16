@@ -17,22 +17,24 @@ from typing import Any
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     Computed,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..data.base import Base, Mixin
-from .enums import ChunkKind, Confidence, ConflictStatus, MemoryCategory
+from .enums import ChunkKind, Confidence, ConflictStatus, MemoryCategory, RunStatus, RunStepStatus
 
 #: Every embedding is stored at this width. 1536 covers every lane's model; shorter ones are padded.
 EMBED_DIM = 1536
@@ -156,6 +158,113 @@ class RetrievalRun(Base):
     note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
 
 
+class ResearchReport(Base, Mixin):
+    """One research a person asked for: the question, what it was allowed to read, where it stands, and
+    what the synthesis concluded. Written as it runs, so a half-finished research is visible as one."""
+
+    __tablename__ = "research_reports"
+    __table_args__ = (
+        CheckConstraint("char_length(question) BETWEEN 3 AND 2000", name="question_length"),
+        CheckConstraint("cardinality(kinds) >= 1", name="reads_something"),
+        CheckConstraint("finished_at IS NULL OR started_at IS NULL OR finished_at >= started_at",
+                        name="finishes_after_it_starts"),
+        Index("ix_research_reports_project_id_created_at", "project_id", "created_at"),
+        # What start-up reads to find research that claims to be in flight after a restart.
+        Index("ix_research_reports_status_created_at", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    ref: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Which kinds of chunk it may read. An array of the chunk vocabulary itself, so a kind retrieval
+    #: does not have cannot be asked for.
+    kinds: Mapped[list[str]] = mapped_column(ARRAY(ChunkKind), nullable=False,
+                                             server_default="{code,doc,memory}")
+    status: Mapped[str] = mapped_column(RunStatus, nullable=False, server_default="queued")
+    requested_by: Mapped[str] = mapped_column(String(120), nullable=False, server_default="")
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+    summary: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    recommendation: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    architecture: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    risks: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
+    gaps: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
+    #: The model's own comparison, [{name, pros[], cons[], verdict}]: read whole, shaped by the answer.
+    alternatives: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
+
+    lane: Mapped[str | None] = mapped_column(String(40))
+    model: Mapped[str | None] = mapped_column(String(120))
+    #: Why the offline rules stood in, when they did.
+    fallback: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    angles: Mapped[list[ResearchAngle]] = relationship(back_populates="report", cascade="all, delete-orphan",
+                                                       order_by="ResearchAngle.n", lazy="selectin")
+
+
+class ResearchAngle(Base):
+    """One sub-question, answered on its own from its own retrieval."""
+
+    __tablename__ = "research_angles"
+    __table_args__ = (
+        UniqueConstraint("report_id", "n"),
+        CheckConstraint("n BETWEEN 1 AND 8", name="n_in_range"),
+        CheckConstraint("hits >= 0", name="hits_not_negative"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    report_id: Mapped[str] = mapped_column(ForeignKey("research_reports.id", ondelete="CASCADE"), nullable=False)
+    n: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(RunStepStatus, nullable=False, server_default="todo")
+    hits: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    hits_lexical: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    hits_semantic: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    finding: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    lane: Mapped[str | None] = mapped_column(String(40))
+    model: Mapped[str | None] = mapped_column(String(120))
+    ms: Mapped[int | None] = mapped_column(Integer)
+    error: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+
+    report: Mapped[ResearchReport] = relationship(back_populates="angles")
+    #: Appended through the angle, which fills in angle_id; report_id is the caller's to set, because a
+    #: citation belongs to both and only one of them can be the parent it is added through.
+    citations: Mapped[list[ResearchCitation]] = relationship(back_populates="angle", cascade="all, delete-orphan",
+                                                             order_by="ResearchCitation.n", lazy="selectin")
+
+
+class ResearchCitation(Base):
+    """A piece an angle actually cited, snapshotted with an excerpt.
+
+    Deliberately no foreign key to `chunks`: every retrieval build deletes and re-inserts a project's
+    chunks, so a key would either cascade the citations away or block re-indexing. The excerpt is what
+    keeps a citation readable after that. Two angles may cite the same piece; a report lists it once.
+    """
+
+    __tablename__ = "research_citations"
+    __table_args__ = (
+        UniqueConstraint("angle_id", "kind", "ref"),
+        Index("ix_research_citations_report_id_n", "report_id", "n"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    report_id: Mapped[str] = mapped_column(ForeignKey("research_reports.id", ondelete="CASCADE"), nullable=False)
+    angle_id: Mapped[int] = mapped_column(ForeignKey("research_angles.id", ondelete="CASCADE"), nullable=False)
+    n: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    kind: Mapped[str] = mapped_column(ChunkKind, nullable=False)
+    ref: Mapped[str] = mapped_column(Text, nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    line: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    title: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    excerpt: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+
+    angle: Mapped[ResearchAngle] = relationship(back_populates="citations")
+
+
 # A chunk's text is searched by words as well as by meaning; both indexes above are on the same row,
 # so a hybrid search never has to reconcile two stores that drifted apart.
-__all__ = ["EMBED_DIM", "Chunk", "MemoryConflict", "MemoryFact", "MemoryTag", "RetrievalRun", "text"]
+__all__ = ["EMBED_DIM", "Chunk", "MemoryConflict", "MemoryFact", "MemoryTag", "ResearchAngle", "ResearchCitation",
+           "ResearchReport", "RetrievalRun", "text"]

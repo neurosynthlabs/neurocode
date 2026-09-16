@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import (
@@ -36,10 +36,13 @@ from ..models import (
     Project,
     Role,
     RolePermission,
+    Setting,
     Task,
     TaskAgent,
 )
 
+#: The settings row that says a workspace has already been given (or declined) the sample work.
+SAMPLE_OFFERED = "workspace.seeded"
 SEED_PATH = Path(__file__).resolve().parent.parent.parent / "seed" / "seed.json"
 
 #: Emptied and rewritten by a seed load, child rows first. Accounts, sessions, audit and keys are not here.
@@ -260,6 +263,29 @@ async def load_seed(session: AsyncSession, data: dict[str, Any] | None = None) -
 
     await session.flush()
     return written
+
+
+async def seed_once(session: AsyncSession) -> bool:
+    """Open a brand-new workspace on the sample work, exactly once in its life.
+
+    The old store seeded every empty table on every start, which is what a first run looked like: the
+    wizard, then a workspace with something in it to try. The new stack never seeded at all, so a fresh
+    install opened on nothing — no task to tick, no approval to decide, no fact to search — and every
+    screen built around them had nothing to show. That is not an empty state, it is a broken first hour.
+
+    Once, though, not on every start. A marker records that this workspace has been looked at, so a
+    person who deliberately clears the sample away does not find it back after a restart. An existing
+    workspace — one imported, or one that has been used — is marked without being touched.
+    """
+    if await session.get(Setting, SAMPLE_OFFERED) is not None:
+        return False
+    worked = (await session.execute(select(func.count()).select_from(Project))).scalar_one() \
+        or (await session.execute(select(func.count()).select_from(Task))).scalar_one()
+    if not worked:
+        await load_seed(session)
+    session.add(Setting(key=SAMPLE_OFFERED, value={"sample": not worked}))
+    await session.flush()
+    return not worked
 
 
 async def sync_roles(session: AsyncSession, data: dict[str, Any] | None = None) -> int:

@@ -14,6 +14,8 @@ never the run: what was already done is already saved, and the screen shows exac
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import re
 import threading
 import time
@@ -25,6 +27,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import agent, onboarding
+from ..agent import coverage as coverage_reports
+from ..agent import testparse
+from ..agent.testparse import all_expected
 from ..agent.git import LEFTOVERS, SECRETS, TODO
 from ..ai.gateway import REVIEW, WRITE, Gateway, NoModel, extract_json
 from ..data.base import utcnow
@@ -39,10 +44,15 @@ from ..repositories import (
     RunRepository,
     TaskRepository,
 )
+from ..repositories.runtime import ResultsRepository
 from .errors import Refused
+
+log = logging.getLogger(__name__)
 
 WORKTREES = Path(__file__).resolve().parent.parent.parent / ".worktrees"
 MAX_CONTEXT, MAX_DIFF, AGENT_TIMEOUT, TEST_LINES = 60_000, 200_000, 1800, 400
+#: The largest coverage report read off disk. A report bigger than this is not one a runner wrote for us.
+MAX_REPORT = 20_000_000
 GATE_WORDS = ("approval", "approve", "sign-off", "sign off", "signature")
 TEST_FILE = re.compile(r"(^|/)(tests?|spec)s?/|\.(test|spec)\.[jt]sx?$|_test\.py$|test_.*\.py$")
 
@@ -191,6 +201,44 @@ class RunService:
         out.append({"n": done + len(out) + 1, "kind": "handoff", "label": "Your approval", "agent": "You"})
         return out
 
+    async def check_run(self, project: Project, by: str, *, at_branch: str | None = None) -> Run:
+        """A run with no agent in it: the project's own tests, in a throwaway worktree.
+
+        It branches from HEAD, or from `at_branch` while that branch still exists — so a failure an
+        agent's branch produced is re-run on that branch's code. The first time in a project it stops
+        at the same approval every run's test step does; it never goes around it. When it ends, however
+        it ends, its worktree and branch are removed.
+        """
+        setup = await asyncio.to_thread(_setup, project)
+        tests = setup["tests"]
+        if not tests:
+            raise Refused(f"No test command was found in {project.name}. NeuroCode runs a project's own "
+                          "tests: a Makefile with a test target, pytest, npm test, go test or dotnet test.")
+        answer = await self.session.get(Setting, f"runtime.tests.{project.id}")
+        if answer is not None and answer.value == "refused":
+            raise Refused(f"You chose not to run tests in {project.name}, so nothing was started.")
+        busy = await self.runs.active_check(project.id)
+        if busy is not None:
+            raise Refused(f"{busy.ref} is already running {project.name}'s tests.")
+
+        base = setup["base"]
+        if at_branch:
+            base = await asyncio.to_thread(branch_tip, setup["repo"], at_branch) or base
+        ref = await self.runs.next_ref()
+        branch = await asyncio.to_thread(agent_free_branch, setup["repo"], f"neurocode/check-{ref.lower()}")
+        command = tests["command"]
+        run = await self.runs.add(Run(
+            id=f"r{ref.split('-')[-1]}-{int(time.time())}", ref=ref, project_id=project.id, status="queued",
+            role="check", branch=branch, worktree=str(WORKTREES / project.id / ref), repo=str(setup["repo"]),
+            prefix=setup["prefix"], base=base, requirement=f"Run {command} at {base[:7]}", requested_by=by,
+            targets=[], tests_command=command, tests_status="not run",
+            review={"findings": [], "verdict": "", "by": ""}))
+        await self._add_steps(run, [{"n": 1, "kind": "test", "agent": "QA Engineer",
+                                     "label": f"Run the project's tests · {command}"}])
+        # Made in this session, so its steps were never loaded: load them before anyone reads them.
+        await self.session.refresh(run, attribute_names=["steps", "conflicts"])
+        return run
+
     async def _new_run(self, plan: Any, task: Any, project: Project, by: str, setup: dict[str, Any], *,
                        role: str, agent: str | None = None, lane: str | None = None,
                        suffix: str = "") -> Run:
@@ -229,11 +277,31 @@ class RunService:
             if target.status in ("queued", "waiting"):
                 target.status, target.finished_at = "cancelled", utcnow()
                 target.note = target.note or "Stopped by you."
+                if target.role == "check":
+                    await self._end_check(target)
         await self.session.flush()
+        # A check run leaves nothing behind — its worktree and branch go with it — so saying that the
+        # worktree stays would send someone looking for a folder that is already gone.
+        left = ("its worktree and branch were removed" if run.role == "check"
+                else "the worktree stays for you to look at")
         await self.activity.record(actor=by, actor_kind="human", action="Run stopped",
-                                   detail=f"{ref} · {run.branch} — the worktree stays for you to look at",
+                                   detail=f"{ref} · {run.branch} — {left}",
                                    level="warn", project_id=run.project_id)
         return run
+
+    async def _end_check(self, run: Run) -> None:
+        """A test-only run that is stopped before it works leaves nothing behind.
+
+        A running one is cleaned up by `_finish` when its loop notices the stop; a queued or waiting
+        one never reaches `_finish`, so its worktree and branch would stay — and the approval it was
+        parked on would sit in the inbox asking to run a command for a run that no longer exists.
+        """
+        await asyncio.to_thread(agent.cleanup, Path(run.repo), Path(run.worktree), run.branch)
+        run.removed = True
+        gate = await self.approvals.waiting_on_person(run.ref)
+        if gate is not None:
+            gate.status, gate.decided_at = "denied", utcnow()
+        run.waiting_on = None
 
     async def discard(self, ref: str, by: str) -> Run:
         """Remove the worktree and the branch. Only once the run has stopped."""
@@ -307,6 +375,60 @@ def agent_free_branch(repo: Path, wanted: str) -> str:
     return agent.free_branch(repo, wanted)
 
 
+def branch_tip(repo: Path, branch: str) -> str | None:
+    """The commit a local branch points at, or None when it is gone. Blocking."""
+    out = agent.git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}"], repo)
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
+
+
+def _before_tests(work: Path) -> tuple[str, str, float]:
+    """The commit about to be tested, the Go module path if there is one, and the moment the tests
+    start — a coverage report older than that was not written by this run. Blocking."""
+    sha = agent.git(["rev-parse", "HEAD"], work).stdout.strip()
+    module = ""
+    gomod = work / "go.mod"
+    if gomod.is_file() and not gomod.is_symlink():
+        try:
+            first = next((ln for ln in gomod.read_text(errors="replace").splitlines()
+                          if ln.startswith("module ")), "")
+        except OSError as e:
+            log.warning("could not read %s: %s", gomod, e)
+        else:
+            module = first.removeprefix("module ").strip().strip('"')
+    return sha, module, time.time()
+
+
+def _coverage(work: Path, since: float, module: str) -> list[tuple[str, int, int, str]]:
+    """Coverage the test command just wrote, summed per top-level directory. Blocking.
+
+    Only a report written after the tests started counts: one committed to the repository, or left by
+    an earlier run, describes code that is not this code. A symlink is never followed — the report
+    must be a file the command wrote inside the worktree, not a way to read something outside it.
+    With nothing fresh on disk, the answer is no rows, not a zero.
+    """
+    roots = (str(work), os.path.realpath(work))
+    inside = f"{os.path.realpath(work)}{os.sep}"
+    files: dict[str, tuple[int, int, str]] = {}
+    for name, kind in coverage_reports.REPORTS:
+        report = work / name
+        try:
+            # A linked `coverage/` directory would lead there too, so where it really is is checked.
+            if report.is_symlink() or not report.is_file() or not os.path.realpath(report).startswith(inside):
+                continue
+            info = report.stat()
+            if info.st_mtime < since or info.st_size > MAX_REPORT:
+                continue
+            text = report.read_text(errors="replace")
+        except OSError as e:
+            log.warning("could not read the coverage report %s: %s", report, e)
+            continue
+        for path, (covered, total) in coverage_reports.parse(kind, text, roots=roots, module=module).items():
+            files.setdefault(path, (covered, total, kind))       # the first report to name a file wins
+    return coverage_reports.by_directory(files)
+
+
 # ── working the steps, in the background ─────────────────────────
 async def _log(db: Database, run_id: str, level: str, line: str, step: int | None = None) -> None:
     async with db.session() as s:
@@ -314,11 +436,20 @@ async def _log(db: Database, run_id: str, level: str, line: str, step: int | Non
 
 
 async def _finish(db: Database, ref: str, status: str, note: str) -> None:
+    async with db.read() as s:
+        run = await RunRepository(s).by_ref(ref)
+        leftover = (Path(run.repo), Path(run.worktree), run.branch) \
+            if run is not None and run.role == "check" and not run.removed else None
+    # A test-only run exists to produce a result, not a branch: whatever it ended as, nothing stays.
+    if leftover is not None:
+        await asyncio.to_thread(agent.cleanup, *leftover)
     async with db.session() as s:
         runs = RunRepository(s)
         run = await runs.by_ref(ref)
         if run is None:
             return
+        if leftover is not None:
+            run.removed = True
         run.status, run.finished_at, run.waiting_on = status, utcnow(), None
         if note:
             run.note = note
@@ -427,7 +558,7 @@ async def _edit(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool:
     try:
         result = await asyncio.to_thread(
             gateway.ask, prompt, lambda raw: EditOut.model_validate(extract_json(raw, trim=False)),
-            feature="agent", project=project_id, role=WRITE, lane=lane, agent=who)
+            feature="agent", project=project_id, role=WRITE, lane=lane, agent=who, run_id=run_id)
     except NoModel as e:
         async with db.session() as s:
             run = await RunRepository(s).by_ref(ref)
@@ -550,13 +681,21 @@ async def _test(db: Database, ref: str, step_n: int) -> bool:
 
     argv = command.split()
     await _log(db, run_id, "tool", f"$ {command}", step_n)
+    sha, module, started = await asyncio.to_thread(_before_tests, work)
     lines: list[str] = []
+    # Every line goes to the reader, not only the ones kept for the log: a failure printed after line
+    # 400 is still a failure.
+    reader = testparse.Reader(roots=(str(work), os.path.realpath(work)), module=module)
 
     def keep(i: int, text: str) -> None:
         if i < TEST_LINES:
             lines.append(text)
+        reader.feed(text)
 
     code, tail = await asyncio.to_thread(agent.run_tests, argv, work, keep, stopped(ref))
+    interrupted = stopped(ref).is_set()
+    found = reader.result()
+    measured = [] if interrupted else await asyncio.to_thread(_coverage, work, started, module)
 
     async with db.session() as s:
         run = await RunRepository(s).by_ref(ref)
@@ -564,11 +703,41 @@ async def _test(db: Database, ref: str, step_n: int) -> bool:
         logs = RunLogRepository(s)
         for text in lines:
             await logs.write(run.id, level="tool", step=step_n, line=text)
+        if interrupted:
+            # Killed half-way, the exit code and the output say nothing about the code; keeping them
+            # would record a failure that never happened.
+            step.status, step.detail = "skipped", "Stopped by you before the tests finished."
+            await logs.write(run.id, level="warn", step=step_n, line="tests stopped before they finished")
+            return False
         passed = code == 0
         run.tests_status = "passed" if passed else "failed"
         run.tests_summary = " · ".join(t for t in tail if t.strip())[:300] or f"exit code {code}"
+        run.tests_sha, run.tests_runner = sha[:64], found.runner
+        run.tests_passed, run.tests_failed = found.passed, found.failed
+        run.tests_skipped, run.tests_total = found.skipped, found.total
+        await ResultsRepository(s).replace(
+            run.id, step_n,
+            [{"name": f.name, "file": f.file, "line": f.line, "message": f.message, "excerpt": f.excerpt}
+             for f in found.failures],
+            measured)
         step.status = "done" if passed else "failed"
         step.detail = run.tests_summary
+        if found.runner and found.total is not None:
+            await logs.write(run.id, level="info", step=step_n,
+                             line=f"read by the {found.runner} parser · {found.passed} passed · "
+                                  f"{found.failed} failed · {found.skipped} skipped of {found.total}")
+        elif found.runner:
+            await logs.write(run.id, level="info", step=step_n,
+                             line=f"read by the {found.runner} parser · {len(found.failures)} failures named; "
+                                  "it printed no totals")
+        else:
+            await logs.write(run.id, level="info", step=step_n,
+                             line="no runner's output was recognised: pass or fail comes from the exit code only")
+        if measured:
+            covered, total = sum(m[1] for m in measured), sum(m[2] for m in measured)
+            await logs.write(run.id, level="info", step=step_n,
+                             line=f"coverage from {', '.join(sorted({m[3] for m in measured}))}: "
+                                  f"{covered} of {total} covered")
         await logs.write(run.id, level="ok" if passed else "err", step=step_n,
                          line=f"tests {'passed' if passed else f'failed (exit {code})'}")
     return False
@@ -609,7 +778,7 @@ async def _review(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool
         # A second opinion is worth more from a different model, and free lanes make that free.
         result = await asyncio.to_thread(
             gateway.ask, prompt, lambda raw: ReviewOut.model_validate(extract_json(raw, trim=False)),
-            feature="review", project=project_id, role=REVIEW, avoid=lane, agent=reviewer)
+            feature="review", project=project_id, role=REVIEW, avoid=lane, agent=reviewer, run_id=run.id)
         findings = [f.model_dump() for f in result.data.findings][:20]
         verdict, by = result.data.verdict[:300], result.provider.model
     except NoModel:
@@ -637,12 +806,19 @@ async def _handoff(db: Database, ref: str, step_n: int) -> bool:
         else:
             nothing = False
             high = [f for f in (run.review or {}).get("findings", []) if f.get("severity") == "HIGH"]
-            failed = run.tests_status == "failed"
+            recorded, expected = await ResultsRepository(s).expected(run.id, run.project_id)
+            calm = run.tests_status == "failed" and all_expected(run.tests_failed, recorded, expected)
+            # The fact is kept as it was — tests_status stays "failed" — but a failure a person already
+            # marked legacy or quarantined does not raise the gate on its own.
+            failed = run.tests_status == "failed" and not calm
+            tests_line = (f"tests failed · {recorded} failure{'' if recorded == 1 else 's'}, all expected "
+                          "(legacy/quarantined)" if calm
+                          else f"tests {run.tests_status}" + (f" · {run.tests_summary}" if run.tests_summary else ""))
             conflicts = list(run.conflicts)
             lines = [f"branch {run.branch} from {run.base[:7]}",
                      f"{run.diff_files} files · +{run.diff_insertions} −{run.diff_deletions} · "
                      f"{run.diff_commits} commits",
-                     f"tests {run.tests_status}" + (f" · {run.tests_summary}" if run.tests_summary else ""),
+                     tests_line,
                      f"review by {(run.review or {}).get('by') or 'nobody'}: "
                      f"{(run.review or {}).get('verdict') or '—'}"]
             if conflicts:
@@ -736,6 +912,11 @@ async def execute(db: Database, gateway: Gateway, ref: str, resume_from: int | N
         run = await RunRepository(s).by_ref(ref)
         verdict = "failed" if any(x.status == "failed" for x in run.steps) else "done"
         note = run.note
+        if run.role == "check" and run.tests_status == "not run":
+            # A test-only run whose tests never ran did not succeed at anything: it was stopped, or
+            # the tests were refused, and its step says which.
+            verdict = "cancelled"
+            note = note or next((x.detail for x in run.steps if x.detail), "The tests did not run.")
     await _finish(db, ref, verdict, note)
 
 

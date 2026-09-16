@@ -5,13 +5,13 @@ out to be wrong is still the reason someone made a decision last year.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..data.base import utcnow
-from ..models import MemoryFact
+from ..models import MemoryFact, MemoryTag
 from ..repositories import ActivityRepository, NotFound, ProjectRepository
 from ..repositories.knowledge import ConflictRepository, MemoryRepository
 from .errors import Refused
@@ -24,6 +24,9 @@ class NewFact:
     category: str = "project"
     confidence: str = "MEDIUM"
     reason: str = ""
+    #: What the fact rests on, when something concrete does — an eval result names its suite, run and
+    #: case, so a lesson learned from a failure can be traced back to it.
+    evidence: list[dict[str, Any]] = field(default_factory=list)
 
 
 class MemoryService:
@@ -50,12 +53,15 @@ class MemoryService:
         added: list[MemoryFact] = []
         for item in new:
             ref = await self.facts.next_ref()
+            # The tag is built into the fact rather than added beside it. Added beside it, the fact's own
+            # `tags` collection was never loaded, and the first thing to read it — the JSON for the
+            # response — lazy-loaded inside async code and raised. Every fact pasted from notes failed.
             fact = await self.facts.add(MemoryFact(
                 id=f"m{ref.split('-')[-1]}", ref=ref, category=item.category, title=item.title.strip(),
                 body=item.body.strip(), reason=item.reason.strip() or f"Added by {by}.",
                 source=source or f"Added by {by}", confidence=item.confidence, strength=80,
-                project_id=None if project_id == "global" else project_id))
-            await self.facts.tag(fact.id, [item.category.replace("_", "-")])
+                project_id=None if project_id == "global" else project_id, evidence=list(item.evidence),
+                tags=[MemoryTag(tag=item.category.replace("_", "-"))]))
             added.append(fact)
         await self.activity.record(actor=by, actor_kind="human", action="Memory added",
                                    detail=f"{len(added)} fact{'s' if len(added) > 1 else ''} · "

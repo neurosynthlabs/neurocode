@@ -5028,6 +5028,12 @@
     "description": "Ask in a session and let it read this project’s code with the tools."
    },
    {
+    "id": "workflows:write",
+    "group": "Work",
+    "label": "Write workflows",
+    "description": "Create, edit and archive workflows. Running one needs the plan permissions."
+   },
+   {
     "id": "approvals:decide",
     "group": "Gates",
     "label": "Approve gated actions",
@@ -5056,6 +5062,12 @@
     "group": "Knowledge",
     "label": "Use AI features",
     "description": "Ask memory, brainstorm, and extract facts from text."
+   },
+   {
+    "id": "evals:write",
+    "group": "Knowledge",
+    "label": "Write evals",
+    "description": "Author eval suites and their cases, and override a result."
    },
    {
     "id": "projects:onboard",
@@ -5117,11 +5129,13 @@
      "tasks:write",
      "runs:run",
      "sessions:chat",
+     "workflows:write",
      "approvals:decide",
      "runs:merge",
      "decisions:make",
      "memory:write",
      "ai:use",
+     "evals:write",
      "projects:onboard",
      "mcp:manage",
      "settings:write",
@@ -5142,11 +5156,13 @@
      "tasks:write",
      "runs:run",
      "sessions:chat",
+     "workflows:write",
      "approvals:decide",
      "runs:merge",
      "decisions:make",
      "memory:write",
      "ai:use",
+     "evals:write",
      "projects:onboard",
      "mcp:manage",
      "settings:write",
@@ -5174,7 +5190,9 @@
      "sessions:chat",
      "projects:onboard",
      "mcp:manage",
-     "settings:write"
+     "settings:write",
+     "workflows:write",
+     "evals:write"
     ]
    },
    {
@@ -5187,7 +5205,8 @@
      "runs:run",
      "memory:write",
      "ai:use",
-     "sessions:chat"
+     "sessions:chat",
+     "evals:write"
     ]
    },
    {

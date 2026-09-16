@@ -17,7 +17,7 @@
     "smoke": "npm run build && node scripts/smoke.mjs",
     "audit:themes": "node scripts/theme-audit.mjs",
     "lint:layout": "npm run build && node scripts/layout-lint.mjs",
-    "api": "uv run --project server uvicorn app.main:create_app --factory --app-dir server --host 127.0.0.1 --port ${NC_API_PORT:-8787}",
+    "api": "uv run --project server uvicorn app.api.app:create_api --factory --app-dir server --host 127.0.0.1 --port ${NC_API_PORT:-8787} --timeout-graceful-shutdown 5",
     "api:test": "cd server && uv run pytest -q",
     "seed": "node scripts/export-seed.mjs",
     "e2e": "node scripts/e2e.mjs"

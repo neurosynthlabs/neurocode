@@ -55,12 +55,16 @@ server/app/
   data/            engine and pooling · the declarative Base · the seed loader · a readiness check
   models/          43 tables in six files: identity · work · knowledge · code · runtime · platform
   repositories/    the questions the screens ask, answered in SQL; nothing here commits
-  services/        the decisions: identity, work and its gates, plans, runs, chat, retrieval,
+  services/        the decisions: identity, work and its gates, plans, runs, chat, retrieval, testing,
+                   workflows, evals, research, extensions, git, ops,
                    onboarding, indexing, and the errors a route turns into a status code
   api/             deps.py (session, who is asking, require(...)) · errors.py · app.py
                    routes_auth · _work · _plans · _knowledge · _platform · _sessions · _runs
-                   routes_code · _ai · _system · _admin · _admin_system · stream.py (SSE)
+                   routes_code · _ai · _system · _admin · _admin_system · _testing · _git · _extensions
+                   routes_workflows · _evals · _research · _ops · stream.py (SSE)
   agent/git.py     git as plain blocking functions: worktrees, safe paths, merges, tests
+  agent/testparse  what a test runner printed, read into passed/failed/skipped and named failures
+  agent/coverage   the coverage report a test step left on disk, summed by top-level folder
   ai/lanes.py      the lanes: a provider and a model each, with their free limits written down
   ai/gateway.py    which lane answers, keys, breakers, budgets, test connection
   ai/ledger.py     the four things the gateway asks of a database, and who answers them
@@ -266,36 +270,47 @@ variable), one per lane, never in the database and never in a log line.
 
 ## API map
 
+117 routes. The running API describes every one at `/docs`; this is the map, with what each family needs.
+
 | Prefix | Needs | What |
 |---|---|---|
 | `/auth` | public / session | status, setup, login, logout, me, change password |
 | `/admin` | `users:manage`, `roles:manage`, `teams:manage`, `audit:read`, `workspace:admin` | people, roles, teams, audit, workspace, AI providers, database, reset |
-| `/tasks`, `/plans`, `/approvals`, `/decisions`, `/prefs` | session + the action's permission | the work |
+| `/tasks`, `/plans`, `/approvals`, `/decisions`, `/prefs` | session + the action's permission | the work; deciding a run's gate resumes the run |
 | `/memory` | session + `memory:write` | facts, search, conflicts |
-| `/projects`, `/mcp`, `/agents` | session + the action's permission | the platform |
+| `/projects`, `/mcp` | session + the action's permission | the platform |
 | `/projects/{id}/code` | session; `projects:onboard` to re-index | summary, file tree, search, file detail, impact, module graph |
-| `/projects/{id}/code/retrieval` | session; `projects:onboard` to build | the chunks, and what bears on a question |
+| `/projects/{id}/code/retrieval` | session; `projects:onboard` to build | the chunks, the documents, and what bears on a question |
+| `/projects/{id}/git` | session | the checkout's branches, commits, worktrees, conflicts and diffs, read from git |
 | `/runs` | session; `runs:run` to stop or discard, `runs:merge` to merge | agent runs, their output, their diff, the merge |
+| `/testing`, `/projects/{id}/tests` | session; `runs:run` to run, `decisions:make` for expectations | each project's own test command, the failures it named, coverage it left |
+| `/workflows` | session; `workflows:write` to author; `plans:compile` + `plans:decide` to run | reusable step lists that become ordinary plans and runs |
+| `/evals` | session; `evals:write` to author, `ai:use` to run, `memory:write` for a lesson | suites of cases scored by stated checks against the real features |
+| `/research` | session; `ai:use` to start | a question split into angles, each answered from retrieval, cited |
+| `/extensions` | session | skills, commands, hooks and plugins read from disk — hooks are shown, never run |
 | `/sessions` | session; `sessions:chat` to ask | conversations, their turns, their tool calls |
 | `/ai` | `ai:use` | ask, brainstorm, extract |
-| `/usage` | session (per-person detail for admins) | the usage ledger, by feature, provider and day |
+| `/agents`, `/models`, `/usage` | session (per-person usage for admins) | the roster from what runs did, the router and its lanes, the usage ledger |
+| `/ops` | session; `workspace:admin` for secrets | this machine: services, checks, deliveries, logs, containers, which keys exist |
 | `/activity`, `/health` | session / public | the log, the live stream, liveness |
 
 ## Phases
 
-- **Done:** 32 screens, calm UI, local API, persisted work, requirement compiler, repository
-  onboarding, live sync, ⌘K, test suites; then (2026-09-11) the modular backend with migrations,
-  accounts, roles and permissions, the audit log, first-run setup, the Admin screens, the AI gateway,
-  and Ask / Brainstorm / Add from text working live, with or without a key; then the database
-  hardening (backups, integrity checks, append-only audit, the usage ledger) and the code index behind
-  live Code Intelligence, Architecture and impact analysis; then (2026-09-12) the agent runtime, several
-  agents per task in parallel worktrees, merging from the UI, model lanes (many free providers, one
-  router), sessions (a conversation that reads the code with tools and keeps every turn), and retrieval
-  (chunks, embeddings where a lane makes them, hybrid search grounding every session).
-- **Waiting on you:** a valid DeepSeek key (Admin → AI providers) — without one the runtime opens the
-  worktree, runs the tests and reviews, but skips the steps that write code; and the `workflow` scope on
-  the GitHub token so CI can be pushed.
-- **Next:** grounding the compiler and the agents in retrieval the way sessions already are; MCP servers
-  as tools a session can actually reach; pushing a branch and opening a pull request from the run
-  screen; tree-sitter parsers in place of the pattern sets; roles per project; Postgres and a hosted
-  mode; single sign-on.
+- **Done:** 40 screens on a calm UI; the Postgres back end — relational, migrated, 300 tests — with
+  accounts, roles, an audit log the database keeps append-only, and the AI gateway routing across free
+  model lanes with an offline fallback; requirement → plan → questions → agents in parallel worktrees →
+  tests → a review from a different model → your signature → merge; memory, retrieval (words and
+  meaning, fused) and the code index; sessions that read the code; and, as of 2026-09-16, real back ends
+  behind every screen that used to show sample data: Testing (runner output parsed into named failures,
+  coverage, expectations that change the gate), Workflows, Evals, Research, Git, Knowledge, Skills,
+  Commands, Hooks, Plugins, Agents, Models and DevOps. ACP is an honest empty state: nothing on this
+  machine speaks it yet. The public demo still runs the sample data in the browser.
+- **Decided, on purpose:** NeuroCode never executes a repository's hooks or a command's shell lines; a
+  project's own tests run only after a person allows it, once per project.
+- **Waiting on you:** a model key (Admin → AI providers) for anything that has to write code — without
+  one, every feature says it answered from the offline rules; and the `workflow` scope on the GitHub
+  token so CI can be pushed.
+- **Next:** grounding the compiler and the agents in retrieval the way sessions and research already
+  are; MCP servers as tools a session can reach; pushing a branch and opening a pull request from the run
+  screen; tree-sitter parsers in place of the pattern sets; roles per project; a hosted mode; single
+  sign-on.

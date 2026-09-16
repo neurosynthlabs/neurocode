@@ -15,8 +15,19 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import CITEXT, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..data.base import Base, Mixin
@@ -34,6 +45,7 @@ from .enums import (
     SourceKind,
     StepState,
     TaskStatus,
+    TestExpectationKind,
 )
 
 
@@ -151,7 +163,10 @@ class TaskAgent(Base):
 
 class Plan(Base, Mixin):
     __tablename__ = "plans"
-    __table_args__ = (Index("ix_plans_project_id_created_at", "project_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_plans_project_id_created_at", "project_id", "created_at"),
+        Index("ix_plans_workflow_id_created_at", "workflow_id", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     ref: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
@@ -166,6 +181,9 @@ class Plan(Base, Mixin):
     technical_requirement: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     architecture_impact: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     requested_by: Mapped[str] = mapped_column(String(120), nullable=False, server_default="")
+    #: The workflow that produced this plan; null when it was compiled from a requirement. A workflow's
+    #: runs are this plan's runs — there is no second table of runs to keep in step with the first.
+    workflow_id: Mapped[str | None] = mapped_column(ForeignKey("workflow_definitions.id", ondelete="SET NULL"))
 
     affected_modules: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
     affected_files: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
@@ -182,6 +200,66 @@ class Plan(Base, Mixin):
     # selectin, not lazy: touching an unloaded relationship inside async code raises instead of
     # quietly issuing a query, so every relationship a serialiser reads is loaded up front.
     task: Mapped[Task | None] = relationship(lazy="selectin")
+
+
+class WorkflowDefinition(Base, Mixin):
+    """A reusable recipe a person wrote: which agents do what, and the requirement it starts from.
+
+    Running one compiles an ordinary plan from it, and the runtime executes that plan like any other.
+    """
+
+    __tablename__ = "workflow_definitions"
+    # The template is the only place the run's input goes; one without the slot would ignore it.
+    __table_args__ = (CheckConstraint("strpos(requirement_template, '{input}') > 0", name="template_takes_input"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    name: Mapped[str] = mapped_column(CITEXT(), unique=True, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    #: Null means every project may run it.
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    requirement_template: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    archived: Mapped[bool] = mapped_column(nullable=False, server_default="false")
+
+    steps: Mapped[list[WorkflowStep]] = relationship(back_populates="workflow", cascade="all, delete-orphan",
+                                                     order_by="WorkflowStep.n", lazy="selectin")
+
+
+class WorkflowStep(Base):
+    """One write step of a workflow. Copied into the plan when it runs, so editing a workflow later never
+    rewrites what an earlier run was asked to do."""
+
+    __tablename__ = "workflow_steps"
+    __table_args__ = (UniqueConstraint("workflow_id", "n"), CheckConstraint("n >= 1", name="n_positive"))
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    workflow_id: Mapped[str] = mapped_column(ForeignKey("workflow_definitions.id", ondelete="CASCADE"),
+                                             nullable=False)
+    n: Mapped[int] = mapped_column(Integer, nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    agent: Mapped[str] = mapped_column(String(120), nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+
+    workflow: Mapped[WorkflowDefinition] = relationship(back_populates="steps")
+
+
+class TestExpectation(Base, Mixin):
+    """A person's standing decision about one test in one project: red on purpose, or quarantined.
+
+    It has a real effect, which is why it is a row and not a label: a hand-off whose every failure is
+    covered by one of these does not raise its risk.
+    """
+
+    __tablename__ = "test_expectations"
+    # One word per test per project. The key is also the lookup a run's failures are joined through.
+    __table_args__ = (UniqueConstraint("project_id", "test_name"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    test_name: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(TestExpectationKind, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
 
 class PlanStep(Base):

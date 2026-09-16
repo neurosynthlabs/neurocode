@@ -237,7 +237,7 @@ export interface RunDoc {
   note: string;
   removed: boolean;
   /** `solo`: one agent. `agent`: one of several working in parallel. `integration`: the run that merges them. */
-  role: 'solo' | 'agent' | 'integration';
+  role: 'solo' | 'agent' | 'integration' | 'check';
   /** Which agent this run belongs to, when it is one of several. */
   agent: string | null;
   /** The task the batch shares. */
@@ -319,9 +319,10 @@ export class ApiError extends Error {
   }
 }
 
-interface RequestOpts { method?: string; json?: unknown; headers?: Record<string, string>; signal?: AbortSignal }
+export interface RequestOpts { method?: string; json?: unknown; headers?: Record<string, string>; signal?: AbortSignal }
 
-async function request<T>(path: string, { method = 'GET', json, headers, signal }: RequestOpts = {}): Promise<T> {
+/** One call to the API: the session cookie, the CSRF header, a 5 s timeout, and FastAPI's error words as an ApiError. */
+export async function request<T>(path: string, { method = 'GET', json, headers, signal }: RequestOpts = {}): Promise<T> {
   const res = await fetch(API_BASE + path, {
     method,
     // The session is an HttpOnly cookie. X-NC-Client is the CSRF guard: the API refuses a change that

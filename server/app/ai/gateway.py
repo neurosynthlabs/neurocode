@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import time
 import urllib.error
@@ -24,6 +25,8 @@ from typing import Any, Generic, TypeVar
 from ..secrets import Secrets
 from . import lanes
 from .ledger import Ledger
+
+log = logging.getLogger(__name__)
 from .lanes import CHAT, PLAN, REVIEW, WRITE, Lane
 
 T = TypeVar("T")
@@ -320,7 +323,8 @@ class Gateway:
 
     # ── calls ────────────────────────────────────────────────────
     def _try(self, provider: Provider, messages: list[dict[str, str]], parse: Callable[[str], T], feature: str,
-             actor: str | None, project: str | None, agent: str = "") -> tuple[T, int] | str:
+             actor: str | None, project: str | None, agent: str = "",
+             run_id: str | None = None) -> tuple[T, int] | str:
         """One lane, one attempt. Returns the answer, or the reason it could not be used."""
         t0, usage = time.monotonic(), {}
         self._recent.setdefault(provider.id, []).append(time.monotonic())
@@ -333,22 +337,22 @@ class Gateway:
                 if key:
                     self._rejected[provider.id] = _fp(key)
             reason = f"{provider.model} failed ({type(e).__name__}: {str(e)[:160]})"
-            self._record(feature, provider, False, _ms(t0), usage, actor, project, reason, agent)
+            self._record(feature, provider, False, _ms(t0), usage, actor, project, reason, agent, run_id)
             return reason
         ms = _ms(t0)
-        self._record(feature, provider, True, ms, usage, actor, project, agent=agent)
+        self._record(feature, provider, True, ms, usage, actor, project, agent=agent, run_id=run_id)
         return data, ms
 
     def run(self, messages: list[dict[str, str]], parse: Callable[[str], T], fallback: Callable[[], T], *,
             offline: str = "offline planner", feature: str = "compile", actor: str | None = None,
             project: str | None = None, role: str | None = None, lane: str | None = None,
-            avoid: str | None = None, agent: str = "") -> Result[T]:
+            avoid: str | None = None, agent: str = "", run_id: str | None = None) -> Result[T]:
         """Ask the best lane and validate its answer. A lane that fails hands the call to the next one;
         when every lane is spent or silent, the rules stand in and say so. Every attempt is ledgered."""
         t0, reason = time.monotonic(), None
         for candidate in self.chain(role=role, lane=lane, avoid=avoid):
             out = self._try(Provider(candidate.id, candidate.model), messages, parse, feature, actor,
-                            project, agent)
+                            project, agent, run_id)
             if isinstance(out, str):
                 reason = out
                 continue
@@ -356,12 +360,13 @@ class Gateway:
             return Result(data, Provider(candidate.id, candidate.model), ms)
         t1 = time.monotonic()
         result = Result(fallback(), Provider("rules", offline), _ms(t0), reason)
-        self._record(feature, result.provider, True, _ms(t1), {}, actor, project, agent=agent)
+        self._record(feature, result.provider, True, _ms(t1), {}, actor, project, agent=agent, run_id=run_id)
         return result
 
     def ask(self, messages: list[dict[str, str]], parse: Callable[[str], T], *, feature: str = "agent",
             actor: str | None = None, project: str | None = None, role: str | None = None,
-            lane: str | None = None, avoid: str | None = None, agent: str = "") -> Result[T]:
+            lane: str | None = None, avoid: str | None = None, agent: str = "",
+            run_id: str | None = None) -> Result[T]:
         """For work with no honest offline version — writing code, reviewing a diff. A lane answers,
         or the next lane does, or this raises; nothing is ever invented to fill the gap."""
         chain = self.chain(role=role, lane=lane, avoid=avoid)
@@ -370,7 +375,7 @@ class Gateway:
         reason = ""
         for candidate in chain:
             out = self._try(Provider(candidate.id, candidate.model), messages, parse, feature, actor,
-                            project, agent)
+                            project, agent, run_id)
             if isinstance(out, str):
                 reason = out
                 continue
@@ -433,11 +438,13 @@ class Gateway:
             return {"ok": False, "ms": _ms(t0), "detail": detail}
 
     def _record(self, feature: str, provider: Provider, ok: bool, ms: int, usage: Usage, actor: str | None,
-                project: str | None, error: str = "", agent: str = "") -> None:
+                project: str | None, error: str = "", agent: str = "", run_id: str | None = None) -> None:
         """One line in the usage ledger. The ledger must never break the feature it measures."""
         try:
             self.store.record(feature=feature, lane=provider.id, model=provider.model, ok=ok, ms=ms,
                               tokens_in=int(usage.get("in") or 0), tokens_out=int(usage.get("out") or 0),
-                              user_id=actor, project_id=project, agent=agent, error=error)
-        except Exception:                        # noqa: BLE001 — a ledger outage must not fail the call
-            pass
+                              user_id=actor, project_id=project, agent=agent, error=error, run_id=run_id)
+        except Exception as e:                   # noqa: BLE001 — a ledger outage must not fail the call
+            # ...but it must not vanish either. Swallowed in silence, a refused insert looked exactly
+            # like a feature that was never used, and the usage screen said so.
+            log.warning("usage ledger: could not record a %s call on %s: %s", feature, provider.id, e)

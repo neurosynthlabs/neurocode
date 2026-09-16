@@ -26,7 +26,7 @@ from ..schemas.platform import mcp_json
 from ..services.errors import Refused
 from ..services.identity import Person
 from ..services.onboarding import OnboardingService, Spec, onboard
-from .deps import current_person, database, gateway, require, session
+from .deps import current_person, database, gateway, hand_off, require, session
 
 router = APIRouter()
 
@@ -102,7 +102,7 @@ async def create_project(body: ProjectIn, jobs: BackgroundTasks,
                 connect_db=body.connectDb, mine_git=body.mineGit, ingest_docs=body.ingestDocs,
                 rules=[r.model_dump() for r in body.rules])
     project = await OnboardingService(open_session).create(spec, who.name)
-    jobs.add_task(onboard, db, gw, project.id, spec)
+    await hand_off(open_session, jobs, onboard, db, gw, project.id, spec)
     return project_json(project)
 
 

@@ -261,3 +261,129 @@ async def test_two_requests_at_once_get_two_references(schema: str):
             await s.execute(text("DELETE FROM tasks WHERE ref LIKE 'TASK-RACE-%'"))
             await s.execute(text("DELETE FROM projects WHERE id = 'erp'"))
         await db.close()
+
+
+# ── pasted notes ─────────────────────────────────────────────────
+
+async def test_facts_pasted_from_notes_are_saved_and_come_back(client: AsyncClient):
+    """The route returned each new fact with its tags, and a new fact's tag collection had never been
+    loaded — so reading it lazy-loaded inside async code and every "Add from text" failed with a 500."""
+    fact = {"category": "business_rules", "title": "Credit notes",
+            "body": "Credit notes must always reference the original invoice number.",
+            "reason": "", "confidence": "HIGH"}
+    added = await client.post("/memory/facts", json={"projectId": "erp", "facts": [fact]})
+    assert added.status_code == 201, added.text[:300]
+    body = added.json()
+    assert body[0]["tags"] == ["business-rules"] and body[0]["ref"].startswith("MEM-")
+
+    found = (await client.get("/memory", params={"q": "credit notes original"})).json()
+    assert any(f["body"].startswith("Credit notes must always") for f in found)
+
+
+# ── a gate that nothing reopened ─────────────────────────────────
+
+async def test_deciding_a_runs_gate_resumes_the_run(client: AsyncClient, seeded: AsyncSession, monkeypatch):
+    """The route's docstring said the runtime would resume the run, and nothing did: every agent run
+    stopped at its first gate — a project's first test run, or your signature — and stayed there."""
+    import app.api.routes_work as routes_work
+    from app.models import Approval
+
+    resumed: list[tuple] = []
+
+    async def record(db, gw, run_ref, step, approved):
+        resumed.append((run_ref, step, approved))
+
+    monkeypatch.setattr(routes_work, "resume_run", record)
+    seeded.add(Approval(id="ap-gate", ref="APPR-9001", title="Run the tests in shop", run_ref="RUN-77",
+                        step=3, status="pending"))
+    await seeded.flush()
+
+    assert (await client.post("/approvals/APPR-9001/approve")).status_code == 200
+    assert resumed == [("RUN-77", 3, True)]
+
+
+async def test_a_gate_with_no_run_behind_it_resumes_nothing(client: AsyncClient, monkeypatch):
+    import app.api.routes_work as routes_work
+
+    resumed: list[tuple] = []
+
+    async def record(*args):
+        resumed.append(args)
+
+    monkeypatch.setattr(routes_work, "resume_run", record)
+    pending = (await client.get("/approvals", params={"status": "pending"})).json()
+    assert (await client.post(f"/approvals/{pending[0]['ref']}/deny")).status_code == 200
+    assert resumed == []
+
+
+async def test_every_list_of_gates_comes_back_in_the_same_order(client: AsyncClient):
+    """Seeded in one transaction, the gates share a timestamp. With no second key the full list and the
+    pending list came back in different orders, so the first Approve button was a different gate."""
+    pending = [a["ref"] for a in (await client.get("/approvals", params={"status": "pending"})).json()]
+    everything = [a["ref"] for a in (await client.get("/approvals")).json() if a["status"] == "pending"]
+    assert pending and pending == everything
+    assert pending == sorted(pending, key=lambda ref: int(ref.split("-")[-1]), reverse=True)
+
+
+# ── a repository with a history ──────────────────────────────────
+
+async def test_a_git_repository_indexes_with_its_history(seeded: AsyncSession, tmp_path: Path):
+    """git's dates arrived as ISO text and the column is a real timestamp, so asyncpg refused the whole
+    insert: every project that was a git repository failed to index, and a plain folder did not."""
+    import subprocess
+
+    from app.models import CodeFile
+    from app.services.indexing import build_index
+
+    repo = tmp_path / "shop"
+    (repo / "pkg").mkdir(parents=True)
+    (repo / "pkg" / "core.py").write_text("def total(x):\n    return x\n")
+    for args in (["init", "-q", "-b", "main"], ["add", "-A"],
+                 ["-c", "user.name=T", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false",
+                  "commit", "-qm", "start"]):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    await build_index(seeded, "erp", repo, [])
+    changed = (await seeded.execute(select(CodeFile.changed_at).where(CodeFile.project_id == "erp",
+                                                                     CodeFile.path == "pkg/core.py"))).scalar_one()
+    assert changed is not None and changed.tzinfo is not None
+
+
+# ── a question is not a search-box query ─────────────────────────
+
+async def test_a_natural_question_finds_the_code_that_answers_it(seeded: AsyncSession):
+    """Every word of a question was required, so "how does the app hand work to a background job?" matched
+    nothing — for research, session grounding, Ask memory and evals alike — while the same words typed as
+    a search found the function at once."""
+    from app.models import Chunk
+    from app.repositories.retrieval import ChunkRepository
+
+    seeded.add(Project(id="words", name="Words"))
+    await seeded.flush()
+    seeded.add_all([
+        Chunk(project_id="words", kind="code", ref="deps.py#hand_off", path="app/api/deps.py", title="hand_off",
+              body="Commit what this request wrote, then queue the background job that will read it."),
+        Chunk(project_id="words", kind="code", ref="css.py#color", path="app/css.py", title="color",
+              body="Pick a colour for the sidebar."),
+    ])
+    await seeded.flush()
+    chunks = ChunkRepository(seeded)
+
+    question = "How does the app hand work to a background job?"
+    asked = await chunks.search("words", question)
+    assert [p["ref"] for p in asked][:1] == ["deps.py#hand_off"]
+    assert await chunks.search("words", question, mode="all") == []     # what used to happen, every time
+    assert await chunks.lexical_count("words", "background job", mode="all") == 1
+
+
+async def test_nothing_a_person_types_becomes_query_syntax(seeded: AsyncSession):
+    """Asked of Postgres itself, because the failure that matters is its syntax error, not a string."""
+    from sqlalchemy import cast as sql_cast
+    from sqlalchemy import select as sql_select
+    from sqlalchemy.types import Text
+
+    from app.repositories.words import tsquery
+
+    parsed = (await seeded.execute(sql_select(sql_cast(tsquery("tax & rounding | !drop :* ') --", "any"), Text)))
+              ).scalar_one()
+    assert parsed == "'tax' | 'round' | 'drop'"

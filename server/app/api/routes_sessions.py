@@ -19,7 +19,7 @@ from ..schemas import chat_json, chat_message_json
 from ..services import chat as chat_service
 from ..services.chat import MAX_QUESTION, ChatService
 from ..services.identity import Person
-from .deps import current_person, database, gateway, require, session
+from .deps import current_person, database, gateway, hand_off, require, session
 
 router = APIRouter(prefix="/sessions")
 
@@ -74,7 +74,7 @@ async def ask(ref: str, body: AskIn, jobs: BackgroundTasks,
               gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Ask, and let it think in the background — the turns arrive on the stream as they are written."""
     out = await ChatService(open_session, gw).ask(ref, body.text, who.name)
-    jobs.add_task(chat_service.think, db, gw, ref, who.name)
+    await hand_off(open_session, jobs, chat_service.think, db, gw, ref, who.name)
     return {"message": chat_message_json(out["message"]),
             "session": chat_json(out["chat"], project_name=await _name_of(open_session, out["chat"].project_id))}
 

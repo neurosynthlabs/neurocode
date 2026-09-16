@@ -21,7 +21,7 @@ descendants() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do echo "$c"; de
 launch() {
   case $1 in
     web) npm run dev -- --port "$WEB_PORT" --strictPort ;;
-    api) uv run --project server uvicorn app.api.app:create_api --factory --app-dir server --host 127.0.0.1 --port "$API_PORT" ;;
+    api) uv run --project server uvicorn app.api.app:create_api --factory --app-dir server --host 127.0.0.1 --port "$API_PORT" --timeout-graceful-shutdown 5 ;;
   esac
 }
 

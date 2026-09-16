@@ -6,9 +6,10 @@ behind. That used to be impossible — the old store committed each statement on
 """
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
+from typing import Any
 
-from fastapi import Depends, Request
+from fastapi import BackgroundTasks, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai.gateway import Gateway
@@ -57,6 +58,20 @@ async def current_person(who: Person | None = Depends(person_or_none)) -> Person
     if who is None:
         raise Refused("Sign in to continue.", status=401)
     return who
+
+
+async def hand_off(open_session: AsyncSession, jobs: BackgroundTasks, job: Callable[..., Any],
+                   *args: Any) -> None:
+    """Commit what this request wrote, then queue the job that will read it.
+
+    The one place a route commits, and why: a background job runs in a transaction of its own, and
+    FastAPI starts it *before* this request's session is closed and committed. So a job that went to
+    fetch the project, the plan or the question the request had just written found nothing — and
+    returned quietly. Onboarding stayed "onboarding" forever, a session's question was never answered,
+    a dispatched plan never ran. Every route that hands work to a job does it through here.
+    """
+    await open_session.commit()
+    jobs.add_task(job, *args)
 
 
 def require(*permissions: str):

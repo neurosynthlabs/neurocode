@@ -3,27 +3,43 @@
 Two of the old file's routes are not here. Liveness is answered by the application itself, and the
 live feed is served by `stream.py`; both moved when the bus did.
 
-What is left is read-only, and all three answers are now the database's work rather than Python's. The
-roster's throughput is counted from the tasks and the runs instead of read off a stored number that
-drifted. The usage report is six aggregates over the ledger, so it costs the same on a year of calls
-as on a day of them — it used to be six scans on a worker thread, because SQLite could not be asked
-anything without blocking.
+What is left is read-only, and the answers are now the database's work rather than Python's. The
+roster is derived from the runs, the steps and the ledger instead of read off stored sample text, and
+the router screen is the gateway's own view of its lanes beside a day of its ledger. The usage report
+is six aggregates over the ledger, so it costs the same on a year of calls as on a day of them — it
+used to be six scans on a worker thread, because SQLite could not be asked anything without blocking.
 """
 from __future__ import annotations
 
+import asyncio
+import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..ai import lanes
+from ..ai.gateway import Gateway
+from ..ai.lanes import REVIEW, WRITE
 from ..models import ActivityEvent
 from ..repositories.base import MAX_LIMIT
-from ..repositories.usage import AgentRepository, UsageRepository
+from ..repositories.usage import AgentRepository, InFlight, UsageRepository
 from ..repositories.work import ActivityRepository
-from ..schemas.system import agent_json, usage_json
+from ..schemas.system import (
+    ENFORCED,
+    ORDERING,
+    PREFERENCE_TEXT,
+    agent_json,
+    fleet_json,
+    pick_run,
+    routes_json,
+    totals_json,
+    usage_json,
+)
 from ..schemas.work import activity_json
 from ..services.identity import Person
-from .deps import current_person, session
+from .deps import current_person, gateway, session
 
 router = APIRouter()
 
@@ -35,22 +51,77 @@ FEED_CAP = MAX_LIMIT
 MAX_DAYS, DEFAULT_DAYS = 365, 30
 
 
+def _roster_lanes(gw: Gateway) -> dict[str, Any]:
+    """What the router would try now for the two roles agents work in, and how many lanes are open.
+    Blocking: every lane's allowance is read from the ledger and Ollama is asked whether it is up."""
+    return {"chains": {WRITE: gw.chain(role=WRITE, limit=2), REVIEW: gw.chain(role=REVIEW, limit=2)},
+            "open": len(gw.chain(limit=len(lanes.IDS)))}
+
+
+def _on_disk(paths: list[str]) -> int:
+    return sum(1 for path in paths if Path(path).is_dir())
+
+
 @router.get("/agents", dependencies=[Depends(current_person)])
-async def agents(open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
-    """The roster, with its throughput counted from the work — two GROUP BYs for the whole list."""
-    repo = AgentRepository(open_session)
+async def agents(open_session: AsyncSession = Depends(session),
+                 gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """The roster, derived: a fixed number of queries for the whole list, never one per agent."""
+    repo, ledger = AgentRepository(open_session), UsageRepository(open_session)
     roster = await repo.all_ordered()
-    finished, record = await repo.tasks_finished(), await repo.run_record()
-    spent = await UsageRepository(open_session).spend_24h()
+    finished, records, flights = await repo.tasks_finished(), await repo.step_record(), await repo.in_flight()
+    current = await repo.current_runs(sorted({f.run_id for f in flights}))
+    spent = await ledger.spend_24h()
+    answered = await ledger.last_answered([n for a in roster for n in (a.name, a.id)])
+    kept = await repo.kept_worktrees()
+    router_now = await asyncio.to_thread(_roster_lanes, gw)
+
+    by_agent: dict[str, list[InFlight]] = {}
+    for flight in flights:
+        by_agent.setdefault(flight.agent_id, []).append(flight)
     out: list[dict[str, Any]] = []
     for agent in roster:
-        rate, minutes = record.get(agent.id, (0, 0))
+        mine = by_agent.get(agent.id, [])
+        run_id = pick_run(mine)
         # The ledger names an agent the way the roster does — by name where a run had one, by id
         # otherwise — so both are looked up rather than assuming which the runtime wrote.
         tokens, cost = spent.get(agent.name) or spent.get(agent.id) or (0, 0.0)
-        out.append(agent_json(agent, tasks_done=finished.get(agent.id, 0), success_rate=rate,
-                              avg_minutes=minutes, tokens_24h=tokens, cost_24h=cost))
-    return out
+        out.append(agent_json(
+            agent, tasks_done=finished.get(agent.id, 0), records=[r for r in records if r.agent_id == agent.id],
+            flights=mine, current=current.get(run_id) if run_id else None, chains=router_now["chains"],
+            answered=answered.get(agent.name) or answered.get(agent.id), tokens_24h=tokens, cost_24h=cost))
+    return {"agents": out, "lanesOpen": router_now["open"],
+            "worktreesOnDisk": await asyncio.to_thread(_on_disk, kept), "enforced": list(ENFORCED)}
+
+
+def _router(gw: Gateway) -> dict[str, Any]:
+    """Everything the gateway knows about its lanes, in one hop to a worker thread: the ledger and
+    Ollama are both asked, and neither may hold up the event loop."""
+    return {"preference": gw.preference(), "locked": bool(os.environ.get("NEUROCODE_COMPILER")),
+            "active": gw.status(), "report": gw.report(), "catalogue": gw.lanes(),
+            # With the chain's own default limit — the one gateway.run and gateway.ask walk. Drawn longer,
+            # the screen promised fallbacks a real call gives up before reaching.
+            "chains": {role: gw.chain(role=role) for role in (None, *lanes.ROLES)},
+            "embed": gw.embed_lane()}
+
+
+@router.get("/models", dependencies=[Depends(current_person)])
+async def models(open_session: AsyncSession = Depends(session),
+                 gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """The lanes, what each feature asks them for, and their last day, from the gateway and its ledger.
+
+    Open to anyone signed in: which lane answered and with which model is already on Runs and Sessions.
+    What is not — a key's mask, where it came from, a lane's address — is removed here, not hidden in
+    the screen.
+    """
+    ledger = UsageRepository(open_session)
+    lane_lines, feature_lines = await ledger.by_lane(1), await ledger.by_feature(1)
+    offline_reviews = await ledger.offline_reviews_24h()
+    now = await asyncio.to_thread(_router, gw)
+    fleet = fleet_json(now["report"], now["catalogue"], lane_lines)
+    return {"preference": now["preference"], "preferenceLocked": now["locked"], "active": now["active"],
+            "ordering": ORDERING, "preferences": PREFERENCE_TEXT, "lanes": fleet,
+            "totals24h": totals_json(fleet, lane_lines),
+            "routes": routes_json(now["chains"], now["embed"], feature_lines, offline_reviews)}
 
 
 @router.get("/activity", dependencies=[Depends(current_person)])

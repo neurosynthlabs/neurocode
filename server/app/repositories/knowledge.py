@@ -6,29 +6,12 @@ so it cannot fall behind — and ranking is `ts_rank` with pinned facts first, i
 """
 from __future__ import annotations
 
-import re
-
 from sqlalchemy import ColumnElement, Integer, cast, func, select
 
-from ..models import MemoryConflict, MemoryFact, MemoryTag
+from ..models import MemoryConflict, MemoryFact
 from .base import Page, Repository
+from .words import Mode, tsquery
 
-
-#: Words too common to narrow anything, dropped before an "any" query so they cannot match everything.
-NOISE = frozenset("a an and are as at be by do does for from has have how in is it of on or that the "
-                  "their them then there these this to was what when where which who why will "
-                  "with would you your".split())
-
-
-def _tsquery(q: str, mode: str):
-    """The query itself. "all" is what a person typing into a search box means; "any" is what a
-    person asking a question means, because a question carries words the answer will not."""
-    if mode != "any":
-        return func.websearch_to_tsquery("english", q.strip())
-    words = [w for w in re.findall(r"[\w']+", q.lower()) if len(w) > 2 and w not in NOISE]
-    if not words:
-        return func.websearch_to_tsquery("english", q.strip())
-    return func.to_tsquery("english", " | ".join(words))
 
 class MemoryRepository(Repository[MemoryFact]):
     model = MemoryFact
@@ -38,7 +21,7 @@ class MemoryRepository(Repository[MemoryFact]):
 
     async def search(self, q: str = "", *, category: str | None = None, project: str | None = None,
                      include_archived: bool = False, limit: int | None = None,
-                     mode: str = "all") -> list[MemoryFact]:
+                     mode: Mode = "all") -> list[MemoryFact]:
         """Words if there are any, otherwise everything that matches the filters — pinned first.
 
         `mode` is the difference between a search box and a question. Someone typing into the box
@@ -57,7 +40,7 @@ class MemoryRepository(Repository[MemoryFact]):
 
         stmt = select(MemoryFact).where(*where)
         if q.strip():
-            query = _tsquery(q, mode)
+            query = tsquery(q, mode)
             stmt = stmt.where(MemoryFact.search.op("@@")(query)).order_by(
                 MemoryFact.pinned.desc(), func.ts_rank(MemoryFact.search, query).desc())
         else:
@@ -67,11 +50,6 @@ class MemoryRepository(Repository[MemoryFact]):
 
     async def next_ref(self, prefix: str = "MEM-") -> str:
         return await super().next_ref(MemoryFact.ref, prefix)
-
-    async def tag(self, fact_id: str, tags: list[str]) -> None:
-        for tag in dict.fromkeys(t.strip() for t in tags if t.strip()):
-            self.session.add(MemoryTag(fact_id=fact_id, tag=tag))
-        await self.session.flush()
 
     async def archive(self, fact: MemoryFact) -> MemoryFact:
         """Archived, never deleted: a fact that was wrong is still evidence of what was believed."""

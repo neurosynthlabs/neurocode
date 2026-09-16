@@ -15,6 +15,7 @@ import json
 import os
 import posixpath
 import re
+from datetime import UTC, datetime
 import subprocess
 import time
 from collections import Counter, defaultdict
@@ -23,7 +24,6 @@ from pathlib import Path
 from typing import Any
 
 from . import onboarding
-from .db import Store, _fts_query, now_iso
 
 PARSERS = {"Python": "python-ast", "TypeScript": "patterns", "JavaScript": "patterns", "C#": "patterns",
            "Java": "patterns", "Go": "patterns", "T-SQL": "patterns"}
@@ -402,7 +402,7 @@ class Index:
 
     def stats(self) -> dict[str, Any]:
         return {"files": len(self.files), "symbols": len(self.symbols), "edges": len(self.edges),
-                "unresolved": self.unresolved, "ms": self.ms, "at": now_iso()}
+                "unresolved": self.unresolved, "ms": self.ms, "at": datetime.now(UTC).isoformat(timespec="seconds")}
 
     def describe(self) -> str:
         unresolved = f" · {self.unresolved} unresolved imports" if self.unresolved else ""
@@ -441,47 +441,6 @@ def build(root: Path, excluded: list[str]) -> Index:
                  round((time.monotonic() - t0) * 1000))
 
 
-def save(store: Store, pid: str, root: str, idx: Index) -> None:
-    """Replace the project's index in one transaction: readers see the old one or the new one, never half."""
-    with store.tx() as c:
-        c.execute("DELETE FROM code_files WHERE project_id = ?", (pid,))  # symbols and edges go with their files
-        c.execute("DELETE FROM code_fts WHERE project_id = ?", (pid,))
-        ids: dict[str, int] = {}
-        for f in idx.files:
-            cur = c.execute(
-                "INSERT INTO code_files(project_id, path, lang, module, lines, bytes, sha1, complexity, churn, changed_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (pid, f["path"], f["lang"], f["module"], f["lines"], f["bytes"], f["sha1"], f["complexity"], f["churn"],
-                 f["changed_at"]))
-            ids[f["path"]] = cur.lastrowid
-        c.executemany("INSERT INTO code_symbols(project_id, file_id, name, kind, line, exported) VALUES (?, ?, ?, ?, ?, ?)",
-                      [(pid, ids[path], name, kind, line, int(exported)) for path, name, kind, line, exported in idx.symbols])
-        c.executemany("INSERT INTO code_edges(project_id, from_file, to_file, target, kind) VALUES (?, ?, ?, ?, ?)",
-                      [(pid, ids[a], ids[b] if b else None, target, kind) for a, b, target, kind in idx.edges])
-        c.executemany(
-            "INSERT INTO code_fts(name, words, path, kind, project_id, file_id, line) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [(posixpath.basename(f["path"]), words(posixpath.splitext(posixpath.basename(f["path"]))[0]), f["path"], "file",
-              pid, ids[f["path"]], 0) for f in idx.files]
-            + [(name, words(name), path, kind, pid, ids[path], line) for path, name, kind, line, _ in idx.symbols])
-        c.execute(
-            "INSERT OR REPLACE INTO code_index_runs(project_id, root, finished_at, ms, files, symbols, edges, unresolved, parsers) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (pid, root, now_iso(), idx.ms, len(idx.files), len(idx.symbols), len(idx.edges), idx.unresolved,
-             json.dumps(idx.parsers)))
-
-
-def project_fields(idx: Index, doc: dict[str, Any], *, found: dict[str, Any] | None = None,
-                   steps: int | None = None) -> dict[str, Any]:
-    """What an index changes on the project record."""
-    cov = idx.coverage()
-    fields: dict[str, Any] = {"codeIndex": idx.stats()}
-    if found is not None and steps:
-        fields.update(onboarding.measured(found, steps, cov, idx.stats()))
-    else:
-        fields["coverage"] = [{**item, "pct": cov.get(item["label"], item["pct"])} for item in doc.get("coverage", [])]
-    return fields
-
-
 # ── reading an index ─────────────────────────────────────────────
 def risk_of(dependents: int, complexity: int = 0, writes: bool = False) -> str:
     if dependents >= 60 or (writes and dependents >= 20):
@@ -491,265 +450,3 @@ def risk_of(dependents: int, complexity: int = 0, writes: bool = False) -> str:
     if dependents >= 4 or complexity >= 30:
         return "MEDIUM"
     return "LOW"
-
-
-def _chunks(ids: list[int], size: int = 500):
-    for i in range(0, len(ids), size):
-        yield ids[i:i + size]
-
-
-def _fan_in(store: Store, ids: list[int]) -> dict[int, int]:
-    out: dict[int, int] = {}
-    for part in _chunks(ids):
-        marks = ",".join("?" * len(part))
-        for r in store.rows(f"SELECT to_file, COUNT(DISTINCT from_file) FROM code_edges WHERE to_file IN ({marks}) "
-                            "AND from_file != to_file GROUP BY to_file", tuple(part)):
-            out[r[0]] = r[1]
-    return out
-
-
-def _module_edges(store: Store, pid: str) -> list[tuple[str, str, int]]:
-    return [(r[0], r[1], r[2]) for r in store.rows(
-        "SELECT fa.module, fb.module, COUNT(*) FROM code_edges e JOIN code_files fa ON fa.id = e.from_file "
-        "JOIN code_files fb ON fb.id = e.to_file WHERE e.project_id = ? AND fa.module != fb.module "
-        "GROUP BY fa.module, fb.module", (pid,))]
-
-
-def _db_objects(store: Store, pid: str) -> list[dict[str, Any]]:
-    use: dict[str, dict[str, set[int]]] = {}
-    for target, kind, src in store.rows("SELECT target, kind, from_file FROM code_edges WHERE project_id = ? "
-                                        "AND kind IN ('reads', 'writes', 'calls')", (pid,)):
-        use.setdefault(target.lower(), {"reads": set(), "writes": set(), "calls": set()})[kind].add(src)
-    out, seen = [], set()
-    for name, kind, path in store.rows(
-            "SELECT s.name, s.kind, f.path FROM code_symbols s JOIN code_files f ON f.id = s.file_id WHERE s.project_id = ? "
-            "AND f.lang = 'T-SQL' AND s.kind IN ('table', 'procedure', 'view', 'function', 'trigger') ORDER BY s.name", (pid,)):
-        if name.lower() in seen:
-            continue
-        seen.add(name.lower())
-        u = use.get(name.lower(), {"reads": set(), "writes": set(), "calls": set()})
-        out.append({"name": name, "kind": kind, "path": path, "readers": len(u["reads"]), "writers": len(u["writes"]),
-                    "callers": len(u["calls"])})
-    return sorted(out, key=lambda o: (-(o["readers"] + o["writers"] + o["callers"]), o["name"]))
-
-
-def summary(store: Store, pid: str) -> dict[str, Any] | None:
-    run = store.row("SELECT * FROM code_index_runs WHERE project_id = ?", (pid,))
-    if run is None:
-        return None
-    languages = [{"name": r[0], "files": r[1], "lines": r[2] or 0} for r in store.rows(
-        "SELECT lang, COUNT(*), SUM(lines) FROM code_files WHERE project_id = ? GROUP BY lang ORDER BY SUM(lines) DESC", (pid,))]
-    mods = {r[0]: {"name": r[0], "files": r[1], "lines": r[2] or 0, "complexity": r[3] or 0, "symbols": 0, "fanIn": 0, "fanOut": 0}
-            for r in store.rows("SELECT module, COUNT(*), SUM(lines), SUM(complexity) FROM code_files WHERE project_id = ? "
-                                "GROUP BY module", (pid,))}
-    for module, n in store.rows("SELECT f.module, COUNT(*) FROM code_symbols s JOIN code_files f ON f.id = s.file_id "
-                                "WHERE s.project_id = ? GROUP BY f.module", (pid,)):
-        mods[module]["symbols"] = n
-    for a, b, _ in _module_edges(store, pid):
-        mods[a]["fanOut"] += 1
-        mods[b]["fanIn"] += 1
-    hot = store.rows(
-        "SELECT f.path, f.lines, f.complexity, f.churn, COUNT(DISTINCT e.from_file) AS n FROM code_edges e "
-        "JOIN code_files f ON f.id = e.to_file WHERE e.project_id = ? AND e.from_file != e.to_file "
-        "GROUP BY e.to_file ORDER BY n DESC, f.complexity DESC LIMIT 10", (pid,))
-    objects = _db_objects(store, pid)
-    return {
-        "indexed": True,
-        "run": {"files": run["files"], "symbols": run["symbols"], "edges": run["edges"], "unresolved": run["unresolved"],
-                "ms": run["ms"], "finishedAt": run["finished_at"], "parsers": json.loads(run["parsers"])},
-        "languages": languages,
-        "modules": sorted(mods.values(), key=lambda m: -m["lines"]),
-        "hotspots": [{"path": r[0], "lines": r[1], "complexity": r[2], "churn": r[3], "fanIn": r[4], "risk": risk_of(r[4], r[2])}
-                     for r in hot],
-        "database": {"objects": len(objects), "top": objects[:12]},
-    }
-
-
-def children(store: Store, pid: str, directory: str = "") -> dict[str, Any]:
-    """One level of the file tree: its folders, with counts, and its files."""
-    prefix = f"{directory.strip('/')}/" if directory.strip("/") else ""
-    rows = store.rows("SELECT id, path, lang, lines, complexity FROM code_files WHERE project_id = ? AND path > ? AND path < ?",
-                      (pid, prefix, prefix + "\U0010ffff"))
-    dirs: dict[str, dict[str, Any]] = {}
-    files: list[dict[str, Any]] = []
-    for r in rows:
-        rest = r["path"][len(prefix):]
-        if "/" in rest:
-            name = rest.split("/", 1)[0]
-            d = dirs.setdefault(name, {"name": name, "path": prefix + name, "files": 0, "lines": 0})
-            d["files"] += 1
-            d["lines"] += r["lines"]
-        else:
-            files.append({"id": r["id"], "name": rest, "path": r["path"], "lang": r["lang"], "lines": r["lines"],
-                          "complexity": r["complexity"], "fanIn": 0})
-    fan = _fan_in(store, [f["id"] for f in files])
-    for f in files:
-        f["fanIn"] = fan.get(f["id"], 0)
-    return {"dir": prefix.rstrip("/"), "dirs": sorted(dirs.values(), key=lambda d: d["name"].lower()),
-            "files": sorted(files, key=lambda f: f["name"].lower())}
-
-
-def search(store: Store, pid: str, q: str, limit: int = 40) -> list[dict[str, Any]]:
-    match = _fts_query(q)
-    if not match:
-        return []
-    rows = store.rows("SELECT name, path, kind, line FROM code_fts WHERE code_fts MATCH ? AND project_id = ? "
-                      "ORDER BY rank LIMIT ?", (match, pid, limit))
-    return [{"name": r[0], "path": r[1], "kind": r[2], "line": r[3]} for r in rows]
-
-
-def impact(store: Store, pid: str, *, path: str | None = None, module: str | None = None,
-           obj: str | None = None) -> dict[str, Any] | None:
-    """What moves if this changes: everything that depends on it, directly or through others, found by
-    walking the dependency edges backwards in the database (a recursive query, eight steps deep)."""
-    if path:
-        seeds = [r[0] for r in store.rows("SELECT id FROM code_files WHERE project_id = ? AND path = ?", (pid, path))]
-        label, shift = path, 0
-    elif module:
-        seeds = [r[0] for r in store.rows("SELECT id FROM code_files WHERE project_id = ? AND module = ?", (pid, module))]
-        label, shift = module, 0
-    elif obj:
-        seeds = [r[0] for r in store.rows("SELECT DISTINCT from_file FROM code_edges WHERE project_id = ? AND target = ? "
-                                          "COLLATE NOCASE AND kind IN ('reads', 'writes', 'calls')", (pid, obj))]
-        label, shift = obj, 1  # the files that use the object are its direct dependents
-        if not seeds and not store.row("SELECT 1 FROM code_symbols WHERE project_id = ? AND name = ? COLLATE NOCASE", (pid, obj)):
-            return None
-    else:
-        return None
-    if not seeds and not obj:
-        return None
-    rows = store.rows(
-        "WITH RECURSIVE dep(id, depth) AS (SELECT value, 0 FROM json_each(?) UNION "
-        "SELECT e.from_file, dep.depth + 1 FROM code_edges e JOIN dep ON e.to_file = dep.id "
-        "WHERE dep.depth < 8 AND e.from_file != e.to_file) "
-        "SELECT f.id, f.path, f.module, f.lang, f.complexity, f.churn, MIN(dep.depth) FROM dep "
-        "JOIN code_files f ON f.id = dep.id GROUP BY f.id", (json.dumps(seeds),))
-    seed_set = set(seeds)
-    reached = [{"id": r[0], "path": r[1], "module": r[2], "lang": r[3], "complexity": r[4], "churn": r[5],
-                "depth": r[6] + shift} for r in rows]
-    seed_rows = [x for x in reached if x["id"] in seed_set]
-    if module:
-        dependents = [x for x in reached if x["module"] != module]
-    elif obj:
-        dependents = reached
-    else:
-        dependents = [x for x in reached if x["id"] not in seed_set]
-    direct = sorted(x["path"] for x in dependents if x["depth"] == 1)
-    further = sorted(x["path"] for x in dependents if x["depth"] > 1)
-    tests = sorted({x["path"] for x in dependents + seed_rows if TEST_FILE.search(x["path"])})
-    mods = Counter(x["module"] for x in dependents)
-
-    if obj:
-        data = [(label, k) for (k,) in store.rows("SELECT DISTINCT kind FROM code_edges WHERE project_id = ? AND target = ? "
-                                                  "COLLATE NOCASE", (pid, obj))]
-    else:
-        data = []
-        for part in _chunks(seeds):
-            marks = ",".join("?" * len(part))
-            data += [(r[0], r[1]) for r in store.rows(
-                f"SELECT DISTINCT target, kind FROM code_edges WHERE from_file IN ({marks}) "
-                "AND kind IN ('reads', 'writes', 'calls') ORDER BY target", tuple(part))]
-    writes = sorted({t for t, k in data if k == "writes"})
-    complexity = max((x["complexity"] for x in seed_rows), default=0)
-    churn = max((x["churn"] for x in seed_rows), default=0)
-    risk = risk_of(len(dependents), complexity, bool(writes))
-
-    run = store.row("SELECT edges, unresolved FROM code_index_runs WHERE project_id = ?", (pid,))
-    langs = {x["lang"] for x in seed_rows + dependents}
-    base = 90 if langs and langs <= {"Python", "T-SQL"} else 80 if "Python" in langs else 72
-    penalty = min(20, round(100 * run["unresolved"] / max(1, run["edges"] + run["unresolved"]))) if run else 0
-
-    warnings = []
-    if len(direct) >= 10:
-        warnings.append(f"{len(direct)} files use it directly. A change to its signature reaches every one of them.")
-    if (dependents or seed_rows) and not tests:
-        warnings.append("No test file reaches it. A change here is unguarded until one does.")
-    if writes:
-        warnings.append(f"It writes {', '.join(writes[:3])}{'…' if len(writes) > 3 else ''}. Check migrations, "
-                        "constraints and anything that audits that data.")
-    if len(mods) >= 3:
-        warnings.append(f"The change crosses {len(mods)} modules.")
-    if churn >= 10:
-        warnings.append(f"It changed {churn} times in 90 days: a hotspot, where regressions cluster.")
-    if run and run["unresolved"]:
-        warnings.append(f"{run['unresolved']} imports in this project could not be resolved, so the true radius may be larger.")
-    recommendation = (
-        "Change it behind a stable interface, land the tests first, and let the plan stop at your approval."
-        if risk in ("HIGH", "CRITICAL") else
-        "Change it together with its direct users in one plan, and run their tests." if risk == "MEDIUM" else
-        "Safe to change in one step. Run the tests that already reach it.")
-    groups = [
-        {"label": "Uses it directly", "items": direct[:40]},
-        {"label": "Reached through others", "items": further[:40]},
-        {"label": "Tests that reach it", "items": tests[:40]},
-        {"label": "Data it touches", "items": [f"{k} {t}" for t, k in data][:40]},
-    ]
-    return {
-        "target": label, "kind": "file" if path else "module" if module else "object",
-        "risk": risk, "confidence": max(40, base - penalty),
-        "counts": {"direct": len(direct), "dependents": len(dependents), "modules": len(mods), "tests": len(tests),
-                   "data": len(data)},
-        "blastRadius": [g for g in groups if g["items"]],
-        "modules": [{"name": m, "files": n} for m, n in mods.most_common(12)],
-        "warnings": warnings,
-        "recommendation": recommendation,
-    }
-
-
-def file_detail(store: Store, pid: str, path: str) -> dict[str, Any] | None:
-    f = store.row("SELECT * FROM code_files WHERE project_id = ? AND path = ?", (pid, path))
-    if f is None:
-        return None
-    symbols = [{"name": r[0], "kind": r[1], "line": r[2], "exported": bool(r[3])} for r in store.rows(
-        "SELECT name, kind, line, exported FROM code_symbols WHERE file_id = ? ORDER BY line", (f["id"],))]
-    out = store.rows("SELECT e.target, e.kind, t.path FROM code_edges e LEFT JOIN code_files t ON t.id = e.to_file "
-                     "WHERE e.from_file = ? ORDER BY t.path IS NULL, t.path, e.target", (f["id"],))
-    used: dict[str, dict[str, Any]] = {}
-    for src, kind, target in store.rows(
-            "SELECT s.path, e.kind, e.target FROM code_edges e JOIN code_files s ON s.id = e.from_file "
-            "WHERE e.to_file = ? AND e.from_file != e.to_file ORDER BY s.path", (f["id"],)):
-        u = used.setdefault(src, {"path": src, "kinds": [], "targets": []})
-        if kind not in u["kinds"]:
-            u["kinds"].append(kind)
-        if target not in u["targets"]:
-            u["targets"].append(target)
-    depends = [{"path": r[2], "target": r[0], "kind": r[1]} for r in out if r[1] in ("imports", "uses")]
-    return {
-        "file": {"path": f["path"], "lang": f["lang"], "module": f["module"], "lines": f["lines"], "bytes": f["bytes"],
-                 "complexity": f["complexity"], "churn": f["churn"], "changedAt": f["changed_at"], "fanIn": len(used),
-                 "fanOut": len({d["path"] for d in depends if d["path"]}), "test": bool(TEST_FILE.search(f["path"]))},
-        "symbols": symbols,
-        "dependsOn": depends,
-        "database": [{"object": r[0], "kind": r[1], "path": r[2]} for r in out if r[1] in ("reads", "writes", "calls")],
-        "usedBy": list(used.values()),
-        "impact": impact(store, pid, path=path),
-    }
-
-
-def graph(store: Store, pid: str, limit: int = 36) -> dict[str, Any]:
-    """Modules and the database objects they touch, sized for one screen: the largest `limit` modules."""
-    mods = store.rows("SELECT module, COUNT(*), SUM(lines) FROM code_files WHERE project_id = ? GROUP BY module "
-                      "ORDER BY SUM(lines) DESC", (pid,))
-    keep = {r[0] for r in mods[:limit]}
-    medges = [(a, b, n) for a, b, n in _module_edges(store, pid) if a in keep and b in keep]
-    fan = Counter(b for _, b, _ in medges)
-    nodes = [{"id": f"m:{r[0]}", "label": r[0], "kind": "module", "files": r[1], "lines": r[2] or 0,
-              "risk": risk_of(fan[r[0]] * 4)} for r in mods[:limit]]
-    edges = [{"from": f"m:{a}", "to": f"m:{b}", "kind": "depends", "weight": n} for a, b, n in medges]
-
-    declared = {r[0].lower(): (r[0], r[1]) for r in store.rows(
-        "SELECT s.name, s.kind FROM code_symbols s JOIN code_files f ON f.id = s.file_id WHERE s.project_id = ? "
-        "AND f.lang = 'T-SQL' AND s.kind IN ('table', 'procedure', 'view', 'function', 'trigger')", (pid,))}
-    uses = [(r[0], r[1], r[2], r[3]) for r in store.rows(
-        "SELECT e.target, e.kind, f.module, COUNT(*) FROM code_edges e JOIN code_files f ON f.id = e.from_file "
-        "WHERE e.project_id = ? AND e.kind IN ('reads', 'writes', 'calls') GROUP BY e.target, e.kind, f.module", (pid,))]
-    reach = Counter(t.lower() for t, _, m, _ in uses if m in keep)
-    top = {o for o, _ in reach.most_common(16)}
-    written = {t.lower() for t, k, m, _ in uses if k == "writes" and m in keep}
-    for o in sorted(top):
-        name, kind = declared.get(o, (o, "table"))
-        nodes.append({"id": f"d:{name}", "label": name, "kind": kind, "files": 0, "lines": 0,
-                      "risk": "HIGH" if o in written else "MEDIUM"})
-    edges += [{"from": f"m:{m}", "to": f"d:{declared.get(t.lower(), (t,))[0]}", "kind": k, "weight": n}
-              for t, k, m, n in uses if m in keep and t.lower() in top]
-    return {"nodes": nodes, "edges": edges, "modules": len(mods), "truncated": len(mods) > limit}

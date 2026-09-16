@@ -10,11 +10,13 @@ export const permissions: Permission[] = [
   { id: 'tasks:write',      group: 'Work',      label: 'Move tasks',               description: 'Change a task’s status and tick its checklist.' },
   { id: 'runs:run',         group: 'Work',      label: 'Run agents',               description: 'Start an agent run in its own worktree, stop it, and discard its branch.' },
   { id: 'sessions:chat',    group: 'Work',      label: 'Use sessions',             description: 'Ask in a session and let it read this project’s code with the tools.' },
+  { id: 'workflows:write',  group: 'Work',      label: 'Write workflows',          description: 'Create, edit and archive workflows. Running one needs the plan permissions.' },
   { id: 'approvals:decide', group: 'Gates',     label: 'Approve gated actions',    description: 'Sign or refuse migrations, deploys and other high-risk actions.' },
   { id: 'runs:merge',       group: 'Gates',     label: 'Merge a run',              description: 'Merge an accepted run’s branch into the repository on this machine.' },
   { id: 'decisions:make',   group: 'Gates',     label: 'Give final verdicts',      description: 'Accept a review or send it back, and open or cancel the production gate.' },
   { id: 'memory:write',     group: 'Knowledge', label: 'Curate memory',            description: 'Add, pin and archive facts, and settle conflicts between them.' },
   { id: 'ai:use',           group: 'Knowledge', label: 'Use AI features',          description: 'Ask memory, brainstorm, and extract facts from text.' },
+  { id: 'evals:write',      group: 'Knowledge', label: 'Write evals',              description: 'Author eval suites and their cases, and override a result.' },
   { id: 'projects:onboard', group: 'Platform',  label: 'Onboard projects',         description: 'Clone or read a repository and measure it.' },
   { id: 'mcp:manage',       group: 'Platform',  label: 'Manage tools',             description: 'Register MCP servers.' },
   { id: 'settings:write',   group: 'Platform',  label: 'Change screen settings',   description: 'Switch skills, plugins, hooks, commands and models on or off.' },
@@ -33,9 +35,10 @@ export const roles: RoleSeed[] = [
   {
     id: 'approver', name: 'AI Project Manager', description: 'Steers the work and signs the gates: the final approver.',
     permissions: ['plans:compile', 'plans:decide', 'tasks:write', 'runs:run', 'approvals:decide', 'runs:merge',
-      'decisions:make', 'memory:write', 'ai:use', 'sessions:chat', 'projects:onboard', 'mcp:manage', 'settings:write'],
+      'decisions:make', 'memory:write', 'ai:use', 'sessions:chat', 'projects:onboard', 'mcp:manage', 'settings:write',
+      'workflows:write', 'evals:write'],
   },
-  { id: 'engineer', name: 'Engineer', description: 'Works the board and curates memory. Cannot sign the gates.', permissions: ['plans:compile', 'tasks:write', 'runs:run', 'memory:write', 'ai:use', 'sessions:chat'] },
+  { id: 'engineer', name: 'Engineer', description: 'Works the board and curates memory. Cannot sign the gates.', permissions: ['plans:compile', 'tasks:write', 'runs:run', 'memory:write', 'ai:use', 'sessions:chat', 'evals:write'] },
   { id: 'viewer', name: 'Viewer', description: 'Reads everything and changes nothing.', permissions: [] },
 ];
 

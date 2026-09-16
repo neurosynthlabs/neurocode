@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai.compiler import AGENTS, Context, PlanOut, compile_plan
 from ..ai.gateway import Gateway, Result
-from ..models import ChecklistItem, Plan, PlanQuestion, PlanStep, Project, Task, TaskAgent
+from ..models import ChecklistItem, Plan, PlanQuestion, PlanStep, Project, Task, TaskAgent, WorkflowDefinition
 from ..repositories import (
     ActivityRepository,
     MemoryRepository,
@@ -27,7 +27,7 @@ from ..repositories import (
     TaskRepository,
 )
 from .errors import Refused
-from .runs import RunService
+from .runs import RunService, _setup
 
 FACTS_FOR_CONTEXT = 6
 
@@ -109,19 +109,56 @@ class PlanService:
         return plan, task
 
     async def _write_steps(self, plan: Plan, task: Task | None, out: PlanOut) -> None:
+        await self._rows(plan, task, [(s.label, s.agent, s.detail) for s in out.steps], out.openQuestions)
+
+    async def _rows(self, plan: Plan, task: Task | None, steps: list[tuple[str, str, str]],
+                    questions: list[str]) -> None:
         """The plan's steps and questions, and the task's checklist, all as rows."""
-        for i, step in enumerate(out.steps, 1):
-            plan.steps.append(PlanStep(id=f"{plan.id}-s{i}", n=i, label=step.label, agent=step.agent,
-                                       state="todo", detail=step.detail))
-        for i, question in enumerate(out.openQuestions):
+        for i, (label, agent, detail) in enumerate(steps, 1):
+            plan.steps.append(PlanStep(id=f"{plan.id}-s{i}", n=i, label=label, agent=agent,
+                                       state="todo", detail=detail))
+        for i, question in enumerate(questions):
             plan.questions.append(PlanQuestion(id=f"{plan.id}-q{i}", n=i, question=question))
         if task is not None:
-            for i, step in enumerate(out.steps, 1):
-                task.checklist.append(ChecklistItem(id=f"{task.id}-c{i}", n=i - 1, label=step.label,
-                                                    done=False))
-            for name in dict.fromkeys(s.agent for s in out.steps if s.agent != "AI Commander"):
+            for i, (label, _, _) in enumerate(steps, 1):
+                task.checklist.append(ChecklistItem(id=f"{task.id}-c{i}", n=i - 1, label=label, done=False))
+            for name in dict.fromkeys(agent for _, agent, _ in steps if agent != "AI Commander"):
                 task.assignees.append(TaskAgent(agent=name))
         await self.session.flush()
+
+    # ── from a workflow ──────────────────────────────────────────
+    async def preflight(self, project: Project) -> None:
+        """Refuse before anything is written when a run could not start in this project.
+
+        Dispatching on its own says "no run started" in the activity log and carries on, which is right
+        for a plan that was worth keeping anyway. A workflow run is asked for in order to run: a plan
+        and a task left dispatched with nothing working on them would be litter, so the runtime's own
+        checks are asked first, and their words are the refusal.
+        """
+        await asyncio.to_thread(_setup, project)
+
+    async def from_workflow(self, workflow: WorkflowDefinition, project: Project, text: str, *,
+                            by: str) -> tuple[Plan, Task]:
+        """A workflow's steps become an ordinary plan, copied rather than referenced, so editing the
+        workflow later never rewrites what this run was asked to do. Nothing is compiled: the person
+        who wrote the workflow already decided the steps, so there is nothing left to ask."""
+        requirement = workflow.requirement_template.replace("{input}", text)
+        task_ref = await self.tasks.next_ref()
+        n = task_ref.split("-")[-1]
+        steps = [(s.label, s.agent, s.detail) for s in workflow.steps]
+        task = await self.tasks.add(Task(
+            id=f"t{n}", ref=task_ref, title=f"{workflow.name}: {text}"[:300], project_id=project.id,
+            status="planning", requirement=requirement, files=0, checklist=[], assignees=[]))
+        plan = await self.plans.add(Plan(
+            id=f"p{n}", ref=f"PLAN-{n}", task_id=task.id, project_id=project.id, status="draft",
+            steps=[], questions=[], raw_requirement=requirement, business_requirement=workflow.description,
+            requested_by=by, workflow_id=workflow.id))
+        await self._rows(plan, task, steps, [])
+        await self.activity.record(
+            actor=by, actor_kind="human", action="Workflow started",
+            detail=f"{workflow.name} → {plan.ref} · {len(steps)} steps", level="ok",
+            project_id=project.id, task_ref=task.ref)
+        return plan, task
 
     async def recompile(self, ref: str, *, by: str, by_id: str | None = None) -> Plan:
         """Compile it again with what has been answered since. Refused once it is under way."""

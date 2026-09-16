@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,11 +28,21 @@ from ..data.engine import Database
 from ..models import Project
 from ..repositories.base import NotFound
 from ..repositories.code import CodeEdgeRepository, CodeFileRepository, CodeIndexRepository, MAX_ENTRIES
+from ..repositories.retrieval import ChunkRepository, MAX_DOCS, MAX_DOC_PATHS
 from ..repositories.work import ActivityRepository, ProjectRepository
 from ..schemas.code import file_json, run_json, symbol_json, tree_file_json
 from .errors import Refused
 from .indexing import INDEXING, build_index
-from .retrieval import RetrievalService
+from .retrieval import (
+    DOCS,
+    MAX_DOC_CHUNKS,
+    RetrievalService,
+    doc_json,
+    doc_title,
+    entity_tokens,
+    pipeline,
+    read_docs_on_disk,
+)
 
 #: How much of a file the file view hands back, and how many modules the graph draws.
 MAX_TEXT = 400_000
@@ -189,6 +200,75 @@ class CodeService:
             return body[:MAX_TEXT], len(body) > MAX_TEXT
 
         return await asyncio.to_thread(read)
+
+    # ── the project's documents ──────────────────────────────────
+    async def _on_disk(self, project: Project, only: list[str] | None = None) -> tuple[
+            dict[str, tuple[int, float]], dict[str, tuple[str, str]], set[str], bool]:
+        """What the checkout says about the documents, and whether there was a checkout to ask."""
+        root = checkout(project)
+        if root is None or not await asyncio.to_thread(root.is_dir):
+            return {}, {}, set(), False
+        disk, commits, tracked = await asyncio.to_thread(read_docs_on_disk, root, list(project.excluded or []), only)
+        return disk, commits, tracked, True
+
+    async def docs(self, project_id: str, gateway: Gateway) -> dict[str, Any]:
+        """Every document retrieval holds for this project, and every one on disk that it does not.
+
+        A document the index dropped — past the doc cap, or written since the last build — is listed as
+        not indexed rather than left out, because "awaiting index" is only honest if it counts them.
+        """
+        project = await self.project(project_id)
+        chunks = ChunkRepository(self.session)
+        state = await RetrievalService(self.session, gateway).summary(project_id)
+        built_at = datetime.fromisoformat(state["at"]) if state.get("at") else None
+        rows = {row["path"]: row for row in await chunks.docs(project_id, limit=MAX_DOC_PATHS)}
+        disk, commits, tracked, known = await self._on_disk(project)
+
+        def one(path: str) -> dict[str, Any]:
+            row = rows.get(path, {})
+            return doc_json(path, chunks=row.get("chunks", 0), embedded=row.get("embedded", 0),
+                            title=row.get("title") or "", head=row.get("head") or "", project_id=project_id,
+                            disk=disk, commits=commits, tracked=tracked, disk_known=known, built_at=built_at,
+                            indexed_at=row["at"].isoformat(timespec="seconds") if row.get("at") else state.get("at"))
+
+        listed = [one(path) for path in sorted({*rows, *disk})]
+        names, _paths, _refs = entity_tokens("\n".join(await chunks.doc_bodies(project_id)), cap=MAX_DOC_CHUNKS * 5)
+        # Counted over everything found, then cut to what one list may show.
+        return {"retrieval": state, "docs": listed[:MAX_DOCS], "onDisk": len(disk),
+                "notIndexed": sum(1 for d in listed if not d["indexed"]),
+                "stale": sum(1 for d in listed if d["stale"]),
+                "entitiesLinked": await chunks.count_symbols_named(project_id, names),
+                "formats": [suffix.lstrip(".") for suffix in DOCS], "pipeline": pipeline(state)}
+
+    async def doc(self, project_id: str, path: str, gateway: Gateway) -> dict[str, Any]:
+        """One document with what it links to: symbols the index declares, files, and refs that exist."""
+        project = await self.project(project_id)
+        relative = _inside(path).as_posix()
+        chunks = ChunkRepository(self.session)
+        state = await RetrievalService(self.session, gateway).summary(project_id)
+        sections = await chunks.doc_sections(project_id, relative)
+        disk, commits, tracked, known = await self._on_disk(
+            project, [relative] if Path(relative).suffix.lower() in DOCS else [])
+        if not sections and relative not in disk:
+            raise NotFound(path)
+
+        text = "\n".join(body for _ref, _title, body, _embedded in sections)
+        names, ticked, refs = entity_tokens(text)
+        declared = await chunks.symbols_named(project_id, names)
+        files = await chunks.code_paths(project_id, ticked)
+        real = await chunks.existing_refs(project_id, refs)
+        first_title, first_body = (sections[0][1], sections[0][2]) if sections else ("", "")
+        doc = doc_json(relative, chunks=len(sections), embedded=sum(1 for *_x, e in sections if e),
+                       title=first_title, head=first_body[:600], project_id=project_id, disk=disk,
+                       commits=commits, tracked=tracked, disk_known=known,
+                       built_at=datetime.fromisoformat(state["at"]) if state.get("at") else None,
+                       indexed_at=state.get("at"))
+        doc["entities"] = list(dict.fromkeys(name for name, _path in declared))
+        doc["linkedTo"] = list(dict.fromkeys([*(p for _name, p in declared), *(t for t in ticked if t in files),
+                                              *(r for r in refs if r in real)]))
+        doc["sections"] = [{"ref": ref, "title": doc_title(title, relative), "embedded": embedded}
+                           for ref, title, _body, embedded in sections]
+        return doc
 
     # ── what breaks if this changes ──────────────────────────────
     async def impact(self, project_id: str, *, path: str | None = None, module: str | None = None,

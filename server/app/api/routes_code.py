@@ -22,7 +22,7 @@ from ..services.code import INDEXING, CodeService, checkout
 from ..services.errors import Refused
 from ..services.identity import Person
 from ..services.retrieval import RetrievalService
-from .deps import current_person, database, gateway, require, session
+from .deps import current_person, database, gateway, hand_off, require, session
 
 router = APIRouter(prefix="/projects/{pid}/code")
 
@@ -79,8 +79,24 @@ async def retrieval(pid: str, q: str = "", limit: int = 8,
     meaning too when a lane makes embeddings."""
     await CodeService(open_session).project(pid)
     service = RetrievalService(open_session, gw)
-    found = await service.search(pid, q, min(MAX_HITS, max(1, limit))) if q.strip() else []
-    return {**await service.summary(pid), "q": q, "results": found}
+    if not q.strip():
+        return {**await service.summary(pid), "q": q, "results": []}
+    found, counts = await service.search_counted(pid, q, min(MAX_HITS, max(1, limit)))
+    return {**await service.summary(pid), "q": q, "results": found, "counts": counts}
+
+
+@router.get("/retrieval/docs", dependencies=[Depends(current_person)])
+async def retrieval_docs(pid: str, open_session: AsyncSession = Depends(session),
+                         gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """The repository's own writing: what retrieval holds of it, and what on disk it does not hold yet."""
+    return await CodeService(open_session).docs(pid, gw)
+
+
+@router.get("/retrieval/doc", dependencies=[Depends(current_person)])
+async def retrieval_doc(pid: str, path: str, open_session: AsyncSession = Depends(session),
+                        gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """One document, its sections, and the symbols, files and refs it names that really exist."""
+    return await CodeService(open_session).doc(pid, path, gw)
 
 
 @router.post("/retrieval/build", status_code=202)
@@ -93,7 +109,7 @@ async def build_retrieval(pid: str, jobs: BackgroundTasks,
     await ActivityRepository(open_session).record(
         actor=who.name, actor_kind="human", action="Building retrieval",
         detail=f"{project.name} · chunking, then embedding what it can", project_id=pid)
-    jobs.add_task(code_jobs.build_retrieval, db, gw, pid)
+    await hand_off(open_session, jobs, code_jobs.build_retrieval, db, gw, pid)
     return {"ok": True}
 
 
@@ -114,5 +130,6 @@ async def reindex(pid: str, jobs: BackgroundTasks, who: Person = Depends(require
     await ActivityRepository(open_session).record(
         actor=who.name, actor_kind="human", action="Re-indexing",
         detail=f"{project.name} · reading the code again", project_id=pid)
-    jobs.add_task(code_jobs.reindex, db, gw, pid, root, list(project.excluded or []))
+    await hand_off(open_session, jobs, code_jobs.reindex, db, gw, pid, root,
+                   list(project.excluded or []))
     return {"ok": True}

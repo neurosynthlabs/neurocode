@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -29,13 +30,20 @@ from . import (
     routes_ai,
     routes_auth,
     routes_code,
+    routes_evals,
+    routes_extensions,
+    routes_git,
     routes_knowledge,
+    routes_ops,
     routes_plans,
     routes_platform,
+    routes_research,
     routes_runs,
     routes_sessions,
     routes_system,
+    routes_testing,
     routes_work,
+    routes_workflows,
     stream,
 )
 from .deps import COOKIE
@@ -46,31 +54,80 @@ log = logging.getLogger(__name__)
 ROUTERS = (routes_auth.router, routes_work.router, routes_plans.router, routes_knowledge.router,
            routes_platform.router, routes_sessions.router, routes_runs.router, routes_code.router,
            routes_ai.router, routes_system.router, routes_admin.router, routes_admin_system.router,
+           routes_testing.router, routes_git.router, routes_extensions.router, routes_workflows.router,
+           routes_evals.router, routes_research.router, routes_ops.router,
            stream.router)
+
+#: What a row that was in flight when the process died says about itself afterwards.
+INTERRUPTED = "interrupted: the server restarted"
+
+
+async def reconcile_interrupted(open_session: AsyncSession) -> dict[str, int]:
+    """Mark the work that claims to be in flight but cannot be, because the process running it is gone.
+
+    Runs, evals and research are executed by tasks inside this process. When it stops, their rows keep
+    saying `running` — or `queued`, for jobs that were handed off and never began — forever, and every
+    screen that reads them shows work nobody is doing. At start-up nothing can be running yet, so any
+    row that says so is a leftover, and failing it is the only true thing to say.
+
+    A `waiting` run is the exception, and is left alone: it is parked on a person's approval, not on a
+    process, and deciding that approval resumes it after a restart exactly as before.
+    """
+    params = {"why": INTERRUPTED}
+    runs = (await open_session.execute(text(
+        "WITH gone AS ("
+        "  UPDATE runs SET status = 'failed', note = :why, finished_at = now() "
+        "  WHERE status = 'running' RETURNING id), "
+        "steps AS ("
+        "  UPDATE run_steps SET status = 'failed', detail = :why "
+        "  WHERE status = 'running' AND run_id IN (SELECT id FROM gone)) "
+        "INSERT INTO run_logs(run_id, level, line) SELECT id, 'warn', :why FROM gone RETURNING run_id"),
+        params)).all()
+    evals = (await open_session.execute(text(
+        "UPDATE eval_runs SET status = 'failed', note = :why, finished_at = now() "
+        "WHERE status IN ('queued', 'running') RETURNING id"), params)).all()
+    research = (await open_session.execute(text(
+        "WITH gone AS ("
+        "  UPDATE research_reports SET status = 'failed', note = :why, finished_at = now() "
+        "  WHERE status IN ('queued', 'running') RETURNING id), "
+        "angles AS ("
+        "  UPDATE research_angles SET status = 'failed', error = :why "
+        "  WHERE status = 'running' AND report_id IN (SELECT id FROM gone)) "
+        "SELECT id FROM gone"), params)).all()
+    return {"runs": len(runs), "evals": len(evals), "research": len(research)}
 
 
 async def _on_start(app: FastAPI) -> None:
-    """The two chores that have to happen before the first request, and could not happen anywhere else.
+    """The chores that have to happen before the first request, and could not happen anywhere else.
 
     Reconciling the built-in roles is what makes a new permission arrive on upgrade: the catalogue is
     the application's, not the database's, so an installation that has been running for months still
     gains whatever was added to it. A role someone made themselves is left exactly as it is.
 
+    Reconciling interrupted work belongs here for the same reason: only before the first request is it
+    certain that nothing in this process is running yet.
+
     Neither is allowed to stop the API. A database that is not there yet is a thing to say plainly
     at the first request — `/health` answers that — not a process that refuses to boot.
     """
-    from ..data.loader import sync_roles
+    from ..data.loader import seed_once, sync_roles
     from ..repositories.identity import SessionRepository
 
     try:
         async with app.state.db.session() as open_session:
             await sync_roles(open_session)
+            if await seed_once(open_session):
+                log.info("a new workspace: opened on the sample work")
             gone = await SessionRepository(open_session).purge_expired()
+            interrupted = await reconcile_interrupted(open_session)
     except Exception as e:                       # noqa: BLE001 — start-up must survive a cold database
         log.warning("start-up chores skipped: %s", e)
         return
     if gone:
         log.info("removed %d expired session(s)", gone)
+    for what, n in interrupted.items():
+        if n:
+            log.info("marked %d interrupted %s failed", n, what)
 
 def create_api(db: Database | None = None, *, config: Settings | None = None) -> FastAPI:
     cfg = config or get_settings()
@@ -92,7 +149,10 @@ def create_api(db: Database | None = None, *, config: Settings | None = None) ->
     # The gateway is blocking by nature — it waits on model providers from a worker thread — so it
     # gets its own small psycopg pool rather than the request's async session. Same database, though:
     # its settings and its usage ledger are Postgres rows like everything else.
-    app.state.ledger = PostgresLedger(cfg.blocking_database_url, echo=cfg.echo_sql)
+    # The same database the app was given — not the one settings name. Built from settings, a gateway
+    # inside an app handed a different database wrote its ledger somewhere else entirely, where the
+    # user who made the call did not exist, and the foreign key quietly refused every line.
+    app.state.ledger = PostgresLedger(app.state.db.url.replace("+asyncpg", "+psycopg"), echo=cfg.echo_sql)
     app.state.gateway = Gateway(app.state.ledger, Secrets(cfg.secrets_path))
     app.state.bus = feed
 

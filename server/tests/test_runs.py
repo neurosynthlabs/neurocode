@@ -9,18 +9,22 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+import pytest
 import pytest_asyncio
 from sqlalchemy import delete, select
 
+from app import models as m
 from app.ai.gateway import Provider, Result
 from app.data.engine import Database
 from app.models import Approval, Plan, PlanStep, Project, Run, RunStep
 from app.repositories import ApprovalRepository, ProjectRepository, RunRepository
-from app.services.runs import RunService, execute, resume
+from app.services.errors import Refused
+from app.services.runs import RunService, all_expected, execute, resume
 
 PROJECT, PLAN = "run-test-project", "PLAN-9001"
 WROTE = "def total(x):\n    return round(x, 2)\n"
@@ -177,3 +181,184 @@ async def test_a_path_that_escapes_the_worktree_is_refused(live: Database, repo:
     assert edit.status == "failed" and "outside the worktree" in edit.detail
     assert not (repo.parent / "escaped.py").exists()
     assert run.diff_files == 0
+
+
+# ── the test step, and a run that is only tests ──────────────────
+
+CHECKED = "check-test-project"
+#: A cobertura report the Makefile copies into place after the tests, so it is written by the step.
+COBERTURA = """<?xml version="1.0" ?>
+<coverage version="7.16.1" lines-valid="4" lines-covered="3">
+  <sources><source>.</source></sources>
+  <packages><package name="pkg"><classes>
+    <class name="core.py" filename="pkg/core.py">
+      <lines><line number="1" hits="1"/><line number="2" hits="1"/><line number="4" hits="1"/><line number="5" hits="0"/></lines>
+    </class>
+  </classes></package></packages>
+</coverage>
+"""
+
+
+@pytest_asyncio.fixture
+async def tested_repo(tmp_path: Path) -> Path:
+    """A repository whose own `make test` runs pytest — one test passes, one fails — and writes coverage.
+
+    It also carries a stale lcov.info in its history: a report that was not written by the run must
+    never be read as if it were.
+    """
+    root = tmp_path / "ledger"
+    (root / "pkg").mkdir(parents=True)
+    (root / "tests").mkdir()
+    (root / "fixtures").mkdir()
+    (root / "pkg" / "__init__.py").write_text("")
+    (root / "pkg" / "core.py").write_text("def total(x):\n    return round(x, 1)\n")
+    (root / "tests" / "test_core.py").write_text(
+        "from pkg.core import total\n\n\ndef test_small():\n    assert total(1.0) == 1.0\n\n\n"
+        "def test_total():\n    assert total(1.05) == 1.05\n")
+    (root / "fixtures" / "coverage.xml").write_text(COBERTURA)
+    (root / "lcov.info").write_text("SF:pkg/core.py\nLF:100\nLH:100\nend_of_record\n")
+    (root / "Makefile").write_text(
+        "test:\n"
+        f"\t{sys.executable} -m pytest -q -p no:cacheprovider tests; status=$$?; "
+        "cp fixtures/coverage.xml coverage.xml; exit $$status\n")
+    run_git(["init", "-b", "main"], root)
+    run_git(["add", "-A"], root)
+    run_git(["commit", "-m", "first"], root)
+    return root
+
+
+@pytest_asyncio.fixture
+async def checked(schema: str, tested_repo: Path) -> AsyncIterator[Database]:
+    db = Database(url=schema)
+    async with db.session() as s:
+        s.add(m.Project(id=CHECKED, name="Ledger", source_kind="local", source_repo=str(tested_repo)))
+    yield db
+    async with db.session() as s:
+        runs = (await s.execute(select(Run).where(Run.project_id == CHECKED))).scalars().unique()
+        for run in runs:
+            shutil.rmtree(Path(run.worktree), ignore_errors=True)
+        await s.execute(delete(Approval).where(Approval.project_id == CHECKED))
+        await s.execute(delete(Run).where(Run.project_id == CHECKED))
+        await s.execute(delete(m.Setting).where(m.Setting.key == f"runtime.tests.{CHECKED}"))
+        await s.execute(delete(m.Project).where(m.Project.id == CHECKED))
+    await db.close()
+
+
+async def start_check(db: Database) -> str:
+    async with db.session() as s:
+        project = await ProjectRepository(s).get(CHECKED)
+        run = await RunService(s, FakeGateway()).check_run(project, "Rajat")
+        assert run.role == "check" and [x.kind for x in run.steps] == ["test"]
+        return run.ref
+
+
+def branches(repo: Path) -> list[str]:
+    out = subprocess.run(["git", "branch", "--format=%(refname:short)"], cwd=repo, capture_output=True,
+                         text=True, check=True).stdout
+    return [b for b in out.splitlines() if b.strip()]
+
+
+async def test_a_check_run_asks_first_then_records_what_the_runner_said_and_leaves_nothing(
+        checked: Database, tested_repo: Path):
+    gateway = FakeGateway()
+    ref = await start_check(checked)
+    await execute(checked, gateway, ref)
+
+    async with checked.read() as s:
+        run = await RunRepository(s).by_ref(ref)
+        gate = await ApprovalRepository(s).waiting_on_person(ref)
+        worktree = Path(run.worktree)
+    # The first time in a project, the command waits for a person — a check run does not go around it.
+    assert run.status == "waiting" and gate is not None and "make test" in gate.title
+    assert worktree.exists() and run.branch in branches(tested_repo)
+
+    await resume(checked, gateway, ref, 1, approved=True)
+
+    async with checked.read() as s:
+        run = await RunRepository(s).by_ref(ref)
+        failures = (await s.execute(select(m.TestFailure).where(m.TestFailure.run_id == run.id))).scalars().all()
+        coverage = (await s.execute(select(m.TestCoverage).where(m.TestCoverage.run_id == run.id))).scalars().all()
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tested_repo, capture_output=True, text=True).stdout.strip()
+
+    assert run.status == "failed" and run.tests_status == "failed"
+    assert (run.tests_runner, run.tests_passed, run.tests_failed, run.tests_total) == ("pytest", 1, 1, 2)
+    assert run.tests_sha == head
+    assert [(f.name, f.file, f.line) for f in failures] == [("tests/test_core.py::test_total", "tests/test_core.py", 9)]
+    assert "assert 1.1 == 1.05" in failures[0].message
+    # Only the report the command wrote: the committed lcov.info claims 100% and is not read.
+    assert [(c.path, c.covered, c.total, c.source) for c in coverage] == [("pkg", 3, 4, "cobertura")]
+    # However it ended, a check run leaves no worktree and no branch.
+    assert run.removed is True and not worktree.exists()
+    assert run.branch not in branches(tested_repo)
+
+
+async def test_stopping_a_check_run_at_its_gate_removes_it_and_answers_the_gate(checked: Database, tested_repo: Path):
+    gateway = FakeGateway()
+    ref = await start_check(checked)
+    await execute(checked, gateway, ref)
+
+    async with checked.session() as s:
+        stopped_run = await RunService(s, gateway).cancel(ref, "Rajat")
+        worktree, branch = Path(stopped_run.worktree), stopped_run.branch
+    async with checked.read() as s:
+        run = await RunRepository(s).by_ref(ref)
+        gates = await ApprovalRepository(s).for_run(ref)
+
+    assert run.status == "cancelled" and run.removed is True and run.waiting_on is None
+    assert not worktree.exists() and branch not in branches(tested_repo)
+    # The inbox does not keep asking to run a command for a run that is gone.
+    assert [g.status for g in gates] == ["denied"]
+
+
+async def test_a_second_check_run_is_refused_while_one_is_working(checked: Database):
+    await start_check(checked)
+    with pytest.raises(Refused, match="already running"):
+        await start_check(checked)
+
+
+async def test_a_project_that_refused_its_tests_starts_no_check_run(checked: Database):
+    async with checked.session() as s:
+        s.add(m.Setting(key=f"runtime.tests.{CHECKED}", value="refused"))
+    with pytest.raises(Refused, match="chose not to run tests"):
+        await start_check(checked)
+
+
+def test_only_failures_every_one_of_which_is_expected_keep_the_gate_calm():
+    assert all_expected(counted=2, recorded=2, expected=2)
+    assert not all_expected(counted=2, recorded=2, expected=1)       # one real failure among them
+    assert not all_expected(counted=3, recorded=2, expected=2)       # a failure nobody recorded
+    assert not all_expected(counted=None, recorded=2, expected=2)    # output nobody could read
+    assert not all_expected(counted=0, recorded=0, expected=0)       # red with nothing named
+
+
+async def test_a_legacy_failure_does_not_raise_the_signature_but_a_new_one_does(
+        checked: Database, tested_repo: Path):
+    async with checked.session() as s:
+        s.add(m.Setting(key=f"runtime.tests.{CHECKED}", value="allowed"))
+        await s.flush()
+        s.add(m.Plan(id="p-check", ref="PLAN-9002", project_id=CHECKED, status="draft",
+                     raw_requirement="Keep the ledger total", affected_files=["pkg/core.py"]))
+        await s.flush()
+        s.add(PlanStep(id="p-check-1", plan_id="p-check", n=1, label="Touch pkg/core.py", agent="Backend Engineer"))
+
+    async def gate_risk() -> tuple[str, str]:
+        edit = json.dumps({"summary": "Comment.", "files": [
+            {"path": "pkg/core.py", "content": "# ledger\ndef total(x):\n    return round(x, 1)\n"}]})
+        gateway = FakeGateway(edit, json.dumps({"findings": [], "verdict": "Fine."}))
+        async with checked.session() as s:
+            project = await ProjectRepository(s).get(CHECKED)
+            plan = (await s.execute(select(Plan).where(Plan.ref == "PLAN-9002"))).scalar_one()
+            ref = (await RunService(s, gateway).plan_runs(plan, None, project, "Rajat"))[-1].ref
+        await execute(checked, gateway, ref)
+        async with checked.read() as s:
+            gate = await ApprovalRepository(s).waiting_on_person(ref)
+        return gate.risk, gate.payload
+
+    risk, payload = await gate_risk()
+    assert risk == "HIGH" and "tests failed" in payload
+
+    async with checked.session() as s:
+        s.add(m.TestExpectation(id="te-ledger", project_id=CHECKED, test_name="tests/test_core.py::test_total",
+                                kind="legacy", reason="Rounds half-down since 2019; finance signs this off."))
+    risk, payload = await gate_risk()
+    assert risk == "MEDIUM" and "1 failure, all expected" in payload

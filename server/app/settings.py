@@ -40,10 +40,13 @@ class Settings(BaseSettings):
 
     # ── where things live on disk ────────────────────────────────
     secrets_path: Path = SERVER_DIR / "secrets.json"
-    #: The old SQLite file. The AI gateway still keeps its settings and its usage ledger there, so it
-    #: is named rather than guessed; the cutover is what finally removes it.
+    #: Where a workspace from the SQLite version was kept. Nothing reads it any more except
+    #: scripts/import-sqlite.py, which carries one across.
     legacy_sqlite_path: Path = SERVER_DIR / "neurocode.db"
     backups_dir: Path = SERVER_DIR / "backups"
+    #: Where pg_dump lives, when it is not on PATH. Homebrew's postgresql@16 is keg-only, so on the most
+    #: common Mac install it is not — which is why the usual install locations are searched as well.
+    pg_bin_dir: Path | None = None
     worktrees_dir: Path = SERVER_DIR / ".worktrees"
     repos_dir: Path = SERVER_DIR / "repos"
 

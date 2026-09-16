@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -28,7 +28,9 @@ from ..data.base import utcnow
 from ..data.engine import Database
 from ..models import Chat, CodeEdge, CodeFile, CodeSymbol, Project
 from ..repositories import ChatRepository, MemoryRepository, NotFound, ProjectRepository
+from . import extensions
 from .errors import Refused
+from .extensions import SkillFile, Snapshot
 from .retrieval import RetrievalService
 
 MAX_STEPS = 6                 # tool calls in one answer, then it must answer with what it has
@@ -36,6 +38,7 @@ MAX_FILE_LINES = 400
 MAX_OBSERVATION = 6_000       # what one tool may put back into the conversation
 MAX_HISTORY = 24              # turns replayed to the model
 MAX_QUESTION = 4_000
+MAX_SKILLS_LISTED = 60        # one line each in the system prompt; beyond this the prompt is the cost
 
 
 # ── the tools ────────────────────────────────────────────────────
@@ -68,9 +71,12 @@ def _safe(root: Path, rel: str) -> Path:
 class Tools:
     """What a session may do. Everything here reads; nothing writes and nothing runs."""
 
-    def __init__(self, session: AsyncSession, gateway: Gateway, project: Project) -> None:
+    def __init__(self, session: AsyncSession, gateway: Gateway, project: Project,
+                 skills: Sequence[SkillFile] = ()) -> None:
         self.session = session
         self.project = project
+        # The skills this answer may load, discovered once before it started — never globbed per call.
+        self.skills = skills
         self.retrieval = RetrievalService(session, gateway)
         self.memory = MemoryRepository(session)
 
@@ -170,6 +176,18 @@ class Tools:
         body = "\n".join(f"{f.ref} · {f.title} — {f.body[:200]}" for f in facts)
         return f"{len(facts)} facts:\n{body}", f"{q} · {len(facts)} facts"
 
+    async def load_skill(self, args: dict[str, Any]) -> tuple[str, str]:
+        """A listed skill's full instructions. The detail is the skill's key: that row is the load count."""
+        name = _text(args, "name", "skill", "slug", "key")
+        if not name:
+            raise Refused("load_skill needs a name.", status=422)
+        found = extensions.resolve_skill(self.skills, name)
+        if found is None:
+            listed = ", ".join(s.slug for s in self.skills[:40]) or "none"
+            raise Refused(f"There is no enabled skill called {name!r}. The skills are: {listed}.", status=404)
+        more = "\n\n[The rest of this skill was cut off.]" if found.truncated else ""
+        return f"Skill {found.name} ({found.source}):\n\n{found.body}{more}", found.key
+
     async def project_summary(self, args: dict[str, Any]) -> tuple[str, str]:
         files, lines = (await self.session.execute(select(
             func.count(CodeFile.id), func.coalesce(func.sum(CodeFile.lines), 0)
@@ -199,6 +217,9 @@ CATALOGUE: tuple[Tool, ...] = (
     Tool("search_memory", '{"query": "gst"}',
          "search the workspace's remembered facts and decisions", Tools.search_memory),
     Tool("project_summary", "{}", "the project's languages and size", Tools.project_summary),
+    Tool("load_skill", '{"name": "impact-analysis"}',
+         "read the full instructions of one of the skills listed below, when its description fits the "
+         "question", Tools.load_skill),
 )
 BY_NAME = {t.name: t for t in CATALOGUE}
 
@@ -210,8 +231,12 @@ class Turn(BaseModel):
     answer: str = ""
 
 
-def system_prompt(project_name: str) -> str:
-    catalogue = "\n".join(f"- {t.name} {t.takes} — {t.what}" for t in CATALOGUE)
+def system_prompt(project_name: str, skills: Sequence[SkillFile] = ()) -> str:
+    """The standing instructions. Each enabled skill costs one line here; its body is loaded only on ask."""
+    offered = [t for t in CATALOGUE if t.name != "load_skill" or skills]
+    catalogue = "\n".join(f"- {t.name} {t.takes} — {t.what}" for t in offered)
+    listed = "".join(f"\n- {s.slug} — {s.description[:200]}" for s in skills[:MAX_SKILLS_LISTED])
+    skill_section = f"Skills (load one with load_skill when it fits):{listed}\n\n" if skills else ""
     return (
         "You are NeuroCode, working inside an engineering workspace. You answer questions about one "
         f"project: {project_name}.\n\n"
@@ -219,6 +244,7 @@ def system_prompt(project_name: str) -> str:
         "enough, then answer from what they returned. Never invent a file, a symbol, a line number or "
         "a fact — if the tools do not show it, say so plainly.\n\n"
         f"Tools:\n{catalogue}\n\n"
+        f"{skill_section}"
         "Answer with one JSON object and nothing else.\n"
         'To use a tool: {"tool": "<name>", "arguments": {…}, "why": "<a short line for the person watching>"}\n'
         'To answer: {"answer": "<your answer, in the language the person used>"}\n'
@@ -254,12 +280,37 @@ class ChatService:
         text = question.strip()[:MAX_QUESTION]
         if not text:
             raise Refused("There is nothing to ask.", status=422)
+        command = await self._command(chat, text)
         if chat.turns == 0 and chat.title == "New session":
             chat.title = text.splitlines()[0][:80]
         message = await self.chats.say(chat.id, role="you", body=text, by=by)
+        if command is not None:
+            # The expansion is its own turn, so the person sees exactly the prompt the model will be given
+            # and the row counts one run of the command. It is replayed to the model as your words.
+            found, args = command
+            await self.chats.say(chat.id, role="tool", body=extensions.expand(found, args)[:MAX_OBSERVATION],
+                                 tool="command", arguments={"name": found.name, "args": args},
+                                 detail=found.key, ok=True)
         chat.status, chat.last_at = "thinking", utcnow()
         await self.session.flush()
         return {"message": message, "chat": chat}
+
+
+    async def _command(self, chat: Chat, text: str) -> tuple[extensions.CommandFile, str] | None:
+        """The command a `/name args` question names, if one is on disk. A question that only looks like
+        one (`/etc kya hai`) is asked as it is; only a command a person switched off is refused."""
+        parsed = extensions.parse_command(text)
+        if parsed is None:
+            return None
+        project = await self.projects.get(chat.project_id)
+        found_on_disk = await extensions.snapshot(self.session, project)
+        name, args = parsed
+        found = extensions.resolve_command(found_on_disk.commands, name)
+        if found is None:
+            return None
+        if not extensions.switched_on(found_on_disk.commands_on, found.key):
+            raise extensions.refuse_disabled(found)
+        return found, args
 
 
 # ── answering, in the background ─────────────────────────────────
@@ -271,15 +322,22 @@ def stop(ref: str) -> None:
     _STOPPED.add(ref)
 
 
-async def _wire(session: AsyncSession, chat: Chat, project_name: str) -> list[dict[str, str]]:
+async def _wire(session: AsyncSession, chat: Chat, project_name: str,
+                skills: Sequence[SkillFile] = ()) -> list[dict[str, str]]:
     """The conversation as the model sees it: the system prompt, then the turns, newest last."""
-    out: list[dict[str, str]] = [{"role": "system", "content": system_prompt(project_name)}]
+    out: list[dict[str, str]] = [{"role": "system", "content": system_prompt(project_name, skills)}]
     turns = await ChatRepository(session).messages(chat.id)
     for m in turns[-MAX_HISTORY:]:
         if m.role == "you":
             out.append({"role": "user", "content": m.body[:MAX_QUESTION]})
         elif m.role == "assistant":
             out.append({"role": "assistant", "content": json.dumps({"answer": m.body})})
+        elif m.role == "tool" and m.tool == "command":
+            # A command is the person's own prompt, not a tool the model called: replaying it as a call
+            # would teach the model to call a tool named "command" that does not exist.
+            name = (m.arguments or {}).get("name", "the command")
+            out.append({"role": "user",
+                        "content": f"{name} expands to this prompt. Follow it:\n{m.body[:MAX_OBSERVATION]}"})
         elif m.role == "tool":
             out.append({"role": "assistant",
                         "content": json.dumps({"tool": m.tool, "arguments": m.arguments or {}})})
@@ -288,7 +346,7 @@ async def _wire(session: AsyncSession, chat: Chat, project_name: str) -> list[di
 
 
 async def _tool_turn(session: AsyncSession, gateway: Gateway, chat: Chat, project: Project,
-                     turn: Turn) -> None:
+                     turn: Turn, skills: Sequence[SkillFile] = ()) -> None:
     """Run one tool and write what it found — a refusal is reported into the conversation, not raised."""
     tool = BY_NAME.get(turn.tool.strip())
     if tool is None:
@@ -298,7 +356,7 @@ async def _tool_turn(session: AsyncSession, gateway: Gateway, chat: Chat, projec
             tool=turn.tool.strip()[:40] or "?", arguments=turn.arguments or {}, detail="refused", ok=False)
         return
     try:
-        observation, detail = await tool.run(Tools(session, gateway, project), turn.arguments or {})
+        observation, detail = await tool.run(Tools(session, gateway, project, skills), turn.arguments or {})
         ok = True
     except Refused as refused:
         observation, detail, ok = str(refused), "refused", False
@@ -308,6 +366,19 @@ async def _tool_turn(session: AsyncSession, gateway: Gateway, chat: Chat, projec
     await ChatRepository(session).say(chat.id, role="tool", body=observation[:MAX_OBSERVATION],
                                       tool=tool.name, arguments=turn.arguments or {},
                                       why=turn.why[:160], detail=detail, ok=ok)
+
+
+def _grounding_question(turns: Sequence[Any]) -> str:
+    """What retrieval should look for: the last question — or, when it was a command, its arguments,
+    since `/plan invoice tax` is about the invoice tax and not about the word plan."""
+    for i in range(len(turns) - 1, -1, -1):
+        if turns[i].role != "you":
+            continue
+        command = next((m for m in turns[i + 1:] if m.role == "tool" and m.tool == "command"), None)
+        if command is not None:
+            return str((command.arguments or {}).get("args") or "") or command.body[:MAX_QUESTION]
+        return turns[i].body
+    return ""
 
 
 async def think(db: Database, gateway: Gateway, ref: str, by: str) -> None:
@@ -323,9 +394,13 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str) -> None:
             return
         project = await ProjectRepository(s).get(chat.project_id)
         project_name = project.name if project else chat.project_id
-        asked = next((m.body for m in reversed(await ChatRepository(s).messages(chat.id))
-                      if m.role == "you"), "")
+        asked = _grounding_question(await ChatRepository(s).messages(chat.id))
         chat.status = "thinking"
+
+    # Skills are discovered once per answer, in a thread, with the switches read once: every step's
+    # prompt and every load_skill call works from this snapshot instead of reading the disk again.
+    async with db.read() as s:
+        found: Snapshot = await extensions.snapshot(s, project)
 
     # Before the model is asked anything, retrieval answers the cheapest question: what do we already
     # hold about this? It is a turn like any other, so the model replays it and the person sees it.
@@ -348,7 +423,7 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str) -> None:
             last = step == MAX_STEPS
 
             async with db.read() as s:
-                messages = await _wire(s, chat, project_name)
+                messages = await _wire(s, chat, project_name, found.skills)
             if last:
                 messages.append({"role": "user", "content":
                                  "You have used every tool call. Answer now with what you already "
@@ -389,7 +464,7 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str) -> None:
                 fresh = await ChatRepository(s).by_ref(ref)
                 if fresh is None:
                     break
-                await _tool_turn(s, gateway, fresh, project, turn)
+                await _tool_turn(s, gateway, fresh, project, turn, found.skills)
     finally:
         async with db.session() as s:
             fresh = await ChatRepository(s).by_ref(ref)

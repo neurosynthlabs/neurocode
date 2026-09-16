@@ -9,14 +9,16 @@ No model is ever called: the gateway is a stand-in that hands back a scripted tu
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
+import pytest
 import pytest_asyncio
 from sqlalchemy import delete
 
 from app.ai.gateway import NoModel, Provider, Result
 from app.data.engine import Database
-from app.models import Chat, Project
+from app.models import Chat, Pref, Project
 from app.repositories import ChatRepository
 from app.services.chat import MAX_STEPS, think
 
@@ -30,16 +32,30 @@ class FakeGateway:
         self.script = list(script)
         self.raises = raises
         self.calls = 0
+        self.seen: list[list[dict[str, str]]] = []
 
     def embed_lane(self) -> None:
         return None                                   # no embeddings: retrieval stays lexical
 
     def ask(self, messages: list[dict[str, str]], parse: Any, **_: Any) -> Result[Any]:
         self.calls += 1
+        self.seen.append(messages)
         if self.raises is not None:
             raise self.raises
         raw = self.script.pop(0) if self.script else '{"answer": "Done."}'
         return Result(parse(raw), Provider("groq", "llama-3.3-70b-versatile"), 12)
+
+
+@pytest.fixture(autouse=True)
+def claude_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A Claude home with two skills, so no test reads the skills of whoever runs the suite."""
+    for slug, text in (
+            ("gst-rules", "---\ndescription: How GST is split between states.\n---\nCGST plus SGST inside a state.\n"),
+            ("release", "---\ndescription: How a release is cut.\n---\nTag, then ship.\n")):
+        (tmp_path / "skills" / slug).mkdir(parents=True)
+        (tmp_path / "skills" / slug / "SKILL.md").write_text(text)
+    monkeypatch.setenv("NEUROCODE_CLAUDE_HOME", str(tmp_path))
+    return tmp_path
 
 
 @pytest_asyncio.fixture
@@ -52,6 +68,7 @@ async def live(schema: str) -> AsyncIterator[Database]:
     async with db.session() as s:
         await s.execute(delete(Chat).where(Chat.project_id == PROJECT))
         await s.execute(delete(Project).where(Project.id == PROJECT))
+        await s.execute(delete(Pref).where(Pref.id == "skills.enabled"))
     await db.close()
 
 
@@ -121,3 +138,39 @@ async def test_with_no_model_the_question_is_still_there(live: Database):
     assert "Admin → AI providers" in turns[1].body
     async with live.read() as s:
         assert (await ChatRepository(s).by_ref(CHAT)).status == "idle"
+
+
+async def test_a_skill_is_offered_by_one_line_and_loaded_only_when_asked_for(live: Database):
+    async with live.session() as s:
+        s.add(Pref(id="skills.enabled", value={"global/release": False}))
+    await start(live, "gst kaise split hota hai?")
+    gateway = FakeGateway('{"tool": "load_skill", "arguments": {"name": "gst-rules"}}',
+                          '{"tool": "load_skill", "arguments": {"name": "release"}}',
+                          '{"answer": "CGST plus SGST."}')
+
+    await think(live, gateway, CHAT, "Rajat")
+
+    system = gateway.seen[0][0]["content"]
+    assert "gst-rules — How GST is split between states." in system
+    assert "release" not in system and "CGST plus SGST inside" not in system    # a line, not the body
+    loads = [m for m in await turns_of(live) if m.tool == "load_skill"]
+    assert loads[0].ok is True and loads[0].detail == "global/gst-rules"
+    assert "CGST plus SGST inside a state." in loads[0].body
+    assert loads[1].ok is False and loads[1].detail == "refused"              # switched off: refused
+
+
+async def test_a_command_turn_reaches_the_model_as_the_persons_words(live: Database):
+    await start(live, "/review invoice tax")
+    async with live.session() as s:
+        chat = await ChatRepository(s).by_ref(CHAT)
+        await ChatRepository(s).say(chat.id, role="tool", body="Review invoice tax against the rules.",
+                                    tool="command", arguments={"name": "/review", "args": "invoice tax"},
+                                    detail="global/review", ok=True)
+    gateway = FakeGateway('{"answer": "Reviewed."}')
+
+    await think(live, gateway, CHAT, "Rajat")
+
+    wire = gateway.seen[0]
+    assert wire[-1] == {"role": "user", "content": "/review expands to this prompt. Follow it:\n"
+                                                   "Review invoice tax against the rules."}
+    assert not any('"tool": "command"' in m["content"] for m in wire)

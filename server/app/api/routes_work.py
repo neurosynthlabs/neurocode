@@ -11,11 +11,13 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
 from fastapi import Path as PathParam
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..ai.gateway import Gateway
+from ..data.engine import Database
 from ..repositories import (
     ApprovalRepository,
     DecisionRepository,
@@ -28,8 +30,9 @@ from ..schemas import approval_json, decision_json, plan_json, pref_json, task_j
 from ..services.gates import ApprovalService, DecisionService, PrefService
 from ..services.identity import Person
 from ..services.knowledge import MemoryService, NewFact
+from ..services.runs import resume as resume_run
 from ..services.work import Actor, PlanQuestions, TaskService
-from .deps import current_person, require, session
+from .deps import current_person, database, gateway, hand_off, require, session
 
 router = APIRouter()
 TaskStatus = Literal["backlog", "planning", "in_progress", "review", "blocked", "done"]
@@ -108,16 +111,25 @@ async def approvals(status: str | None = None, limit: int | None = None, offset:
                     open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
     repo = ApprovalRepository(open_session)
     page = (await repo.pending(limit=limit, offset=offset) if status == "pending"
-            else await repo.page(order_by=None, limit=limit, offset=offset))
+            else await repo.newest(limit=limit, offset=offset))
     return [approval_json(a) for a in page.items]
 
 
 @router.post("/approvals/{ref}/{decision}")
-async def decide(ref: str, decision: Literal["approve", "deny"],
+async def decide(ref: str, decision: Literal["approve", "deny"], jobs: BackgroundTasks,
                  who: Person = Depends(require("approvals:decide")),
-                 open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
-    """A decision is final. Whatever was waiting on this gate is resumed by the runtime, not here."""
+                 open_session: AsyncSession = Depends(session), db: Database = Depends(database),
+                 gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """A decision is final — and when an agent run was stopped at this gate, it carries on from here.
+
+    This used to say the runtime would resume the run, and nothing did: the decision was written, and
+    the run sat at "waiting" for ever. Every run stopped at its first gate — the first test run in a
+    project, or your signature on the diff — and never went further.
+    """
     answered = await ApprovalService(open_session).decide(ref, decision, by_id=who.id, by_name=who.name)
+    if answered.run_ref:
+        await hand_off(open_session, jobs, resume_run, db, gw, answered.run_ref, answered.step or 0,
+                       decision == "approve")
     return approval_json(answered)
 
 

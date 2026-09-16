@@ -7,8 +7,8 @@ whatever store the deployment runs on.
 
 Four, and no more. The port is deliberately not "a database": everything the gateway needs is a
 setting to read, a setting to write, how many calls a lane has made today, and a line to append. A
-port that small can be implemented against anything, and *is* — Postgres for the real stack, the old
-SQLite file for as long as the old one is still serving, and a dict in the tests.
+port that small can be implemented against anything, and *is* — Postgres for the app, and a dict in
+the tests.
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ class Ledger(Protocol):
 
     def record(self, *, feature: str, lane: str, model: str, ok: bool, ms: int, tokens_in: int,
                tokens_out: int, user_id: str | None, project_id: str | None, agent: str,
-               error: str) -> None: ...
+               error: str, run_id: str | None = None) -> None: ...
 
 
 class PostgresLedger:
@@ -79,15 +79,16 @@ class PostgresLedger:
 
     def record(self, *, feature: str, lane: str, model: str, ok: bool, ms: int, tokens_in: int,
                tokens_out: int, user_id: str | None, project_id: str | None, agent: str = "",
-               error: str) -> None:
+               error: str, run_id: str | None = None) -> None:
         with self.engine.begin() as conn:
             conn.execute(text(
                 "INSERT INTO ai_calls(at, feature, lane, model, ok, ms, tokens_in, tokens_out, "
-                "user_id, project_id, agent, error) VALUES (now(), :feature, :lane, :model, :ok, :ms, "
-                ":tin, :tout, :user_id, :project_id, :agent, :error)"),
+                "user_id, project_id, agent, run_id, error) VALUES (now(), :feature, :lane, :model, :ok, "
+                ":ms, :tin, :tout, :user_id, :project_id, :agent, :run_id, :error)"),
                 {"feature": feature, "lane": lane, "model": model, "ok": ok, "ms": ms,
                  "tin": tokens_in, "tout": tokens_out, "user_id": user_id,
-                 "project_id": project_id, "agent": (agent or "")[:60], "error": error[:300]})
+                 "project_id": project_id, "agent": (agent or "")[:60], "run_id": run_id,
+                 "error": error[:300]})
 
     def close(self) -> None:
         self.engine.dispose()
@@ -115,32 +116,3 @@ class MemoryLedger:
     def record(self, **line: Any) -> None:
         with self._lock:
             self.calls.append({**line, "at": datetime.now(timezone.utc)})
-
-
-class SqliteLedger:
-    """The old file, behind the same four questions. It exists so the stack that is still serving
-    keeps working while the new one is built; the cutover is what deletes it."""
-
-    def __init__(self, store: Any) -> None:
-        self.store = store
-
-    def setting(self, key: str, default: Any = None) -> Any:
-        return self.store.setting(key, default)
-
-    def save_setting(self, key: str, value: Any) -> None:
-        self.store.set_setting(key, value)
-
-    def calls_today(self, lane_id: str) -> int:
-        row = self.store.row("SELECT COUNT(*) FROM ai_calls WHERE lane = ? AND substr(at, 1, 10) = ?",
-                             (lane_id, datetime.now().strftime("%Y-%m-%d")))
-        return int(row[0]) if row else 0
-
-    def record(self, *, feature: str, lane: str, model: str, ok: bool, ms: int, tokens_in: int,
-               tokens_out: int, user_id: str | None, project_id: str | None, agent: str = "",
-               error: str) -> None:
-        # The old table has no column for the agent; it keeps what it can and the new stack keeps all.
-        self.store.execute(
-            "INSERT INTO ai_calls(at, feature, lane, provider, model, ok, ms, tokens_in, tokens_out, "
-            "user_id, project_id, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (datetime.now().isoformat(timespec="seconds"), feature, lane, lane, model, int(ok), ms,
-             tokens_in, tokens_out, user_id, project_id, error[:300]))

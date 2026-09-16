@@ -16,6 +16,7 @@ because neither can live inside a transaction.
 from __future__ import annotations
 
 import asyncio
+import glob
 import os
 import re
 import shutil
@@ -116,6 +117,50 @@ def _describe(path: Path) -> dict[str, Any]:
     stat = path.stat()
     return {"name": path.name, "bytes": stat.st_size,
             "at": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(timespec="seconds")}
+
+
+#: Where PostgreSQL's client tools are usually installed when they are not on PATH: Homebrew on both
+#: architectures (its versioned formulae are keg-only), Postgres.app, and Debian's layout.
+PG_BIN_GLOBS = ("/opt/homebrew/opt/postgresql@*/bin", "/opt/homebrew/opt/postgresql/bin",
+                "/usr/local/opt/postgresql@*/bin", "/usr/local/opt/postgresql/bin",
+                "/Applications/Postgres.app/Contents/Versions/*/bin", "/usr/lib/postgresql/*/bin")
+
+
+def _major(program: str) -> int | None:
+    try:
+        out = subprocess.run([program, "--version"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found = re.search(r"(\d+)(?:\.\d+)?", out)
+    return int(found.group(1)) if found else None
+
+
+def find_pg_dump(server_major: int, configured: Path | None = None) -> str | None:
+    """A pg_dump that can actually dump this server, or None.
+
+    Two things make this more than `shutil.which`. The common Mac install does not put pg_dump on PATH
+    at all — Homebrew's versioned PostgreSQL is keg-only — so a backup that only looked there could
+    never be taken on exactly the machine this runs on. And pg_dump refuses a server newer than itself,
+    so any old client that does happen to be on PATH is not good enough. The closest version that is
+    new enough wins; a folder named in settings is tried before anything else.
+    """
+    candidates: list[str] = []
+    if configured is not None:
+        candidates.append(str(Path(configured).expanduser() / "pg_dump"))
+    on_path = shutil.which("pg_dump")
+    if on_path:
+        candidates.append(on_path)
+    for pattern in PG_BIN_GLOBS:
+        candidates += sorted(str(Path(d) / "pg_dump") for d in glob.glob(pattern))
+
+    usable: list[tuple[int, int, str]] = []
+    for order, program in enumerate(dict.fromkeys(candidates)):
+        if not os.access(program, os.X_OK):
+            continue
+        major = _major(program)
+        if major is not None and major >= server_major:
+            usable.append((major, order, program))
+    return min(usable)[2] if usable else None
 
 
 class NoBackupTool(Refused):
@@ -252,10 +297,13 @@ class MaintenanceService:
         line, where every process on the machine could read it. Only the account that runs the API can
         read what comes out, and the newest few are kept.
         """
-        found = shutil.which("pg_dump")
+        server = int(await self._scalar("SELECT current_setting('server_version_num')::int")) // 10000
+        found = await asyncio.to_thread(find_pg_dump, server, self.config.pg_bin_dir)
         if found is None:
-            raise NoBackupTool("pg_dump is not on this machine's PATH, so no backup can be taken. Install "
-                          "the PostgreSQL client tools and try again.")
+            raise NoBackupTool(
+                f"No pg_dump for PostgreSQL {server} or newer was found on PATH or in the usual install "
+                f"locations, so no backup can be taken. Install the client tools, or set "
+                f"NEUROCODE_PG_BIN_DIR to the folder that holds pg_dump.")
         return await asyncio.to_thread(self._dump, found, reason)
 
     def _dump(self, program: str, reason: str) -> dict[str, Any]:

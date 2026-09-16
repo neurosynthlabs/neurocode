@@ -1,91 +1,76 @@
 # NeuroCode local API
 
-FastAPI over one SQLite file. It stores the operator's side of the product and does the parts of
-the engine that are real today:
+FastAPI over Postgres 16. It holds the whole workspace — accounts, the work, memory, the code index, agent
+runs and sessions — and it does the parts of the product that act: compiling requirements into plans,
+onboarding and indexing repositories, running agents in git worktrees, answering from retrieval, and
+routing every model call through one gateway.
 
-- **Approvals, tasks, memory**: decisions, status, checklists, pins and archives persist.
-- **Requirement compiler**: a requirement in English or Hinglish becomes a stored plan and a task.
-- **Onboarding**: a git remote is shallow-cloned, or a local folder is read, and then measured
-  (files, lines, languages, SQL tables and procedures, modules). The semantic passes (syntax trees,
-  call graph, business rules) are not connected yet, and the project record says so.
-- **Memory**: FTS5 search, conflict resolution, and answers to a plan's questions saved as business rules.
-- **MCP registry**: servers added in the wizard are stored untrusted and disconnected.
-- **Screen settings and decisions**: skills, plugins, models, hooks, commands, ACP modes and settings
-  persist; a review verdict and the production gate are final decisions.
+It is a single-workspace service for one machine. It binds to `127.0.0.1`, every route except
+`/health` and the sign-in routes needs a session, and a change riding on the session cookie must also carry
+the `X-NC-Client` header. Do not expose it on a network as it stands.
 
-Every change goes into the activity log and is pushed to open tabs over Server-Sent Events.
-
-It binds to `127.0.0.1` and has no authentication. It is a single-operator, local-first service; do not
-expose it on a network.
+`docs/ARCHITECTURE.md` at the repository root is the design; this file is how to run it.
 
 ## Run
 
 ```bash
-npm run dev:start    # web on :5180 and API on :8787; Vite proxies /api to the API
-npm run api          # the API alone, in the foreground
-npm run api:test     # pytest
-npm run e2e          # API + web app + headless browser, on a throwaway database
+brew install postgresql@16 pgvector && brew services start postgresql@16   # once
+uv run python ../scripts/bootstrap-db.py        # once: the databases, and the extensions a superuser must enable
+uv run alembic upgrade head                     # after every pull
+uv run uvicorn app.api.app:create_api --factory --host 127.0.0.1 --port 8787
+uv run pytest -q                                # 220 tests, against neurocode_test
 ```
 
-The first start creates `server/.venv` with uv and seeds `server/neurocode.db` (git-ignored). A database
-made by an older version gains any new tables, seeded, and keeps its data.
-**Settings → Reset database** puts the seed back, and so does
-`curl -X POST -H 'X-Confirm: reset' 127.0.0.1:8787/admin/reset`.
+From the repository root, `npm run dev:start` runs this and the web app together, and checks the database
+first — no server, no database and no migrations each print the one command that fixes them
+(`uv run python -m app.data.check` asks the same question on its own).
 
-## The compiler
+A brand-new workspace opens on the sample work, once. A workspace that already holds work is never
+reseeded, and one where someone cleared the sample away does not get it back on a restart.
 
-`NEUROCODE_COMPILER` picks the planner. `auto` (the default) tries them in this order:
+Coming from the SQLite version: `uv run python ../scripts/import-sqlite.py --dry-run`, then without
+`--dry-run`. Accounts come across with their passwords, and signed-in browsers stay signed in.
 
-| Provider | When | Notes |
-|---|---|---|
-| DeepSeek | `DEEPSEEK_API_KEY` is set | The requirement and the matching memory facts are sent to DeepSeek. |
-| Ollama | a local Ollama has `NEUROCODE_OLLAMA_MODEL` pulled | Nothing leaves the machine; a 7B model needs about 5 GB of free RAM. |
-| offline planner | always | Keyword rules, not a model. The UI labels its plans that way. |
+## Settings
 
-Put these in `server/.env`, which is git-ignored and read at startup; `server/.env.example` lists them.
-If a model's answer fails to parse or validate, it is not stored: the offline planner stands in, and
-the activity log says so. Tests and `npm run e2e` always use the offline planner.
+Everything is `NEUROCODE_*`, read from the environment or `server/.env` (`app/settings.py` lists them all):
 
-## Seed
+| Variable                      | Default                                                             |                                                                                |
+| ----------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `NEUROCODE_DATABASE_URL`      | `postgresql+asyncpg://neurocode:neurocode@127.0.0.1:5432/neurocode` | a plain `postgres://` URL is upgraded                                          |
+| `NEUROCODE_TEST_DATABASE_URL` | `…/neurocode_test`                                                  | what the tests migrate and roll back inside                                    |
+| `NEUROCODE_COMPILER`          | `auto`                                                              | `auto` · `free` · `local` · `rules` · a lane id; the tests and e2e pin `rules` |
+| `NEUROCODE_PG_BIN_DIR`        | —                                                                   | where `pg_dump` is, if it is not on PATH or in a usual install location        |
+| `NEUROCODE_CORS_ORIGIN_REGEX` | localhost only                                                      | origins allowed to carry the session cookie                                    |
 
-`server/seed/seed.json` is generated from the frontend mocks in `src/mock/`. Run `npm run seed` after you
-change them; CI fails when the two disagree.
+Model keys are not settings: they live in `server/secrets.json` (mode 0600), set from Admin → AI
+providers, and are only ever reported masked.
 
 ## Endpoints
 
-| Method | Path | Notes |
-|---|---|---|
-| GET | `/health` | row counts, and which compiler is active |
-| GET | `/projects` | |
-| POST | `/projects` | onboard a repository: `{source: git \| local, repo, branch, excluded, rules, …}`; the clone and scan run after the response |
-| GET | `/tasks?project=`, `/tasks/{ref}` | |
-| PATCH | `/tasks/{ref}` | `{status}`, one of the six board columns |
-| POST | `/tasks/{ref}/checklist/{id}` | `{done}` |
-| GET | `/approvals?status=` | |
-| POST | `/approvals/{ref}/approve`, `/approvals/{ref}/deny` | final: a second decision returns 409 |
-| GET | `/plans` | newest compiled first |
-| POST | `/plans/compile` | `{requirement, projectId}`, creates `PLAN-n` and `TASK-n` |
-| POST | `/plans/{ref}/questions/{i}` | `{answer}` saves a business rule to memory; `{defer: true}` records the assumption |
-| POST | `/plans/{ref}/dispatch` | refused while any question is open |
-| POST | `/plans/{ref}/recompile` | keeps answered and deferred questions settled |
-| GET | `/memory?q=&category=&project=&include_archived=` | `q` is FTS5, prefix-matched word by word, ranked |
-| POST | `/memory/{ref}/pin` | `{pinned}` |
-| POST | `/memory/{ref}/archive` | hidden from recall, never deleted |
-| GET | `/memory/conflicts` | open contradictions |
-| POST | `/memory/conflicts/{id}/resolve` | `{keep: a \| b \| adr}`; the losing fact is archived as superseded |
-| GET | `/mcp/servers` | |
-| POST | `/mcp/servers` | `{name, transport, command, scope, defaultEffect, config}` |
-| GET | `/prefs` | saved screen settings |
-| PUT | `/prefs/{key}` | `{value, detail}`; a `detail` also writes an audit line |
-| GET | `/decisions` | |
-| POST | `/decisions/{key}` | `{value, action, detail}`; final: a second decision returns 409 |
-| GET | `/agents` | |
-| GET | `/activity?limit=` | newest first |
-| GET | `/activity/stream` | `text/event-stream`: `activity` (a log line) and `change` (a document put or dropped) |
-| POST | `/admin/reset` | requires the header `X-Confirm: reset` |
+86 of them. The running API describes every one at `http://127.0.0.1:8787/docs`; this is the map.
+
+| Family                           |     | What it holds                                                                                                                       |
+| -------------------------------- | --- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `/auth`                          | 6   | setup, sign-in and out, who is asking, password                                                                                     |
+| `/admin`                         | 24  | people, roles, teams, permissions, workspace, audit log · database health, backup, check, optimize, reset · AI lanes and their test |
+| `/projects`                      | 3   | the projects, and onboarding one — the clone, scan and index run after the response                                                 |
+| `/projects/{pid}/code`           | 9   | the index summary, file tree, one file, search, impact, module graph, re-index · retrieval and its rebuild                          |
+| `/tasks`                         | 4   | the board, a move, a checklist tick                                                                                                 |
+| `/plans`                         | 6   | compile, read, recompile, answer or defer a question, dispatch                                                                      |
+| `/approvals`                     | 2   | the inbox, and a final decision — which resumes the run waiting on it                                                               |
+| `/runs`                          | 6   | agent runs, their logs from a line you already hold, the diff, cancel, discard, merge                                               |
+| `/sessions`                      | 5   | conversations that can read the code, turn by turn                                                                                  |
+| `/memory`                        | 6   | search, add, pin, archive, conflicts and their resolution                                                                           |
+| `/ai`                            | 4   | ask memory, brainstorm, extract facts from text                                                                                     |
+| `/mcp`                           | 2   | registered servers, untrusted until promoted                                                                                        |
+| `/prefs`, `/decisions`           | 4   | screen settings, and decisions that are made once                                                                                   |
+| `/agents`, `/activity`, `/usage` | 4   | the roster with its real throughput and spend, the feed, the usage ledger                                                           |
+| `/activity/stream`               |     | Server-Sent Events: `activity`, `change`, `run` and `chat`                                                                          |
+| `/health`                        | 1   | public: the database, its row counts, and which model would answer                                                                  |
 
 ## How the web app uses it
 
-Screens read this data through `useData()` in `src/lib/data.tsx`. When no API answers, the app paints
-from the same seed and keeps changes in the tab. The public Vercel demo works that way, and it never
-sends a request.
+Screens read the workspace through `useData()` in `src/lib/data.tsx`, and screens with data of their own
+through `useRemote()`. When no API answers, the app paints the same sample work and keeps changes in the
+tab — which is how the public demo runs, without ever sending a request.

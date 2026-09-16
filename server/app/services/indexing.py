@@ -11,6 +11,7 @@ database from the row itself, so it cannot drift out of step the way a hand-writ
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,20 @@ from ..data.base import utcnow
 from ..models import CodeEdge, CodeFile, CodeIndexRun, CodeSymbol
 
 
+def _moment(value: str | datetime | None) -> datetime | None:
+    """The reader speaks git's `%cI` — ISO 8601 text, offset included — because it was written for a
+    store that kept text. The column is a real timestamp now, and asyncpg will not guess: handed the
+    string, it refused the whole insert, so every project that was a git repository failed to index
+    while a plain folder, with no history to read, indexed fine."""
+    if value is None or isinstance(value, datetime):
+        return value
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
 async def save_index(session: AsyncSession, project_id: str, root: str, idx: codeindex.Index) -> None:
     """Replace a project's index. Files go first; symbols and edges point at them by id."""
     await session.execute(delete(CodeFile).where(CodeFile.project_id == project_id))
@@ -29,7 +44,7 @@ async def save_index(session: AsyncSession, project_id: str, root: str, idx: cod
 
     session.add_all([CodeFile(project_id=project_id, path=f["path"], lang=f["lang"], module=f["module"],
                               lines=f["lines"], bytes=f["bytes"], sha1=f["sha1"],
-                              complexity=f["complexity"], churn=f["churn"], changed_at=f["changed_at"])
+                              complexity=f["complexity"], churn=f["churn"], changed_at=_moment(f["changed_at"]))
                      for f in idx.files])
     await session.flush()
 

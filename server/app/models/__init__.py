@@ -18,9 +18,19 @@ from .identity import (
     UserRole,
     Workspace,
 )
-from .knowledge import EMBED_DIM, Chunk, MemoryConflict, MemoryFact, MemoryTag, RetrievalRun
-from .platform import AiCall, Brainstorm, McpServer, McpTool, PermissionRule
-from .runtime import Chat, ChatMessage, Run, RunConflict, RunLog, RunStep
+from .knowledge import (
+    EMBED_DIM,
+    Chunk,
+    MemoryConflict,
+    MemoryFact,
+    MemoryTag,
+    ResearchAngle,
+    ResearchCitation,
+    ResearchReport,
+    RetrievalRun,
+)
+from .platform import AiCall, Brainstorm, EvalCase, EvalResult, EvalRun, EvalSuite, McpServer, McpTool, PermissionRule
+from .runtime import Chat, ChatMessage, Run, RunConflict, RunLog, RunStep, TestCoverage, TestFailure
 from .work import (
     ActivityEvent,
     Agent,
@@ -34,15 +44,21 @@ from .work import (
     Project,
     Task,
     TaskAgent,
+    TestExpectation,
+    WorkflowDefinition,
+    WorkflowStep,
 )
 
 __all__ = [
     "EMBED_DIM",
     "ActivityEvent", "Agent", "AiCall", "Approval", "AuditEntry", "Brainstorm", "Chat", "ChatMessage",
     "ChecklistItem", "Chunk", "CodeEdge", "CodeFile", "CodeIndexRun", "CodeSymbol", "Decision",
+    "EvalCase", "EvalResult", "EvalRun", "EvalSuite",
     "LoginAttempt", "McpServer", "McpTool", "MemoryConflict", "MemoryFact", "MemoryTag",
     "PermissionRule", "Plan",
-    "PlanQuestion", "PlanStep", "Pref", "Project", "RetrievalRun", "Role", "RolePermission", "Run",
+    "PlanQuestion", "PlanStep", "Pref", "Project", "ResearchAngle", "ResearchCitation", "ResearchReport",
+    "RetrievalRun", "Role", "RolePermission", "Run",
     "RunConflict", "RunLog", "RunStep", "Session", "Setting", "Task", "TaskAgent", "Team", "TeamMember",
-    "User", "UserRole", "Workspace",
+    "TestCoverage", "TestExpectation", "TestFailure",
+    "User", "UserRole", "Workspace", "WorkflowDefinition", "WorkflowStep",
 ]

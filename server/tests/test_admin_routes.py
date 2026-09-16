@@ -179,7 +179,7 @@ async def test_a_team_carries_its_members_and_refuses_a_stranger(client: AsyncCl
 
 async def test_the_catalogue_is_the_one_the_roles_screen_groups_by(client: AsyncClient):
     catalogue = (await client.get("/admin/permissions")).json()
-    assert len(catalogue) == 18
+    assert len(catalogue) == 20
     assert all(set(p) >= {"id", "label", "group", "description"} for p in catalogue)
     assert {p["group"] for p in catalogue} <= {"Work", "Gates", "Knowledge", "Platform", "Admin"}
     assert [p["id"] for p in catalogue[:2]] == ["plans:compile", "plans:decide"]

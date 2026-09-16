@@ -101,9 +101,18 @@ class ApprovalRepository(Repository[Approval]):
     async def by_ref(self, ref: str) -> Approval | None:
         return await self.one(Approval.ref == ref)
 
+    #: Newest first, and then by reference, newest first too. The seeded gates are written in one
+    #: transaction and share a timestamp, so without the second key the order was whatever Postgres
+    #: returned — and the full list and the pending list came back in different orders, which put a
+    #: different gate under the first "Approve" button than the one a caller had just read.
+    ORDER = (Approval.created_at.desc(),
+             cast(func.nullif(func.regexp_replace(Approval.ref, r"\D", "", "g"), ""), Integer).desc())
+
     async def pending(self, *, limit: int | None = None, offset: int = 0) -> Page[Approval]:
-        return await self.page(Approval.status == "pending", order_by=Approval.created_at.desc(),
-                               limit=limit, offset=offset)
+        return await self.page(Approval.status == "pending", order_by=self.ORDER, limit=limit, offset=offset)
+
+    async def newest(self, *, limit: int | None = None, offset: int = 0) -> Page[Approval]:
+        return await self.page(order_by=self.ORDER, limit=limit, offset=offset)
 
     async def for_run(self, run_ref: str) -> list[Approval]:
         return await self.list(Approval.run_ref == run_ref, order_by=Approval.created_at)

@@ -7,10 +7,26 @@ reconnect after a drop and ask only for what it missed.
 """
 from __future__ import annotations
 
-from sqlalchemy import ColumnElement, Integer, cast, func, select
+from collections.abc import Sequence
+from typing import Any
 
-from ..models import Chat, ChatMessage, Run, RunLog
-from .base import Page, Repository
+from sqlalchemy import ColumnElement, Select, and_, delete, func, select
+from sqlalchemy.dialects.postgresql import aggregate_order_by, array_agg, insert
+
+from ..models import (
+    Chat,
+    ChatMessage,
+    Project,
+    Run,
+    RunLog,
+    RunStep,
+    Setting,
+    TestCoverage,
+    TestExpectation,
+    TestFailure,
+    User,
+)
+from .base import MAX_LIMIT, Page, Repository, bounded
 
 
 class RunRepository(Repository[Run]):
@@ -35,6 +51,11 @@ class RunRepository(Repository[Run]):
             out.setdefault(child.parent_id or "", []).append(child)
         return out
 
+    async def active_check(self, project_id: str) -> Run | None:
+        """A test-only run of this project that has not finished — queued, working, or at its gate."""
+        return await self.one(Run.project_id == project_id, Run.role == "check",
+                              Run.status.in_(("queued", "running", "waiting")))
+
     async def waiting(self) -> list[Run]:
         return await self.list(Run.status == "waiting", order_by=Run.created_at)
 
@@ -48,6 +69,12 @@ class RunLogRepository(Repository[RunLog]):
     async def after(self, run_id: str, last_id: int = 0, *, limit: int = 1000) -> list[RunLog]:
         stmt = (select(RunLog).where(RunLog.run_id == run_id, RunLog.id > last_id)
                 .order_by(RunLog.id).limit(min(limit, 2000)))
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def of_step(self, run_id: str, step: int, *, limit: int = 400) -> list[RunLog]:
+        """What one step printed, in order. The test step keeps at most its first 400 lines anyway."""
+        stmt = (select(RunLog).where(RunLog.run_id == run_id, RunLog.step == step)
+                .order_by(RunLog.id).limit(min(limit, 1000)))
         return list((await self.session.execute(stmt)).scalars())
 
     async def write(self, run_id: str, *, level: str, line: str, step: int | None = None) -> RunLog:
@@ -97,3 +124,171 @@ class ChatRepository(Repository[Chat]):
 
     async def next_ref(self, prefix: str = "CHAT-") -> str:
         return await super().next_ref(Chat.ref, prefix)
+
+
+#: The runs a test step really ran in: the command started and an exit code came back.
+TESTED = ("passed", "failed")
+
+
+class ResultsRepository(Repository[TestFailure]):
+    """What test steps found — failures, coverage, totals — and the expectations people set on them.
+
+    Failures and coverage are read from their own tables, never through `Run.failures`: that
+    relationship refuses to load lazily, because a run is fetched dozens of times while it works and
+    none of those reads want two hundred excerpts dragged along.
+    """
+
+    model = TestFailure
+
+    # ── written by the test step ─────────────────────────────────
+    async def replace(self, run_id: str, step_n: int, failures: Sequence[dict[str, Any]],
+                      coverage: Sequence[tuple[str, int, int, str]]) -> None:
+        """This step's findings, replacing any an earlier attempt at the same step left."""
+        await self.session.execute(delete(TestFailure).where(TestFailure.run_id == run_id,
+                                                              TestFailure.step_n == step_n))
+        await self.session.execute(delete(TestCoverage).where(TestCoverage.run_id == run_id))
+        self.session.add_all([TestFailure(run_id=run_id, step_n=step_n, **f) for f in failures])
+        self.session.add_all([TestCoverage(run_id=run_id, path=path, covered=covered, total=total, source=source)
+                              for path, covered, total, source in coverage])
+        await self.session.flush()
+
+    async def expected(self, run_id: str, project_id: str) -> tuple[int, int]:
+        """(failures recorded for this run, how many of them a person expects)."""
+        row = (await self.session.execute(
+            select(func.count(TestFailure.id), func.count(TestExpectation.id))
+            .select_from(TestFailure)
+            .outerjoin(TestExpectation, and_(TestExpectation.project_id == project_id,
+                                             TestExpectation.test_name == TestFailure.name))
+            .where(TestFailure.run_id == run_id))).one()
+        return int(row[0]), int(row[1])
+
+    # ── read by the Testing screen ───────────────────────────────
+    async def onboarded(self, project_id: str | None, *, limit: int = 50) -> list[Project]:
+        """Projects with code on this machine — the only ones that have tests to run."""
+        where: list[ColumnElement[bool]] = [Project.source_kind.is_not(None)]
+        if project_id:
+            where.append(Project.id == project_id)
+        stmt = select(Project).where(*where).order_by(Project.name).limit(min(limit, MAX_LIMIT))
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def answers(self, project_ids: Sequence[str]) -> dict[str, str]:
+        """project id → 'allowed' | 'refused', for projects where someone answered the first-run gate."""
+        if not project_ids:
+            return {}
+        keys = {f"runtime.tests.{pid}": pid for pid in project_ids}
+        rows = (await self.session.execute(select(Setting).where(Setting.key.in_(keys)))).scalars()
+        return {keys[row.key]: str(row.value) for row in rows}
+
+    def _tested(self, project_ids: Sequence[str]) -> Select[tuple[Run, int | None]]:
+        return (select(Run, RunStep.ms)
+                .join(RunStep, and_(RunStep.run_id == Run.id, RunStep.kind == "test"))
+                .where(Run.project_id.in_(project_ids), Run.tests_status.in_(TESTED)))
+
+    async def latest(self, project_ids: Sequence[str]) -> dict[str, tuple[Run, int | None]]:
+        """Each project's most recent run whose tests really ran, with how long the step took."""
+        if not project_ids:
+            return {}
+        stmt = (self._tested(project_ids).order_by(Run.project_id, Run.created_at.desc())
+                .distinct(Run.project_id))
+        return {run.project_id: (run, ms) for run, ms in (await self.session.execute(stmt)).all()}
+
+    async def history(self, project_ids: Sequence[str], *, limit: int = 50) -> list[tuple[Run, int | None]]:
+        if not project_ids:
+            return []
+        stmt = self._tested(project_ids).order_by(Run.created_at.desc()).limit(bounded(limit))
+        return [(run, ms) for run, ms in (await self.session.execute(stmt)).all()]
+
+    async def checking(self, project_ids: Sequence[str]) -> dict[str, str]:
+        """project id → the ref of a test-only run still in flight there."""
+        if not project_ids:
+            return {}
+        stmt = (select(Run.project_id, Run.ref)
+                .where(Run.project_id.in_(project_ids), Run.role == "check",
+                       Run.status.in_(("queued", "running", "waiting")))
+                .order_by(Run.created_at))
+        return {pid: ref for pid, ref in (await self.session.execute(stmt)).all()}
+
+    def _with_expectation(self) -> Select[tuple[TestFailure, str, str, TestExpectation | None, str | None]]:
+        return (select(TestFailure, Run.ref, Run.project_id, TestExpectation, User.name)
+                .join(Run, Run.id == TestFailure.run_id)
+                .outerjoin(TestExpectation, and_(TestExpectation.project_id == Run.project_id,
+                                                 TestExpectation.test_name == TestFailure.name))
+                .outerjoin(User, User.id == TestExpectation.by_user_id))
+
+    async def failures(self, run_ids: Sequence[str], *, limit: int = MAX_LIMIT) -> list[tuple[Any, ...]]:
+        """(failure, run ref, project id, expectation or None, who set it) for these runs."""
+        if not run_ids:
+            return []
+        stmt = (self._with_expectation().where(TestFailure.run_id.in_(run_ids))
+                .order_by(Run.project_id, TestFailure.id).limit(bounded(limit)))
+        return [tuple(row) for row in (await self.session.execute(stmt)).all()]
+
+    async def failure(self, failure_id: int) -> tuple[Any, ...] | None:
+        row = (await self.session.execute(
+            self._with_expectation().where(TestFailure.id == failure_id))).one_or_none()
+        return tuple(row) if row else None
+
+    async def recurrence(self, project_ids: Sequence[str], window: int
+                         ) -> tuple[dict[str, int], dict[tuple[str, str], tuple[int, str]]]:
+        """How often each test failed across each project's last `window` tested runs.
+
+        Returns (project → how many runs the window holds, (project, test) → (runs it failed in, the
+        earliest of those runs' refs)). A measured count, not anyone's opinion of what is flaky.
+        """
+        if not project_ids:
+            return {}, {}
+        ranked = (select(Run.id, Run.ref, Run.project_id, Run.created_at,
+                         func.row_number().over(partition_by=Run.project_id,
+                                                order_by=Run.created_at.desc()).label("n"))
+                  .where(Run.project_id.in_(project_ids), Run.tests_status.in_(TESTED))).subquery()
+        recent = select(ranked).where(ranked.c.n <= window).subquery()
+        sizes = (await self.session.execute(
+            select(recent.c.project_id, func.count()).group_by(recent.c.project_id))).all()
+        counts = (await self.session.execute(
+            select(recent.c.project_id, TestFailure.name, func.count(func.distinct(TestFailure.run_id)),
+                   array_agg(aggregate_order_by(recent.c.ref, recent.c.created_at.asc()))[1])
+            .join(TestFailure, TestFailure.run_id == recent.c.id)
+            .group_by(recent.c.project_id, TestFailure.name)
+            .limit(MAX_LIMIT * 4))).all()
+        return ({pid: int(n) for pid, n in sizes},
+                {(pid, name): (int(n), first) for pid, name, n, first in counts})
+
+    async def coverage(self, run_ids: Sequence[str]) -> list[TestCoverage]:
+        if not run_ids:
+            return []
+        stmt = (select(TestCoverage).where(TestCoverage.run_id.in_(run_ids))
+                .order_by(TestCoverage.run_id, TestCoverage.path).limit(MAX_LIMIT))
+        return list((await self.session.execute(stmt)).scalars())
+
+
+class ExpectationRepository(Repository[TestExpectation]):
+    model = TestExpectation
+
+    async def put(self, *, expectation_id: str, project_id: str, test_name: str, kind: str, reason: str,
+                  by_user_id: str | None) -> TestExpectation:
+        """One standing word per test per project: a second one replaces the first, in one statement."""
+        stmt = (insert(TestExpectation)
+                .values(id=expectation_id, project_id=project_id, test_name=test_name, kind=kind, reason=reason,
+                        by_user_id=by_user_id)
+                .on_conflict_do_update(index_elements=[TestExpectation.project_id, TestExpectation.test_name],
+                                       set_={"kind": kind, "reason": reason, "by_user_id": by_user_id,
+                                             "updated_at": func.now()})
+                .returning(TestExpectation.id))
+        kept = (await self.session.execute(stmt)).scalar_one()
+        return (await self.session.execute(
+            select(TestExpectation).where(TestExpectation.id == kept)
+            .execution_options(populate_existing=True))).scalar_one()
+
+    async def remove_for(self, project_id: str, test_name: str) -> int:
+        return await self.remove_where(TestExpectation.project_id == project_id,
+                                       TestExpectation.test_name == test_name)
+
+    async def of_projects(self, project_ids: Sequence[str], *, limit: int = 200
+                          ) -> list[tuple[TestExpectation, str | None]]:
+        if not project_ids:
+            return []
+        stmt = (select(TestExpectation, User.name)
+                .outerjoin(User, User.id == TestExpectation.by_user_id)
+                .where(TestExpectation.project_id.in_(project_ids))
+                .order_by(TestExpectation.updated_at.desc()).limit(bounded(limit)))
+        return [(e, name) for e, name in (await self.session.execute(stmt)).all()]

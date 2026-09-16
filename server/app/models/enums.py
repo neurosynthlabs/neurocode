@@ -33,11 +33,17 @@ Autonomy = Enum("supervised", "semi", "autonomous", name="autonomy")
 
 # Runs and sessions
 RunStatus = Enum("queued", "running", "waiting", "done", "failed", "cancelled", name="run_status")
-RunRole = Enum("solo", "agent", "integration", name="run_role")
+#: `check` is a run that only tests: started from the Testing screen, with no agent writing anything.
+RunRole = Enum("solo", "agent", "integration", "check", name="run_role")
 RunStepKind = Enum("edit", "merge", "test", "review", "handoff", name="run_step_kind")
 RunStepStatus = Enum("todo", "running", "waiting", "done", "failed", "skipped", name="run_step_status")
 ChatStatus = Enum("idle", "thinking", name="chat_status")
 ChatRole = Enum("you", "assistant", "tool", "note", name="chat_role")
+
+# Testing
+#: A person's standing word about one test: red on purpose (`legacy`), or too flaky to gate on
+#: (`quarantine`). Both are still reported; neither raises a hand-off's risk.
+TestExpectationKind = Enum("legacy", "quarantine", name="test_expectation")
 
 # Code index
 EdgeKind = Enum("imports", "uses", "reads", "writes", "calls", name="edge_kind")
@@ -47,6 +53,12 @@ MemoryCategory = Enum("human", "project", "architecture", "business_rules", "leg
                       "bugs", "decisions", "incidents", "preferences", "code", name="memory_category")
 ConflictStatus = Enum("open", "resolved", name="conflict_status")
 ChunkKind = Enum("code", "doc", "memory", name="chunk_kind")
+
+# Evals
+EvalKind = Enum("regression", "capability", "safety", "cost", name="eval_kind")
+#: What a suite exercises: the compiler, memory answers, retrieval, the review prompt, or a bare prompt.
+EvalTarget = Enum("compile", "ask", "retrieval", "review", "prompt", name="eval_target")
+EvalStatus = Enum("pass", "fail", "partial", "error", name="eval_status")
 
 # Platform
 McpTransport = Enum("stdio", "http", "sse", name="mcp_transport")

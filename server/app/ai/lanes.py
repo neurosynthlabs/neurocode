@@ -16,8 +16,8 @@ import os
 from dataclasses import dataclass, replace
 from typing import Any
 
-from ..db import Store
 from ..secrets import Secrets
+from .ledger import Ledger
 
 # What a lane is asked for. A lane offers what it is good at; the router asks for what it needs.
 WRITE, REVIEW, PLAN, CHAT = "write", "review", "plan", "chat"
@@ -102,12 +102,22 @@ def _apply(fields: dict[str, Any], saved: dict[str, Any], mapping: dict[str, str
             fields[field] = value
 
 
+def priced(lane_id: str) -> bool:
+    """Whether this lane's cost is known. A free lane's is — it is zero. A paid lane that declares no price
+    is not: its $0 is a missing number, and showing it as "free" would be the one thing a cost column must
+    never do."""
+    lane = next((x for x in LANES if x.id == lane_id), None)
+    if lane is None:
+        return lane_id == "rules"            # the offline rules cost nothing; an unknown lane is unknown
+    return lane.free or bool(lane.usd_per_m_in or lane.usd_per_m_out)
+
+
 def price_of(lane_id: str) -> tuple[float, float]:
     """What a million tokens cost on this lane, in and out. An unknown lane costs nothing known."""
     lane = next((x for x in LANES if x.id == lane_id), None)
     return (lane.usd_per_m_in, lane.usd_per_m_out) if lane else (0.0, 0.0)
 
-def settled(store: Store, lane_id: str, environ: dict[str, str] | None = None) -> Lane | None:
+def settled(store: Ledger, lane_id: str, environ: dict[str, str] | None = None) -> Lane | None:
     """The lane as this workspace has it: the catalogue, then what an admin saved, then the
     environment — which wins, so a script or CI can pin a model without touching the database."""
     base = BY_ID.get(lane_id)
@@ -126,11 +136,11 @@ def settled(store: Store, lane_id: str, environ: dict[str, str] | None = None) -
     return replace(base, **fields) if fields else base
 
 
-def every(store: Store, environ: dict[str, str] | None = None) -> list[Lane]:
+def every(store: Ledger, environ: dict[str, str] | None = None) -> list[Lane]:
     return [lane for lane_id in IDS if (lane := settled(store, lane_id, environ)) is not None]
 
 
-def enabled(store: Store, lane_id: str) -> bool:
+def enabled(store: Ledger, lane_id: str) -> bool:
     """A lane an admin switched off stays off even when its key is there."""
     return (store.setting(f"ai.lane.{lane_id}", {}) or {}).get("enabled", True) is not False
 

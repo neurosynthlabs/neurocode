@@ -7,6 +7,7 @@ though: `GET /code/file` opens those files, so they exist on disk.
 """
 from __future__ import annotations
 
+import subprocess
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,12 +15,14 @@ from pathlib import Path
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import models as m
 from app.api import deps
 from app.api.app import create_api
 from app.data.loader import load_seed, sync_roles
-from app.models import CodeEdge, CodeFile, CodeIndexRun, CodeSymbol, Project
+from app.models import Chunk, CodeEdge, CodeFile, CodeIndexRun, CodeSymbol, Project, RetrievalRun
 from app.services import code as code_jobs
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
@@ -293,3 +296,109 @@ async def test_building_retrieval_is_queued_behind_the_onboarding_permission(
 async def test_reading_the_index_needs_a_session(api):
     async with _client(api) as stranger:
         assert (await stranger.get(f"/projects/{PID}/code")).status_code == 401
+
+
+# ── documents: what Knowledge reads ──────────────────────────────
+README = ("Shop\nThe shop charges tax through `TaxService` and `app/service.py`, see TASK-9101, TASK-492 and "
+          "TASK-99999.\n\nMore.")
+
+
+@pytest_asyncio.fixture
+async def documented(indexed: Path, session: AsyncSession) -> Path:
+    """Two indexed documents — one committed, one deleted since — one only on disk, and a memory chunk."""
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=indexed, check=True)
+    (indexed / "README.md").write_text(f"# {README}")
+    (indexed / "docs").mkdir()
+    (indexed / "docs" / "guide.md").write_text("# Guide\nNot indexed yet.\n")
+    (indexed / "node_modules" / "pkg").mkdir(parents=True)
+    (indexed / "node_modules" / "pkg" / "README.md").write_text("# Vendored\n")
+    subprocess.run(["git", "add", "README.md"], cwd=indexed, check=True)
+    subprocess.run(["git", "-c", "user.name=Rajat", "-c", "user.email=r@example.com", "-c", "commit.gpgsign=false",
+                    "commit", "-qm", "docs"], cwd=indexed, check=True)
+    session.add_all([
+        Chunk(project_id=PID, kind="doc", ref="README.md#0", path="README.md", title="README.md · Shop", body=README),
+        Chunk(project_id=PID, kind="doc", ref="README.md#1", path="README.md", title="README.md · Usage",
+              body="Usage\nRun it."),
+        Chunk(project_id=PID, kind="doc", ref="gone.md#0", path="gone.md", title="gone.md · Gone", body="Gone"),
+        Chunk(project_id=None, kind="memory", ref="MEM-1", path="business_rules", title="A fact", body="A fact"),
+    ])
+    session.add(RetrievalRun(project_id=PID, finished_at=datetime(2026, 1, 1, tzinfo=UTC), chunks=4))
+    await session.flush()
+    session.add(m.Task(id="t9101", ref="TASK-9101", title="Charge tax", project_id=PID, checklist=[], assignees=[]))
+    await session.flush()
+    return indexed
+
+
+async def test_documents_list_what_the_index_holds_and_what_it_missed(client: AsyncClient, documented: Path):
+    body = (await client.get(f"/projects/{PID}/code/retrieval/docs")).json()
+    docs = {d["id"]: d for d in body["docs"]}
+    assert set(docs) == {"README.md", "docs/guide.md", "gone.md"}      # never memory, never node_modules
+
+    readme = docs["README.md"]
+    assert (readme["kind"], readme["title"], readme["chunks"], readme["indexed"]) == ("md", "Shop", 2, True)
+    # The first line of the first piece is the heading, which is the title: the summary starts after it.
+    assert readme["summary"].startswith("The shop charges tax")
+    assert readme["source"] == "repository file · last commit by Rajat"
+    assert readme["stale"] is True                         # written after the index was built
+
+    guide = docs["docs/guide.md"]
+    assert guide["indexed"] is False and guide["chunks"] == 0 and guide["source"] == "file on disk, not committed"
+    assert docs["gone.md"]["source"] == "no longer on disk" and docs["gone.md"]["stale"] is True
+
+    assert (body["onDisk"], body["notIndexed"], body["stale"]) == (2, 1, 2)
+    assert body["entitiesLinked"] == 1                     # TaxService is declared; nothing else is
+    assert body["formats"] == ["md", "mdx", "rst", "txt", "adoc"]
+    assert [step["n"] for step in body["pipeline"]] == [1, 2, 3, 4, 5, 6]
+    assert body["retrieval"]["built"] is True
+
+
+async def test_a_summary_is_empty_rather_than_the_title_again(client: AsyncClient, documented: Path):
+    docs = (await client.get(f"/projects/{PID}/code/retrieval/docs")).json()["docs"]
+    assert next(d for d in docs if d["id"] == "gone.md")["summary"] == ""
+
+
+async def test_one_document_links_only_to_things_that_exist(client: AsyncClient, documented: Path):
+    body = (await client.get(f"/projects/{PID}/code/retrieval/doc", params={"path": "README.md"})).json()
+    assert body["entities"] == ["TaxService"]
+    # TASK-492 is real but another project's, and TASK-99999 is no task at all: neither is linked.
+    assert body["linkedTo"] == ["app/service.py", "TASK-9101"]
+    assert body["sections"] == [{"ref": "README.md#0", "title": "Shop", "embedded": False},
+                                {"ref": "README.md#1", "title": "Usage", "embedded": False}]
+    assert body["bytes"] == len(f"# {README}")
+
+    guide = (await client.get(f"/projects/{PID}/code/retrieval/doc", params={"path": "docs/guide.md"})).json()
+    assert guide["indexed"] is False and guide["sections"] == []
+    assert (await client.get(f"/projects/{PID}/code/retrieval/doc", params={"path": "../etc/passwd"})
+            ).status_code == 403
+    assert (await client.get(f"/projects/{PID}/code/retrieval/doc", params={"path": "app/service.py"})
+            ).status_code == 404
+
+
+async def test_a_search_says_what_each_retriever_had(client: AsyncClient, documented: Path):
+    body = (await client.get(f"/projects/{PID}/code/retrieval", params={"q": "shop tax"})).json()
+    assert body["counts"]["lexical"] >= 1 and body["counts"]["fused"] == len(body["results"])
+    assert body["counts"]["semantic"] == 0                  # no embedding lane here, so meaning found nothing
+    assert body["counts"]["lexicalCap"] > 0 and body["counts"]["k"] > 0
+    assert body["results"][0]["ref"] == "README.md#0"
+
+
+
+async def test_the_document_routes_need_a_session(api: FastAPI, documented: Path):
+    async with _client(api) as stranger:
+        assert (await stranger.get(f"/projects/{PID}/code/retrieval/docs")).status_code == 401
+        assert (await stranger.get(f"/projects/{PID}/code/retrieval/doc",
+                                   params={"path": "README.md"})).status_code == 401
+
+
+async def test_a_document_links_only_to_work_in_its_own_project(session: AsyncSession, client: AsyncClient,
+                                                                documented: Path):
+    """A TASK-12 mentioned in one project's notes used to be shown as connected to another project's TASK-12."""
+    from app.repositories.retrieval import ChunkRepository
+
+    other = (await session.execute(select(m.Task).where(m.Task.project_id != PID))).scalars().first()
+    mine = m.Task(id="t-doc-own", ref="TASK-DOCOWN", title="Ours", project_id=PID, checklist=[], assignees=[])
+    session.add(mine)
+    await session.flush()
+
+    found = await ChunkRepository(session).existing_refs(PID, [other.ref, mine.ref])
+    assert found == {mine.ref}
