@@ -7,7 +7,7 @@ import {
   Stat, StatGrid, Bar, Empty, SectionTitle,
 } from '@/components/os';
 import { useAccess, agentName } from '@/lib/access';
-import { FEATURE_LABEL, fetchUsage, type Priced, type SpendDay, type SpendReport } from '@/lib/live/usage';
+import { FEATURE_LABEL, fetchUsage, type CacheLine, type Priced, type SpendDay, type SpendReport } from '@/lib/live/usage';
 import { useRemote } from '@/lib/remote';
 import { cn } from '@/lib/utils';
 import { ago, tokens } from '@/pages/code/format';
@@ -111,6 +111,7 @@ function Report({ r }: { r: SpendReport }) {
 
       {t.calls > 0 && <DailySpend r={r} />}
       {t.calls > 0 && <Breakdown r={r} />}
+      {t.calls > 0 && <CacheAndReasoning r={r} />}
       {t.calls > 0 && <Costliest r={r} />}
       <Latest r={r} />
     </PageBody>
@@ -236,6 +237,65 @@ function Breakdown({ r }: { r: SpendReport }) {
             ))}
           </DataTable>
         )}
+      </Panel>
+    </section>
+  );
+}
+
+/** Dollars a cache saved: a sum over priced calls, unknown when none of them had a price. */
+function saved(line: CacheLine): string {
+  if (line.savedUsd === null) return 'unpriced';
+  const n = line.savedUsd;
+  const text = n === 0 ? '$0' : n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`;
+  return line.costComplete ? text : `≥ ${text}`;
+}
+
+const share = (line: CacheLine) => (line.cacheShare === null ? null : Math.round(line.cacheShare * 100));
+
+/* What a provider's prompt cache took off the bill, and what the models spent reasoning — both as the
+   providers reported them. A lane that reports no cache hits shows none; nothing here is estimated. */
+function CacheAndReasoning({ r }: { r: SpendReport }) {
+  const [by, setBy] = useState<'lane' | 'feature'>('lane');
+  const all = r.cache.totals;
+  if (!all) return null;
+  const rows: (CacheLine & { key: string; label: string })[] = by === 'lane'
+    ? r.cache.byLane.map((l) => ({ ...l, key: l.lane, label: l.lane }))
+    : r.cache.byFeature.map((f) => ({ ...f, key: f.feature, label: feature(f.feature) }));
+  const hit = share(all);
+  return (
+    <section className="space-y-3">
+      <SectionTitle right={<span className="text-[12.5px] text-dim">model calls only · as each provider reported them</span>}>Prompt cache and reasoning</SectionTitle>
+      <StatGrid cols={3}>
+        <Stat label="Served from cache" value={hit === null ? '—' : `${hit}%`} tone={hit ? 'ok' : undefined}
+          sub={`${tokens(all.tokensCached)} of ${tokens(all.tokensIn)} input tokens`} />
+        <Stat label="Saved by the cache" value={saved(all)} tone={all.savedUsd ? 'ok' : undefined}
+          sub="cached tokens at the fresh price, less what they cost cached" />
+        <Stat label="Reasoning" value={tokens(all.tokensReasoning)}
+          sub={all.tokensOut ? `${Math.round((100 * all.tokensReasoning) / all.tokensOut)}% of ${tokens(all.tokensOut)} output tokens — paid for, not shown as the answer` : 'no output tokens'} />
+      </StatGrid>
+      <div className="flex flex-wrap items-center gap-2">
+        <Segmented options={[{ id: 'lane', label: 'By lane' }, { id: 'feature', label: 'By feature' }]} value={by} onChange={setBy} />
+        {all.tokensCached === 0 && <span className="ml-auto text-[12.5px] text-dim">No provider reported a cache hit in this window.</span>}
+      </div>
+      <Panel flush>
+        <DataTable head={[by === 'lane' ? 'Lane' : 'Feature', 'Calls', 'Input', 'From cache', 'Saved', 'Reasoning', 'Cost']}>
+          {rows.map((line) => {
+            const pct = share(line);
+            return (
+              <Row key={line.key}>
+                <Cell className="font-medium text-ink">{line.label}</Cell>
+                <Cell className="tnum">{line.calls.toLocaleString()}</Cell>
+                <Cell className="tnum">{tokens(line.tokensIn)}</Cell>
+                <Cell>{pct === null ? <span className="text-dim">—</span> : (
+                  <span className="flex items-center gap-2"><Bar className="w-20" pct={pct} tone="ok" /><span className="tnum text-[12px]">{pct}%</span></span>
+                )}</Cell>
+                <Cell className={cn('tnum', line.savedUsd ? 'text-ok' : line.savedUsd === null ? 'text-dim' : 'text-ink-2')}>{saved(line)}</Cell>
+                <Cell className="tnum">{line.tokensReasoning ? tokens(line.tokensReasoning) : <span className="text-dim">none</span>}</Cell>
+                <Cell className={cn('tnum', line.costUsd === null ? 'text-dim' : 'text-ink')}>{usd(line)}</Cell>
+              </Row>
+            );
+          })}
+        </DataTable>
       </Panel>
     </section>
   );

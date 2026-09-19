@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Microscope, BookOpen, Library, Brain, EyeOff, Loader2, Square } from 'lucide-react';
+import { Microscope, BookOpen, Library, Brain, EyeOff, Globe, Loader2, Square } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
@@ -14,6 +14,7 @@ import {
   fetchReport, fetchResearch, startResearch, stopResearch,
   type ResearchDoc, type ResearchKind, type ResearchListItem,
 } from '@/lib/live/research';
+import { webApi } from '@/lib/live/web';
 import { cn } from '@/lib/utils';
 import type { Project } from '@/types';
 import { NoProject } from './code/shared';
@@ -31,7 +32,8 @@ export default function Research() {
 
 /* ── live ─────────────────────────────────────────────────────── */
 
-/** What research can read: the chunk kinds retrieval holds. Nothing here fetches the web or GitHub. */
+/** What research can read: the chunk kinds retrieval holds — and the web, asked for apart from them, when a
+    search provider is configured (Settings → Web). Nothing here reads GitHub. */
 const LIVE_SOURCES: { id: ResearchKind; label: string; icon: typeof BookOpen }[] = [
   { id: 'doc', label: 'Documentation', icon: BookOpen },
   { id: 'code', label: 'Internal knowledge', icon: Library },
@@ -50,6 +52,9 @@ function LiveResearch({ project }: { project: Project }) {
   const { can } = useAuth();
   const [q, setQ] = useState('');
   const [kinds, setKinds] = useState<Set<ResearchKind>>(new Set(['doc', 'code', 'memory']));
+  const [web, setWeb] = useState(false);
+  const search = useRemote('web-status', webApi.status);
+  const webReady = !!search.data?.configured;
   const [picked, setPicked] = useState<{ project: string; ref: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -79,11 +84,13 @@ function LiveResearch({ project }: { project: Project }) {
   const start = async () => {
     setBusy(true);
     try {
-      const made = await startResearch(q.trim(), project.id, [...kinds]);
+      const withWeb = web && webReady;
+      const made = await startResearch(q.trim(), project.id, [...kinds], withWeb);
       setQ('');
       setPicked({ project: project.id, ref: made.ref });
       list.reload();
-      toast.success(`${made.ref} started`, { description: `${kinds.size} source${kinds.size > 1 ? 's' : ''} · angles are answered in parallel` });
+      const sources = kinds.size + (withWeb ? 1 : 0);
+      toast.success(`${made.ref} started`, { description: `${sources} source${sources > 1 ? 's' : ''} · angles are answered in parallel` });
     } catch (e) {
       toast.error('Research not started', { description: reason(e) });
     } finally {
@@ -117,6 +124,14 @@ function LiveResearch({ project }: { project: Project }) {
                 <I className="size-3" />{label}
               </button>
             ))}
+            <button onClick={() => setWeb((w) => !w)} aria-pressed={web && webReady} disabled={!webReady}
+              title={webReady ? 'Search the web for each angle and read the top pages. The tool rules apply to every search and page.'
+                : search.data ? 'Web search is not configured. Add a key in Settings → Web.' : undefined}
+              className={cn('flex items-center gap-1.5 rounded-sm border px-2 py-1 text-[12.5px] transition-colors disabled:cursor-not-allowed',
+                web && webReady ? 'border-brand/40 bg-brand/10 text-brand' : 'border-line bg-surface text-dim line-through')}>
+              <Globe className="size-3" />The web
+            </button>
+            {search.data && !webReady && <span className="text-[11.5px] text-dim">web search is set up in Settings → Web</span>}
           </div>
         </div>
       </PageHeader>
@@ -191,7 +206,8 @@ function LiveReport({ r, canStop, onStopped }: { r: ResearchDoc; canStop: boolea
             <SectionTitle>Summary</SectionTitle>
             <p className="text-[14px] leading-relaxed text-ink-2">{r.summary}</p>
             <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line pt-2.5">
-              {r.sources.map((s) => <Tag key={s.kind} tone="neutral">{s.count} {s.kind}</Tag>)}
+              {r.sources.map((s) => <Tag key={s.kind} tone={s.kind === 'web' ? 'info' : 'neutral'}>{s.count} {s.kind}</Tag>)}
+              {r.web && !r.sources.some((s) => s.kind === 'web') && <Tag tone="neutral">searched the web · nothing cited</Tag>}
               {writer && <Tag tone={r.provider === 'rules' ? 'warn' : 'info'}>{writer}</Tag>}
             </div>
           </>
@@ -285,10 +301,20 @@ function LiveReport({ r, canStop, onStopped }: { r: ResearchDoc; canStop: boolea
                   <div key={`${c.kind}:${c.url}`} className="px-3.5 py-2">
                     <div className="flex items-center gap-2.5">
                       <span className="tnum w-5 shrink-0 text-right font-mono text-[11.5px] text-dim">[{i + 1}]</span>
+                      {c.via === 'web' && <Globe className="size-3 shrink-0 text-brand" />}
                       <span className="min-w-0 flex-1 truncate text-[13px] text-ink-2">{c.label}</span>
-                      <Tag tone="neutral">{c.via}</Tag>
-                      <span className="hidden min-w-0 max-w-[40%] shrink truncate font-mono text-[11.5px] text-dim sm:block">{c.url}</span>
+                      <Tag tone={c.via === 'web' ? 'info' : 'neutral'}>{c.via}</Tag>
+                      {c.via === 'web' ? (
+                        <a href={c.url} target="_blank" rel="noreferrer noopener"
+                          className="hidden min-w-0 max-w-[40%] shrink truncate font-mono text-[11.5px] text-brand hover:underline sm:block">{c.url} ↗</a>
+                      ) : (
+                        <span className="hidden min-w-0 max-w-[40%] shrink truncate font-mono text-[11.5px] text-dim sm:block">{c.url}</span>
+                      )}
                     </div>
+                    {c.via === 'web' && (
+                      <a href={c.url} target="_blank" rel="noreferrer noopener"
+                        className="mt-1 ml-7 block truncate font-mono text-[11.5px] text-brand hover:underline sm:hidden">{c.url} ↗</a>
+                    )}
                     {c.excerpt && <p className="mt-1 ml-7 line-clamp-2 font-mono text-[11.5px] text-dim">{c.excerpt}</p>}
                   </div>
                 ))}

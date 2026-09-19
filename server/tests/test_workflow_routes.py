@@ -31,7 +31,7 @@ ENGINEER = {"email": "dev@example.com", "name": "Dev", "password": "another long
             "roles": ["engineer"]}            # may compile and run agents, but may not steer plans or write workflows
 HEADERS = {"X-NC-Client": "test"}
 CODE = "shop"
-TAX = "Invoice mein tax galat aa raha hai — CGST/SGST interstate orders pe reverse ho raha hai, TRANS_INVOICE table fix karo."
+TAX = "Invoice tax is wrong: CGST and SGST come out reversed on interstate orders. Fix the TRANS_INVOICE table."
 
 TWO_AGENTS = {
     "name": "api-and-screen", "description": "An endpoint and the screen that reads it.",

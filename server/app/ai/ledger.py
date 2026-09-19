@@ -35,7 +35,8 @@ class Ledger(Protocol):
 
     def record(self, *, feature: str, lane: str, model: str, ok: bool, ms: int, tokens_in: int,
                tokens_out: int, user_id: str | None, project_id: str | None, agent: str,
-               error: str, run_id: str | None = None) -> None: ...
+               error: str, run_id: str | None = None, tokens_cached: int = 0,
+               tokens_reasoning: int = 0) -> None: ...
 
 
 class PostgresLedger:
@@ -83,14 +84,16 @@ class PostgresLedger:
 
     def record(self, *, feature: str, lane: str, model: str, ok: bool, ms: int, tokens_in: int,
                tokens_out: int, user_id: str | None, project_id: str | None, agent: str = "",
-               error: str, run_id: str | None = None) -> None:
+               error: str, run_id: str | None = None, tokens_cached: int = 0,
+               tokens_reasoning: int = 0) -> None:
         with self.engine.begin() as conn:
             conn.execute(text(
-                "INSERT INTO ai_calls(at, feature, lane, model, ok, ms, tokens_in, tokens_out, "
-                "user_id, project_id, agent, run_id, error) VALUES (now(), :feature, :lane, :model, :ok, "
-                ":ms, :tin, :tout, :user_id, :project_id, :agent, :run_id, :error)"),
+                "INSERT INTO ai_calls(at, feature, lane, model, ok, ms, tokens_in, tokens_out, tokens_cached, "
+                "tokens_reasoning, user_id, project_id, agent, run_id, error) VALUES (now(), :feature, :lane, "
+                ":model, :ok, :ms, :tin, :tout, :tcached, :treason, :user_id, :project_id, :agent, :run_id, :error)"),
                 {"feature": feature, "lane": lane, "model": model, "ok": ok, "ms": ms,
-                 "tin": tokens_in, "tout": tokens_out, "user_id": user_id,
+                 "tin": tokens_in, "tout": tokens_out, "tcached": tokens_cached, "treason": tokens_reasoning,
+                 "user_id": user_id,
                  "project_id": project_id, "agent": (agent or "")[:60], "run_id": run_id,
                  "error": error[:300]})
 

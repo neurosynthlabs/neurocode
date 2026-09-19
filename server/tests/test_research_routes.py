@@ -8,9 +8,14 @@ stand-in that either answers from a script or has no lane at all, which is the o
 """
 from __future__ import annotations
 
+import ipaddress
 import json
-from collections.abc import AsyncIterator
+import threading
+from collections.abc import AsyncIterator, Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import pytest_asyncio
@@ -25,8 +30,11 @@ from app.api import deps
 from app.api.app import create_api
 from app.data.engine import Database
 from app.repositories.research import ResearchRepository
-from app.schemas.research import UNSEARCHABLE, report_json
+from app.schemas.research import UNSEARCHABLE, UNSEARCHABLE_WITH_WEB, report_json
+from app.secrets import Secrets
+from app.services import mcp as mcp_service
 from app.services import research as research_jobs
+from app.services import web as web_service
 from app.services.research import coverage_notes, investigate, split_question
 from tests.fixtures.workspace import load_workspace
 
@@ -65,7 +73,7 @@ async def client(api: FastAPI) -> AsyncIterator[AsyncClient]:
 def handed(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     asked: list[str] = []
 
-    async def record(_db: Any, _gw: Any, ref: str, _user: str | None) -> None:
+    async def record(_db: Any, _gw: Any, ref: str, _user: str | None, _web: bool = False) -> None:
         asked.append(ref)
 
     monkeypatch.setattr(research_jobs, "investigate", record)
@@ -322,3 +330,126 @@ async def test_a_stopped_research_says_who_stopped_it(live: Database):
     report = await _read(live, ref)
     assert report["status"] == "cancelled" and report["note"] == "Stopped by Rajat"
     assert ref not in research_jobs._STOPPED
+
+
+# ── the web as a source ──────────────────────────────────────────
+class Web(BaseHTTPRequestHandler):
+    """A search provider in Brave's shape, and the two pages its results point to — one of them gone."""
+
+    base = ""
+    searched: list[str] = []
+    read: list[str] = []
+
+    def log_message(self, *_: Any) -> None:
+        return None
+
+    def _send(self, status: int, body: bytes, kind: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802
+        path = urlsplit(self.path).path
+        if path == "/search":
+            type(self).searched.append(parse_qs(urlsplit(self.path).query)["q"][0])
+            results = [{"title": "GST rounding guide", "url": f"{type(self).base}/gst",
+                        "description": "Round <b>GST</b> on the invoice total."},
+                       {"title": "Old post", "url": f"{type(self).base}/gone", "description": "An old post on GST."}]
+            self._send(200, json.dumps({"web": {"results": results}}).encode(), "application/json")
+            return
+        type(self).read.append(path)
+        if path == "/gst":
+            self._send(200, b"<title>GST rounding, explained</title><nav>Menu</nav>"
+                            b"<p>Cookie notice: this site uses cookies for many many things.</p>"
+                            b"<p>Invoice tax is rounded once on the invoice total, never on each line of it.</p>",
+                       "text/html")
+        else:
+            self._send(404, b"<p>gone</p>", "text/html")
+
+
+@pytest.fixture
+def the_web(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    Web.searched, Web.read = [], []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Web)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    Web.base = f"http://127.0.0.1:{server.server_address[1]}"
+    monkeypatch.setattr(web_service, "BRAVE_URL", f"{Web.base}/search")
+    # The pages are on this machine, which the fetch guard refuses; for these tests only it counts as public.
+    real = mcp_service._public
+    monkeypatch.setattr(mcp_service, "_public", lambda ip: ip == ipaddress.ip_address("127.0.0.1") or real(ip))
+    yield Web.base
+    server.shutdown()
+    server.server_close()
+
+
+class WebLanes(NoLanes):
+    def __init__(self, tmp: Path) -> None:
+        self.secrets = Secrets(tmp / "secrets.json")
+        self.secrets.set(web_service.SECRET, "bsa-test-key")
+
+
+class WebScripted(ScriptedGateway):
+    """Answers each angle by citing the web page it was handed, and keeps what the angle was shown."""
+
+    def __init__(self, tmp: Path, cite: str) -> None:
+        super().__init__(decompose=["How is GST rounded?", "Where is GST rounding written down?"],
+                         angle={"finding": "Rounded once, on the total.", "citations": [cite]},
+                         synthesis={"summary": "GST is rounded on the total."})
+        self.secrets = WebLanes(tmp).secrets
+        self.shown: list[str] = []
+
+    def run(self, messages: list[dict[str, str]], parse: Any, fallback: Any, **kw: Any) -> Result[Any]:
+        if "answer one research sub-question" in messages[0]["content"]:
+            self.shown.append(messages[1]["content"])
+        return super().run(messages, parse, fallback, **kw)
+
+
+async def test_a_research_with_the_web_cites_the_pages_it_read(live: Database, the_web: str, tmp_path: Path):
+    ref = await _start(live, "How is GST rounded on an invoice?", ["code"])
+    gw = WebScripted(tmp_path, f"{the_web}/gst")
+    await investigate(live, gw, ref, None, True)  # type: ignore[arg-type]
+
+    report = await _read(live, ref)
+    assert report["status"] == "complete" and report["web"] is True
+    assert Web.searched == ["How is GST rounded?", "Where is GST rounding written down?"]
+    assert sorted(Web.read) == ["/gone", "/gst"]            # the top two of each angle, each page read once
+    # What the angle was shown: the page, marked as the web, cut down to the paragraph that bears on it.
+    assert f"[web · {the_web}/gst]" in gw.shown[0] and "rounded once on the invoice total" in gw.shown[0]
+    assert "Menu" not in gw.shown[0]
+    # A page that answered 404 is handed as the result's snippet, not as its error page.
+    assert "An old post on GST." in gw.shown[0] and "gone" not in gw.shown[0].split(f"{the_web}/gone]")[1][:40]
+    web_cites = [c for c in report["citations"] if c["via"] == "web"]
+    assert [(c["url"], c["kind"], c["label"]) for c in web_cites] == [
+        (f"{the_web}/gst", "web", "GST rounding, explained")]
+    assert {"kind": "web", "count": 1} in report["sources"]
+    assert UNSEARCHABLE_WITH_WEB in report["gaps"] and UNSEARCHABLE not in report["gaps"]
+    async with live.read() as s:
+        said = (await s.execute(select(m.ActivityEvent.action).where(
+            m.ActivityEvent.project_id == PROJECT))).scalars().all()
+    assert said.count("Web searched") == 2 and said.count("Web page fetched") == 2
+    assert said.count("Web page not read") == 0                       # a 404 is a page that answered
+
+
+async def test_a_rule_that_denies_the_web_is_obeyed_and_said(live: Database, the_web: str, tmp_path: Path):
+    async with live.session() as s:
+        s.add(m.ToolRule(project_id=PROJECT, tool="web_search", pattern="*GST*", action="deny", note="Not for GST"))
+    ref = await _start(live, "How is GST rounded on an invoice?", ["code"])
+    await investigate(live, WebLanes(tmp_path), ref, None, True)  # type: ignore[arg-type]
+
+    report = await _read(live, ref)
+    assert Web.searched == [] and Web.read == []
+    assert report["web"] is True and [c for c in report["citations"] if c["via"] == "web"] == []
+    assert any(g.startswith("The web was not searched for") and "Not for GST" in g for g in report["gaps"])
+
+
+async def test_asking_for_the_web_needs_a_search_provider(client: AsyncClient, api: FastAPI, tmp_path: Path,
+                                                          handed: list[str]):
+    ask = {"question": "How is GST rounded?", "projectId": "erp", "web": True}
+    gw = api.state.gateway
+    gw.secrets = Secrets(tmp_path / "secrets.json")
+    refused = await client.post("/research", json=ask)
+    assert refused.status_code == 409 and "Settings → Web" in refused.json()["detail"] and handed == []
+    gw.secrets.set(web_service.SECRET, "bsa-test-key")
+    assert (await client.post("/research", json=ask)).status_code == 201 and len(handed) == 1

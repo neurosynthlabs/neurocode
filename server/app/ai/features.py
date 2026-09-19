@@ -73,7 +73,7 @@ class BriefOut(BaseModel):
     roadmap: list[Phase] = Field(default_factory=list)
 
 
-BRAIN_SYSTEM = """You are a sharp product partner inside NeuroCode. Turn the operator's idea (English or Hinglish)
+BRAIN_SYSTEM = """You are a sharp product partner inside NeuroCode. Turn the operator's idea (in any language)
 into a brief for the project described. Be concrete and short; no filler. In `risks`, argue against the idea
 the way a skeptical senior engineer would. Reply with one JSON object:
 {"title": "...", "problem": "...", "audience": "...", "value": "...", "mvp": ["..."], "risks": ["..."],
@@ -108,20 +108,20 @@ class ExtractOut(BaseModel):
 
 
 EXTRACT_SYSTEM = f"""You extract durable facts for NeuroCode's memory from text the operator pastes: meeting notes,
-requirements or chats, in English or Hinglish. Keep only facts that will still matter next month: business rules,
+requirements or chats, in any language. Keep only facts that will still matter next month: business rules,
 decisions, constraints, preferences, known bugs, database facts. Skip small talk and one-off tasks. Each fact has a
 short title, a one-sentence body, a category from {', '.join(CATEGORIES)}, a confidence (HIGH, MEDIUM or LOW) and the
 reason it is true (who said it, or what it rests on). At most eight facts.
 Reply with one JSON object: {{"facts": [{{"title": "...", "body": "...", "category": "...", "confidence": "...", "reason": "..."}}]}}"""
 
 POLICY = re.compile(r"\b(must|never|always|should|shall|only|cannot|can't|not allowed|required|mandatory|rule|policy|"
-                    r"decided|agreed|deadline|hona chahiye|nahi karna|kabhi nahi|zaroori|mat karo|chahiye)\b", re.I)
+                    r"decided|agreed|deadline)\b", re.I)
 HINTS = [
-    ("decisions", re.compile(r"\b(decided|agreed|decision|we will|finali[sz]ed|tay hua)\b", re.I)),
-    ("bugs", re.compile(r"\b(bug|error|fails?|broken|crash|issue|galat)\b", re.I)),
+    ("decisions", re.compile(r"\b(decided|agreed|decision|we will|finali[sz]ed)\b", re.I)),
+    ("bugs", re.compile(r"\b(bug|error|fails?|broken|crash|issue)\b", re.I)),
     ("database", re.compile(r"\b(table|column|procedure|database|index|schema|migration)\b", re.I)),
-    ("preferences", re.compile(r"\b(prefers?|likes?|hates?|wants?|pasand)\b", re.I)),
-    ("business_rules", re.compile(r"\b(must|never|always|only|rule|policy|zaroori|chahiye)\b", re.I)),
+    ("preferences", re.compile(r"\b(prefers?|likes?|hates?|wants?)\b", re.I)),
+    ("business_rules", re.compile(r"\b(must|never|always|only|rule|policy)\b", re.I)),
 ]
 
 

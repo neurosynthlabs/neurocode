@@ -1,7 +1,9 @@
 import { useState, type SyntheticEvent } from 'react';
 import { ArrowLeft, ArrowRight, Check, KeyRound, Loader2, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Field, LogoMark, SelectField } from '@/components/os';
+import { Field, SelectField } from '@/components/os';
+import { LogoSymbol } from '@/components/os/Logo';
+import { SignalGlow } from '@/components/os/Glow';
 import { ApiError, api, type LaneId } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { cn } from '@/lib/utils';
@@ -78,11 +80,14 @@ export default function Setup() {
   };
 
   return (
-    <div className="flex h-full w-full justify-center overflow-y-auto bg-bg px-5 py-10">
-      <form onSubmit={submit} className="my-auto w-full max-w-[460px]">
+    <div className="relative flex h-full w-full justify-center overflow-y-auto bg-bg px-5 py-10">
+      <SignalGlow />
+      <form onSubmit={submit} className="relative my-auto w-full max-w-[460px]">
         <div className="flex flex-col items-center text-center">
-          <LogoMark size={48} />
-          <h1 className="mt-5 text-[26px] leading-tight font-semibold tracking-[-0.025em] text-ink">Welcome to NeuroCode</h1>
+          <div className="nc-icon-in">
+            <LogoSymbol size={64} title="NeuroCode" />
+          </div>
+          <h1 className="mt-6 text-[27px] leading-[1.15] font-semibold tracking-[-0.028em] text-ink">Welcome to NeuroCode</h1>
           <p className="mt-2 max-w-sm text-[14.5px] leading-relaxed text-soft">
             Three short steps and your workspace is ready. It lives in your own database; a model sees only what a step sends it.
           </p>

@@ -18,6 +18,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -89,6 +90,9 @@ class Run(Base, Mixin):
     #: how many tries the person allowed. goal_budget is null for a run with no goal.
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     goal_budget: Mapped[int | None] = mapped_column(Integer)
+    #: What a person allowed this run beyond the rules — `[{tool, subject, scope: 'once'|'run', by, at}]` —
+    #: from the "Allow once / Allow for this run" answers to a tool rule's 'ask'.
+    grants: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
 
     #: The review's findings and verdict, and the merge once it happened.
     review: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
@@ -131,6 +135,11 @@ class RunStep(Base):
     status: Mapped[str] = mapped_column(RunStepStatus, nullable=False, server_default="todo")
     detail: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     ms: Mapped[int | None] = mapped_column(Integer)
+    #: The worktree commit this step left, so the run can be reverted to it; empty for a step that wrote nothing.
+    commit_sha: Mapped[str] = mapped_column(String(64), nullable=False, server_default="")
+    #: A question the agent asked the person mid-step, and the person's answer once given.
+    question: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    answer: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     #: For a merge step: the agent run whose branch it brings in.
     child_run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id", ondelete="SET NULL"))
 
@@ -240,6 +249,11 @@ class Chat(Base, Mixin):
     #: The prompt tokens the provider counted on the session's last model call: what the context meter
     #: shows against the lane's window. Null until a model has answered.
     context_tokens: Mapped[int | None] = mapped_column(Integer)
+    #: A session forked from another keeps where it came from: the parent and the turn it was forked at.
+    parent_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"))
+    forked_at: Mapped[int | None] = mapped_column(BigInteger)
+    #: "Allow for this session" answers to a tool rule's 'ask' — `[{tool, subject, by, at}]`.
+    grants: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
 
     messages: Mapped[list[ChatMessage]] = relationship(back_populates="chat", cascade="all, delete-orphan",
                                                        order_by="ChatMessage.id")
@@ -275,5 +289,27 @@ class ChatMessage(Base):
     #: Set on turns a compaction has folded into a 'summary' message: kept for the person to read,
     #: left out of what the model is sent.
     compacted: Mapped[bool] = mapped_column(nullable=False, server_default="false")
+    #: What the person attached or mentioned — `[{kind: 'file'|'symbol'|'fact'|'plan'|'upload', ref, name}]`.
+    attachments: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    #: An edited question or a regenerated answer replaces this turn in what the model is sent; the old
+    #: turn stays, marked, and points at the one that replaced it.
+    superseded_by: Mapped[int | None] = mapped_column(ForeignKey("chat_messages.id", ondelete="SET NULL"))
 
     chat: Mapped[Chat] = relationship(back_populates="messages")
+
+
+class ChatFile(Base):
+    """A file a person dropped into a session: kept in the database so a backup keeps it too, capped in
+    size by the route, and sent to a model only by the gateway — an image only to a lane that reads them."""
+
+    __tablename__ = "chat_files"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    mime: Mapped[str] = mapped_column(String(120), nullable=False)
+    bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha1: Mapped[str] = mapped_column(String(40), nullable=False)
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    by: Mapped[str] = mapped_column(String(120), nullable=False, server_default="")
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

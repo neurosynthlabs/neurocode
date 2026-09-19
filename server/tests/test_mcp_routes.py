@@ -22,8 +22,10 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import models as m
 from app.api import deps
 from app.api.app import create_api
 from app.services import mcp as mcp_service
@@ -52,6 +54,11 @@ for line in sys.stdin:
         result = {"tools": [{"name": "post_entry", "description": "Post an entry"}]}
     elif method == "prompts/list":
         result = {"prompts": [{"name": "close_month"}]}
+    elif method == "tools/call" and msg["params"]["name"] == "post_entry":
+        result = {"content": [{"type": "text", "text": "The ledger is closed for the month."}], "isError": True}
+    elif method == "tools/call":
+        said = "row for " + json.dumps(msg["params"].get("arguments"), sort_keys=True)
+        result = {"content": [{"type": "text", "text": said}, {"type": "image", "mimeType": "image/png", "data": ""}]}
     else:
         result = {}
     print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
@@ -252,7 +259,9 @@ class Streamable(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             result = ({"tools": [{"name": "search_issues", "annotations": {"readOnlyHint": True}}]}
-                      if body["method"] == "tools/list" else {"resources": [{"uri": "a"}, {"uri": "b"}]})
+                      if body["method"] == "tools/list"
+                      else {"content": [{"type": "text", "text": "3 issues match " + body["params"]["arguments"]["q"]}]}
+                      if body["method"] == "tools/call" else {"resources": [{"uri": "a"}, {"uri": "b"}]})
             message = json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": result})
             payload = f"event: message\ndata: {message}\n\n".encode()
             self.send_response(200)
@@ -390,3 +399,103 @@ async def test_an_address_that_is_not_http_is_an_error(client: AsyncClient):
     await register(client, "odd", "http", "ftp://example.com/mcp", trust=False)
     doc = (await client.post("/mcp/servers/odd/check")).json()
     assert doc["status"] == "error" and "not an http" in doc["lastError"]
+
+
+# ── calling a tool ───────────────────────────────────────────────
+async def _checked(client: AsyncClient, name: str, transport: str, cmd: str, *, trust: bool = True) -> None:
+    await register(client, name, transport, cmd, trust=trust)
+    assert (await client.post(f"/mcp/servers/{name}/check")).json()["status"] == "connected"
+
+
+async def test_a_listed_tool_is_called_and_what_it_said_comes_back(client: AsyncClient, session: AsyncSession,
+                                                                  speaks: str):
+    await _checked(client, "ledger", "stdio", speaks)
+    called = await client.post("/mcp/servers/ledger/tools/read_ledger/call",
+                               json={"arguments": {"row": 7, "book": "sales"}, "projectId": "erp"})
+    assert called.status_code == 200, called.text
+    body = called.json()
+    assert (body["ok"], body["isError"], body["truncated"], body["error"]) == (True, False, False, "")
+    assert body["text"] == 'row for {"book": "sales", "row": 7}\n[image · image/png]'
+    assert isinstance(body["ms"], int) and body["decision"]["action"] == "ask"
+
+    # The tool saying its work failed is an answer, not a failure of the call.
+    failed = (await client.post("/mcp/servers/ledger/tools/post_entry/call", json={"arguments": {}})).json()
+    assert (failed["ok"], failed["isError"], failed["text"]) == (True, True, "The ledger is closed for the month.")
+
+    said = (await session.execute(select(m.ActivityEvent.detail).where(
+        m.ActivityEvent.action == "MCP tool called").order_by(m.ActivityEvent.seq))).scalars().all()
+    assert said[0].startswith("ledger/read_ledger · LOW risk · ok") and "reported an error" in said[1]
+    audited = (await session.execute(select(m.AuditEntry.target, m.AuditEntry.detail).where(
+        m.AuditEntry.action == "mcp.call").order_by(m.AuditEntry.seq))).all()
+    assert [t for t, _ in audited] == ["ledger/read_ledger", "ledger/post_entry"]
+    assert "sales" not in json.dumps([d for _, d in audited])        # what it was given is never kept
+
+
+async def test_a_call_is_refused_before_anything_is_sent(client: AsyncClient, session: AsyncSession, speaks: str,
+                                                        tmp_path: Path):
+    marker = tmp_path / "launched"
+    await register(client, "stranger", "stdio", command(f"open({str(marker)!r}, 'w').write('x')"), trust=False)
+    untrusted = await client.post("/mcp/servers/stranger/tools/anything/call", json={"arguments": {}})
+    assert untrusted.status_code == 409 and "Trust it first" in untrusted.json()["detail"]
+    assert not marker.exists()
+
+    await register(client, "ledger", "stdio", speaks, trust=True)
+    unchecked = await client.post("/mcp/servers/ledger/tools/read_ledger/call", json={"arguments": {}})
+    assert unchecked.status_code == 409 and "Check it first" in unchecked.json()["detail"]
+    await client.post("/mcp/servers/ledger/check")
+    unknown = await client.post("/mcp/servers/ledger/tools/drop_tables/call", json={"arguments": {}})
+    assert unknown.status_code == 404 and "did not list" in unknown.json()["detail"]
+    assert (await client.post("/mcp/servers/nope/tools/x/call", json={"arguments": {}})).status_code == 404
+
+    rule = (await client.post("/permissions/tool-rules", json={
+        "tool": "mcp", "pattern": "ledger/post_*", "action": "deny", "projectId": "erp"})).json()
+    denied = await client.post("/mcp/servers/ledger/tools/post_entry/call",
+                               json={"arguments": {}, "projectId": "erp"})
+    assert denied.status_code == 403 and f"Rule #{rule['id']}" in denied.json()["detail"]
+    # The rule is erp's: in another project the same call asks, and the person pressing Try is the answer.
+    elsewhere = await client.post("/mcp/servers/ledger/tools/post_entry/call",
+                                  json={"arguments": {}, "projectId": "hims"})
+    assert elsewhere.status_code == 200
+
+    approver = await headers_for(session, "approver")                 # mcp:manage, but may not launch
+    launch = await client.post("/mcp/servers/ledger/tools/read_ledger/call", headers=approver,
+                               json={"arguments": {}})
+    assert launch.status_code == 403 and "workspace:admin" in launch.json()["detail"]
+    viewer = await headers_for(session, "viewer")
+    assert (await client.post("/mcp/servers/ledger/tools/read_ledger/call", headers=viewer,
+                              json={"arguments": {}})).status_code == 403
+    assert (await client.post("/mcp/servers/ledger/tools/read_ledger/call",
+                              json={"arguments": {"blob": "x" * 30_000}})).status_code == 422
+
+
+async def test_a_server_whose_default_is_deny_needs_a_rule_that_allows(client: AsyncClient, speaks: str):
+    made = await client.post("/mcp/servers", json={"name": "vault", "transport": "stdio", "command": speaks,
+                                                   "scope": "global", "defaultEffect": "deny", "config": "{}"})
+    assert made.status_code == 201
+    await client.post("/mcp/servers/vault/trust", json={"trusted": True})
+    await client.post("/mcp/servers/vault/check")
+
+    refused = await client.post("/mcp/servers/vault/tools/read_ledger/call", json={"arguments": {}})
+    assert refused.status_code == 403 and "default effect is deny" in refused.json()["detail"]
+    await client.post("/permissions/tool-rules", json={"tool": "mcp", "pattern": "vault/read_*", "action": "allow"})
+    allowed = (await client.post("/mcp/servers/vault/tools/read_ledger/call", json={"arguments": {}})).json()
+    assert allowed["ok"] and allowed["decision"]["action"] == "allow"
+
+
+async def test_an_http_tool_is_called_in_the_same_session_and_its_answer_capped(
+        client: AsyncClient, http_server: str, monkeypatch: pytest.MonkeyPatch):
+    await _checked(client, "issues", "http", http_server, trust=True)
+    Streamable.seen = []
+    monkeypatch.setattr(mcp_service, "RESULT_CHARS", 10)
+    body = (await client.post("/mcp/servers/issues/tools/search_issues/call",
+                              json={"arguments": {"q": "gst rounding"}})).json()
+    assert (body["ok"], body["text"], body["truncated"]) == (True, "3 issues m", True)
+    assert [s["method"] for s in Streamable.seen] == ["initialize", "notifications/initialized", "tools/call"]
+    assert [s["session"] for s in Streamable.seen] == [None, "sess-42", "sess-42"]
+
+
+async def test_a_server_that_went_away_is_an_answer_not_a_crash(client: AsyncClient, http_server: str):
+    await _checked(client, "issues", "http", http_server, trust=True)
+    Streamable.demand_auth = True
+    body = (await client.post("/mcp/servers/issues/tools/search_issues/call", json={"arguments": {"q": "x"}})).json()
+    assert body["ok"] is False and "credentials" in body["error"] and body["text"] == ""

@@ -13,14 +13,19 @@ the database works out rather than a date this process formatted from its own cl
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import ColumnElement, Float, and_, case, cast, func, literal, null, select, text
 
 from ..data import roster
 from ..models import Agent, AiCall, Project, Run, RunStep, Task, TaskAgent, User
 from .base import MAX_LIMIT, Repository, bounded
+
+if TYPE_CHECKING:
+    from ..ai.lanes import Price
 
 #: The lane that answers from rules alone. Every other lane went to a model.
 OFFLINE = "rules"
@@ -53,32 +58,74 @@ def _ms(value: object) -> int:
     return round(float(value or 0))
 
 
+def _rate(lane: str) -> ColumnElement[float]:
+    """The share of the full price a call on this lane paid, by the hour it was made in (UTC): 1 in the
+    provider's peak hours, its off-peak factor otherwise, and 1 all day on a lane with one price."""
+    from ..ai.lanes import off_peak
+
+    rule = off_peak(lane)
+    if rule is None:
+        return literal(1.0, Float)
+    utc = func.timezone("UTC", AiCall.at)
+    peak = and_(cast(func.extract("isodow", utc), Float).in_([float(d) for d in rule.weekdays]),
+                cast(func.extract("hour", utc), Float).in_([float(h) for h in rule.hours]))
+    return case((peak, literal(1.0, Float)), else_=literal(rule.factor, Float))
+
+
+def _priced(value: Callable[[Price], ColumnElement[float]]
+            ) -> list[tuple[ColumnElement[bool], ColumnElement[float]]]:
+    """One CASE over every lane and model with a price: what a call cost, or what its cache saved.
+
+    `value(price)` is the expression for one priced model at full rate; it is multiplied by the hour's
+    rate here. A free lane is zero for the models its price holds for; a call on anything else is NULL."""
+    from ..ai.lanes import IDS, price_table, priced, priced_models
+
+    whens = []
+    for lane in (*IDS, OFFLINE):
+        if not priced(lane):
+            continue
+        table = price_table(lane)
+        if table:
+            rate = _rate(lane)
+            for model, price in table.items():
+                whens.append((and_(AiCall.lane == lane, AiCall.model == model), value(price) * rate))
+            continue
+        models = priced_models(lane)
+        which = AiCall.lane == lane if models is None else and_(AiCall.lane == lane, AiCall.model.in_(models))
+        whens.append((which, literal(0.0, Float)))
+    return whens
+
+
 def _cost() -> ColumnElement[float | None]:
     """What one ledger line cost in US dollars, worked out by the database, or NULL when its lane
     declares no price, or declares one for a model other than the one the call ran on.
 
-    The prices are the lanes' own (`lanes.price_of`), and "known" is `lanes.priced_call` — the same two
-    `spend_24h` asks — written into the statement as a CASE, so a month of calls is summed and sorted
-    in Postgres rather than carried back here a row at a time. The model is in the condition because a
-    lane's price is its catalogue model's: a free lane an admin pointed at a paid model must not sum
-    to $0. Built on every call rather than once, because the catalogue is Python and a test that
-    changes a price must see it.
+    The prices are the lanes' own (`lanes.price_table`), and "known" is `lanes.priced_call`, written
+    into the statement as a CASE, so a month of calls is summed and sorted in Postgres rather than
+    carried back here a row at a time. The model is in the condition because a lane's price is per
+    model: a free lane an admin pointed at a paid model must not sum to $0. An input token the provider
+    served from its cache is billed at the cached price, and a call in a provider's off-peak hours at
+    its off-peak rate — both only what the provider reported and published. Built on every call rather
+    than once, because the catalogue is Python and a test that changes a price must see it.
     """
-    from ..ai.lanes import IDS, price_of, priced, priced_models
-
     per_million = cast(literal(1e6), Float)
-    whens = []
-    for lane in (*IDS, OFFLINE):
-        if priced(lane):
-            per_in, per_out = price_of(lane)
-            models = priced_models(lane)
-            which = AiCall.lane == lane if models is None else and_(AiCall.lane == lane, AiCall.model.in_(models))
-            whens.append((which,
-                          (cast(AiCall.tokens_in, Float) * literal(per_in, Float)
-                           + cast(AiCall.tokens_out, Float) * literal(per_out, Float)) / per_million))
+    fresh = cast(AiCall.tokens_in - AiCall.tokens_cached, Float)
+    cached = cast(AiCall.tokens_cached, Float)
+    out = cast(AiCall.tokens_out, Float)
+    whens = _priced(lambda p: (fresh * literal(p.per_m_in, Float) + cached * literal(p.per_m_cached, Float)
+                               + out * literal(p.per_m_out, Float)) / per_million)
     # A call that used no tokens — refused, rate-limited, timed out before an answer — cost nothing on any
     # lane, so it is priced at zero rather than leaving the day's total unknown.
     return case((AiCall.tokens_in + AiCall.tokens_out == 0, literal(0.0, Float)), *whens, else_=null())
+
+
+def _saved() -> ColumnElement[float | None]:
+    """What the provider's prompt cache took off one call: its cached tokens at the fresh price, less
+    what they cost cached. Zero on a free lane and with no cache hit; NULL where the cost is unknown."""
+    per_million = cast(literal(1e6), Float)
+    cached = cast(AiCall.tokens_cached, Float)
+    whens = _priced(lambda p: cached * literal(p.per_m_in - p.per_m_cached, Float) / per_million)
+    return case((AiCall.tokens_cached == 0, literal(0.0, Float)), *whens, else_=null())
 
 
 def _dollars(total: object, calls: int, unpriced: int) -> float | None:
@@ -179,6 +226,27 @@ class LaneLine:
     tokens_in: int
     tokens_out: int
     avg_ms: int
+    tokens_cached: int = 0
+    tokens_reasoning: int = 0
+    cost_usd: float | None = 0.0
+    saved_usd: float | None = 0.0
+    #: Calls with tokens whose cost is unknown: the lane has no price for the model they ran on.
+    unpriced: int = 0
+
+
+@dataclass(slots=True)
+class CacheLine:
+    """What the prompt cache and reasoning came to, for one lane or one feature (`key`)."""
+
+    key: str
+    calls: int
+    tokens_in: int
+    tokens_cached: int
+    tokens_out: int
+    tokens_reasoning: int
+    cost_usd: float | None
+    saved_usd: float | None
+    unpriced: int
 
 
 @dataclass(slots=True)
@@ -258,6 +326,9 @@ class Usage:
     by_agent: list[AgentSpend]
     by_project: list[ProjectSpend]
     costliest: list[CostlyCall]
+    cache: CacheLine | None = None
+    cache_by_lane: list[CacheLine] | None = None
+    cache_by_feature: list[CacheLine] | None = None
 
 
 class UsageRepository(Repository[AiCall]):
@@ -374,18 +445,46 @@ class UsageRepository(Repository[AiCall]):
                 for f, c, m, o, x, ti, to, ms in (await self.session.execute(stmt)).all()]
 
     async def by_lane(self, days: int) -> list[LaneLine]:
-        """A lane and the model it reached. The old ledger called the first half of that a provider."""
-        calls = func.count()
+        """A lane and the model it reached. The old ledger called the first half of that a provider.
+        What each line cost is the database's sum at the lane's price for that model, with its cache
+        hits and its hour — the same `_cost` every other figure here is."""
+        calls, cost, saved = func.count(), _cost(), _saved()
         stmt = (select(AiCall.lane, AiCall.model, calls,
                        func.count().filter(AiCall.ok.is_(False)),
                        func.coalesce(func.sum(AiCall.tokens_in), 0),
                        func.coalesce(func.sum(AiCall.tokens_out), 0),
-                       func.coalesce(func.avg(AiCall.ms), 0))
+                       func.coalesce(func.avg(AiCall.ms), 0),
+                       func.coalesce(func.sum(AiCall.tokens_cached), 0),
+                       func.coalesce(func.sum(AiCall.tokens_reasoning), 0),
+                       func.sum(cost), func.sum(saved), func.count().filter(cost.is_(None)))
                 .where(self._within(days)).group_by(AiCall.lane, AiCall.model)
                 .order_by(calls.desc(), AiCall.lane, AiCall.model).limit(MAX_LIMIT))
         return [LaneLine(lane=lane, model=model, calls=_int(c), failures=_int(x), tokens_in=_int(ti),
-                         tokens_out=_int(to), avg_ms=_ms(ms))
-                for lane, model, c, x, ti, to, ms in (await self.session.execute(stmt)).all()]
+                         tokens_out=_int(to), avg_ms=_ms(ms), tokens_cached=_int(tc), tokens_reasoning=_int(tr),
+                         cost_usd=_dollars(usd, _int(c), _int(u)), saved_usd=_dollars(sv, _int(c), _int(u)),
+                         unpriced=_int(u))
+                for lane, model, c, x, ti, to, ms, tc, tr, usd, sv, u in (await self.session.execute(stmt)).all()]
+
+    async def cache(self, days: int, by: str | None = None) -> list[CacheLine]:
+        """The prompt cache's share and what it saved, and the reasoning tokens apart from the answer's —
+        over the whole window (`by` None), or per lane or per feature. Only what providers reported:
+        a lane that reports no cache hits shows none, rather than an estimate."""
+        column = {"lane": AiCall.lane, "feature": AiCall.feature}.get(by or "")
+        key = column if column is not None else literal("all")
+        calls, cost, saved = func.count(), _cost(), _saved()
+        stmt = (select(key, calls, func.coalesce(func.sum(AiCall.tokens_in), 0),
+                       func.coalesce(func.sum(AiCall.tokens_cached), 0),
+                       func.coalesce(func.sum(AiCall.tokens_out), 0),
+                       func.coalesce(func.sum(AiCall.tokens_reasoning), 0),
+                       func.sum(cost), func.sum(saved), func.count().filter(cost.is_(None)))
+                .where(self._within(days), AiCall.lane != OFFLINE))
+        if column is not None:
+            stmt = stmt.group_by(column).order_by(calls.desc(), column)
+        rows = (await self.session.execute(stmt.limit(MAX_LIMIT))).all()
+        return [CacheLine(key=k, calls=_int(c), tokens_in=_int(ti), tokens_cached=_int(tc), tokens_out=_int(to),
+                          tokens_reasoning=_int(tr), cost_usd=_dollars(usd, _int(c), _int(u)),
+                          saved_usd=_dollars(sv, _int(c), _int(u)), unpriced=_int(u))
+                for k, c, ti, tc, to, tr, usd, sv, u in rows if _int(c)]
 
     async def recent_calls(self, *, limit: int = RECENT) -> list[CallLine]:
         """The newest calls, whenever they happened — this strip is not inside the window, and never
@@ -420,24 +519,15 @@ class UsageRepository(Repository[AiCall]):
         zero. A zero here means "free", not "we did not look".
         """
         since = func.now() - text("interval '24 hours'")
-        tokens = func.coalesce(func.sum(AiCall.tokens_in + AiCall.tokens_out), 0)
-        stmt = (select(AiCall.agent, AiCall.lane, AiCall.model,
-                       func.coalesce(func.sum(AiCall.tokens_in), 0),
-                       func.coalesce(func.sum(AiCall.tokens_out), 0), tokens)
+        cost = _cost()
+        stmt = (select(AiCall.agent, func.coalesce(func.sum(AiCall.tokens_in + AiCall.tokens_out), 0),
+                       func.sum(cost), func.count().filter(cost.is_(None)))
                 .where(AiCall.at >= since, AiCall.agent != "")
-                .group_by(AiCall.agent, AiCall.lane, AiCall.model).limit(MAX_LIMIT))
-
-        from ..ai.lanes import price_of, priced_call
-        out: dict[str, tuple[int, float | None]] = {}
-        for who, lane, model, tin, tout, total in (await self.session.execute(stmt)).all():
-            spent, cost = out.get(who, (0, 0.0))
-            per_in, per_out = price_of(lane)
-            # One call to a lane with no declared price — or on a model its price is not for — makes the
-            # whole figure unknown, not smaller.
-            cost = None if cost is None or (_int(total) and not priced_call(lane, model)) else \
-                cost + _int(tin) / 1e6 * per_in + _int(tout) / 1e6 * per_out
-            out[who] = (spent + _int(total), cost)
-        return {who: (n, None if cost is None else round(cost, 4)) for who, (n, cost) in out.items()}
+                .group_by(AiCall.agent).limit(MAX_LIMIT))
+        # One call to a lane with no declared price — or on a model its price is not for — makes the whole
+        # figure unknown, not smaller. The cost is `_cost`, so cache hits and off-peak hours count here too.
+        return {who: (_int(total), None if _int(unpriced) else round(float(usd or 0), 4))
+                for who, total, usd, unpriced in (await self.session.execute(stmt)).all()}
 
     async def last_answered(self, agents: list[str]) -> dict[str, Answered]:
         """agent name or id → the last call a lane answered for it. What the router *would* pick is a
@@ -471,7 +561,10 @@ class UsageRepository(Repository[AiCall]):
                      recent=await self.recent_calls(),
                      by_person=await self.by_person(days) if admin else None,
                      by_agent=await self.by_agent(days), by_project=await self.by_project(days),
-                     costliest=await self.costliest(days))
+                     costliest=await self.costliest(days),
+                     cache=next(iter(await self.cache(days)), None),
+                     cache_by_lane=await self.cache(days, "lane"),
+                     cache_by_feature=await self.cache(days, "feature"))
 
 
 class AgentRepository(Repository[Agent]):

@@ -312,3 +312,46 @@ class ResearchCitation(Base):
 # so a hybrid search never has to reconcile two stores that drifted apart.
 __all__ = ["EMBED_DIM", "Chunk", "MemoryConflict", "MemoryFact", "MemoryHit", "MemoryTag", "ResearchAngle", "ResearchCitation",
            "ResearchReport", "RetrievalRun", "text"]
+
+
+class TasteSignal(Base):
+    """Something a person did that says how they like the work done: accepted or refused a run, sent it back
+    with notes, changed what an agent wrote, edited a plan. Captured where it happens, with no model."""
+
+    __tablename__ = "taste_signals"
+    __table_args__ = (CheckConstraint("kind IN ('accept', 'refuse', 'rework_note', 'edit_delta', 'plan_edit')",
+                                      name="kind"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id", ondelete="SET NULL"))
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    #: What the signal says: the notes, the refused finding, the hunk before and after.
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    #: Set once a distillation has read it, so the next one reads only what is new.
+    distilled: Mapped[bool] = mapped_column(nullable=False, server_default="false")
+    by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class TasteRule(Base, Mixin):
+    """One sentence of how this person or team likes the work done, proposed from signals and active only once
+    a person adopted it. Its confidence is counted — signals that support it against those that contradict
+    it — never taken from a model."""
+
+    __tablename__ = "taste_rules"
+    __table_args__ = (CheckConstraint("status IN ('proposed', 'active', 'retired')", name="status"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, server_default="proposed")
+    support: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    contradict: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    #: The signal ids behind it.
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    #: Which lane and model proposed it.
+    proposed_by: Mapped[str] = mapped_column(String(160), nullable=False, server_default="")
+    adopted_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    adopted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+

@@ -13,24 +13,29 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import onboarding
-from ..ai.gateway import CHAT, Gateway, NoModel, extract_json
+from ..ai import lanes
+from ..ai.gateway import CHAT, Gateway, NoModel, ProviderError, Result, Stopped, extract_json
 from ..data.base import utcnow
 from ..data.engine import Database
-from ..models import Chat, CodeEdge, CodeFile, CodeSymbol, Project
+from ..models import Chat, ChatMessage, CodeEdge, CodeFile, CodeSymbol, Project
 from ..repositories import ChatRepository, MemoryRepository, NotFound, ProjectRepository
+from ..schemas.runtime import AUTO_COMPACT_AT  # fold once the last prompt filled this share of the window
 from . import extensions
 from .errors import Refused
 from .extensions import SkillFile, Snapshot
+from .instructions import Resolved
+from .instructions import resolve as resolve_instructions
 from .knowledge import MemoryService
 from .retrieval import RetrievalService
 
@@ -40,6 +45,14 @@ MAX_OBSERVATION = 6_000       # what one tool may put back into the conversation
 MAX_HISTORY = 24              # turns replayed to the model
 MAX_QUESTION = 4_000
 MAX_SKILLS_LISTED = 60        # one line each in the system prompt; beyond this the prompt is the cost
+#: Compaction: the newest turns stay word for word; at least this many older ones must be there to fold.
+KEEP_RECENT = 6
+MIN_TO_FOLD = 4
+#: What the summariser is handed at most: one tool result's head, and the whole transcript's tail.
+FOLD_OBSERVATION = 1_500
+FOLD_TRANSCRIPT = 120_000
+#: How often, at most, the words of an answer being written are sent to open tabs.
+STREAM_EVERY = 0.08
 
 
 # ── the tools ────────────────────────────────────────────────────
@@ -236,12 +249,18 @@ class Turn(BaseModel):
     answer: str = ""
 
 
-def system_prompt(project_name: str, skills: Sequence[SkillFile] = ()) -> str:
-    """The standing instructions. Each enabled skill costs one line here; its body is loaded only on ask."""
+def system_prompt(project_name: str, skills: Sequence[SkillFile] = (), instructions: str = "") -> str:
+    """The standing instructions. Each enabled skill costs one line here; its body is loaded only on ask.
+
+    `instructions` is the project's own AGENTS.md / CLAUDE.md text, already read and capped by
+    `services/instructions.resolve` — the caller reads it once per answer. It sits after the tools and
+    before the answer format, so the unchanging opening of the prompt stays the same for every project."""
     offered = [t for t in CATALOGUE if t.name != "load_skill" or skills]
     catalogue = "\n".join(f"- {t.name} {t.takes} — {t.what}" for t in offered)
     listed = "".join(f"\n- {s.slug} — {s.description[:200]}" for s in skills[:MAX_SKILLS_LISTED])
     skill_section = f"Skills (load one with load_skill when it fits):{listed}\n\n" if skills else ""
+    project_section = (f"The project's instructions, from files in its repository — follow them where they "
+                       f"apply to your answer:\n{instructions.strip()}\n\n" if instructions.strip() else "")
     return (
         "You are NeuroCode, working inside an engineering workspace. You answer questions about one "
         f"project: {project_name}.\n\n"
@@ -250,6 +269,7 @@ def system_prompt(project_name: str, skills: Sequence[SkillFile] = ()) -> str:
         "a fact — if the tools do not show it, say so plainly.\n\n"
         f"Tools:\n{catalogue}\n\n"
         f"{skill_section}"
+        f"{project_section}"
         "Answer with one JSON object and nothing else.\n"
         'To use a tool: {"tool": "<name>", "arguments": {…}, "why": "<a short line for the person watching>"}\n'
         'To answer: {"answer": "<your answer, in the language the person used>"}\n'
@@ -301,9 +321,18 @@ class ChatService:
         return {"message": message, "chat": chat}
 
 
+    async def compact(self, ref: str, by: str) -> ChatMessage:
+        """A person's "Compact": fold the older turns now, rather than when the window is nearly full."""
+        chat = await self.chats.by_ref(ref)
+        if chat is None:
+            raise NotFound(f"session {ref}")
+        if chat.status == "thinking":
+            raise Refused(f"{ref} is still answering. Compact it once the answer is in.")
+        return await fold(self.session, self.gateway, chat, by)
+
     async def _command(self, chat: Chat, text: str) -> tuple[extensions.CommandFile, str] | None:
         """The command a `/name args` question names, if one is on disk. A question that only looks like
-        one (`/etc kya hai`) is asked as it is; only a command a person switched off is refused."""
+        one (`/etc/hosts, what is it?`) is asked as it is; only a command a person switched off is refused."""
         parsed = extensions.parse_command(text)
         if parsed is None:
             return None
@@ -327,12 +356,131 @@ def stop(ref: str) -> None:
     _STOPPED.add(ref)
 
 
+class _Answer:
+    """The value of `"answer"` in a JSON object that is still arriving, decoded as far as it has come.
+
+    A session's model answers `{"answer": "…"}` (or names a tool), so the raw stream is JSON. What a
+    person should watch being written is the answer inside it, not braces and escapes — and a tool call
+    shows nothing here, only its reasoning. The final turn is still parsed from the whole reply; this
+    is only what is shown on the way."""
+
+    ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f", '"': '"', "\\": "\\", "/": "/"}
+
+    def __init__(self) -> None:
+        self.raw = ""
+        self.at: int | None = None
+        self.done = False
+
+    def feed(self, piece: str) -> str:
+        """Add what arrived; return the answer's new characters, if any."""
+        self.raw += piece
+        if self.done:
+            return ""
+        if self.at is None:
+            start = self.raw.find('"answer"')
+            colon = self.raw.find(":", start + 8) if start >= 0 else -1
+            quote = self.raw.find('"', colon + 1) if colon >= 0 else -1
+            if quote < 0 or self.raw[start + 8:colon].strip() or self.raw[colon + 1:quote].strip():
+                return ""
+            self.at = quote + 1
+        out, i, raw = [], self.at, self.raw
+        while i < len(raw):
+            c = raw[i]
+            if c == '"':
+                self.done = True
+                i += 1
+                break
+            if c != "\\":
+                out.append(c)
+                i += 1
+                continue
+            if i + 1 >= len(raw):
+                break                                   # the escape's second half has not arrived
+            code = raw[i + 1]
+            if code == "u":
+                if i + 6 > len(raw):
+                    break
+                try:
+                    out.append(chr(int(raw[i + 2:i + 6], 16)))
+                except ValueError:
+                    out.append("?")
+                i += 6
+            else:
+                out.append(self.ESCAPES.get(code, code))
+                i += 2
+        self.at = i
+        return "".join(out)
+
+
+class _Tap:
+    """Hands the words of an answer being written to every open tab, as `chat` events on the stream.
+
+    Called on the gateway's worker thread; the bus is safe to publish from there. The deltas are
+    appended by position (`answerAt`, `reasoningAt`), so a tab that missed one ignores what follows
+    rather than showing words out of order — the finished turn, written once, replaces them all."""
+
+    def __init__(self, bus: Any, ref: str, step: int) -> None:
+        self.bus, self.ref, self.step = bus, ref, step
+        self.answer = _Answer()
+        self.sent = {"answer": 0, "reasoning": 0}
+        self.held = {"answer": "", "reasoning": ""}
+        self.last = 0.0
+        self.t0 = time.monotonic()
+
+    def __call__(self, kind: str, text: str) -> None:
+        if self.bus is None:
+            return
+        if kind == "restart":
+            # The lane failed halfway and the next one starts afresh: what the first wrote is not its.
+            self.flush()
+            self.answer = _Answer()
+            self.sent, self.held = {"answer": 0, "reasoning": 0}, {"answer": "", "reasoning": ""}
+            self.bus.publish("chat", {"sessionRef": self.ref,
+                                      "stream": {"step": self.step, "restart": True, "lane": text}})
+            return
+        piece = self.answer.feed(text) if kind == "answer" else text
+        if piece:
+            self.held[kind] += piece
+        if time.monotonic() - self.last >= STREAM_EVERY:
+            self.flush()
+
+    def flush(self) -> None:
+        if self.bus is None or not (self.held["answer"] or self.held["reasoning"]):
+            return
+        delta: dict[str, Any] = {"step": self.step, "ms": round((time.monotonic() - self.t0) * 1000)}
+        for kind in ("answer", "reasoning"):
+            if self.held[kind]:
+                delta[kind], delta[f"{kind}At"] = self.held[kind], self.sent[kind]
+                self.sent[kind] += len(self.held[kind])
+                self.held[kind] = ""
+        self.last = time.monotonic()
+        self.bus.publish("chat", {"sessionRef": self.ref, "stream": delta})
+
+
+def _thought(result: Result[Any]) -> dict[str, Any]:
+    """How long and how many tokens the model reasoned — stored beside the turn, shown folded."""
+    tokens = int(result.usage.get("reasoning") or 0) if result.usage else 0
+    out: dict[str, Any] = {}
+    if result.thought_ms is not None:
+        out["ms"] = result.thought_ms
+    if tokens:
+        out["tokens"] = tokens
+    return {"thought": out} if out else {}
+
+
 async def _wire(session: AsyncSession, chat: Chat, project_name: str,
-                skills: Sequence[SkillFile] = ()) -> list[dict[str, str]]:
-    """The conversation as the model sees it: the system prompt, then the turns, newest last."""
-    out: list[dict[str, str]] = [{"role": "system", "content": system_prompt(project_name, skills)}]
-    turns = await ChatRepository(session).messages(chat.id)
-    for m in turns[-MAX_HISTORY:]:
+                skills: Sequence[SkillFile] = (), project_instructions: str = "") -> list[dict[str, str]]:
+    """The conversation as the model sees it: the system prompt, the summary of what was folded, then
+    the turns since, newest last. A folded turn stays in the table for the person to read and is never
+    sent again; reasoning is never sent back at all — it is the model's working, not the conversation."""
+    out: list[dict[str, str]] = [{"role": "system",
+                                  "content": system_prompt(project_name, skills, project_instructions)}]
+    turns = [m for m in await ChatRepository(session).messages(chat.id) if not m.compacted]
+    summary = next((m for m in reversed(turns) if m.role == "summary"), None)
+    if summary is not None:
+        out.append({"role": "user", "content": "A summary of the earlier conversation, written by a model; the "
+                                               f"turns it covers are left out:\n{summary.body}"})
+    for m in [m for m in turns if m.role != "summary"][-MAX_HISTORY:]:
         if m.role == "you":
             out.append({"role": "user", "content": m.body[:MAX_QUESTION]})
         elif m.role == "assistant":
@@ -351,17 +499,19 @@ async def _wire(session: AsyncSession, chat: Chat, project_name: str,
 
 
 async def _tool_turn(session: AsyncSession, gateway: Gateway, chat: Chat, project: Project,
-                     turn: Turn, skills: Sequence[SkillFile] = (), recalled: set[str] | None = None) -> None:
+                     turn: Turn, skills: Sequence[SkillFile] = (), recalled: set[str] | None = None,
+                     reasoning: str = "") -> None:
     """Run one tool and write what it found — a refusal is reported into the conversation, not raised.
 
     `recalled` is the facts this answer has already been handed, so a fact two tools both return is
-    counted as one recall of it, not two."""
+    counted as one recall of it, not two. `reasoning` is what the model thought before it chose the tool."""
     tool = BY_NAME.get(turn.tool.strip())
     if tool is None:
         await ChatRepository(session).say(
             chat.id, role="tool", body=f"There is no tool called {turn.tool!r}. The tools are: "
                                        f"{', '.join(BY_NAME)}.",
-            tool=turn.tool.strip()[:40] or "?", arguments=turn.arguments or {}, detail="refused", ok=False)
+            tool=turn.tool.strip()[:40] or "?", arguments=turn.arguments or {}, detail="refused", ok=False,
+            reasoning=reasoning)
         return
     tools = Tools(session, gateway, project, skills)
     try:
@@ -378,7 +528,7 @@ async def _tool_turn(session: AsyncSession, gateway: Gateway, chat: Chat, projec
         await MemoryService(session).recall(fresh, via="chat", context=chat.ref)
     await ChatRepository(session).say(chat.id, role="tool", body=observation[:MAX_OBSERVATION],
                                       tool=tool.name, arguments=turn.arguments or {},
-                                      why=turn.why[:160], detail=detail, ok=ok)
+                                      why=turn.why[:160], detail=detail, ok=ok, reasoning=reasoning)
 
 
 def _grounding_question(turns: Sequence[Any]) -> str:
@@ -394,11 +544,108 @@ def _grounding_question(turns: Sequence[Any]) -> str:
     return ""
 
 
+# ── compaction ───────────────────────────────────────────────────
+FOLD_SYSTEM = (
+    "You summarise the earlier part of a conversation between a person and NeuroCode, an assistant that "
+    "reads a code project with tools, so the conversation can go on without those turns. Keep what the "
+    "person asked and decided, every file path, symbol, line number and fact the tools returned that a "
+    "later answer may need, and what is still open. Add nothing the turns do not say.\n"
+    'Answer with one JSON object and nothing else: {"summary": "<the summary, in the language the person used>"}'
+)
+
+
+class Folded(BaseModel):
+    summary: str = Field(min_length=1)
+
+
+def _transcript(turns: Sequence[ChatMessage]) -> str:
+    """The turns to fold, as plain text: long tool results cut to their head, and the whole cut to its
+    tail when it is still too long — the newest of the folded turns matter most to what comes next."""
+    lines = []
+    for m in turns:
+        if m.role == "summary":
+            lines.append(f"Summary of what came before:\n{m.body}")
+        elif m.role == "you":
+            lines.append(f"Person: {m.body}")
+        elif m.role == "assistant":
+            lines.append(f"NeuroCode: {m.body}")
+        elif m.role == "tool":
+            body = m.body if len(m.body) <= FOLD_OBSERVATION else f"{m.body[:FOLD_OBSERVATION]} […]"
+            lines.append(f"Tool {m.tool} ({m.detail}):\n{body}")
+        elif m.role == "note":
+            lines.append(f"Note: {m.body}")
+    text = "\n\n".join(lines)
+    return text[-FOLD_TRANSCRIPT:]
+
+
+async def fold(session: AsyncSession, gateway: Gateway, chat: Chat, by: str) -> ChatMessage:
+    """Fold a session's older turns into one summary written by a model, keeping the newest turns word
+    for word. The folded turns are marked, never deleted: the person still reads all of it, and the
+    model is sent the summary instead. Refused when there is too little to fold or no lane can write it."""
+    repo = ChatRepository(session)
+    live = [m for m in await repo.messages(chat.id, limit=1000) if not m.compacted]
+    turns = [m for m in live if m.role != "summary"]
+    older = turns[:-KEEP_RECENT] if len(turns) > KEEP_RECENT else []
+    if len(older) < MIN_TO_FOLD:
+        raise Refused(f"{chat.ref} is short enough to send whole: there is nothing to compact yet.")
+    folding = [m for m in live if m.role == "summary"] + older
+    try:
+        result = await asyncio.to_thread(
+            gateway.ask, [{"role": "system", "content": FOLD_SYSTEM},
+                          {"role": "user", "content": _transcript(folding)}],
+            lambda raw: Folded.model_validate(extract_json(raw, trim=False)),
+            feature="compact", actor=by, project=chat.project_id, role=CHAT)
+    except NoModel as e:
+        raise Refused(f"Nothing was folded: {e}", status=409) from e
+    except ProviderError as e:
+        raise Refused(f"Nothing was folded: no lane could write the summary ({e.body[:200]}).", status=502) from e
+    summary = await repo.say(
+        chat.id, role="summary", body=result.data.summary, by=by, model=result.provider.model,
+        lane=result.provider.id, ms=result.ms, reasoning=result.reasoning,
+        arguments={"folded": len(older), "from": older[0].id, "to": older[-1].id})
+    await session.execute(update(ChatMessage).where(ChatMessage.id.in_([m.id for m in folding]))
+                          .values(compacted=True))
+    for m in folding:
+        m.compacted = True
+    return summary
+
+
+def _crowded(chat: Chat) -> bool:
+    """Has the last call's prompt filled enough of the lane's window to fold before the next one?"""
+    window = lanes.window_for(chat.lane, chat.model)
+    return bool(window and chat.context_tokens and chat.context_tokens >= AUTO_COMPACT_AT * window)
+
+
+def _resolved(project: Project | None) -> Resolved | None:
+    """The project's own instruction files (AGENTS.md, CLAUDE.md, rules), or None when its code is not
+    on this machine to read. Blocking: called on a worker thread."""
+    if project is None or not project.source_kind:
+        return None
+    root = onboarding.source_root({"id": project.id, "source": {"kind": project.source_kind,
+                                                                  "repo": project.source_repo}})
+    if root is None or not root.is_dir():
+        return None
+    return resolve_instructions(root)
+
+
+def _instructions(project: Project | None) -> str:
+    """The instructions' text, as the system prompt carries it, read once per answer."""
+    found = _resolved(project)
+    return found.text if found else ""
+
+
+def instruction_files(project: Project | None) -> list[dict[str, Any]] | None:
+    """What the session's screen lists: `[{path, bytes}]`, or None when there was nothing to read."""
+    found = _resolved(project)
+    return found.brief() if found else None
+
+
 async def think(db: Database, gateway: Gateway, ref: str, by: str) -> None:
     """Answer the last question: ground it, read with the tools, then say what was found.
 
     Each turn is written in a transaction of its own, so a crash halfway through loses only the turn
-    that was in flight — everything already said is already saved.
+    that was in flight — everything already said is already saved. The answer being written is shown
+    as it arrives (`_Tap`) and written once, whole, when it is done.
     """
     _STOPPED.discard(ref)
     async with db.session() as s:
@@ -414,6 +661,21 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str) -> None:
     # prompt and every load_skill call works from this snapshot instead of reading the disk again.
     async with db.read() as s:
         found: Snapshot = await extensions.snapshot(s, project)
+    try:
+        standing = await asyncio.to_thread(_instructions, project)
+    except Exception:                                # unreadable instructions must not end the session
+        standing = ""
+
+    # Near the lane's window, the older turns are folded before the model is asked again. A fold that
+    # cannot happen (no lane, nothing to fold) leaves the session as it was, and it answers anyway.
+    if _crowded(chat):
+        async with db.session() as s:
+            fresh = await ChatRepository(s).by_ref(ref)
+            if fresh is not None:
+                try:
+                    await fold(s, gateway, fresh, by)
+                except Refused:
+                    pass
 
     # Before the model is asked anything, retrieval answers the cheapest question: what do we already
     # hold about this? It is a turn like any other, so the model replays it and the person sees it.
@@ -439,29 +701,46 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str) -> None:
             last = step == MAX_STEPS
 
             async with db.read() as s:
-                messages = await _wire(s, chat, project_name, found.skills)
+                messages = await _wire(s, chat, project_name, found.skills, standing)
             if last:
                 messages.append({"role": "user", "content":
                                  "You have used every tool call. Answer now with what you already "
                                  'have, as {"answer": "…"}.'})
 
+            tap = _Tap(db.bus, ref, step)
             try:
                 result = await asyncio.to_thread(
                     gateway.ask, messages,
                     lambda raw: Turn.model_validate(extract_json(raw, trim=False)),
-                    feature="chat", actor=by, project=chat.project_id, role=CHAT)
+                    feature="chat", actor=by, project=chat.project_id, role=CHAT,
+                    on_delta=tap, stop=lambda: ref in _STOPPED)
+            except Stopped as stopped:
+                # What had been written stays, marked as stopped: it is the person's to read, not an answer.
+                words = _Answer()
+                partial = words.feed(stopped.reply.text)
+                async with db.session() as s:
+                    if partial.strip():
+                        await ChatRepository(s).say(chat.id, role="assistant", body=partial, detail="stopped",
+                                                    reasoning=stopped.reply.reasoning)
+                    await ChatRepository(s).say(chat.id, role="note", body="You stopped this answer.",
+                                                reasoning="" if partial.strip() else stopped.reply.reasoning)
+                break
             except NoModel as e:
                 async with db.session() as s:
                     await ChatRepository(s).say(chat.id, role="note", body=str(e))
                 break
             except Exception as e:                       # every lane failed, or none could be parsed
+                why = f" The last lane said: {e.body}" if isinstance(e, ProviderError) and e.body else ""
                 async with db.session() as s:
                     await ChatRepository(s).say(
                         chat.id, role="note",
-                        body=f"No lane could answer: {type(e).__name__}. Try again in a moment.")
+                        body=f"No lane could answer: {type(e).__name__}. Try again in a moment.{why}"[:1_000])
                 break
+            finally:
+                tap.flush()
 
             turn = result.data
+            prompt_tokens = int(result.usage.get("in") or 0) if result.usage else 0
             if turn.answer or not turn.tool or last:
                 # On the last step whatever comes back is the answer: a session always ends in words.
                 async with db.session() as s:
@@ -470,17 +749,23 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str) -> None:
                         chat.id, role="assistant",
                         body=turn.answer or f"I read what I could in {MAX_STEPS} tool calls without "
                                             "reaching an answer.",
-                        model=result.provider.model, lane=result.provider.id, ms=result.ms)
+                        model=result.provider.model, lane=result.provider.id, ms=result.ms,
+                        reasoning=result.reasoning, arguments=_thought(result))
                     if fresh is not None:
                         fresh.turns += 1
                         fresh.model, fresh.lane = result.provider.model, result.provider.id
+                        if prompt_tokens:
+                            fresh.context_tokens = prompt_tokens
                 break
 
             async with db.session() as s:
                 fresh = await ChatRepository(s).by_ref(ref)
                 if fresh is None:
                     break
-                await _tool_turn(s, gateway, fresh, project, turn, found.skills, recalled)
+                if prompt_tokens:
+                    fresh.context_tokens = prompt_tokens
+                    fresh.model, fresh.lane = result.provider.model, result.provider.id
+                await _tool_turn(s, gateway, fresh, project, turn, found.skills, recalled, result.reasoning)
     finally:
         async with db.session() as s:
             fresh = await ChatRepository(s).by_ref(ref)

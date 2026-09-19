@@ -15,7 +15,8 @@ import { Topbar } from '@/components/layout/Topbar';
 import { CommandPalette } from '@/components/layout/CommandPalette';
 import { PageSkeleton, RouteBoundary } from '@/components/layout/RouteBoundary';
 import { NotConnected } from '@/components/layout/NotConnected';
-import { Empty, LogoMark, Page, PageBody } from '@/components/os';
+import { Empty, Page, PageBody } from '@/components/os';
+import { LogoSymbol } from '@/components/os/Logo';
 
 // The home screen ships in the entry chunk so first paint never waits on a second request.
 // Every other screen is its own chunk, fetched the first time it is opened.
@@ -187,7 +188,7 @@ function Splash() {
   return (
     <div className="grid h-full w-full place-items-center bg-bg">
       <div className="flex flex-col items-center gap-3">
-        <LogoMark size={40} />
+        <LogoSymbol size={40} />
         <span className="text-[13px] text-dim">Opening your workspace…</span>
       </div>
     </div>

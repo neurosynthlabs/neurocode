@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowDown, FileCode, Database, Boxes, HelpCircle, FlaskConical, Play, Cpu, RefreshCw, Check, Workflow,
+  BookOpen, ListChecks, Pencil,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -9,7 +10,10 @@ import {
   BlockBar, SectionTitle, KV, Bar,
 } from '@/components/os';
 import { inFlight, useData } from '@/lib/data';
-import type { RunDoc } from '@/lib/api';
+import { ApiError, type RunDoc } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
+import { instructionsApi, type GroundedPlan } from '@/lib/live/instructions';
+import { runtimeApi } from '@/lib/live/runtime';
 import { workflowsApi } from '@/lib/live/workflows';
 import { projectLabel } from '@/lib/live/work';
 import { cn } from '@/lib/utils';
@@ -28,6 +32,50 @@ const STAGES = [
   { k: 'technicalRequirement', label: 'Technical requirement',hint: 'what has to change in the code' },
 ] as const;
 
+/** One affected file, and what checking it against the code index said. */
+function FileLine({ path, p }: { path: string; p: GroundedPlan }) {
+  const check = p.fileCheck;
+  const candidates = check?.ambiguous[path];
+  return (
+    <div className="flex items-center gap-2 px-3.5 py-1.5">
+      <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-2" title={path}>{path}</span>
+      {check?.newFiles.includes(path) && <span title="Not in the code index: a file this change creates"><Tag tone="brand">new</Tag></span>}
+      {candidates && <span title={`Matches ${candidates.join(', ')} in the code index`}><Tag tone="warn">{candidates.length}+ matches</Tag></span>}
+    </div>
+  );
+}
+
+/** What the compiler was handed: instruction files, code and document pieces, remembered facts. */
+function GroundedIn({ p }: { p: GroundedPlan }) {
+  const grounding = p.grounding ?? [];
+  const told = grounding.filter((g) => g.kind === 'instructions');
+  const pieces = grounding.filter((g) => g.kind !== 'instructions');
+  const facts = p.cited ?? [];
+  if (!p.compiler) {
+    return <p className="px-3.5 py-3 text-[13px] text-dim">Written by a workflow, not compiled — nothing was handed to a model.</p>;
+  }
+  if (told.length + pieces.length + facts.length === 0) {
+    return <p className="px-3.5 py-3 text-[13px] text-dim">Nothing: no instruction files, no indexed code and no memory matched. The plan rests on the requirement alone.</p>;
+  }
+  const group = (label: string, items: { key: string; main: string; sub?: string }[]) => items.length > 0 && (
+    <div className="px-3.5 py-2.5">
+      <p className="mb-1 text-[12px] font-medium text-dim">{label}</p>
+      {items.map((x) => (
+        <p key={x.key} className="truncate font-mono text-[12px] text-ink-2" title={x.sub ? `${x.main} · ${x.sub}` : x.main}>
+          {x.main}{x.sub && <span className="text-dim"> · {x.sub}</span>}
+        </p>
+      ))}
+    </div>
+  );
+  return (
+    <div className="divide-y divide-line">
+      {group('Instruction files', told.map((g) => ({ key: g.path, main: g.path, sub: `sha ${g.ref.slice(0, 7)}` })))}
+      {group('Code and documents from retrieval', pieces.map((g) => ({ key: g.ref, main: g.ref, sub: g.kind === 'doc' ? 'document' : undefined })))}
+      {group('Memory facts', facts.map((ref) => ({ key: ref, main: ref })))}
+    </div>
+  );
+}
+
 /** Which model compiled a plan, or the workflow that wrote it. */
 function CompiledBy({ p, workflow }: { p: Plan; workflow: string | null }) {
   if (p.compiler) {
@@ -44,6 +92,7 @@ function CompiledBy({ p, workflow }: { p: Plan; workflow: string | null }) {
 export default function Plans() {
   const nav = useNavigate();
   const { plans, runs, projects, settleQuestion, dispatchPlan, recompile } = useData();
+  const { can } = useAuth();
   const [workflows, setWorkflows] = useState<Record<string, string>>({});
   const wanted = useSearchParams()[0].get('ref');
   // ?ref= (⌘K) opens a plan, also when this screen is already showing; a click picks another until the link changes.
@@ -51,7 +100,14 @@ export default function Plans() {
   const sel = (picked && picked.link === wanted ? picked.ref : null) ?? wanted ?? plans[0]?.ref ?? '';
   // An answer being typed belongs to one plan's question, so opening another plan never shows it.
   const [typing, setTyping] = useState<{ plan: string; index: number; text: string } | null>(null);
-  const [working, setWorking] = useState<'dispatch' | 'recompile' | null>(null);
+  const [working, setWorking] = useState<'dispatch' | 'recompile' | 'criteria' | null>(null);
+  // Criteria being edited belong to one plan, like an answer being typed. `saved` is the server's answer to
+  // a save and the store's criteria at that moment: it is shown only while the store still holds those, so
+  // the list never flashes back to the old sentences, and whatever the stream delivers next wins.
+  const [criteriaDraft, setCriteriaDraft] = useState<{ plan: string; text: string } | null>(null);
+  const [saved, setSaved] = useState<{ doc: GroundedPlan; before: string } | null>(null);
+  // "Run until done": attempts in all, the first included — the API takes 1 to 5.
+  const [goal, setGoal] = useState<{ on: boolean; budget: number }>({ on: false, budget: 3 });
   const p = useMemo(() => plans.find((x) => x.ref === sel) ?? plans[0], [plans, sel]);
   // Workflow names, only when a plan came from one: the plan keeps the id, the workflow keeps the name.
   const fromWorkflow = plans.some((x) => x.workflowId);
@@ -80,6 +136,12 @@ export default function Plans() {
     );
   }
 
+  const held: GroundedPlan = p;
+  const g: GroundedPlan = saved?.doc.ref === p.ref && (held.acceptanceCriteria ?? []).join('\n') === saved.before
+    ? { ...p, acceptanceCriteria: saved.doc.acceptanceCriteria, criteriaEdited: saved.doc.criteriaEdited }
+    : p;
+  const criteria = g.acceptanceCriteria ?? [];
+  const editingCriteria = criteriaDraft?.plan === p.ref ? criteriaDraft : null;
   const run = runOf.get(p.ref);
   const draft = typing?.plan === p.ref ? typing : null;
   const setDraft = (next: { index: number; text: string } | null) => setTyping(next && { plan: p.ref, ...next });
@@ -94,13 +156,45 @@ export default function Plans() {
     else toast.success('Answer recorded', { description: 'Saved to memory as a business rule, so the next plan knows it.' });
   };
 
+  const untilDone = goal.on && criteria.length > 0;
   const dispatch = async () => {
     setWorking('dispatch');
-    const ok = await dispatchPlan(p.ref);
+    let ok: boolean;
+    if (untilDone) {
+      // The store's own dispatch sends no budget; the plan and its run arrive on the stream either way.
+      try {
+        await runtimeApi.dispatch(p.ref, { goalBudget: goal.budget });
+        ok = true;
+      } catch (e) {
+        toast.error('Not dispatched', { description: e instanceof ApiError ? e.message : 'The local API did not answer.' });
+        ok = false;
+      }
+    } else {
+      ok = await dispatchPlan(p.ref);
+    }
     setWorking(null);
     if (!ok) return;
-    toast.success(`${p.ref} dispatched`, { description: `${p.taskRef} is in progress. Its run, once one starts, is in Live runs.` });
+    toast.success(`${p.ref} dispatched`, {
+      description: untilDone
+        ? `${p.taskRef} runs until its acceptance criteria are met, ${goal.budget} attempt${goal.budget > 1 ? 's' : ''} at most. It still stops at your signature.`
+        : `${p.taskRef} is in progress. Its run, once one starts, is in Live runs.`,
+    });
     nav('/tasks');
+  };
+
+  const saveCriteria = async (text: string) => {
+    setWorking('criteria');
+    try {
+      const before = (held.acceptanceCriteria ?? []).join('\n');
+      const doc = await instructionsApi.setCriteria(p.ref, text.split('\n').map((x) => x.trim()).filter(Boolean));
+      setSaved({ doc, before });
+      setCriteriaDraft(null);
+      toast.success('Acceptance criteria saved', { description: `${doc.acceptanceCriteria?.length ?? 0} for ${doc.ref}. A re-compile keeps them.` });
+    } catch (e) {
+      toast.error('Not saved', { description: e instanceof ApiError ? e.message : 'The local API did not answer.' });
+    } finally {
+      setWorking(null);
+    }
   };
 
   const again = async () => {
@@ -114,7 +208,7 @@ export default function Plans() {
     <Page>
       <PageHeader
         title="Plans"
-        subtitle="The requirement compiler. Broken Hinglish in, an evidenced implementation plan out — with the open questions it refuses to guess at."
+        subtitle="The requirement compiler. A requirement in your own words goes in; an evidenced implementation plan comes out, with the open questions it refuses to guess at."
         actions={<Button size="sm" onClick={() => nav('/tasks')}><Play className="size-3.5" />Open the board</Button>}
       />
 
@@ -178,11 +272,15 @@ export default function Plans() {
                     : p.affectedModules.map((m) => <div key={m} className="px-3.5 py-1.5 text-[13px] text-ink-2">{m}</div>)}
                 </div>
               </Panel>
-              <Panel eyebrow={`${p.affectedFiles.length} files`} title={<span className="flex items-center gap-1.5"><FileCode className="size-3.5 text-brand" />Affected files</span>} flush>
+              <Panel
+                eyebrow={!g.fileCheck ? `${p.affectedFiles.length} files` : !g.fileCheck.checked
+                  ? `${p.affectedFiles.length} files · not checked, no code index`
+                  : `${p.affectedFiles.length - g.fileCheck.newFiles.length} in the index · ${g.fileCheck.newFiles.length} new`}
+                title={<span className="flex items-center gap-1.5"><FileCode className="size-3.5 text-brand" />Affected files</span>} flush>
                 <div className="divide-y divide-line">
                   {p.affectedFiles.length === 0
                     ? <div className="px-3.5 py-3 text-[13px] text-dim">None named yet.</div>
-                    : p.affectedFiles.map((f) => <div key={f} className="truncate px-3.5 py-1.5 font-mono text-[12px] text-ink-2" title={f}>{f}</div>)}
+                    : p.affectedFiles.map((f) => <FileLine key={f} path={f} p={g} />)}
                 </div>
               </Panel>
               <Panel eyebrow={`${p.affectedDb.length} objects`} title={<span className="flex items-center gap-1.5"><Database className="size-3.5 text-brand" />Affected database</span>} flush>
@@ -311,6 +409,50 @@ export default function Plans() {
             </Panel>
           </div>
 
+          <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <Panel eyebrow="What the compiler was handed" title={<span className="flex items-center gap-1.5"><BookOpen className="size-3.5 text-brand" />Grounded in</span>} flush>
+              <GroundedIn p={g} />
+            </Panel>
+
+            <Panel eyebrow={g.criteriaEdited ? 'Edited by a person · a re-compile keeps them' : 'What done means · proposed by the compiler'}
+              title={<span className="flex items-center gap-1.5"><ListChecks className="size-3.5 text-brand" />Acceptance criteria</span>}
+              actions={!underway && !editingCriteria && can('plans:decide') ? (
+                <Button size="xs" variant="ghost" onClick={() => setCriteriaDraft({ plan: p.ref, text: criteria.join('\n') })}>
+                  <Pencil className="size-3" />Edit
+                </Button>
+              ) : undefined}
+              flush>
+              {editingCriteria ? (
+                <form className="space-y-1.5 px-3.5 py-2.5"
+                  onSubmit={(e) => { e.preventDefault(); void saveCriteria(editingCriteria.text); }}>
+                  <textarea autoFocus rows={5} value={editingCriteria.text}
+                    onChange={(e) => setCriteriaDraft({ plan: p.ref, text: e.target.value })}
+                    aria-label="Acceptance criteria, one per line"
+                    placeholder="One checkable sentence per line…"
+                    className="w-full resize-y rounded-sm border border-line bg-base px-2.5 py-1.5 text-[13px] text-ink placeholder:text-dim focus-visible:border-brand focus-visible:outline-none" />
+                  <p className="text-[11.5px] text-dim">One per line, up to 12. Blank lines are dropped.</p>
+                  <div className="flex gap-1.5">
+                    <Button size="xs" type="submit" disabled={working !== null}><Check className="size-3" />{working === 'criteria' ? 'Saving…' : 'Save criteria'}</Button>
+                    <Button size="xs" type="button" variant="ghost" onClick={() => setCriteriaDraft(null)}>Cancel</Button>
+                  </div>
+                </form>
+              ) : criteria.length === 0 ? (
+                <p className="px-3.5 py-3 text-[13px] text-dim">
+                  {underway ? 'None were set before it was dispatched.' : 'None yet. A compile proposes them; you can write your own before dispatch.'}
+                </p>
+              ) : (
+                <div className="divide-y divide-line">
+                  {criteria.map((c, i) => (
+                    <div key={c} className="flex items-start gap-2.5 px-3.5 py-1.5">
+                      <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[11.5px] text-dim">{i + 1}</span>
+                      <span className="text-[13px] text-ink-2">{c}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Panel>
+          </div>
+
           <Panel className="mt-3" eyebrow="Verification" title={<span className="flex items-center gap-1.5"><FlaskConical className="size-3.5 text-brand" />Test plan</span>} flush>
             {p.testPlan.length === 0 && <p className="px-3.5 py-3 text-[13px] text-dim">No test plan was written for this plan.</p>}
             <div className="divide-y divide-line">
@@ -332,6 +474,23 @@ export default function Plans() {
               <RefreshCw className={cn('size-3.5', working === 'recompile' && 'animate-spin')} />
               {working === 'recompile' ? 'Re-compiling…' : 'Re-compile'}
             </Button>
+            {!underway && can('plans:decide') && (
+              <span className="flex flex-wrap items-center gap-1.5 text-[12.5px] text-ink-2">
+                <label className="flex items-center gap-1.5" title="After tests, checks and review, a second model judges each acceptance criterion against the diff; a miss sends the run back on its own.">
+                  <input type="checkbox" checked={goal.on} disabled={criteria.length === 0}
+                    onChange={(e) => setGoal({ ...goal, on: e.target.checked })} className="accent-brand" />
+                  Run until done
+                </label>
+                {goal.on && criteria.length > 0 && (
+                  <select value={goal.budget} onChange={(e) => setGoal({ ...goal, budget: Number(e.target.value) })}
+                    aria-label="Attempts at most"
+                    className="h-7 rounded-sm border border-line bg-base px-1.5 text-[12.5px] text-ink focus-visible:border-brand focus-visible:outline-none">
+                    {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n} attempt{n > 1 ? 's' : ''}</option>)}
+                  </select>
+                )}
+                {criteria.length === 0 && <span className="text-[12px] text-dim">needs acceptance criteria</span>}
+              </span>
+            )}
             {!underway && open > 0 && (
               <span className="text-[12px] text-warn">Answer or defer {open} open question{open > 1 ? 's' : ''} to dispatch.</span>
             )}

@@ -111,6 +111,7 @@ export default function AiProviders() {
                   ) : <Tag>Not set</Tag>}
                 />
                 <KV k="Model" v={cfg.deepseek.model} mono />
+                {cfg.deepseek.retired && <p className="mt-2 rounded-lg bg-warn/10 px-3 py-2 text-[12.5px] text-warn">{cfg.deepseek.retired}</p>}
                 <form onSubmit={saveKey} className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-end">
                   <Field
                     className="flex-1" label={cfg.deepseek.hasKey ? 'Replace the key' : 'API key'} type="password" mono
@@ -127,6 +128,8 @@ export default function AiProviders() {
                   <Field label="Model" mono value={ds.model ?? cfg.deepseek.model} onChange={(v) => setDs({ ...ds, model: v })} disabled={!manage} />
                   <Field label="Base URL" mono value={ds.baseUrl ?? cfg.deepseek.baseUrl} onChange={(v) => setDs({ ...ds, baseUrl: v })} disabled={!manage} />
                 </div>
+                <ModelChoices lane={cfg.lanes.find((l) => l.id === 'deepseek')} current={ds.model ?? cfg.deepseek.model}
+                  disabled={!manage} onPick={(model) => setDs({ ...ds, model })} />
                 <Footer
                   result={tests.deepseek} onTest={() => void test('deepseek')}
                   dirty={ds.model !== undefined || ds.baseUrl !== undefined}
@@ -220,7 +223,16 @@ function Lanes({ lanes, manage, busy, tests, onTest, onPatch }: {
             <p className="mt-1.5 text-[12.5px] leading-relaxed text-dim">
               {lane.ready ? lane.note : <span className="text-warn">{lane.blocked}</span>}
               {' · '}good at {lane.goodAt.join(', ')}
+              {lane.window ? ` · ${tokens(lane.window)} context` : ''}
+              {lane.thinks ? ' · thinking set per feature on Models & Router' : ''}
             </p>
+            {lane.retired && <p className="mt-1.5 rounded-lg bg-warn/10 px-3 py-2 text-[12.5px] text-warn">{lane.retired}</p>}
+            {lane.prices.length > 0 && (
+              <p className="mt-1.5 text-[12px] leading-relaxed text-soft">
+                {lane.prices.map((p) => `${p.model}: $${p.usdPerMIn} in, $${p.usdPerMCached} cached, $${p.usdPerMOut} out`).join(' · ')}
+                {' '}per million tokens{lane.offPeak ? `. ${lane.offPeak.words}` : ''}
+              </p>
+            )}
 
             {manage && lane.needsKey && !lane.hasKey && (
               <div className="mt-2.5 flex flex-col gap-2 sm:flex-row sm:items-end">
@@ -274,6 +286,23 @@ function Usage() {
         </DataTable>
       )}
     </Panel>
+  );
+}
+
+/** The models the lane's provider serves now, as one-click choices beside the free-text field. */
+function ModelChoices({ lane, current, disabled, onPick }: {
+  lane: AiLane | undefined; current: string; disabled: boolean; onPick: (model: string) => void;
+}) {
+  if (!lane || lane.models.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      <span className="text-[12px] text-dim">Served now:</span>
+      {lane.models.map((m) => (
+        <Button key={m} size="xs" variant={m === current ? 'secondary' : 'outline'} disabled={disabled || m === current} onClick={() => onPick(m)}>
+          <Mono>{m}</Mono>
+        </Button>
+      ))}
+    </div>
   );
 }
 

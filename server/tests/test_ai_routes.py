@@ -33,10 +33,10 @@ from tests.fixtures.workspace import load_workspace, rows
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
 HEADERS = {"X-NC-Client": "test"}
-IDEA = "Ek queue system chahiye jo OPD patients ko unka asli wait time bataye, SMS pe."
-NOTES = ("Tax hamesha line item pe round hona chahiye, invoice total pe nahi. "
-         "Client ne decide kiya ki GST slabs sirf MST_TAX table se aayenge. "
-         "Baaki chhoti cheezein baad mein dekh lenge.")
+IDEA = "A queue that tells outpatients their real waiting time, by SMS."
+NOTES = ("Tax must always be rounded per line item, never on the invoice total. "
+         "The client decided that GST slabs come only from the MST_TAX table. "
+         "The small things can wait until later.")
 
 
 @pytest_asyncio.fixture
@@ -150,7 +150,7 @@ async def test_a_provider_that_fails_a_brainstorm_is_passed_through_with_its_rea
 async def test_the_next_reference_comes_from_the_database_not_from_counting(client: AsyncClient, monkeypatch):
     answering(monkeypatch, BRIEF, BRIEF)
     first = await client.post("/ai/brainstorm", json={"idea": IDEA})
-    second = await client.post("/ai/brainstorm", json={"idea": "Memory ko decay hona chahiye."})
+    second = await client.post("/ai/brainstorm", json={"idea": "Memory should decay when it is not used."})
     assert (first.json()["ref"], second.json()["ref"]) == ("IDEA-1", "IDEA-2")
     assert first.json()["id"] != second.json()["id"]
     assert first.json()["projectId"] is None

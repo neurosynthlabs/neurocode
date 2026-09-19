@@ -15,6 +15,8 @@ from ..models import ActivityEvent, Approval, Decision, Plan, Pref, Project, Set
 SIZES = ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K"))
 #: Which task statuses the project card counts as "running", "in review" and "blocked".
 RUNNING = ("in_progress",)
+#: What the plan service keeps beside the lane in `plans.compiler`, sent as fields of their own.
+PLAN_CHECKS = ("criteria", "fileCheck")
 
 
 def fmt_lines(n: int) -> str:
@@ -44,7 +46,13 @@ def task_json(task: Task) -> dict[str, Any]:
 
 
 def plan_json(plan: Plan, *, task_ref: str | None = None, run_ref: str | None = None) -> dict[str, Any]:
-    """Questions are rows now, so the three lists the screens read are rebuilt from their state."""
+    """Questions are rows now, so the three lists the screens read are rebuilt from their state.
+
+    `fileCheck` is what checking the named files against the code index found — `{checked, newFiles,
+    ambiguous}` — or null for a plan nobody checked (a workflow's, or one compiled before the check).
+    `criteriaEdited` is true once the acceptance criteria are no longer the ones the compiler proposed."""
+    compiled = plan.compiler or {}
+    criteria = list(plan.acceptance_criteria or [])
     answered = [{"q": q.question, "a": q.answer} for q in plan.questions if q.answer]
     deferred = [q.question for q in plan.questions if q.deferred]
     open_questions = [q.question for q in plan.questions if not q.answer and not q.deferred]
@@ -61,7 +69,9 @@ def plan_json(plan: Plan, *, task_ref: str | None = None, run_ref: str | None = 
                   for s in plan.steps],
         "testPlan": plan.test_plan or [], "openQuestions": open_questions, "status": plan.status,
         "answered": answered, "deferred": deferred, "cited": plan.cited or [], "grounding": plan.grounding or [],
-        "compiler": plan.compiler or None, "requestedBy": plan.requested_by, "workflowId": plan.workflow_id,
+        "compiler": {k: v for k, v in compiled.items() if k not in PLAN_CHECKS} or None, "requestedBy": plan.requested_by, "workflowId": plan.workflow_id,
+        "acceptanceCriteria": criteria, "criteriaEdited": criteria != list(compiled.get("criteria") or []),
+        "fileCheck": compiled.get("fileCheck"),
         **({"runRef": run_ref} if run_ref else {}),
     }
 

@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ExternalLink, FolderGit2, Globe, Loader2, RefreshCw, Scale, Search } from 'lucide-react';
+import { ExternalLink, FileText, FolderGit2, Globe, Loader2, RefreshCw, Scale, Search, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
@@ -12,11 +12,12 @@ import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useData } from '@/lib/data';
 import { useProject } from '@/lib/project-context';
+import { instructionsApi, kb } from '@/lib/live/instructions';
 import { useRemote } from '@/lib/remote';
 import type { Project } from '@/types';
 import { ago } from './code/format';
 
-type Tab = 'modules' | 'rules' | 'decisions' | 'hotspots';
+type Tab = 'modules' | 'instructions' | 'rules' | 'decisions' | 'hotspots';
 
 export default function ProjectOverview() {
   const { projectId } = useParams();
@@ -47,6 +48,7 @@ function Overview({ p }: { p: Project }) {
   const [tab, setTab] = useState<Tab>('modules');
   const [q, setQ] = useState('');
   const [asked, setAsked] = useState<string | null>(null);
+  const [drafting, setDrafting] = useState(false);
 
   // The index's finish time streams in on the project record: a new index reloads the summary.
   const stamp = p.codeIndex?.at ?? 'none';
@@ -59,6 +61,9 @@ function Overview({ p }: { p: Project }) {
     const t = q.trim().toLowerCase();
     return t ? all.filter((m) => m.name.toLowerCase().includes(t)) : all;
   }, [summary, q]);
+  // Read off the checkout on every request, so a new index — the likeliest moment a file changed — reads it again.
+  const ins = useRemote(p.source ? `${p.id}:${stamp}:instructions` : null, () => instructionsApi.list(p.id));
+  const told = ins.data;
   const hotspots = summary?.hotspots ?? [];
   const rules = p.rules ?? [];
   const decisions = useMemo(
@@ -78,6 +83,19 @@ function Overview({ p }: { p: Project }) {
     }
   };
   const openIn = (to: string) => { setProjectId(p.id); nav(to); };
+
+  const draft = async () => {
+    setDrafting(true);
+    try {
+      const plan = await instructionsApi.draft(p.id);
+      toast.success(`${plan.ref} compiled`, { description: 'Dispatch it when its questions are settled; AGENTS.md is written in a worktree and lands with your signature.' });
+      openIn(`/plans?ref=${encodeURIComponent(plan.ref)}`);
+    } catch (e) {
+      toast.error('No draft compiled', { description: e instanceof ApiError ? e.message : 'The local API did not answer.' });
+    } finally {
+      setDrafting(false);
+    }
+  };
 
   const notIndexed = (
     <Empty icon={indexing ? <Loader2 className="size-5 animate-spin" /> : undefined}
@@ -160,6 +178,7 @@ function Overview({ p }: { p: Project }) {
           <Segmented
             options={[
               { id: 'modules', label: summary?.indexed ? `Modules (${summary.modules?.length ?? 0})` : 'Modules' },
+              { id: 'instructions', label: told ? `Instructions (${told.files.length})` : 'Instructions' },
               { id: 'rules', label: `Rules (${rules.length})` },
               { id: 'decisions', label: `Decisions (${decisions.length})` },
               { id: 'hotspots', label: summary?.indexed ? `Most depended on (${hotspots.length})` : 'Most depended on' },
@@ -195,6 +214,71 @@ function Overview({ p }: { p: Project }) {
                 ))}
               </DataTable>
             ))}
+          </Panel>
+        )}
+
+        {tab === 'instructions' && (
+          <Panel flush eyebrow="Read from the checkout root when a plan is compiled or a session answers"
+            title={<span className="flex items-center gap-1.5"><FileText className="size-3.5 text-brand" />Instructions</span>}
+            actions={told && told.files.length > 0 ? (
+              <span className={told.capped ? 'text-[12px] text-warn' : 'text-[12px] text-dim'}>
+                {kb(told.bytes)} of {kb(told.cap)} handed to the model{told.capped ? ' · cut at the cap' : ''}
+              </span>
+            ) : undefined}>
+            {!p.source ? (
+              <Empty title="No instruction files here" hint="Its code was not onboarded on this machine, so there is no checkout to read them from." />
+            ) : ins.error ? (
+              <Empty title="The instructions did not load" hint={ins.error} action={<Button size="sm" variant="outline" onClick={ins.reload}>Try again</Button>} />
+            ) : !told ? (
+              <Empty icon={<Loader2 className="size-5 animate-spin" />} title="Reading the instruction files…" />
+            ) : told.files.length === 0 ? (
+              <Empty icon={<FileText className="size-6" />} title={`${p.name} has no instruction files`}
+                hint={summary?.indexed
+                  ? 'AGENTS.md, CLAUDE.md and .claude/rules/*.md at the checkout root are handed to every plan and session. Draft an AGENTS.md from the code index: it compiles a plan you dispatch and sign like any other.'
+                  : 'AGENTS.md, CLAUDE.md and .claude/rules/*.md at the checkout root are handed to every plan and session. Index the code to draft an AGENTS.md from it.'}
+                action={summary?.indexed && can('plans:compile') ? (
+                  <Button size="sm" disabled={drafting} onClick={() => void draft()}>
+                    {drafting && <Loader2 className="size-3.5 animate-spin" />}{drafting ? 'Compiling…' : 'Draft AGENTS.md'}
+                  </Button>
+                ) : undefined} />
+            ) : (
+              <>
+                <DataTable head={['File', 'Scope', 'Size', 'SHA-1', 'Applies']}>
+                  {told.files.map((f) => (
+                    <Row key={f.path}>
+                      <Cell>
+                        <span className="block font-mono text-[12.5px] text-ink">{f.path}</span>
+                        {f.importedBy && <span className="block text-[11.5px] text-dim">imported by {f.importedBy}</span>}
+                      </Cell>
+                      <Cell><Tag tone={f.scope === 'rules' ? 'violet' : 'neutral'}>{f.scope === 'rules' ? 'rule' : 'project'}</Tag></Cell>
+                      <Cell className="tnum">{kb(f.bytes)}</Cell>
+                      <Cell mono className="text-dim">{f.sha1.slice(0, 7)}</Cell>
+                      <Cell className="text-[12.5px]">
+                        {f.paths.length === 0
+                          ? <span className="text-ink-2">always</span>
+                          : <span className={f.applied ? 'text-ink-2' : 'text-dim'} title={f.paths.join(', ')}>
+                              {f.matched ? `matched ${f.matched}` : `only for ${f.paths.join(', ')}`}
+                            </span>}
+                        {f.cut && <span className="ml-1.5"><Tag tone="warn">cut at the cap</Tag></span>}
+                      </Cell>
+                    </Row>
+                  ))}
+                </DataTable>
+                {told.refused.length > 0 && (
+                  <div className="border-t border-line px-5 py-3">
+                    <p className="mb-1.5 flex items-center gap-1.5 text-[12.5px] font-medium text-warn"><ShieldAlert className="size-3.5" />Imports not read</p>
+                    {told.refused.map((r) => (
+                      <p key={`${r.from}:${r.path}`} className="text-[12.5px] text-soft [overflow-wrap:anywhere]">
+                        <span className="font-mono text-ink-2">@{r.path}</span> in {r.from || 'the checkout root'} — {r.why}
+                      </p>
+                    ))}
+                  </div>
+                )}
+                <p className="border-t border-line px-5 py-2.5 text-[12px] text-dim">
+                  A rule with <span className="font-mono">paths:</span> is handed over only when the plan's files fall under it. HTML comments are left out.
+                </p>
+              </>
+            )}
           </Panel>
         )}
 

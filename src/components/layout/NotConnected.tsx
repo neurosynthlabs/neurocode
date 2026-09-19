@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Copy, RotateCcw, Unplug } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { LogoMark } from '@/components/os';
+import { LogoSymbol } from '@/components/os/Logo';
 import { API_BASE } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -49,7 +49,7 @@ export function NotConnected({ reason, onRetry, variant = 'screen' }: {
       <div className="w-full max-w-[440px]">
         <div className="flex items-center gap-3">
           {variant === 'screen'
-            ? <LogoMark size={36} />
+            ? <LogoSymbol size={36} />
             : <span className="grid size-9 place-items-center rounded-lg bg-surface-2 text-dim"><Unplug className="size-[18px]" /></span>}
           <div className="min-w-0">
             <h1 className="text-[17px] font-semibold text-ink">Not connected</h1>

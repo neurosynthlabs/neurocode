@@ -104,7 +104,20 @@ export interface AiLane {
   /** Can it take the next call? If not, `blocked` says why in plain words. */
   ready: boolean; blocked: string | null; allowed: boolean;
   spent: { minute: number; today: number };
+  /** Why the model it is set to no longer answers — the provider withdrew it — or null. */
+  retired: string | null;
+  /** The model's context window in tokens, from its provider's documents; null when none is published. */
+  window: number | null;
+  /** How the lane is told to think: DeepSeek's own fields, OpenAI-style effort, or null (it takes none). */
+  thinks: 'deepseek' | 'effort' | null;
+  /** The model names offered for this lane. */
+  models: string[];
+  /** Per model, per million tokens at the full rate. A cached input token has its own price. */
+  prices: { model: string; usdPerMIn: number; usdPerMCached: number; usdPerMOut: number }[];
+  /** A time-of-day discount: the factor off-peak, and the provider's rule in words. */
+  offPeak: { factor: number; words: string } | null;
 }
+export type ThinkingLevel = 'off' | 'low' | 'high' | 'max';
 export interface AiConfig {
   preference: AiPreference;
   /** NEUROCODE_COMPILER is set on the server, and it wins over the workspace setting. */
@@ -113,6 +126,8 @@ export interface AiConfig {
   deepseek: {
     hasKey: boolean; keyMask: string | null; keySource: 'workspace' | 'environment' | null;
     model: string; baseUrl: string; rejected: boolean;
+    /** Set when the saved model is one DeepSeek has retired. */
+    retired: string | null;
   };
   ollama: { url: string; model: string; ready: boolean };
   lanes: AiLane[];
@@ -133,6 +148,8 @@ export interface AiPatch {
   rpm?: number;
   rpd?: number;
   enabled?: boolean;
+  /** feature → how hard it asks a model to think; "default" puts it back. */
+  thinking?: Record<string, ThinkingLevel | 'default'>;
 }
 export interface AiTestResult { ok: boolean; ms: number; detail: string }
 
@@ -279,15 +296,36 @@ export interface SessionDoc {
   id: string; ref: string; projectId: string; projectName: string; title: string; status: SessionStatus;
   startedAt: string; lastAt: string; startedBy: string; turns: number; toolCalls: number;
   model: string | null; lane: LaneId | null; note: string;
+  /** Prompt tokens the provider counted on the last call, and the answering model's window (null: unknown). */
+  contextTokens: number | null; contextWindow: number | null;
+  /** The share of the window at which older turns are folded before the next answer. */
+  autoCompactAt: number;
+  /** The project's instruction files its model is handed; absent when there was nothing to read. */
+  instructions?: { path: string; bytes: number }[] | null;
 }
-/** One turn: your question, a tool call with what it found, an answer, or a note from the system. */
+/** One turn: your question, a tool call with what it found, an answer, a note, or a summary of folded turns. */
 export interface ChatMessage {
-  id: number; at: string; role: 'you' | 'assistant' | 'tool' | 'note'; text: string;
+  id: number; at: string; role: 'you' | 'assistant' | 'tool' | 'note' | 'summary'; text: string;
   by?: string; model?: string; lane?: LaneId; ms?: number;
   tool?: string; arguments?: Record<string, unknown>; why?: string; detail?: string; ok?: boolean;
+  /** What the model reasoned before this turn, when the lane returned it. */
+  reasoning?: string;
+  /** How long (when it streamed) and how many tokens it reasoned. */
+  thought?: { ms: number | null; tokens: number | null };
+  /** On a summary: how many turns it folded, and their first and last ids. */
+  folded?: { turns: number; from: number | null; to: number | null };
+  /** A turn folded into a summary: still here to read, no longer sent to the model. */
+  compacted?: boolean;
 }
 export interface SessionDetail extends SessionDoc { messages: ChatMessage[] }
-export interface ChatEvent extends ChatMessage { sessionRef: string }
+/** The words of an answer being written, appended by position; never stored — the finished turn replaces them. */
+export interface ChatStream {
+  step: number; ms?: number;
+  answer?: string; answerAt?: number; reasoning?: string; reasoningAt?: number;
+  /** A lane failed halfway and the next one starts afresh. */
+  restart?: boolean; lane?: string;
+}
+export type ChatEvent = (ChatMessage & { sessionRef: string; stream?: undefined }) | { sessionRef: string; stream: ChatStream };
 
 /* ── usage and the database ───────────────────────────────────── */
 export interface UsageReport {
@@ -501,6 +539,8 @@ export const api = {
   askSession: (ref: string, text: string) =>
     request<{ message: ChatMessage; session: SessionDoc }>(`/sessions/${seg(ref)}/messages`, POST({ text })),
   cancelSession: (ref: string) => request<SessionDoc>(`/sessions/${seg(ref)}/cancel`, POST()),
+  compactSession: (ref: string) =>
+    request<{ summary: ChatMessage; session: SessionDoc }>(`/sessions/${seg(ref)}/compact`, { ...POST(), signal: modelTimeout() }),
 
   /** The AI gateway's ledger: every model call and every offline answer. */
   usage: (days = 30) => request<UsageReport>(`/usage?days=${days}`),

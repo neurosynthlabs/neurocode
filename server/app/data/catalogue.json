@@ -55,6 +55,12 @@
       "description": "Accept a review or send it back, and open or cancel the production gate."
     },
     {
+      "id": "rules:manage",
+      "group": "Gates",
+      "label": "Write tool rules",
+      "description": "Allow, ask or deny what agents, sessions and tools may do — edits, commands, web access and MCP calls — for the workspace or one project."
+    },
+    {
       "id": "memory:write",
       "group": "Knowledge",
       "label": "Curate memory",
@@ -136,6 +142,7 @@
         "approvals:decide",
         "runs:merge",
         "decisions:make",
+        "rules:manage",
         "memory:write",
         "ai:use",
         "evals:write",
@@ -163,6 +170,7 @@
         "approvals:decide",
         "runs:merge",
         "decisions:make",
+        "rules:manage",
         "memory:write",
         "ai:use",
         "evals:write",

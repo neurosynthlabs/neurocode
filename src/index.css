@@ -594,3 +594,21 @@
               0 14px 36px -16px color-mix(in srgb, var(--os-shadow) 75%, transparent);
 }
 .composer:focus-within { border-color: color-mix(in srgb, var(--os-brand) 45%, var(--os-line)); }
+
+/* ── Sign-in ────────────────────────────────────────────────────
+   Two motions, both answers to something: the page arriving once, and
+   the fields shaking when the password was wrong — the way a Mac says it.
+   Neither plays for someone who asked for less motion. */
+@keyframes nc-arrive { from { opacity: 0; transform: translateY(10px) scale(.985) } to { opacity: 1; transform: none } }
+@keyframes nc-icon-in { from { opacity: 0; transform: scale(.86) } to { opacity: 1; transform: none } }
+@keyframes nc-shake {
+  0%, 100% { transform: translateX(0) }
+  14% { transform: translateX(-10px) } 28% { transform: translateX(9px) } 42% { transform: translateX(-7px) }
+  57% { transform: translateX(5px) } 71% { transform: translateX(-3px) } 85% { transform: translateX(1px) }
+}
+.nc-arrive { animation: nc-arrive .7s cubic-bezier(.2, .8, .2, 1) both }
+.nc-icon-in { animation: nc-icon-in .8s cubic-bezier(.2, .9, .25, 1.15) both }
+.nc-shake { animation: nc-shake .52s cubic-bezier(.36, .07, .19, .97) both }
+@media (prefers-reduced-motion: reduce) {
+  .nc-arrive, .nc-icon-in, .nc-shake { animation: none }
+}

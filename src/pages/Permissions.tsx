@@ -1,5 +1,19 @@
 import { useMemo, useState } from 'react';
-import { ShieldCheck, ShieldAlert, ShieldX, Check, X, Search, Box, Globe, Loader2 } from 'lucide-react';
+import {
+  ShieldCheck,
+  ShieldAlert,
+  ShieldX,
+  Check,
+  X,
+  Search,
+  Box,
+  Globe,
+  Loader2,
+  Plus,
+  Pencil,
+  Trash2,
+  FlaskConical,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
@@ -22,14 +36,25 @@ import {
   SectionTitle,
   Segmented,
 } from '@/components/os';
+import { ApiError } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { useData } from '@/lib/data';
 import { useRemote } from '@/lib/remote';
 import { fetchRoster } from '@/lib/live/agents';
 import { fetchModels } from '@/lib/live/models';
-import { projectLabel, work } from '@/lib/live/work';
+import {
+  projectLabel,
+  work,
+  RULE_TOOLS,
+  RULES_PERMISSION,
+  type RuleAction,
+  type RuleTool,
+  type RuleTrial,
+  type ToolRule,
+} from '@/lib/live/work';
 import { ago } from '@/lib/time';
 import { cn } from '@/lib/utils';
-import type { ApprovalRequest } from '@/types';
+import type { ApprovalRequest, Project } from '@/types';
 
 /* Permissions: the gates the runtime really has, and nothing it does not. An agent works alone inside its
    own worktree; the first run of a project's tests asks you once and the answer is kept; a run that
@@ -84,7 +109,7 @@ function median(values: number[]): number | null {
 }
 
 export default function Permissions() {
-  const [tab, setTab] = useState<'inbox' | 'rules' | 'sandbox'>('inbox');
+  const [tab, setTab] = useState<'inbox' | 'rules' | 'tools' | 'sandbox'>('inbox');
   const [answer, setAnswer] = useState('all');
   const [q, setQ] = useState('');
   const { approvals, runs, projects, decide: record } = useData();
@@ -165,6 +190,7 @@ export default function Permissions() {
                 id: 'rules',
                 label: rules.data ? `Rules (${rules.data.length})` : 'Rules',
               },
+              { id: 'tools', label: 'Tool rules' },
               { id: 'sandbox', label: 'Sandbox' },
             ]}
             value={tab}
@@ -379,6 +405,8 @@ export default function Permissions() {
           </>
         )}
 
+        {tab === 'tools' && <ToolRules projects={projects} />}
+
         {tab === 'sandbox' && (
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
             <Panel
@@ -461,5 +489,402 @@ export default function Permissions() {
         )}
       </PageBody>
     </Page>
+  );
+}
+
+/* ── tool rules ─────────────────────────────────────────────────── */
+
+const ANSWER_TONE: Record<RuleAction, 'ok' | 'warn' | 'danger'> = { allow: 'ok', ask: 'warn', deny: 'danger' };
+const toolLabel = (id: RuleTool) => RULE_TOOLS.find((t) => t.id === id)?.label ?? id;
+const toolOf = (id: RuleTool) => RULE_TOOLS.find((t) => t.id === id) ?? RULE_TOOLS[0];
+const why = (e: unknown) => (e instanceof ApiError ? e.message : 'The local API did not answer.');
+
+interface Draft {
+  id: number | null;
+  tool: RuleTool;
+  scope: string;
+  pattern: string;
+  action: RuleAction;
+  note: string;
+}
+
+const EMPTY: Draft = { id: null, tool: 'web_fetch', scope: 'workspace', pattern: '', action: 'deny', note: '' };
+
+/** Allow, ask or deny, written ahead of time: the table, the form that writes one, and a box that says
+    what a tool would do here, and which rule says so, without doing it. */
+function ToolRules({ projects }: { projects: Project[] }) {
+  const { can } = useAuth();
+  const mayWrite = can(RULES_PERMISSION);
+  const [scope, setScope] = useState('all');
+  const [tool, setTool] = useState('all');
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [armed, setArmed] = useState<number | null>(null);
+  const [version, setVersion] = useState(0);
+  const rules = useRemote(`tool-rules:${version}`, () => work.toolRules());
+
+  const shown = useMemo(
+    () =>
+      (rules.data ?? []).filter(
+        (r) =>
+          (scope === 'all' || (scope === 'workspace' ? r.projectId === null : r.projectId === scope)) &&
+          (tool === 'all' || r.tool === tool),
+      ),
+    [rules.data, scope, tool],
+  );
+
+  const scopes = [
+    { value: 'workspace', label: 'Workspace — every project' },
+    ...projects.map((p) => ({ value: p.id, label: `${p.name} only` })),
+  ];
+
+  const save = async () => {
+    if (!draft) return;
+    setSaving(true);
+    try {
+      const saved =
+        draft.id === null
+          ? await work.addToolRule({
+              tool: draft.tool,
+              pattern: draft.pattern.trim(),
+              action: draft.action,
+              note: draft.note.trim(),
+              projectId: draft.scope === 'workspace' ? null : draft.scope,
+            })
+          : await work.changeToolRule(draft.id, {
+              pattern: draft.pattern.trim(),
+              action: draft.action,
+              note: draft.note.trim(),
+            });
+      toast.success(draft.id === null ? `Rule #${saved.id} added` : `Rule #${saved.id} changed`, {
+        description: `${saved.action} · ${toolLabel(saved.tool)} · ${saved.pattern}`,
+      });
+      setDraft(null);
+      setVersion((v) => v + 1);
+    } catch (e) {
+      toast.error('Rule not saved', { description: why(e) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (r: ToolRule) => {
+    if (armed !== r.id) {
+      setArmed(r.id);
+      window.setTimeout(() => setArmed((a) => (a === r.id ? null : a)), 4000);
+      return;
+    }
+    setArmed(null);
+    try {
+      await work.removeToolRule(r.id);
+      toast(`Rule #${r.id} removed`, { description: `${toolLabel(r.tool)} · ${r.pattern} asks again.` });
+      setVersion((v) => v + 1);
+    } catch (e) {
+      toast.error('Rule not removed', { description: why(e) });
+    }
+  };
+
+  const edit = (r: ToolRule) =>
+    setDraft({
+      id: r.id,
+      tool: r.tool,
+      scope: r.projectId ?? 'workspace',
+      pattern: r.pattern,
+      action: r.action,
+      note: r.note,
+    });
+
+  const draftTool = draft ? toolOf(draft.tool) : null;
+  const blocker = !draft
+    ? ''
+    : !draft.pattern.trim()
+      ? `Write a pattern over the ${draftTool?.subject}.`
+      : draft.pattern.length > 300
+        ? 'A pattern is at most 300 characters.'
+        : '';
+
+  return (
+    <>
+      <Toolbar>
+        <SelectField
+          className="w-52"
+          value={scope}
+          onChange={setScope}
+          options={[{ value: 'all', label: 'Every scope' }, ...scopes]}
+        />
+        <SelectField
+          className="w-44"
+          value={tool}
+          onChange={setTool}
+          options={[{ value: 'all', label: 'Every tool' }, ...RULE_TOOLS.map((t) => ({ value: t.id, label: t.label }))]}
+        />
+        {rules.data && (
+          <span className="text-[12.5px] text-dim">
+            {shown.length} of {rules.data.length}
+          </span>
+        )}
+        <Button
+          size="sm"
+          className="ml-auto"
+          disabled={!mayWrite}
+          title={mayWrite ? undefined : `Writing tool rules needs ${RULES_PERMISSION}.`}
+          onClick={() => setDraft({ ...EMPTY, scope: scope === 'all' ? 'workspace' : scope })}
+        >
+          <Plus className="size-3.5" />
+          Add rule
+        </Button>
+      </Toolbar>
+
+      {draft && draftTool && (
+        <Panel
+          className="accent-left"
+          eyebrow={draft.id === null ? 'New rule' : `Rule #${draft.id} · its tool and scope stay as they are`}
+          title={draft.id === null ? 'Write a tool rule' : 'Change this rule'}
+        >
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {draft.id === null ? (
+              <SelectField
+                label="Tool"
+                value={draft.tool}
+                onChange={(v) => setDraft({ ...draft, tool: v as RuleTool })}
+                options={RULE_TOOLS.map((t) => ({ value: t.id, label: `${t.label} — matched on the ${t.subject}` }))}
+              />
+            ) : (
+              <Field label="Tool" value={toolLabel(draft.tool)} onChange={() => {}} disabled />
+            )}
+            {draft.id === null ? (
+              <SelectField
+                label="Holds for"
+                value={draft.scope}
+                onChange={(v) => setDraft({ ...draft, scope: v })}
+                options={scopes}
+              />
+            ) : (
+              <Field
+                label="Holds for"
+                value={scopes.find((x) => x.value === draft.scope)?.label ?? draft.scope}
+                onChange={() => {}}
+                disabled
+              />
+            )}
+            <Field
+              label={`Pattern over the ${draftTool.subject}`}
+              value={draft.pattern}
+              onChange={(v) => setDraft({ ...draft, pattern: v })}
+              placeholder={draftTool.example}
+              mono
+              hint="* matches anything, / included; ? one character. Case matters."
+            />
+            <Field
+              label="Note (optional)"
+              value={draft.note}
+              onChange={(v) => setDraft({ ...draft, note: v })}
+              placeholder="Why this rule exists"
+            />
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Segmented
+              options={[
+                { id: 'allow', label: 'Allow' },
+                { id: 'ask', label: 'Ask' },
+                { id: 'deny', label: 'Deny' },
+              ]}
+              value={draft.action}
+              onChange={(v) => setDraft({ ...draft, action: v })}
+            />
+            <span className="text-[12px] text-dim">
+              {draft.action === 'allow'
+                ? 'Goes ahead without asking anyone.'
+                : draft.action === 'ask'
+                  ? 'A person answers first.'
+                  : 'Never happens, whoever asks.'}
+            </span>
+          </div>
+          {!draftTool.consultedBy && (
+            <p className="mt-3 rounded-sm border border-warn/30 bg-warn/8 px-3 py-2 text-[12.5px] text-warn">
+              Nothing consults {draftTool.label.toLowerCase()} rules yet. The rule is kept, and applies once runs and
+              sessions read it.
+            </p>
+          )}
+          <div className="mt-3 flex items-center gap-2 border-t border-line pt-3">
+            <Button size="sm" disabled={!!blocker || saving} title={blocker || undefined} onClick={() => void save()}>
+              {saving && <Loader2 className="size-3.5 animate-spin" />}
+              {draft.id === null ? 'Add rule' : 'Save'}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setDraft(null)}>
+              Cancel
+            </Button>
+            <span className="ml-auto text-[12px] text-dim">Written to the audit log under your name.</span>
+          </div>
+        </Panel>
+      )}
+
+      <Panel flush>
+        {rules.loading ? (
+          <p className="px-3.5 py-3 text-[13px] text-dim">
+            <Loader2 className="mr-2 inline size-3.5 animate-spin" />
+            reading the tool rules…
+          </p>
+        ) : rules.error ? (
+          <Empty
+            title="The tool rules did not load"
+            hint={rules.error}
+            action={
+              <Button size="sm" variant="outline" onClick={rules.reload}>
+                Try again
+              </Button>
+            }
+          />
+        ) : !rules.data?.length ? (
+          <Empty
+            icon={<ShieldAlert className="size-6" />}
+            title="No tool rules yet"
+            hint="With no rule every tool asks: a person answers first. Add one to allow what you trust or deny what must never happen."
+          />
+        ) : shown.length === 0 ? (
+          <Empty title="No rule matches" hint="Choose another scope or tool." />
+        ) : (
+          <DataTable head={['#', 'Holds for', 'Tool', 'Pattern', 'Answer', 'Note', 'By', '']}>
+            {shown.map((r) => {
+              const t = toolOf(r.tool);
+              return (
+                <Row key={r.id} className={cn(r.action === 'deny' && 'bg-danger/4')}>
+                  <Cell mono className="text-dim">
+                    {r.id}
+                  </Cell>
+                  <Cell className="text-[12.5px]">{r.projectName ?? (r.projectId ? r.projectId : 'Workspace')}</Cell>
+                  <Cell className="text-[12.5px]">
+                    {t.label}
+                    {!t.consultedBy && <span className="block text-[11.5px] text-dim">kept · not consulted yet</span>}
+                  </Cell>
+                  <Cell mono className="max-w-[280px] break-all text-ink">
+                    {r.pattern}
+                  </Cell>
+                  <Cell>
+                    <Tag tone={ANSWER_TONE[r.action]}>{r.action}</Tag>
+                  </Cell>
+                  <Cell className="max-w-[240px] text-[12.5px] text-soft">{r.note}</Cell>
+                  <Cell className="text-[12.5px]">
+                    {r.createdBy ?? <span className="text-dim">not recorded</span>}
+                    {r.updatedAt && <span className="block text-[11.5px] text-dim">{ago(r.updatedAt)}</span>}
+                  </Cell>
+                  <Cell>
+                    {mayWrite && (
+                      <span className="flex items-center gap-1">
+                        <Button size="xs" variant="ghost" aria-label={`Change rule ${r.id}`} onClick={() => edit(r)}>
+                          <Pencil className="size-3" />
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant={armed === r.id ? 'destructive' : 'ghost'}
+                          aria-label={`Remove rule ${r.id}`}
+                          onClick={() => void remove(r)}
+                        >
+                          <Trash2 className="size-3" />
+                          {armed === r.id && 'Remove?'}
+                        </Button>
+                      </span>
+                    )}
+                  </Cell>
+                </Row>
+              );
+            })}
+          </DataTable>
+        )}
+      </Panel>
+
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+        <TryRule projects={projects} scopes={scopes} />
+        <Panel eyebrow="The same order every time" title="How a rule is chosen">
+          <ol className="list-decimal space-y-1.5 pl-4 text-[12.5px] text-ink-2">
+            <li>A project's own rule beats the workspace's, whatever either says.</li>
+            <li>Then the longer pattern, counted without its wildcards: src/api/* beats src/*.</li>
+            <li>Then deny beats ask beats allow, when two rules are equally specific.</li>
+            <li>No rule matches: it asks.</li>
+          </ol>
+          <SectionTitle className="mt-3">Consulted today</SectionTitle>
+          <div className="space-y-1">
+            {RULE_TOOLS.map((t) => (
+              <p key={t.id} className="text-[12.5px] text-ink-2">
+                <span className="font-medium text-ink">{t.label}:</span>{' '}
+                {t.consultedBy ?? <span className="text-dim">nothing yet — the rule is kept for when runs read it</span>}
+              </p>
+            ))}
+          </div>
+        </Panel>
+      </div>
+    </>
+  );
+}
+
+function TryRule({ projects, scopes }: { projects: Project[]; scopes: { value: string; label: string }[] }) {
+  const [tool, setTool] = useState<RuleTool>('web_fetch');
+  const [subject, setSubject] = useState('');
+  const [scope, setScope] = useState(projects[0]?.id ?? 'workspace');
+  const [busy, setBusy] = useState(false);
+  const [answer, setAnswer] = useState<RuleTrial | null>(null);
+  const t = toolOf(tool);
+
+  const ask = async () => {
+    setBusy(true);
+    try {
+      setAnswer(await work.tryToolRule(tool, subject.trim(), scope === 'workspace' ? null : scope));
+    } catch (e) {
+      setAnswer(null);
+      toast.error('Not tried', { description: why(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Panel
+      eyebrow="Nothing runs"
+      title={
+        <span className="flex items-center gap-1.5">
+          <FlaskConical className="size-3.5 text-brand" />
+          Try it
+        </span>
+      }
+    >
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <SelectField
+          label="Tool"
+          value={tool}
+          onChange={(v) => {
+            setTool(v as RuleTool);
+            setAnswer(null);
+          }}
+          options={RULE_TOOLS.map((x) => ({ value: x.id, label: x.label }))}
+        />
+        <SelectField label="In" value={scope} onChange={setScope} options={scopes} />
+      </div>
+      <div className="mt-2 flex items-end gap-2">
+        <Field
+          className="min-w-0 flex-1"
+          label={`The ${t.subject}`}
+          value={subject}
+          onChange={setSubject}
+          placeholder={t.example.replace(/\*/g, '') || t.example}
+          mono
+        />
+        <Button size="sm" disabled={!subject.trim() || busy} onClick={() => void ask()}>
+          {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
+          Try
+        </Button>
+      </div>
+      {answer && (
+        <div className="mt-3 rounded-sm border border-line bg-base px-3 py-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <Tag tone={ANSWER_TONE[answer.action]}>{answer.action}</Tag>
+            <Mono className="min-w-0 truncate">{answer.subject}</Mono>
+          </div>
+          <p className="mt-1.5 text-[12.5px] text-ink-2">{answer.why}</p>
+          {!toolOf(answer.tool).consultedBy && (
+            <p className="mt-1 text-[12px] text-dim">Nothing consults {toolOf(answer.tool).label.toLowerCase()} rules yet.</p>
+          )}
+        </div>
+      )}
+    </Panel>
   );
 }

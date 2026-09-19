@@ -1,4 +1,4 @@
-"""The MCP registry, and the one thing NeuroCode does with a server so far: check it.
+"""The MCP registry: checking a server, and calling one of its tools.
 
 A check connects once, the way any MCP client would — `initialize`, `notifications/initialized`, then
 `tools/list` (and `resources/list` / `prompts/list` when the server says it has them) — and writes down
@@ -22,6 +22,15 @@ Two transports:
   is shown to everyone who can sign in.
 
 The whole conversation has one ceiling, `TIMEOUT_S`. A check that hits it is an error with that reason.
+
+**Calling a tool** (`call_tool`) opens the same conversation — the same two transports, the same address
+guard — and asks `tools/call` instead of listing. It is only ever done on a server a person trusted and a
+check found connected, for a tool that check listed, and only after the tool rules had their say
+(`decide('mcp', 'server/tool')`); with no rule, the server's own default effect stands. What comes back
+is capped and handed to the person who called it, never written down: a tool's answer may carry
+anything its server can read.
+
+The address guard lives here and nowhere else: `guarded_opener` is what the web fetcher uses too.
 """
 from __future__ import annotations
 
@@ -49,8 +58,10 @@ from ..data.base import utcnow
 from ..models import McpServer, McpTool
 from ..repositories import ActivityRepository, NotFound
 from ..repositories.platform import McpRepository
+from ..repositories.identity import AuditRepository
 from .errors import Refused
 from .identity import Person
+from .tool_rules import Decision, decide
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +77,12 @@ STDERR_LINES = 20
 #: What launching a program on this machine needs, beyond managing the registry: the same permission
 #: trusting a server needs, because trusting one is exactly what allows it to be launched.
 LAUNCH = "workspace:admin"
+#: A tool call does work a listing does not, so it is given longer — and still one ceiling for the whole call.
+CALL_TIMEOUT_S = 30.0
+#: How much of a tool's answer is handed back. A tool that returns a database dump is answered with its start.
+RESULT_CHARS = 20_000
+#: How large the arguments a person types may be, serialised.
+MAX_ARGUMENTS = 20_000
 
 Status = Literal["connected", "error", "auth_required"]
 
@@ -136,12 +153,18 @@ async def _listed(channel: Channel, method: str, key: str, cap: int) -> list[dic
     return found[:cap]
 
 
-async def converse(channel: Channel) -> Probe:
-    """The handshake and the listing, over whichever transport the channel is."""
+async def _hello(channel: Channel) -> dict[str, Any]:
+    """The handshake every conversation opens with. Returns what the server says it offers."""
     hello = await channel.request("initialize", {"protocolVersion": PROTOCOL, "capabilities": {},
                                                  "clientInfo": CLIENT})
     offers = hello.get("capabilities") if isinstance(hello.get("capabilities"), dict) else {}
     await channel.notify("notifications/initialized", {})
+    return offers
+
+
+async def converse(channel: Channel) -> Probe:
+    """The handshake and the listing, over whichever transport the channel is."""
+    offers = await _hello(channel)
 
     started = time.monotonic()
     if "tools" in offers:
@@ -240,7 +263,55 @@ async def _drain(stream: asyncio.StreamReader, into: deque[str]) -> None:
         into.append(line.decode(errors="replace")[:300])
 
 
-async def _check_stdio(command: str) -> Probe:
+@dataclass(slots=True)
+class Called:
+    """What one tool call came back with. `error` is this client's own words when the call itself failed;
+    `is_error` is the tool saying its work failed, with `text` saying why."""
+
+    ok: bool
+    text: str = ""
+    is_error: bool = False
+    truncated: bool = False
+    ms: int | None = None
+    error: str = ""
+
+
+def _content_text(result: dict[str, Any]) -> str:
+    """A tools/call result as text: its text blocks as they are, anything else named for what it is."""
+    parts: list[str] = []
+    for block in result.get("content") or []:
+        if not isinstance(block, dict):
+            continue
+        kind = block.get("type")
+        if kind == "text":
+            parts.append(str(block.get("text") or ""))
+        elif kind in ("image", "audio"):
+            parts.append(f"[{kind} · {block.get('mimeType') or 'unknown type'}]")
+        elif kind == "resource" and isinstance(block.get("resource"), dict):
+            resource = block["resource"]
+            parts.append(str(resource["text"]) if isinstance(resource.get("text"), str)
+                         else f"[resource · {resource.get('uri') or 'no uri'}]")
+        elif kind == "resource_link":
+            parts.append(f"[link · {block.get('name') or ''} {block.get('uri') or ''}]".replace("  ", " "))
+    if not parts and "structuredContent" in result:
+        parts.append(json.dumps(result["structuredContent"], indent=2, ensure_ascii=False))
+    return "\n".join(parts)
+
+
+def invoke(tool: str, arguments: dict[str, Any]):
+    """A conversation that calls one tool, for `_check_stdio` / `_check_http` to hold."""
+    async def talk(channel: Channel) -> Called:
+        await _hello(channel)
+        started = time.monotonic()
+        result = await channel.request("tools/call", {"name": tool, "arguments": arguments})
+        ms = round((time.monotonic() - started) * 1000)
+        text = _content_text(result)
+        return Called(ok=True, text=text[:RESULT_CHARS], is_error=result.get("isError") is True,
+                      truncated=len(text) > RESULT_CHARS, ms=ms)
+    return talk
+
+
+async def _check_stdio(command: str, talk: Any = converse, timeout: float | None = None) -> Any:
     try:
         argv = shlex.split(command)
     except ValueError as e:
@@ -260,8 +331,8 @@ async def _check_stdio(command: str) -> Probe:
     assert process.stderr is not None
     draining = asyncio.create_task(_drain(process.stderr, stderr))
     try:
-        async with asyncio.timeout(TIMEOUT_S):
-            return await converse(StdioChannel(process, stderr))
+        async with asyncio.timeout(TIMEOUT_S if timeout is None else timeout):
+            return await talk(StdioChannel(process, stderr))
     finally:
         # The group, not just the process: `start_new_session` made the server its own group leader,
         # so whatever it spawned goes with it.
@@ -295,7 +366,11 @@ def _public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return ip.is_global and not ip.is_multicast
 
 
-def _connector(allow_private: bool):
+#: What the guard says when a name resolves somewhere it may not go, unless a caller says otherwise.
+ADMIN_ONLY = "Only a workspace admin can check a server there."
+
+
+def _connector(allow_private: bool, refusal: str = ADMIN_ONLY):
     """What an http connection uses to open its socket: resolve the name, refuse the whole name when any
     address it resolves to is not public (unless allowed), then connect to one of the addresses just
     vetted. Connecting to the vetted address, not the name, is what stops a name that resolves to a
@@ -308,8 +383,7 @@ def _connector(allow_private: bool):
         for *_rest, sockaddr in found:
             ip = ipaddress.ip_address(str(sockaddr[0]).split("%")[0])
             if not allow_private and not _public(ip):
-                raise CheckFailed(f"{host} is a local or private address. Only a workspace admin can check a "
-                                  f"server there.")
+                raise CheckFailed(f"{host} is a local or private address. {refusal}".strip())
             vetted.append(str(sockaddr[0]))
         failed: OSError = OSError(f"{host} has no address")
         for ip_text in vetted:
@@ -322,13 +396,14 @@ def _connector(allow_private: bool):
 
 
 class _GuardedHttp(urllib.request.HTTPHandler):
-    def __init__(self, allow_private: bool) -> None:
+    def __init__(self, allow_private: bool, refusal: str = ADMIN_ONLY) -> None:
         super().__init__()
         self.allow_private = allow_private
+        self.refusal = refusal
 
     def _connection(self, host: str, **kwargs: Any) -> http.client.HTTPConnection:
         made = http.client.HTTPConnection(host, **kwargs)
-        made._create_connection = _connector(self.allow_private)  # type: ignore[attr-defined]  # noqa: SLF001
+        made._create_connection = _connector(self.allow_private, self.refusal)  # type: ignore[attr-defined]  # noqa: SLF001
         return made
 
     def http_open(self, req: urllib.request.Request) -> Any:
@@ -336,13 +411,14 @@ class _GuardedHttp(urllib.request.HTTPHandler):
 
 
 class _GuardedHttps(urllib.request.HTTPSHandler):
-    def __init__(self, allow_private: bool) -> None:
+    def __init__(self, allow_private: bool, refusal: str = ADMIN_ONLY) -> None:
         super().__init__()
         self.allow_private = allow_private
+        self.refusal = refusal
 
     def _connection(self, host: str, **kwargs: Any) -> http.client.HTTPSConnection:
         made = http.client.HTTPSConnection(host, **kwargs)
-        made._create_connection = _connector(self.allow_private)  # type: ignore[attr-defined]  # noqa: SLF001
+        made._create_connection = _connector(self.allow_private, self.refusal)  # type: ignore[attr-defined]  # noqa: SLF001
         return made
 
     def https_open(self, req: urllib.request.Request) -> Any:
@@ -357,10 +433,18 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
                           f"register the address it points to instead.")
 
 
-def _opener(allow_private: bool) -> urllib.request.OpenerDirector:
+def guarded_opener(allow_private: bool, *, redirects: urllib.request.HTTPRedirectHandler | None = None,
+                   refusal: str = ADMIN_ONLY) -> urllib.request.OpenerDirector:
+    """An opener that connects only to vetted addresses, through no proxy, and follows no redirect on its
+    own. `redirects` decides what a 30x does (by default it fails the request); `refusal` is the sentence
+    added when an address is refused. The web fetcher is the other caller."""
     # No proxy: a proxy would make the connection, and the address it reached would go unvetted.
-    return urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect(),
-                                       _GuardedHttp(allow_private), _GuardedHttps(allow_private))
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), redirects or _NoRedirect(),
+                                       _GuardedHttp(allow_private, refusal), _GuardedHttps(allow_private, refusal))
+
+
+def _opener(allow_private: bool) -> urllib.request.OpenerDirector:
+    return guarded_opener(allow_private)
 
 
 def _post(url: str, body: bytes, headers: dict[str, str], timeout: float, allow_private: bool = False) -> Reply:
@@ -441,12 +525,13 @@ class HttpChannel:
         await self._exchange({"jsonrpc": "2.0", "method": method, "params": params}, method)
 
 
-async def _check_http(url: str, allow_private: bool) -> Probe:
+async def _check_http(url: str, allow_private: bool, talk: Any = converse, timeout: float | None = None) -> Any:
     parsed = urlparse(url.strip())
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise CheckFailed(f"{url} is not an http or https address.")
-    async with asyncio.timeout(TIMEOUT_S):
-        return await converse(HttpChannel(url.strip(), time.monotonic() + TIMEOUT_S, allow_private))
+    ceiling = TIMEOUT_S if timeout is None else timeout
+    async with asyncio.timeout(ceiling):
+        return await talk(HttpChannel(url.strip(), time.monotonic() + ceiling, allow_private))
 
 
 async def probe(transport: str, command: str, *, allow_private: bool = False) -> Probe:
@@ -462,6 +547,19 @@ async def probe(transport: str, command: str, *, allow_private: bool = False) ->
         return Probe(status=failed.status, error=failed.reason)
     except TimeoutError:
         return Probe(status="error", error=f"No complete answer within {TIMEOUT_S:.0f} s.")
+
+
+async def call_tool(transport: str, command: str, tool: str, arguments: dict[str, Any], *,
+                    allow_private: bool = False) -> Called:
+    """Call one tool and say what came back. Never raises for anything the server did, or failed to do."""
+    try:
+        if transport == "stdio":
+            return await _check_stdio(command, invoke(tool, arguments), CALL_TIMEOUT_S)
+        return await _check_http(command, allow_private, invoke(tool, arguments), CALL_TIMEOUT_S)
+    except CheckFailed as failed:
+        return Called(ok=False, error=failed.reason)
+    except TimeoutError:
+        return Called(ok=False, error=f"No complete answer within {CALL_TIMEOUT_S:.0f} s.")
 
 
 # ── the registry ─────────────────────────────────────────────────
@@ -514,3 +612,52 @@ class McpService:
                     if found.status == "connected" else f"{server.id} · {found.status} · {found.error}"),
             level="ok" if found.status == "connected" else "warn")
         return server
+
+    async def call_tool(self, server_id: str, tool: str, arguments: dict[str, Any], who: Person, *,
+                        project_id: str | None = None, ip: str = "") -> dict[str, Any]:
+        """Call a tool a check listed, on a server a person trusted, once the tool rules allow it.
+
+        Refused, in words, before anything is sent: an untrusted server, one the last check did not
+        find connected, a tool it did not list, a rule or the server's default effect that denies it.
+        With no rule the person pressing the button is the one who was asked, so it goes ahead. Once
+        sent, a failure is an answer (200, `ok: false`), the way a failed check is."""
+        server = await self._server(server_id)
+        if server.untrusted:
+            raise Refused(f"{server.id} is untrusted, so none of its tools is called. Trust it first.")
+        if server.transport == "stdio":
+            who.must(LAUNCH, "launch an MCP server's command")
+        if server.checked_at is None or server.status != "connected":
+            raise Refused(f"{server.id} was not connected at its last check. Check it first.")
+        listed = {t.name: t for t in server.tools}
+        if tool not in listed:
+            raise Refused(f"{server.id} did not list a tool called {tool} at its last check.", status=404)
+        if not isinstance(arguments, dict):
+            raise Refused("A tool's arguments are a JSON object.", status=422)
+        if len(json.dumps(arguments)) > MAX_ARGUMENTS:
+            raise Refused(f"The arguments are larger than {MAX_ARGUMENTS // 1000} KB.", status=422)
+
+        decision = await decide(self.session, "mcp", f"{server.id}/{tool}", project_id)
+        if decision.rule_id is None and server.default_effect == "deny":
+            decision = Decision("deny", None, f"No tool rule covers {server.id}/{tool}, and {server.id}'s "
+                                              f"default effect is deny.")
+        if decision.action == "deny":
+            raise Refused(decision.why, status=403)
+
+        called = await call_tool(server.transport, server.command, tool, arguments,
+                                 allow_private=who.can(LAUNCH))
+        outcome = ("failed: " + called.error if not called.ok else
+                   "the tool reported an error" if called.is_error else "ok")
+        await self.activity.record(
+            actor=who.name, actor_kind="human", action="MCP tool called",
+            detail=f"{server.id}/{tool} · {listed[tool].risk} risk · {outcome}"
+                   + (f" · {called.ms} ms" if called.ms is not None else ""),
+            level="ok" if called.ok and not called.is_error else "warn", project_id=project_id)
+        # A tool may change the world outside this app, so who called what is audited. What it was
+        # given and what it answered are not: either may carry what the person typed or the server read.
+        await AuditRepository(self.session).record(
+            action="mcp.call", user_id=who.id, target=f"{server.id}/{tool}",
+            detail={"risk": listed[tool].risk, "ok": called.ok, "isError": called.is_error,
+                    "rule": decision.rule_id}, ip=ip)
+        return {"server": server.id, "tool": tool, "ok": called.ok, "isError": called.is_error,
+                "text": called.text, "truncated": called.truncated, "ms": called.ms, "error": called.error,
+                "decision": decision.json()}

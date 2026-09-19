@@ -5,7 +5,8 @@ import { request } from '@/lib/api';
    whose finding cites a piece it was handed — never a model's opinion of itself. */
 
 export type ResearchStatus = 'queued' | 'running' | 'complete' | 'failed' | 'cancelled';
-/** The chunk kinds retrieval holds. The web and GitHub have no fetcher, so they are not among them. */
+/** The chunk kinds retrieval holds. The web is asked for apart from them (`web: true`), and only when a
+    search provider is configured; nothing reads GitHub. */
 export type ResearchKind = 'code' | 'doc' | 'memory';
 
 export interface ResearchListItem {
@@ -26,10 +27,10 @@ export interface ResearchListItem {
 
 export interface ResearchCitation {
   label: string;
-  /** The piece's ref: `pkg/tax.py#apply_gst:118`, `README.md#2`, `MEM-512`. */
+  /** The piece's ref: `pkg/tax.py#apply_gst:118`, `README.md#2`, `MEM-512` — or a web page's own URL. */
   url: string;
-  via: 'internal' | 'docs' | 'memory';
-  kind: ResearchKind;
+  via: 'internal' | 'docs' | 'memory' | 'web';
+  kind: ResearchKind | 'web';
   path: string;
   line: number;
   excerpt: string;
@@ -55,7 +56,9 @@ export interface ResearchDoc extends ResearchListItem {
   finishedAt: string | null;
   projectHint: string;
   kinds: ResearchKind[];
-  sources: { kind: 'code' | 'docs' | 'memory'; count: number }[];
+  /** Whether this research searched the web: it cited a page, or noted what the web could not give. */
+  web: boolean;
+  sources: { kind: 'code' | 'docs' | 'memory' | 'web'; count: number }[];
   summary: string;
   recommendation: string;
   architecture: string;
@@ -79,6 +82,6 @@ const seg = encodeURIComponent;
 export const fetchResearch = (project: string) =>
   request<ResearchListItem[]>(`/research?${new URLSearchParams({ project, limit: '50' })}`);
 export const fetchReport = (ref: string) => request<ResearchDoc>(`/research/${seg(ref)}`);
-export const startResearch = (question: string, projectId: string, kinds: ResearchKind[]) =>
-  request<ResearchListItem>('/research', { method: 'POST', json: { question, projectId, kinds } });
+export const startResearch = (question: string, projectId: string, kinds: ResearchKind[], web = false) =>
+  request<ResearchListItem>('/research', { method: 'POST', json: { question, projectId, kinds, web } });
 export const stopResearch = (ref: string) => request<ResearchListItem>(`/research/${seg(ref)}/cancel`, { method: 'POST' });

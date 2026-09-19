@@ -12,7 +12,7 @@ import { NAV, NAV_SECTIONS, allowed, type NavItem, type NavSection } from '@/lib
 import { useAuth } from '@/lib/auth';
 import { AccountMenu } from './AccountMenu';
 import { cn } from '@/lib/utils';
-import { LogoMark, Wordmark } from '@/components/os/Logo';
+import { LogoSymbol, Wordmark } from '@/components/os/Logo';
 import { useTheme } from '@/lib/theme';
 import { inFlight, useData } from '@/lib/data';
 import type { Catalogue, RunDoc } from '@/lib/api';
@@ -191,7 +191,7 @@ export function Sidebar({ collapsed, onToggle, onSearch, variant = 'rail' }: {
         <div className={cn('flex shrink-0 items-center gap-2 pt-3.5 pb-2', mini ? 'justify-center px-2' : 'px-3.5')}>
           {mini ? (
             <button onClick={onToggle} aria-label="Expand sidebar" className="transition-transform duration-200 hover:scale-105">
-              <LogoMark size={30} />
+              <LogoSymbol size={30} />
             </button>
           ) : (
             <>

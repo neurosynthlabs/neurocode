@@ -10,7 +10,12 @@ The events, by name:
 - `change` — `{op: "put", collection, doc}` or `{op: "drop", collection, id}`: a document a screen
   holds, in exactly the shape its list route returns (see `data.changes`).
 - `run` — one log line of an agent run, with its `runRef`.
-- `chat` — one message of a session.
+- `chat` — one message of a session, as `GET /sessions/{ref}` lists it, with its `sessionRef`. While
+  an answer is being written, `chat` also carries `{sessionRef, stream: {step, answer?, answerAt?,
+  reasoning?, reasoningAt?, ms}}` — the words that just arrived, and where they go in the answer (or its
+  reasoning) so far — or `{sessionRef, stream: {step, restart: true, lane}}` when a lane failed halfway
+  and the next starts afresh. These are never stored: the finished turn is written once, and arrives
+  as an ordinary message that replaces them. A tab that misses one ignores the rest of that step.
 - `reset` — `{at: <ISO 8601>}`: the workspace was emptied. Emptying is one bulk statement per table,
   so there is no document-by-document account of it to send; a tab that hears this reloads everything
   it holds. Published only after the emptying has committed, so the reload reads the empty workspace.

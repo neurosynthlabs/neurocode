@@ -491,7 +491,7 @@ function AddFromText({ open, onOpenChange, projectId, onAdded }: {
         <DialogHeader>
           <DialogTitle>Add from text</DialogTitle>
           <DialogDescription>
-            Paste meeting notes, a requirement or a chat, in English or Hinglish. The facts worth keeping come back, and you choose which to store.
+            Paste meeting notes, a requirement or a chat, in any language. The facts worth keeping come back, and you choose which to store.
           </DialogDescription>
         </DialogHeader>
         {!found ? (
@@ -504,7 +504,7 @@ function AddFromText({ open, onOpenChange, projectId, onAdded }: {
           <Empty
             icon={<FileSearch className="size-6" />} title="No fact worth keeping was found"
             hint={found.provider === 'rules'
-              ? 'The offline rules keep sentences that state a rule or a decision: must, never, always, decided, zaroori… A model reads more; set one in Admin → AI providers.'
+              ? 'The offline rules keep sentences that state a rule or a decision: must, never, always, decided… A model reads more; set one in Admin → AI providers.'
               : 'Nothing in this text looks durable enough to remember.'}
           />
         ) : (

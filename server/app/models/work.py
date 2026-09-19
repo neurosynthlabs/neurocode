@@ -192,6 +192,10 @@ class Plan(Base, Mixin):
     #: What "done" means for this plan, one checkable sentence each — written by the compiler or by a
     #: person — which a goal run is judged against before it stops at the signature.
     acceptance_criteria: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    #: Dispatched "pause before each step": the runtime stops at an approval between steps.
+    step_gate: Mapped[bool] = mapped_column(nullable=False, server_default="false")
+    #: Bumped each time the plan is revised from comments, so a comment knows which version it was on.
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     compiler: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
 
     steps: Mapped[list[PlanStep]] = relationship(back_populates="plan", cascade="all, delete-orphan",
@@ -359,3 +363,63 @@ class ActivityEvent(Base):
     level: Mapped[str] = mapped_column(Level, nullable=False, server_default="info")
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
     task_ref: Mapped[str | None] = mapped_column(String(40))
+
+
+class PlanComment(Base, Mixin):
+    """A person's note on a plan before it is dispatched — on a step or on the plan as a whole. It never goes
+    into the plan's text; "Revise with comments" hands the open ones to the compiler, which proposes a new
+    revision."""
+
+    __tablename__ = "plan_comments"
+    __table_args__ = (CheckConstraint("kind IN ('comment', 'split', 'remove', 'why', 'risky')", name="kind"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("plans.id", ondelete="CASCADE"), nullable=False, index=True)
+    step_id: Mapped[str | None] = mapped_column(ForeignKey("plan_steps.id", ondelete="SET NULL"))
+    kind: Mapped[str] = mapped_column(String(10), nullable=False, server_default="comment")
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    resolved: Mapped[bool] = mapped_column(nullable=False, server_default="false")
+
+
+class Schedule(Base, Mixin):
+    """A routine: a workflow or a requirement that becomes a plan and a run on a cadence, by a webhook, or
+    when a person presses "Run now". Every firing stops at the same signature a hand-made run does."""
+
+    __tablename__ = "schedules"
+    __table_args__ = (CheckConstraint("workflow_id IS NOT NULL OR requirement <> ''", name="what"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    workflow_id: Mapped[str | None] = mapped_column(ForeignKey("workflow_definitions.id", ondelete="CASCADE"))
+    requirement: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    #: A five-field cron expression, evaluated in UTC.
+    cadence: Mapped[str] = mapped_column(String(120), nullable=False, server_default="")
+    enabled: Mapped[bool] = mapped_column(nullable=False, server_default="true")
+    next_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: The webhook's secret, hashed like a session token; null when the routine has no webhook.
+    token_hash: Mapped[str | None] = mapped_column(String(128))
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+
+class ScheduleFire(Base):
+    """One firing of a routine and what became of it."""
+
+    __tablename__ = "schedule_fires"
+    __table_args__ = (CheckConstraint("trigger IN ('schedule', 'manual', 'webhook')", name="trigger"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    schedule_id: Mapped[str] = mapped_column(ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False, index=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    trigger: Mapped[str] = mapped_column(String(20), nullable=False)
+    plan_ref: Mapped[str | None] = mapped_column(String(40))
+    run_ref: Mapped[str | None] = mapped_column(String(40))
+    #: fired | refused | failed — and why, in words.
+    outcome: Mapped[str] = mapped_column(String(20), nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    #: The first part of a webhook's payload, kept as quoted data — never read as an instruction.
+    payload_excerpt: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { GitMerge, GitPullRequest, TriangleAlert, Check, Search, FolderGit2, Loader2, RefreshCw, GitCompare } from 'lucide-react';
+import { GitMerge, GitPullRequest, TriangleAlert, Check, Search, FolderGit2, Loader2, RefreshCw, GitCompare, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
@@ -135,14 +135,27 @@ function LiveGit({ project }: { project: Project }) {
   );
 }
 
+/** Where a run's branch was pushed, and the page where its pull request is opened — or why there is none. */
+function PushedLine({ pushed }: { pushed: NonNullable<RunDoc['pushed']> }) {
+  return (
+    <p className="flex flex-wrap items-center gap-x-1.5">
+      <Upload className="size-3 text-brand" />Pushed to {pushed.remote} at <Mono>{sha7(pushed.sha)}</Mono> by {pushed.by}, {ago(pushed.at)} ·
+      {pushed.compareUrl
+        ? <a href={pushed.compareUrl} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">Open pull request ↗</a>
+        : <span>this remote has no pull request page NeuroCode knows how to open</span>}
+    </p>
+  );
+}
+
 function LiveWorktrees({ project, data, stamp }: { project: Project; data: GitOverview; stamp: string }) {
-  const { mergeRun } = useData();
+  const { mergeRun, runs } = useData();
   const { can } = useAuth();
   const { armed, arm, disarm } = useArmed();
   const [picked, setPicked] = useState<string | null>(null);
   const [against, setAgainst] = useState<'base' | 'head'>('base');
   const [busy, setBusy] = useState(false);
   const wt = data.worktrees.find((w) => w.id === picked) ?? data.worktrees[0] ?? null;
+  const pushed = wt?.runRef ? runs.find((r) => r.ref === wt.runRef)?.pushed ?? null : null;
   // Every branch git still has carries a last commit, so a gone run with none has no branch left to diff.
   const branchKnown = !!wt && wt.branch !== '(detached)' && !(wt.gone && wt.lastCommitAt === null);
   const diff = useRemote(wt && branchKnown ? `${project.id}:diff:${wt.branch}:${against}:${stamp}` : null,
@@ -182,7 +195,8 @@ function LiveWorktrees({ project, data, stamp }: { project: Project; data: GitOv
               <div className="flex items-center gap-2">
                 <Dot state={w.gone ? 'disconnected' : w.status} pulse={w.runStatus === 'running'} />
                 <Mono className="truncate">{w.branch}</Mono>
-                {w.gone && <Tag tone="warn" className="ml-auto">gone</Tag>}
+                {w.gone ? <Tag tone="warn" className="ml-auto">gone</Tag>
+                  : w.runRef && runs.some((r) => r.ref === w.runRef && r.pushed) ? <Tag tone="info" className="ml-auto">pushed</Tag> : null}
               </div>
               <div className="mt-1 flex items-center gap-2 text-[11.5px] text-dim">
                 <span className="truncate">{w.madeBy === 'git' ? 'made outside NeuroCode' : w.agent}</span>
@@ -222,7 +236,9 @@ function LiveWorktrees({ project, data, stamp }: { project: Project; data: GitOv
               {wt.runRef && <p>Run <Link to={`/runs?ref=${encodeURIComponent(wt.runRef)}`} className="font-mono text-brand hover:underline">{wt.runRef}</Link> · {wt.runStatus}{wt.base ? <> · from <Mono>{sha7(wt.base)}</Mono></> : null}</p>}
               {wt.merged && <p className="text-ok">Merged into {wt.merged.into} as <Mono>{wt.merged.commit}</Mono> · undo with <Mono>{wt.merged.undo}</Mono></p>}
               {wt.mergeBlocked && !wt.merged && <p>Merge: {wt.mergeBlocked}</p>}
-              <p>To share it for review, push it yourself: <Mono>git push origin {wt.branch}</Mono></p>
+              {pushed ? <PushedLine pushed={pushed} />
+                : wt.runRef ? <p>Once you accept <Link to={`/runs?ref=${encodeURIComponent(wt.runRef)}`} className="text-brand hover:underline">the run</Link>, push its branch from there: your own git credentials, never forced.</p>
+                  : <p>To share it for review, push it yourself: <Mono>git push origin {wt.branch}</Mono></p>}
             </div>
           </Panel>
 
@@ -451,7 +467,7 @@ function LiveReviews({ runs, data }: { runs: RunDoc[]; data: GitOverview }) {
         const pending = gate?.status === 'pending';
         return (
           <Panel key={run.id} eyebrow={`${p.branch} → ${p.base} · opened ${ago(p.openedAt)}`}
-            title={<span className="flex flex-wrap items-center gap-2"><Mono tone="brand">{p.ref}</Mono>{p.title}<Tag tone={PR_TONE[p.state]}>{p.state.replace('_', ' ')}</Tag></span>}
+            title={<span className="flex flex-wrap items-center gap-2"><Mono tone="brand">{p.ref}</Mono>{p.title}<Tag tone={PR_TONE[p.state]}>{p.state.replace('_', ' ')}</Tag>{run.pushed && <Tag tone="info">pushed</Tag>}</span>}
             actions={<span className="text-[12px] text-dim">{p.files} files · <span className="text-ok">+{p.additions}</span> <span className="text-danger">−{p.deletions}</span> · {p.commits} commits</span>}>
             {p.body && <p className="max-w-4xl text-[13px] leading-relaxed text-ink-2">{p.body}</p>}
             <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -477,6 +493,7 @@ function LiveReviews({ runs, data }: { runs: RunDoc[]; data: GitOverview }) {
                     {gate && pending ? `${gate.ref} · ${gate.risk} risk · ${gate.reason}` : run.note || (run.merged ? `Merged into ${run.merged.into} as ${run.merged.commit}.` : 'No gate is open for this run.')}
                   </p>
                   <p className="mt-1 text-[12px] text-dim">{p.author}{p.reviewers.length ? ` · reviewed by ${p.reviewers.join(', ')}` : ''}</p>
+                  {run.pushed && <div className="mt-1 text-[12px] text-dim"><PushedLine pushed={run.pushed} /></div>}
                   <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                     {p.state === 'awaiting_human' && pending && can('approvals:decide') && (
                       <>

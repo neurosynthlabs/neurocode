@@ -1,4 +1,4 @@
-"""Projects and the MCP registry.
+"""Projects, the MCP registry, and the web.
 
 A project's card carries numbers that used to be stored on it and drift: how many tasks it is
 carrying, how many are running, how big the code is. They are all computed here, in two queries for
@@ -6,13 +6,18 @@ the whole list rather than one per project.
 
 Onboarding a repository — cloning, scanning, indexing — still runs on the old stack; it moves with the
 runtime in its own phase.
+
+The web is here for the same reason MCP is: both are tools this server reaches out with on someone's
+behalf, behind the same address guard and the same tool rules. `/web` says whether search is set up and
+lets an admin set its key; `/web/search` and `/web/fetch` are a person trying it, and need `ai:use`,
+the permission research — the first thing that searches the web — already asks for.
 """
 from __future__ import annotations
 
 import json
 from typing import Any, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,8 +30,10 @@ from ..repositories.platform import McpRepository
 from ..schemas import project_json
 from ..schemas.platform import mcp_json
 from ..services.errors import Refused
+from ..services import instructions
 from ..services.identity import Person
-from ..services.mcp import McpService
+from ..services.mcp import MAX_ARGUMENTS, McpService
+from ..services.web import MAX_QUERY, MAX_URL, WebService
 from ..services.onboarding import OnboardingService, Spec, onboard
 from .deps import current_person, database, gateway, hand_off, require, session
 
@@ -68,6 +75,30 @@ class TrustIn(BaseModel):
     trusted: bool
 
 
+class ToolCallIn(BaseModel):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    #: The project the call is made for, so that project's tool rules apply; null is the workspace's.
+    projectId: str | None = Field(default=None, max_length=80)
+
+
+class WebKeyIn(BaseModel):
+    key: str = Field(max_length=300)          # an empty string removes it
+
+
+class WebSearchIn(BaseModel):
+    q: str = Field(min_length=1, max_length=MAX_QUERY)
+    projectId: str | None = Field(default=None, max_length=80)
+
+
+class WebFetchIn(BaseModel):
+    url: str = Field(min_length=1, max_length=MAX_URL)
+    projectId: str | None = Field(default=None, max_length=80)
+
+
+def _ip(request: Request) -> str:
+    return request.client.host if request.client else ""
+
+
 @router.get("/projects", dependencies=[Depends(current_person)])
 async def projects(open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
     repo = ProjectRepository(open_session)
@@ -86,6 +117,19 @@ async def project(pid: str, open_session: AsyncSession = Depends(session)) -> di
     counts = await repo.task_counts()
     return project_json(found, tasks=counts.get(pid),
                         index=await CodeIndexRepository(open_session).summary(pid))
+
+
+@router.get("/projects/{pid}/instructions", dependencies=[Depends(current_person)])
+async def project_instructions(pid: str, target: list[str] = Query(default_factory=list, max_length=50),
+                               open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    """The instruction files at the project's checkout root, read now: which were read, their size and
+    sha1, which rules applied, what an `@import` was refused and why, and whether the cap cut the text.
+    With `target` (repeatable), a rule scoped by `paths:` says whether it would apply to those files.
+    A project with no code on this machine answers with no files, not an error."""
+    found = await ProjectRepository(open_session).get(pid)
+    if found is None:
+        raise NotFound(f"project {pid}")
+    return instructions.as_json(await instructions.for_project(found, target))
 
 
 @router.post("/projects", status_code=201)
@@ -142,3 +186,55 @@ async def check_mcp(server_id: str, who: Person = Depends(require("mcp:manage"))
     """Connect once and record what happened. A failed check is still a 200: the server's status and
     reason are the answer. Refused only when the check may not run at all."""
     return mcp_json(await McpService(open_session).check(server_id, who))
+
+
+@router.post("/mcp/servers/{server_id}/tools/{name}/call")
+async def call_mcp_tool(server_id: str, name: str, body: ToolCallIn, request: Request,
+                        who: Person = Depends(require("mcp:manage")),
+                        open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    """Try one tool: refused in words before anything is sent when the server is untrusted, was not
+    connected at its last check, never listed the tool, or a rule denies it. Once sent, what came back
+    is the answer — `ok: false` with the reason when the call itself failed."""
+    if len(json.dumps(body.arguments)) > MAX_ARGUMENTS:
+        raise Refused(f"The arguments are larger than {MAX_ARGUMENTS // 1000} KB.", status=422)
+    await _known_project(open_session, body.projectId)
+    return await McpService(open_session).call_tool(server_id, name, body.arguments, who,
+                                                    project_id=body.projectId or None, ip=_ip(request))
+
+
+# ── the web ──────────────────────────────────────────────────────
+@router.get("/web")
+async def web_status(who: Person = Depends(current_person), open_session: AsyncSession = Depends(session),
+                     gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """Whether web search can answer, and the caps on fetching. The masked key only for an admin."""
+    return WebService(open_session, gw.secrets).status(masked=who.can("workspace:admin"))
+
+
+@router.put("/web")
+async def set_web_key(body: WebKeyIn, request: Request, who: Person = Depends(require("workspace:admin")),
+                      open_session: AsyncSession = Depends(session),
+                      gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    return await WebService(open_session, gw.secrets).set_key(body.key, who, ip=_ip(request))
+
+
+@router.post("/web/search")
+async def web_search(body: WebSearchIn, who: Person = Depends(require("ai:use")),
+                     open_session: AsyncSession = Depends(session),
+                     gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    await _known_project(open_session, body.projectId)
+    return await WebService(open_session, gw.secrets).search(body.q, actor=who.name,
+                                                             project_id=body.projectId or None)
+
+
+@router.post("/web/fetch")
+async def web_fetch(body: WebFetchIn, who: Person = Depends(require("ai:use")),
+                    open_session: AsyncSession = Depends(session),
+                    gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    await _known_project(open_session, body.projectId)
+    return await WebService(open_session, gw.secrets).fetch(body.url, actor=who.name,
+                                                            project_id=body.projectId or None)
+
+
+async def _known_project(open_session: AsyncSession, project_id: str | None) -> None:
+    if project_id and await ProjectRepository(open_session).get(project_id) is None:
+        raise NotFound(f"project {project_id}")

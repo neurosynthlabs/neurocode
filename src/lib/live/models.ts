@@ -1,4 +1,4 @@
-import { request, type AiLane, type AiPreference, type CompilerInfo, type LaneId } from '@/lib/api';
+import { request, type AiLane, type AiPreference, type CompilerInfo, type LaneId, type ThinkingLevel } from '@/lib/api';
 
 /* The Models & Router screen's live data: GET /models. The gateway's own view of its lanes, what each
    feature asks it for, and a day of its ledger. Key material is removed on the server. */
@@ -18,12 +18,18 @@ export interface FleetLane extends Omit<AiLane, 'keyMask' | 'keySource' | 'baseU
   avgMs24h: number;
   tokensIn24h: number;
   tokensOut24h: number;
+  /** Of the input tokens, how many the provider served from its prompt cache (as it reported them). */
+  tokensCached24h: number;
+  /** Of the output tokens, how many were reasoning rather than the answer. */
+  tokensReasoning24h: number;
   /** null when the lane is not priced — unknown, which is not the same as free. */
   cost24h: number | null;
+  /** What the prompt cache took off the bill; null when the cost is unknown. */
+  saved24h: number | null;
 }
 
 export interface RouteLine {
-  feature: 'compile' | 'agent' | 'review' | 'chat' | 'ask' | 'brainstorm' | 'extract' | 'embed' | 'test';
+  feature: 'compile' | 'agent' | 'review' | 'chat' | 'compact' | 'ask' | 'brainstorm' | 'extract' | 'embed' | 'test';
   role: LaneRole | null;
   /** Whether the feature has an answer of its own when no lane does. */
   offline: boolean;
@@ -35,6 +41,9 @@ export interface RouteLine {
   calls24h: number;
   failures24h: number;
   offline24h: number;
+  /** How hard it asks a model to think; null where there is nothing to set (embeddings, the admin test). */
+  thinking: ThinkingLevel | null;
+  thinkingDefault: ThinkingLevel | null;
 }
 
 export interface ModelsReport {

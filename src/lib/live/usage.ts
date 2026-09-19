@@ -47,6 +47,21 @@ export interface CostlyCall {
   taskRef: string | null;
 }
 
+/** The prompt cache and the reasoning, over model calls only: the rules read no prompt. Only what providers
+   reported — a lane that reports no cache hits shows none. */
+export interface CacheLine extends Priced {
+  calls: number;
+  tokensIn: number;
+  tokensCached: number;
+  /** Cached ÷ input tokens; null with no input. */
+  cacheShare: number | null;
+  tokensOut: number;
+  /** Of the output tokens, how many were reasoning, paid for but never shown as the answer. */
+  tokensReasoning: number;
+  /** What the cache took off: cached tokens at the fresh price, less their cached price. Null when unknown. */
+  savedUsd: number | null;
+}
+
 export interface SpendReport extends Omit<UsageReport, 'totals' | 'byDay'> {
   totals: UsageReport['totals'] & Priced;
   byDay: SpendDay[];
@@ -54,6 +69,12 @@ export interface SpendReport extends Omit<UsageReport, 'totals' | 'byDay'> {
   byProject: ProjectSpend[];
   /** The window's ten costliest calls; unpriced calls come after every priced one. */
   costliest: CostlyCall[];
+  cache: {
+    /** Null when no model call fell in the window. */
+    totals: (CacheLine & { scope: 'all' }) | null;
+    byLane: (CacheLine & { lane: string })[];
+    byFeature: (CacheLine & { feature: string })[];
+  };
 }
 
 export const fetchUsage = (days: number) => request<SpendReport>(`/usage?days=${days}`);
@@ -61,6 +82,6 @@ export const fetchUsage = (days: number) => request<SpendReport>(`/usage?days=${
 /** What each feature the ledger records is called on screen. An id not here is shown as it is. */
 export const FEATURE_LABEL: Record<string, string> = {
   compile: 'Requirement compiler', agent: 'Agent step', review: 'Code review', chat: 'Session', ask: 'Ask memory',
-  brainstorm: 'Brainstorm', extract: 'Add from text', embed: 'Embedding', test: 'Connection test',
+  brainstorm: 'Brainstorm', extract: 'Add from text', embed: 'Embedding', test: 'Connection test', compact: 'Session summary',
   research: 'Research', eval: 'Eval', 'eval-judge': 'Eval judge',
 };

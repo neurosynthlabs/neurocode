@@ -27,6 +27,7 @@ from ..repositories.usage import (
     OFFLINE,
     AgentSpend,
     Answered,
+    CacheLine,
     CallLine,
     CostlyCall,
     CurrentRun,
@@ -188,6 +189,9 @@ ROUTES = (
           "failed answer, rules read the diff and the review says so."),
     Route("chat", CHAT, False, False,
           "Lanes good at chat. With no lane the session says so and stops."),
+    Route("compact", CHAT, False, False,
+          "Lanes good at chat write the summary a long session's older turns fold into. With no lane "
+          "nothing is folded, and the session says so."),
     Route("ask", None, True, False,
           "No particular role. With no lane, memory search answers from the facts alone."),
     Route("brainstorm", None, False, False,
@@ -230,10 +234,9 @@ def fleet_json(report: list[dict[str, Any]], catalogue: Sequence[Lane],
         tin, tout = sum(line.tokens_in for line in mine), sum(line.tokens_out for line in mine)
         per_in, per_out = lanes.price_of(row["id"])
         known = lanes.priced(row["id"])
-        # The lane's price holds for the model it names; a day that ran another model through it has no
-        # known cost, even on a free lane.
-        all_priced = known and all(lanes.priced_call(line.lane, line.model)
-                                   for line in mine if line.tokens_in or line.tokens_out)
+        # The lane's price holds for the models it names; a day that ran another model through it has no
+        # known cost, even on a free lane. Each line's cost is the database's, cache and hour included.
+        all_priced = known and not any(line.unpriced for line in mine)
         out.append({
             **{k: v for k, v in row.items() if k not in PRIVATE},
             "hosting": "local" if row["api"] == "ollama" else "remote", "embed": embeds.get(row["id"]),
@@ -241,13 +244,19 @@ def fleet_json(report: list[dict[str, Any]], catalogue: Sequence[Lane],
             "calls24h": calls, "failures24h": sum(line.failures for line in mine),
             "avgMs24h": round(sum(line.avg_ms * line.calls for line in mine) / calls) if calls else 0,
             "tokensIn24h": tin, "tokensOut24h": tout,
-            "cost24h": round(tin / 1e6 * per_in + tout / 1e6 * per_out, 4) if all_priced else None,
+            "tokensCached24h": sum(line.tokens_cached for line in mine),
+            "tokensReasoning24h": sum(line.tokens_reasoning for line in mine),
+            "cost24h": round(sum(line.cost_usd or 0 for line in mine), 4) if all_priced else None,
+            "saved24h": round(sum(line.saved_usd or 0 for line in mine), 4) if all_priced else None,
         })
     return out
 
 
 def routes_json(chains: dict[str | None, list[Lane]], embed: Lane | None, features: Sequence[FeatureLine],
-                offline_reviews: int) -> list[dict[str, Any]]:
+                offline_reviews: int, thinking: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    """Each feature's chain and its last day. `thinking` is how hard it asks a model to think, where it
+    can be set: a lane that takes no thinking setting is sent none, whatever the level says."""
+    levels = thinking or {}
     by_feature = {line.feature: line for line in features}
     out = []
     for route in ROUTES:
@@ -261,7 +270,10 @@ def routes_json(chains: dict[str | None, list[Lane]], embed: Lane | None, featur
                     "chain": [{"lane": x.id, "model": x.embed if route.feature == "embed" else x.model}
                               for x in chain],
                     "calls24h": line.calls if line else 0, "failures24h": line.failures if line else 0,
-                    "offline24h": offline})
+                    "offline24h": offline,
+                    "thinking": levels.get(route.feature) if route.feature in lanes.THINKING_FEATURES else None,
+                    "thinkingDefault": lanes.THINKING_DEFAULTS.get(route.feature, "off")
+                    if route.feature in lanes.THINKING_FEATURES else None})
     return out
 
 
@@ -325,6 +337,15 @@ def call_json(line: CallLine, *, admin: bool) -> dict[str, Any]:
             "error": line.error, "by": line.by if admin else None}
 
 
+def cache_json(line: CacheLine, key: str) -> dict[str, Any]:
+    """The prompt cache and the reasoning for one line. `cacheShare` is of the input tokens; the
+    dollars saved are null where the cost itself is unknown."""
+    return {key: line.key, "calls": line.calls, "tokensIn": line.tokens_in, "tokensCached": line.tokens_cached,
+            "cacheShare": round(line.tokens_cached / line.tokens_in, 4) if line.tokens_in else None,
+            "tokensOut": line.tokens_out, "tokensReasoning": line.tokens_reasoning,
+            "costUsd": line.cost_usd, "savedUsd": line.saved_usd, "costComplete": not line.unpriced}
+
+
 def person_json(line: PersonLine) -> dict[str, Any]:
     return {"name": line.name, "calls": line.calls, "tokens": line.tokens}
 
@@ -346,6 +367,10 @@ def usage_json(report: Usage, *, admin: bool) -> dict[str, Any]:
         "byFeature": [feature_json(f) for f in report.by_feature],
         "byProvider": [lane_json(line) for line in report.by_lane],
         "recent": [call_json(c, admin=admin) for c in report.recent],
+        # Model calls only: the rules read no prompt and cache nothing.
+        "cache": {"totals": cache_json(report.cache, "scope") if report.cache else None,
+                  "byLane": [cache_json(line, "lane") for line in report.cache_by_lane or []],
+                  "byFeature": [cache_json(line, "feature") for line in report.cache_by_feature or []]},
     }
     if report.by_person is not None:   # who uses what is for admins; everyone else sees the totals
         out["byPerson"] = [person_json(p) for p in report.by_person]

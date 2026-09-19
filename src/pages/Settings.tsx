@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Check } from 'lucide-react';
+import { Check, Globe, Loader2, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
-  Page, PageHeader, PageBody, Panel, Mono, Ascii, SelectField, SectionTitle, KV,
+  Page, PageHeader, PageBody, Panel, Mono, Ascii, SelectField, SectionTitle, KV, Field, Tag,
 } from '@/components/os';
+import { ApiError } from '@/lib/api';
+import { useRemote } from '@/lib/remote';
+import { webApi, WEB_KEY_PERMISSION, type WebPage, type WebSearch, type WebStatus } from '@/lib/live/web';
 import { useTheme, THEMES } from '@/lib/theme';
 import { useAccess } from '@/lib/access';
 import { useData } from '@/lib/data';
@@ -14,7 +17,8 @@ import { cn } from '@/lib/utils';
 import { plural } from '@/lib/words';
 
 /* Only what something reads. Appearance is this browser's; the routing policy, the lanes and their keys,
-   roles and gates each have a screen of their own, which is where they are changed. */
+   roles and gates each have a screen of their own, which is where they are changed. The web is here:
+   the search key, and a place to try a search or read one page. */
 
 
 export default function Settings() {
@@ -117,11 +121,13 @@ export default function Settings() {
               </div>
             </Panel>
 
+            <WebPanel />
+
             <Panel eyebrow="Changed on their own screens" title="Set elsewhere">
               <div className="divide-y divide-line/60">
                 <Elsewhere what="Routing policy and lanes" where="Models & Router" onOpen={() => nav('/models')} />
                 {admin && <Elsewhere what="Model keys and each lane's limits" where="AI providers" onOpen={() => nav('/admin/ai')} />}
-                <Elsewhere what="What needs your approval" where="Permissions" onOpen={() => nav('/permissions')} />
+                <Elsewhere what="What needs your approval, and the tool rules" where="Permissions" onOpen={() => nav('/permissions')} />
                 {canAny('roles:manage', 'users:manage') && <Elsewhere what="Who may do what" where="Roles & permissions" onOpen={() => nav('/admin/roles')} />}
               </div>
             </Panel>
@@ -136,6 +142,7 @@ export default function Settings() {
               <KV k="Screen preferences" v="Postgres · prefs table" mono />
               <KV k="Project rules" v="Postgres · projects.rules" mono />
               <KV k="Model keys" v="server/secrets.json · owner-only" mono />
+              <KV k="Web search key" v="server/secrets.json · owner-only" mono />
               <KV k="Memory" v="Postgres · full-text + pgvector" mono />
               <KV k="Operational data" v="Postgres · local API" mono />
               {data.health?.db && <KV k="Database" v={data.health.db} mono />}
@@ -179,5 +186,151 @@ function Elsewhere({ what, where, onOpen }: { what: string; where: string; onOpe
       <span className="text-[13.5px] text-ink-2">{what}</span>
       <Button size="xs" variant="outline" onClick={onOpen}>Open {where}</Button>
     </div>
+  );
+}
+
+const reason = (e: unknown) => (e instanceof ApiError ? e.message : 'The local API did not answer.');
+const kb = (n: number) => (n < 1024 ? `${n} B` : `${Math.round(n / 1024)} KB`);
+
+/** Web search: its key, and trying it. Every search and page passes the tool rules, and is in the activity log. */
+function WebPanel() {
+  const { can } = useAuth();
+  const admin = can(WEB_KEY_PERMISSION);
+  const mayTry = can('ai:use');
+  const [version, setVersion] = useState(0);
+  const status = useRemote(`web:${version}`, webApi.status);
+  const [key, setKey] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [q, setQ] = useState('');
+  const [url, setUrl] = useState('');
+  const [busy, setBusy] = useState<'search' | 'fetch' | null>(null);
+  const [found, setFound] = useState<WebSearch | null>(null);
+  const [page, setPage] = useState<WebPage | null>(null);
+  const s: WebStatus | null = status.data;
+
+  const saveKey = async (value: string) => {
+    setSaving(true);
+    try {
+      const next = await webApi.setKey(value);
+      setKey('');
+      setVersion((v) => v + 1);
+      toast.success(value ? 'Web search key saved' : 'Web search key removed', {
+        description: value ? `Kept in the API's secrets file as ${next.keyMask}.` : 'Research can no longer search the web.',
+      });
+    } catch (e) {
+      toast.error('Key not saved', { description: reason(e) });
+    } finally {
+      setSaving(false);
+    }
+  };
+  const trySearch = async () => {
+    setBusy('search');
+    try {
+      setFound(await webApi.search(q.trim()));
+    } catch (e) {
+      setFound(null);
+      toast.error('No search', { description: reason(e) });
+    } finally {
+      setBusy(null);
+    }
+  };
+  const tryFetch = async () => {
+    setBusy('fetch');
+    try {
+      setPage(await webApi.fetch(url.trim()));
+    } catch (e) {
+      setPage(null);
+      toast.error('Page not read', { description: reason(e) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <Panel eyebrow={s ? `${s.label} · the tool rules apply to every search and page` : 'Search and pages'}
+      title={<span className="flex items-center gap-1.5"><Globe className="size-3.5 text-brand" />Web</span>}
+      actions={s && <Tag tone={s.configured ? 'ok' : 'neutral'}>{s.configured ? 'search configured' : 'search not configured'}</Tag>}>
+      {status.loading ? (
+        <p className="text-[13px] text-dim"><Loader2 className="mr-2 inline size-3.5 animate-spin" />asking the API…</p>
+      ) : status.error || !s ? (
+        <p className="text-[13px] text-danger">{status.error ?? 'No answer.'}</p>
+      ) : (
+        <>
+          <p className="text-[12.5px] text-ink-2">
+            Research can search the web for each angle and read the top pages when you tick “The web”. Search goes
+            through the {s.label}; its key is kept beside the model keys and never shown again.
+          </p>
+          {admin ? (
+            <div className="mt-3 flex flex-wrap items-end gap-2">
+              <Field className="min-w-0 flex-1 basis-56" label={s.keyMask ? `Key · ${s.keyMask}` : 'Key'} type="password"
+                value={key} onChange={setKey} placeholder={s.keyMask ? 'Paste a new key to replace it' : 'BSA…'}
+                autoComplete="off" mono
+                hint={<>Made in the <a className="text-brand hover:underline" href={s.keysAt} target="_blank" rel="noreferrer noopener">Brave Search API dashboard ↗</a>. Setting it is written to the audit log.</>} />
+              <div className="flex gap-1.5 pb-6">
+                <Button size="sm" disabled={!key.trim() || saving} onClick={() => void saveKey(key.trim())}>
+                  {saving && <Loader2 className="size-3.5 animate-spin" />}Save key
+                </Button>
+                {s.keyMask && <Button size="sm" variant="outline" disabled={saving} onClick={() => void saveKey('')}>Remove</Button>}
+              </div>
+            </div>
+          ) : (
+            <p className="mt-2 text-[12px] text-dim">
+              {s.configured ? 'An admin has set the key.' : `Setting the key needs ${WEB_KEY_PERMISSION}.`}
+            </p>
+          )}
+
+          <div className="mt-4 grid grid-cols-1 gap-4 border-t border-line pt-3 md:grid-cols-2">
+            <div className="min-w-0">
+              <SectionTitle>Try a search</SectionTitle>
+              <div className="flex items-end gap-2">
+                <Field className="min-w-0 flex-1" value={q} onChange={setQ} placeholder="postgres advisory locks"
+                  disabled={!s.configured || !mayTry} />
+                <Button size="sm" variant="outline" disabled={!s.configured || !mayTry || !q.trim() || busy !== null}
+                  title={!s.configured ? 'Add a key first.' : !mayTry ? 'Needs ai:use.' : undefined} onClick={() => void trySearch()}>
+                  {busy === 'search' ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}Search
+                </Button>
+              </div>
+              {found && (
+                <div className="mt-2 space-y-2">
+                  {found.results.length === 0 ? <p className="text-[12.5px] text-dim">No results for “{found.query}”.</p>
+                    : found.results.map((r) => (
+                      <div key={r.url} className="min-w-0">
+                        <a href={r.url} target="_blank" rel="noreferrer noopener" className="block truncate text-[13px] text-brand hover:underline">{r.title}</a>
+                        <Mono className="block truncate">{r.url}</Mono>
+                        {r.snippet && <p className="line-clamp-2 text-[12px] text-soft">{r.snippet}</p>}
+                      </div>
+                    ))}
+                  <p className="text-[11.5px] text-dim">{found.decision.why}</p>
+                </div>
+              )}
+            </div>
+            <div className="min-w-0">
+              <SectionTitle>Read a page</SectionTitle>
+              <div className="flex items-end gap-2">
+                <Field className="min-w-0 flex-1" value={url} onChange={setUrl} placeholder="https://www.postgresql.org/docs/" mono disabled={!mayTry} />
+                <Button size="sm" variant="outline" disabled={!mayTry || !url.trim() || busy !== null}
+                  title={!mayTry ? 'Needs ai:use.' : undefined} onClick={() => void tryFetch()}>
+                  {busy === 'fetch' && <Loader2 className="size-3.5 animate-spin" />}Read
+                </Button>
+              </div>
+              {page && (
+                <div className="mt-2 min-w-0">
+                  <p className="truncate text-[13px] text-ink">{page.title || page.url}</p>
+                  <p className="text-[11.5px] text-dim">
+                    HTTP {page.status} · {page.contentType} · {kb(page.bytes)}{page.truncated ? ' · cut' : ''}
+                    {page.hops ? ` · ${page.hops} redirect${page.hops > 1 ? 's' : ''}` : ''}
+                  </p>
+                  <Ascii className="mt-1.5 max-h-[200px] overflow-auto whitespace-pre-wrap">{page.text.slice(0, 2000) || '(no text on the page)'}</Ascii>
+                </div>
+              )}
+              <p className="mt-2 text-[11.5px] text-dim">
+                http and https only, never a local or private address; up to {s.fetch.maxHops} redirects, each checked
+                again; {Math.round(s.fetch.maxBytes / 1048576)} MB and {s.fetch.timeoutS} s at most.
+              </p>
+            </div>
+          </div>
+        </>
+      )}
+    </Panel>
   );
 }

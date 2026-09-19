@@ -49,6 +49,8 @@ class User(Base, Mixin):
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(UserStatus, nullable=False, server_default="active")
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: When this person last looked at the inbox: "done since your last visit" is counted from it.
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     roles: Mapped[list[UserRole]] = relationship(back_populates="user", cascade="all, delete-orphan",
                                                  lazy="selectin")

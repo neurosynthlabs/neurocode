@@ -400,7 +400,7 @@ function RunDialog({ workflow, projects, active, onClose, onStarted }: {
               <span className="mb-1.5 block text-[12.5px] font-medium text-soft">{workflow.builtin ? 'Requirement' : 'Input'}</span>
               <textarea
                 value={input} onChange={(e) => setInput(e.target.value)} rows={5} autoFocus
-                placeholder={workflow.builtin ? 'Invoice mein tax galat aa raha hai — interstate orders pe CGST/SGST reverse ho raha hai.' : 'What this run is about, e.g. the invoice tax report'}
+                placeholder={workflow.builtin ? 'What should change, e.g. invoice totals are rounded per line instead of per invoice' : 'What this run is about, e.g. the invoice tax report'}
                 className="focus-brand w-full resize-none rounded-lg border border-line bg-surface-2/60 p-3 text-[13.5px] leading-relaxed text-ink placeholder:text-dim focus-visible:outline-none"
               />
             </label>

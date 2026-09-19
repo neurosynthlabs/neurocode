@@ -102,7 +102,7 @@ def _router(gw: Gateway) -> dict[str, Any]:
             # With the chain's own default limit — the one gateway.run and gateway.ask walk. Drawn longer,
             # the screen promised fallbacks a real call gives up before reaching.
             "chains": {role: gw.chain(role=role) for role in (None, *lanes.ROLES)},
-            "embed": gw.embed_lane()}
+            "embed": gw.embed_lane(), "thinking": gw.thinking_levels()}
 
 
 @router.get("/models", dependencies=[Depends(current_person)])
@@ -122,7 +122,7 @@ async def models(open_session: AsyncSession = Depends(session),
     return {"preference": now["preference"], "preferenceLocked": now["locked"], "active": now["active"],
             "ordering": ORDERING, "preferences": PREFERENCE_TEXT, "lanes": fleet,
             "totals24h": totals_json(fleet, lane_lines),
-            "routes": routes_json(now["chains"], now["embed"], feature_lines, offline_reviews)}
+            "routes": routes_json(now["chains"], now["embed"], feature_lines, offline_reviews, now["thinking"])}
 
 
 @router.get("/activity", dependencies=[Depends(current_person)])

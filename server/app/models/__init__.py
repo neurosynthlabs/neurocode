@@ -29,9 +29,11 @@ from .knowledge import (
     ResearchCitation,
     ResearchReport,
     RetrievalRun,
+    TasteRule,
+    TasteSignal,
 )
 from .platform import AiCall, Brainstorm, EvalCase, EvalResult, EvalRun, EvalSuite, McpServer, McpTool, ToolRule
-from .runtime import Chat, ChatMessage, Run, RunConflict, RunLog, RunStep, TestCoverage, TestFailure
+from .runtime import Chat, ChatFile, ChatMessage, Run, RunConflict, RunLog, RunStep, TestCoverage, TestFailure
 from .work import (
     ActivityEvent,
     Agent,
@@ -40,9 +42,12 @@ from .work import (
     Decision,
     Plan,
     PlanQuestion,
+    PlanComment,
     PlanStep,
     Pref,
     Project,
+    Schedule,
+    ScheduleFire,
     Task,
     TaskAgent,
     TestExpectation,
@@ -56,7 +61,7 @@ __all__ = [
     "ChecklistItem", "Chunk", "CodeEdge", "CodeFile", "CodeIndexRun", "CodeSymbol", "Decision",
     "EvalCase", "EvalResult", "EvalRun", "EvalSuite",
     "LoginAttempt", "McpServer", "McpTool", "MemoryConflict", "MemoryFact", "MemoryHit", "MemoryTag",
-    "Plan", "ToolRule",
+    "Plan", "ToolRule", "ChatFile", "TasteRule", "TasteSignal", "PlanComment", "Schedule", "ScheduleFire",
     "PlanQuestion", "PlanStep", "Pref", "Project", "ResearchAngle", "ResearchCitation", "ResearchReport",
     "RetrievalRun", "Role", "RolePermission", "Run",
     "RunConflict", "RunLog", "RunStep", "Session", "Setting", "Task", "TaskAgent", "Team", "TeamMember",

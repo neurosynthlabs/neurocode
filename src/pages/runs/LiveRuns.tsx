@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowDownToLine, FileDiff, FolderGit2, GitMerge, Loader2, Square, Trash2, TriangleAlert } from 'lucide-react';
+import { ArrowDownToLine, ExternalLink, FileDiff, FolderGit2, GitMerge, Loader2, RefreshCw, Square, Trash2, TriangleAlert, Upload } from 'lucide-react';
 import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Ascii, Dot, Empty, KV, ListRow, Mono, Page, PageBody, PageHeader, Panel, Stat, StatGrid, Tag } from '@/components/os';
-import { api, type MergeResult, type RunDoc, type RunLog, type RunStep } from '@/lib/api';
+import { api, ApiError, type MergeResult, type RunDoc, type RunLog, type RunStep } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useData } from '@/lib/data';
 import { useRemote } from '@/lib/remote';
 import { cn } from '@/lib/utils';
 import { ago } from '@/pages/code/format';
 import { SEVERITY_TONE, clock } from '@/lib/live/work';
+import { asRuntime, runtimeApi, shortReceipt, type RunCheck, type RunGoal, type RuntimeRun } from '@/lib/live/runtime';
 import { plural } from '@/lib/words';
 
 /* Live Runs, for real: every run is a git worktree on a branch of its own, and this is what it did. */
@@ -22,7 +23,15 @@ const LEVEL_MARK: Record<RunLog['level'], string> = { info: '·', ok: '✓', war
 const KIND_LABEL: Record<RunStep['kind'], string> = {
   edit: 'writes code', merge: 'brings a branch in', test: 'runs the tests', review: 'reads the diff', handoff: 'your signature',
 };
+const CHECK_TONE: Record<RunCheck['status'], 'ok' | 'danger' | 'neutral'> = { passed: 'ok', failed: 'danger', skipped: 'neutral', 'not run': 'neutral' };
+const GOAL_TONE: Record<RunGoal['verdict'], 'ok' | 'danger' | 'warn' | 'neutral'> = { met: 'ok', 'not met': 'danger', unjudged: 'warn', 'not run': 'neutral' };
 const done = (s: RunStep) => s.status === 'done' || s.status === 'skipped' || s.status === 'failed';
+/** What a step does, told apart where one kind does two jobs: a check runs as a test step, the completion check as a review. */
+const stepKind = (r: RuntimeRun, s: RunStep) =>
+  r.checks.some((c) => c.step === s.n) ? 'runs a check' : r.goal?.step === s.n ? 'judges the goal' : KIND_LABEL[s.kind];
+/** A run a person accepted: it finished and its signature step was answered yes. */
+const accepted = (r: RunDoc) => r.status === 'done' && r.steps.some((s) => s.kind === 'handoff' && s.status === 'done');
+const failed = (e: unknown) => (e instanceof ApiError ? e.message : 'The local API did not answer.');
 const progress = (r: RunDoc) => Math.round((100 * r.steps.filter(done).length) / Math.max(1, r.steps.length));
 
 export function LiveRuns() {
@@ -31,7 +40,8 @@ export function LiveRuns() {
   const linked = useSearchParams()[0].get('ref');
   const [picked, setPicked] = useState<{ link: string | null; ref: string } | null>(null);
   const selected = (picked && picked.link === linked ? picked.ref : null) ?? linked ?? runs[0]?.ref ?? null;
-  const run = runs.find((r) => r.ref === selected) ?? runs[0] ?? null;
+  const found = runs.find((r) => r.ref === selected) ?? runs[0] ?? null;
+  const run = found ? asRuntime(found) : null;
 
   const detail = useRemote(run ? `run:${run.ref}` : null, () => api.run(run?.ref ?? ''));
   const [streamed, setStreamed] = useState<Record<string, RunLog[]>>({});
@@ -64,6 +74,32 @@ export function LiveRuns() {
     const out = await cancelRun(run.ref);
     setBusy(false);
     if (out) toast('Stopped', { description: 'The worktree stays where it is, for you to look at.' });
+  };
+  const push = async () => {
+    if (!run) return;
+    setBusy(true);
+    try {
+      const out = asRuntime(await runtimeApi.push(run.ref));
+      toast.success(`Pushed to ${out.pushed?.remote ?? 'the remote'}`, {
+        description: out.pushed?.compareUrl ? 'Open the pull request from here, under your own account.' : `${out.branch} at ${out.pushed?.sha.slice(0, 7) ?? ''}.`,
+      });
+    } catch (e) {
+      toast.error('Nothing was pushed', { description: failed(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const reviewAgain = async () => {
+    if (!run) return;
+    setBusy(true);
+    try {
+      await runtimeApi.reviewAgain(run.ref);
+      toast('Reading it again', { description: 'The review reads the branch as it is now, and keeps a new receipt.' });
+    } catch (e) {
+      toast.error('Not reviewed again', { description: failed(e) });
+    } finally {
+      setBusy(false);
+    }
   };
   const discard = async () => {
     if (!run) return;
@@ -107,6 +143,12 @@ export function LiveRuns() {
 
   const working = run.status === 'running' || run.status === 'queued';
   const stat = run.diff;
+  const reviewStep = run.steps.find((s) => s.kind === 'review' && s.n !== run.goal?.step);
+  const gateStep = run.steps.find((s) => s.status === 'waiting');
+  const canReread = can('runs:run') && !!reviewStep && reviewStep.status !== 'running' && !run.parent && run.role !== 'check'
+    && !run.removed && !run.merged && (run.status === 'done' || (run.status === 'waiting' && gateStep?.kind === 'handoff'));
+  const canPush = can('runs:merge') && accepted(run) && !run.removed && run.diff.files > 0 && !run.parent;
+  const receipt = run.review.receipt;
 
   return (
     <Page>
@@ -117,6 +159,22 @@ export function LiveRuns() {
           <>
             {can('runs:run') && (working || run.status === 'waiting') && (
               <Button size="sm" variant="outline" onClick={() => void stop()} disabled={busy}><Square className="size-3.5" />Stop</Button>
+            )}
+            {canReread && (
+              <Button size="sm" variant="outline" onClick={() => void reviewAgain()} disabled={busy} title="Read the branch as it is now, and keep a new receipt">
+                <RefreshCw className="size-3.5" />Review again
+              </Button>
+            )}
+            {canPush && (
+              <Button size="sm" variant="outline" onClick={() => void push()} disabled={busy} title="Push this run's branch with your own git credentials. Never forced.">
+                {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}{run.pushed ? 'Push again' : 'Push branch'}
+              </Button>
+            )}
+            {run.pushed?.compareUrl && (
+              <a href={run.pushed.compareUrl} target="_blank" rel="noopener noreferrer" className={buttonVariants({ size: 'sm', variant: 'outline' })}
+                title="Opens the remote's pull request page, under your own account">
+                Open pull request<ExternalLink className="size-3.5" />
+              </a>
             )}
             {can('runs:merge') && run.status === 'done' && !run.merged && !run.removed && run.diff.files > 0 && (
               <Button size="sm" onClick={() => void merge()} disabled={busy}>
@@ -164,13 +222,17 @@ export function LiveRuns() {
 
           {/* the run */}
           <div className="flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto [&>*]:shrink-0">
-            <StatGrid cols={4}>
+            <StatGrid cols={run.goalBudget ? 5 : 4}>
               <Stat label="Changed" value={plural(stat.files, 'file')} sub={`+${stat.insertions} −${stat.deletions} · ${plural(stat.commits, 'commit')}`} />
               <Stat label="Tests" value={run.tests.status} tone={run.tests.status === 'passed' ? 'ok' : run.tests.status === 'failed' ? 'danger' : 'neutral'}
                 sub={run.tests.command ?? 'no test command found'} />
               <Stat label="Review" value={run.review.by ? plural(run.review.findings.length, 'finding') : 'not yet'} tone={run.review.findings.some((f) => f.severity === 'HIGH') ? 'danger' : 'neutral'}
                 sub={run.review.by ? `by ${run.review.by}` : 'not reviewed yet'} />
               <Stat label="Wrote with" value={run.model ?? 'no model'} tone={run.model ? 'brand' : 'warn'} sub={run.requestedBy} />
+              {run.goalBudget ? (
+                <Stat label="Until done" value={`attempt ${run.attempt} of ${run.goalBudget}`} tone={run.goal ? GOAL_TONE[run.goal.verdict] : 'neutral'}
+                  sub={run.goal && run.goal.verdict !== 'not run' ? `goal ${run.goal.verdict}` : 'goal not checked yet'} />
+              ) : null}
             </StatGrid>
 
             {run.status === 'waiting' && (
@@ -249,7 +311,7 @@ export function LiveRuns() {
                     <Dot state={s.status === 'running' ? 'running' : s.status} pulse={s.status === 'running'} className="mt-1.5" />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-[13.5px] text-ink">{s.label}</span>
-                      <span className="mt-0.5 block truncate text-[12px] text-dim">{s.agent} · {KIND_LABEL[s.kind]}{s.detail ? ` · ${s.detail}` : ''}</span>
+                      <span className="mt-0.5 block truncate text-[12px] text-dim">{s.agent} · {stepKind(run, s)}{s.detail ? ` · ${s.detail}` : ''}</span>
                     </span>
                     <span className="tnum shrink-0 text-[11.5px] text-dim">{s.ms ? `${(s.ms / 1000).toFixed(1)}s` : ''}</span>
                   </div>
@@ -278,8 +340,12 @@ export function LiveRuns() {
               </div>
             </Panel>
 
+            {run.checks.length > 0 && <ChecksPanel checks={run.checks} />}
+            {run.goal && run.goalBudget ? <GoalPanel goal={run.goal} attempt={run.attempt} budget={run.goalBudget} /> : null}
+
             {run.review.findings.length > 0 && (
-              <Panel flush title="Review" eyebrow={run.review.verdict || `read by ${run.review.by}`}>
+              <Panel flush title="Review" eyebrow={run.review.verdict || `read by ${run.review.by}`}
+                actions={receipt ? <span className="text-[11.5px] text-dim">receipt <Mono>{shortReceipt(receipt.sha256)}</Mono></span> : undefined}>
                 <div className="divide-y divide-line/60">
                   {run.review.findings.map((f, i) => (
                     <div key={i} className="flex items-start gap-3 px-5 py-2.5">
@@ -306,6 +372,17 @@ export function LiveRuns() {
               <KV k="Worktree" v={run.removed ? 'removed' : run.worktree} mono />
               <KV k="Branched from" v={run.shortBase} mono />
               <KV k="Started" v={`${ago(run.startedAt)} by ${run.requestedBy}`} />
+              {receipt && (
+                <KV k="Reviewed diff" v={<span><Mono>{shortReceipt(receipt.sha256)}</Mono> at <Mono>{receipt.head.slice(0, 7) || '—'}</Mono>{receipt.by ? ` · ${receipt.by}` : ''}</span>} />
+              )}
+              {run.pushed && (
+                <KV k="Pushed" v={<span>to {run.pushed.remote} at <Mono>{run.pushed.sha.slice(0, 7)}</Mono>, by {run.pushed.by}, {ago(run.pushed.at)}</span>} />
+              )}
+              {run.pushed && (
+                <KV k="Pull request" v={run.pushed.compareUrl
+                  ? <a href={run.pushed.compareUrl} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">Open it on the remote ↗</a>
+                  : 'This remote has no pull request page NeuroCode knows how to open.'} />
+              )}
               {run.merged ? (
                 <>
                   <KV k="Merged" v={`into ${run.merged.into} as ${run.merged.commit}, by ${run.merged.by}`} />
@@ -319,5 +396,64 @@ export function LiveRuns() {
         </div>
       </PageBody>
     </Page>
+  );
+}
+
+/** The project's own lint and typecheck, as they ran in this run's worktree. Output folded, a click away. */
+function ChecksPanel({ checks }: { checks: RunCheck[] }) {
+  const failedN = checks.filter((c) => c.status === 'failed').length;
+  return (
+    <Panel flush title="Checks" eyebrow={failedN ? `${failedN} failed · the signature says so` : 'the project\'s own commands, allowed once per project'}>
+      <div className="divide-y divide-line/60">
+        {checks.map((c) => (
+          <div key={c.step} className="px-5 py-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <Tag tone={CHECK_TONE[c.status]}>{c.status}</Tag>
+              <span className="text-[13.5px] text-ink">{c.name}</span>
+              <Mono className="min-w-0 truncate">{c.command}</Mono>
+            </div>
+            {c.summary && <p className="mt-1 text-[12.5px] break-words text-dim">{c.summary}</p>}
+            {c.output.length > 0 && (
+              <details className="mt-1.5">
+                <summary className="cursor-pointer text-[12px] text-brand">Last {c.output.length} lines</summary>
+                <Ascii className="mt-1.5 max-h-[240px] overflow-auto text-[12px]">{c.output.join('\n')}</Ascii>
+              </details>
+            )}
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+/** A goal run's completion check: each criterion, what was cited for it, and what happened next. */
+function GoalPanel({ goal, attempt, budget }: { goal: RunGoal; attempt: number; budget: number }) {
+  const next = goal.next === 'rework' ? `attempt ${attempt + 1} of ${budget} does it again` : goal.verdict === 'not run' ? 'runs after the review' : 'your signature decides';
+  return (
+    <Panel flush title={<span className="flex items-center gap-2">Completion check<Tag tone={GOAL_TONE[goal.verdict]}>{goal.verdict}</Tag></span>}
+      eyebrow={`attempt ${attempt} of ${budget} · ${next}`}>
+      <div className="px-5 py-2.5 text-[13px] text-ink-2">
+        {goal.verdict === 'not run'
+          ? 'Once the tests, checks and review are done, a model on a lane that did not write this change judges each acceptance criterion against the diff, citing evidence.'
+          : goal.why}
+        {goal.by && <span className="text-dim"> · judged by {goal.by}</span>}
+      </div>
+      {goal.criteria.length > 0 && (
+        <div className="divide-y divide-line/60 border-t border-line/60">
+          {goal.criteria.map((c, i) => (
+            <div key={i} className="flex items-start gap-3 px-5 py-2.5">
+              <Tag tone={c.met ? 'ok' : 'danger'}>{c.met ? 'met' : 'not met'}</Tag>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[13px] text-ink">{c.criterion}</span>
+                {(c.evidence || c.why) && (
+                  <span className="mt-0.5 block text-[12px] break-words text-dim">{[c.evidence, c.why].filter(Boolean).join(' · ')}</span>
+                )}
+              </span>
+              {c.file && <Mono className="shrink-0">{c.file}</Mono>}
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
   );
 }

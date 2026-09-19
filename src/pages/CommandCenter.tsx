@@ -26,7 +26,7 @@ interface Mode { id: Kind; label: string; icon: LucideIcon; placeholder: string;
 interface Suggestion { icon: LucideIcon; label: string; text: string }
 
 const MODES: Mode[] = [
-  { id: 'plan', label: 'Plan', icon: GitBranchPlus, placeholder: 'Describe the change in English or Hinglish…', action: 'Compile Plan', verb: 'compile', perm: 'plans:compile' },
+  { id: 'plan', label: 'Plan', icon: GitBranchPlus, placeholder: 'Describe the change you want, in your own words…', action: 'Compile Plan', verb: 'compile', perm: 'plans:compile' },
   { id: 'ask', label: 'Ask', icon: MessagesSquare, placeholder: 'Ask what memory knows about this project…', action: 'Ask memory', verb: 'ask', perm: 'ai:use' },
   { id: 'idea', label: 'Brainstorm', icon: Lightbulb, placeholder: 'Pitch an idea. It comes back as a brief that argues against itself.', action: 'Brainstorm', verb: 'brainstorm', perm: 'ai:use' },
 ];

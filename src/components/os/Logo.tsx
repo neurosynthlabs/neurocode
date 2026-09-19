@@ -3,71 +3,77 @@ import { cn } from '@/lib/utils';
 /* ═══════════════════════════════════════════════════════════════
    NEUROCODE — the mark.
 
-   An "N" drawn as a synapse: four nodes wired by two axons, with
-   the descending stroke breaking into a signal pulse. Geometric,
-   monoline, legible down to 14px. Every colour is a theme token,
-   so the mark recolours with the palette instead of fighting it.
+   One ribbon drawn without lifting the pen: up, over, down and up
+   again — an N — stopping short of the top, where a node sits on its
+   own. The signal and the neuron it reaches. It stands alone, in its
+   own marigold, and it is the same in every theme: the palette
+   recolours the app around it, not it.
+
+   Drawn on a 100-unit grid with a stroke heavy enough to hold at
+   16 px (the favicon) and round enough to feel written, not built.
    ═══════════════════════════════════════════════════════════════ */
 
-export function LogoGlyph({ size = 32, className }: { size?: number; className?: string }) {
+export const MARIGOLD = '#FF9F1C';
+/** The app icon's tile: a rounded square whose corners ease into the sides instead of meeting them. */
+export const TILE = 'M30 0H70C87 0 100 13 100 30V70C100 87 87 100 70 100H30C13 100 0 87 0 70V30C0 13 13 0 30 0Z';
+const RIBBON = 'M27 76V38c0-11 12-14 18-5l10 17c6 9 18 6 18-5V44';
+const NODE = { cx: 73, cy: 23, r: 7.5 };
+
+function Ribbon({ color }: { color: string }) {
   return (
-    <svg viewBox="0 0 32 32" width={size} height={size} className={cn('shrink-0', className)}
-      fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      {/* left axon */}
-      <path d="M8 25V9" strokeWidth="2.4" />
-      {/* diagonal — the synapse crossing */}
-      <path d="M8 9.6 24 22.4" strokeWidth="2.4" opacity=".55" />
-      {/* right axon */}
-      <path d="M24 7v16" strokeWidth="2.4" />
-      {/* terminal nodes */}
-      <circle cx="8" cy="7.2" r="2.5" fill="currentColor" stroke="none" />
-      <circle cx="24" cy="24.8" r="2.5" fill="currentColor" stroke="none" />
-      {/* synapse dots along the crossing */}
-      <circle cx="13.4" cy="13.9" r="1.15" fill="currentColor" stroke="none" opacity=".9" />
-      <circle cx="18.6" cy="18.1" r="1.15" fill="currentColor" stroke="none" opacity=".9" />
-      {/* signal pulse — the "code" half */}
-      <path d="M2.6 16h2.6" strokeWidth="1.7" opacity=".65" />
-      <path d="M26.8 16h2.6" strokeWidth="1.7" opacity=".65" />
+    <>
+      <path d={RIBBON} fill="none" stroke={color} strokeWidth="13" strokeLinecap="round" strokeLinejoin="round" />
+      <circle {...NODE} fill={color} />
+    </>
+  );
+}
+
+/** The mark on its own, in marigold — the logo. */
+export function LogoSymbol({ size = 32, className, title }: { size?: number; className?: string; title?: string }) {
+  return (
+    <svg viewBox="0 0 100 100" width={size} height={size} className={cn('shrink-0', className)}
+      role={title ? 'img' : undefined} aria-label={title} aria-hidden={title ? undefined : true}>
+      <Ribbon color={MARIGOLD} />
     </svg>
   );
 }
 
-/** The glyph on a solid brand tile — the app icon. */
-export function LogoMark({ size = 34, className }: { size?: number; className?: string }) {
+/** The app icon: the mark on a graphite tile, for places that need a filled square — the favicon, a home screen. */
+export function LogoMark({ size = 34, className, title }: { size?: number; className?: string; title?: string }) {
   return (
-    <span
-      className={cn('sheen relative grid shrink-0 place-items-center overflow-hidden', className)}
-      style={{
-        width: size, height: size,
-        borderRadius: 'calc(var(--radius) * 1.15)',
-        background: 'hsl(var(--primary))',
-        color: 'hsl(var(--primary-foreground))',
-        boxShadow:
-          'inset 0 1px 0 hsl(var(--primary-foreground) / 0.24), 0 1px 3px hsl(var(--primary) / 0.38)',
-      }}
-    >
-      <LogoGlyph size={size * 0.68} />
-    </span>
+    <svg viewBox="0 0 100 100" width={size} height={size} className={cn('shrink-0', className)}
+      role={title ? 'img' : undefined} aria-label={title} aria-hidden={title ? undefined : true}>
+      <path d={TILE} fill="#1B1C20" />
+      <path d={TILE} fill="none" stroke="#FFFFFF" strokeOpacity=".08" strokeWidth="2" />
+      <g transform="translate(16 16) scale(.68)"><Ribbon color={MARIGOLD} /></g>
+    </svg>
   );
 }
 
-/** Mark + name. `onDark` switches the type to the sidebar's foreground. */
+/** The mark in the current text colour, for places that draw it in one ink. */
+export function LogoGlyph({ size = 32, className }: { size?: number; className?: string }) {
+  return (
+    <svg viewBox="0 0 100 100" width={size} height={size} className={cn('shrink-0', className)} aria-hidden>
+      <Ribbon color="currentColor" />
+    </svg>
+  );
+}
+
+/** Mark and name. `onDark` switches the type to the sidebar's foreground. */
 export function Wordmark({
-  size = 34, sub = `v${__APP_VERSION__} · self-hosted`, className, onDark, hideSub,
+  size = 34, sub = `Version ${__APP_VERSION__}`, className, onDark, hideSub,
 }: { size?: number; sub?: string; className?: string; onDark?: boolean; hideSub?: boolean }) {
   const ink = onDark ? 'var(--rail-ink)' : 'var(--os-ink)';
-  const accent = onDark ? 'var(--rail-accent)' : 'var(--os-brand)';
   const dim = onDark ? 'var(--rail-dim)' : 'var(--os-dim)';
   return (
-    <span className={cn('flex items-center gap-2.5', className)}>
-      <LogoMark size={size} />
+    <span className={cn('flex items-center gap-2', className)}>
+      <LogoSymbol size={size * 0.86} />
       <span className="min-w-0 leading-none">
-        <span className="block truncate tracking-[-0.022em]" style={{ fontSize: size * 0.44 }}>
-          <span className="font-bold" style={{ color: ink }}>Neuro</span>
-          <span className="font-semibold" style={{ color: accent }}>Code</span>
+        <span className="block truncate font-semibold tracking-[-0.022em]" style={{ fontSize: size * 0.46, color: ink }}>
+          NeuroCode
         </span>
         {!hideSub && (
-          <span className="mt-1 block truncate font-mono" style={{ fontSize: size * 0.27, color: dim }}>
+          <span className="mt-1 block truncate" style={{ fontSize: size * 0.3, color: dim }}>
             {sub}
           </span>
         )}

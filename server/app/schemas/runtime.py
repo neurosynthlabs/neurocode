@@ -9,8 +9,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from ..ai import lanes
 from ..models import Chat, ChatMessage, Run, RunLog, RunStep
 from .work import when
+
+#: The share of a lane's window at which a session folds its older turns. Written here, not imported
+#: from services/chat, because the schemas sit below the services; services/chat reads it from here.
+AUTO_COMPACT_AT = 0.8
 
 
 def run_step_json(step: RunStep) -> dict[str, Any]:
@@ -24,8 +29,14 @@ def run_log_json(line: RunLog) -> dict[str, Any]:
             "line": line.line}
 
 
+#: Kept on the run's review document, but shown beside it: the project's checks, a goal run's
+#: completion check, and a re-read in flight, which the screen reads from the run's own step.
+_BESIDE_REVIEW = ("checks", "goal", "reviewing")
+
+
 def run_json(run: Run, *, project_name: str = "", children: Sequence[Run] = (),
              task_ref: str | None = None, plan_ref: str | None = None) -> dict[str, Any]:
+    review = run.review or {"findings": [], "verdict": "", "by": ""}
     return {
         "id": run.id, "ref": run.ref, "projectId": run.project_id, "projectName": project_name,
         "taskRef": task_ref, "planRef": plan_ref, "requirement": run.requirement,
@@ -39,7 +50,11 @@ def run_json(run: Run, *, project_name: str = "", children: Sequence[Run] = (),
                   "summary": run.tests_summary, "passed": run.tests_passed, "failed": run.tests_failed,
                   "skipped": run.tests_skipped, "total": run.tests_total, "sha": run.tests_sha,
                   "runner": run.tests_runner},
-        "review": run.review or {"findings": [], "verdict": "", "by": ""},
+        # `receipt`: the fingerprint of the patch the reviewer read; merge and push refuse another one.
+        "review": {k: v for k, v in review.items() if k not in _BESIDE_REVIEW},
+        "checks": review.get("checks") or [],
+        "goal": review.get("goal"),
+        "attempt": run.attempt, "goalBudget": run.goal_budget,
         "diff": {"files": run.diff_files, "insertions": run.diff_insertions,
                  "deletions": run.diff_deletions, "commits": run.diff_commits},
         "model": run.model, "lane": run.lane, "note": run.note, "removed": run.removed,
@@ -65,13 +80,35 @@ def chat_message_json(message: ChatMessage) -> dict[str, Any]:
     if message.tool:
         out["arguments"] = message.arguments or {}
         out["ok"] = message.ok
+    # What the model reasoned before this turn, when the lane returned it, and for how long — shown
+    # folded. A summary says which turns it folded; a folded turn says so, and is still here to read.
+    if message.reasoning:
+        out["reasoning"] = message.reasoning
+    thought = (message.arguments or {}).get("thought") if not message.tool else None
+    if thought:
+        out["thought"] = {"ms": thought.get("ms"), "tokens": thought.get("tokens")}
+    if message.role == "summary":
+        folded = message.arguments or {}
+        out["folded"] = {"turns": folded.get("folded", 0), "from": folded.get("from"), "to": folded.get("to")}
+    if message.compacted:
+        out["compacted"] = True
     return out
 
 
-def chat_json(chat: Chat, *, project_name: str = "") -> dict[str, Any]:
+def chat_json(chat: Chat, *, project_name: str = "",
+              instructions: Sequence[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """`instructions` is the project's instruction files the session's model is handed, `[{path, bytes}]`
+    (`Resolved.brief()`), read by the caller. Left out when the caller did not read them, so a list that
+    was never looked at is never mistaken for a project that has none."""
     return {
         "id": chat.id, "ref": chat.ref, "projectId": chat.project_id, "projectName": project_name,
         "title": chat.title, "status": chat.status, "startedAt": when(chat.created_at),
         "lastAt": when(chat.last_at), "startedBy": chat.started_by, "turns": chat.turns,
         "toolCalls": chat.tool_calls, "model": chat.model, "lane": chat.lane, "note": chat.note,
+        # The context meter: the prompt tokens the provider counted on the last call, against the window
+        # of the model that answered it (null when its provider publishes none that this catalogue cites).
+        "contextTokens": chat.context_tokens, "contextWindow": lanes.window_for(chat.lane, chat.model),
+        "autoCompactAt": AUTO_COMPACT_AT,
+        **({"instructions": [{"path": f["path"], "bytes": f["bytes"]} for f in instructions]}
+           if instructions is not None else {}),
     }

@@ -253,7 +253,7 @@ async def test_a_command_fills_in_its_arguments_and_never_runs_its_shell_lines(c
 async def test_a_slash_that_names_no_command_is_just_a_question_and_a_switched_off_one_is_refused(
         client: AsyncClient):
     ref = (await client.post("/sessions", json={"projectId": PID})).json()["ref"]
-    plain = await client.post(f"/sessions/{ref}/messages", json={"text": "/etc kya hai"})
+    plain = await client.post(f"/sessions/{ref}/messages", json={"text": "/etc/hosts, what is it?"})
     assert plain.status_code == 201
     assert [t["role"] for t in (await client.get(f"/sessions/{ref}")).json()["messages"]] == ["you"]
 

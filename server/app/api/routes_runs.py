@@ -1,5 +1,5 @@
-"""Agent runs over HTTP: what they did, their output, the real diff, and stopping, merging, discarding
-or sending one back for changes.
+"""Agent runs over HTTP: what they did, their output, the real diff, and stopping, merging, pushing,
+discarding, reviewing again or sending one back for changes.
 
 Same paths and same JSON as before. What changed underneath: a run's steps, logs, children and
 collisions are rows now, so this file reads them in a fixed number of queries however many runs are
@@ -29,6 +29,11 @@ router = APIRouter(prefix="/runs")
 
 class ReworkIn(BaseModel):
     notes: str = Field(min_length=1, max_length=4000)
+
+
+class PushIn(BaseModel):
+    #: Which of the repository's remotes; left out, `origin` — or the only one there is.
+    remote: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 async def _context(open_session: AsyncSession, runs: list[Run]) -> dict[str, dict[str, Any]]:
@@ -103,6 +108,33 @@ async def merge(ref: str, request: Request, who: Person = Depends(require("runs:
             detail={"commit": result["commit"], "run": ref},
             ip=request.client.host if request.client else "")
     return {**result, "run": _one(merged, await _context(open_session, [merged]))}
+
+
+@router.post("/{ref}/push")
+async def push(ref: str, request: Request, body: PushIn | None = None,
+               who: Person = Depends(require("runs:merge")), open_session: AsyncSession = Depends(session),
+               gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """Push an accepted run's own branch to the project's remote with your git credentials, never forced.
+    Refused while the branch is not exactly what was reviewed. Answers the run, whose `pushed` carries
+    the compare link where you open the pull request yourself."""
+    pushed = await RunService(open_session, gw).push(ref, who.name, body.remote if body else None)
+    await AuditRepository(open_session).record(
+        action="run.push", user_id=who.id, target=f"{pushed.branch} → {pushed.pushed['remote']}",
+        detail={"run": ref, "sha": pushed.pushed["sha"], "compareUrl": pushed.pushed["compareUrl"]},
+        ip=request.client.host if request.client else "")
+    return _one(pushed, await _context(open_session, [pushed]))
+
+
+@router.post("/{ref}/review")
+async def review_again(ref: str, jobs: BackgroundTasks, who: Person = Depends(require("runs:run")),
+                       open_session: AsyncSession = Depends(session), db: Database = Depends(database),
+                       gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """Read the run's diff again, as the branch is now, for a new review and a new receipt. The reading
+    happens after the response; what comes back is the run with its review step running."""
+    run, step = await RunService(open_session, gw).review_again(ref, who.name)
+    answer = _one(run, await _context(open_session, [run]))
+    await hand_off(open_session, jobs, runtime.reread, db, gw, ref, step, who.name)
+    return answer
 
 
 @router.post("/{ref}/discard")

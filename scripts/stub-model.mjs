@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // A model for the end-to-end run: an OpenAI-compatible chat-completions server that answers every prompt
-// NeuroCode sends with a small, deterministic, schema-valid reply.
+// NeuroCode sends with a small, deterministic, schema-valid reply — whole, or streamed when asked to stream.
 //
 // It exists so the checks can walk the real path — the gateway, a lane, the ledger, the parsers — without
 // a key, without the network, and without the app keeping a canned answer of its own for when no model is
@@ -120,16 +120,32 @@ export function startStubModel(port = 0) {
         res.end(JSON.stringify({ error: { message: `no ${req.method} ${req.url} here` } }));
         return;
       }
-      const { messages = [] } = JSON.parse(body || '{}');
+      const { messages = [], stream = false } = JSON.parse(body || '{}');
       const system = messages.find((m) => m.role === 'system')?.content ?? '';
       const user = messages.filter((m) => m.role === 'user').map((m) => m.content).join('\n\n');
       const kind = kindOf(system);
       seen.push(kind);
       const content = JSON.stringify(reply(kind, system, user));
+      const usage = { prompt_tokens: Math.ceil((system.length + user.length) / 4), completion_tokens: Math.ceil(content.length / 4) };
+      if (stream) {
+        // Streamed the way the providers stream: a reasoning piece first, the answer in a few pieces, then a
+        // last chunk carrying the usage (stream_options.include_usage), then [DONE].
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+        const send = (chunk) => res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        send({ choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: 'Reading the question. ' }, finish_reason: null }] });
+        const size = Math.max(1, Math.ceil(content.length / 3));
+        for (let at = 0; at < content.length; at += size) {
+          send({ choices: [{ index: 0, delta: { content: content.slice(at, at + size) }, finish_reason: null }] });
+        }
+        send({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+        send({ choices: [], usage: { ...usage, completion_tokens_details: { reasoning_tokens: 5 } } });
+        res.end('data: [DONE]\n\n');
+        return;
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: Math.ceil((system.length + user.length) / 4), completion_tokens: Math.ceil(content.length / 4) },
+        usage,
       }));
     });
   });

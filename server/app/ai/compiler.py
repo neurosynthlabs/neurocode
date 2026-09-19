@@ -1,7 +1,8 @@
-"""The requirement compiler: a requirement in English or Hinglish in, an implementation plan out.
+"""The requirement compiler: a requirement in a person's own words in, an implementation plan out.
 
-The compiler is given the memory facts that match the requirement and records which ones, so a reader
-can check what the plan was based on. The gateway picks the model. There is no plan without one: a
+The compiler is given the project's own instructions (its AGENTS.md and CLAUDE.md), the memory facts
+that match the requirement and the pieces of code and documents retrieval finds for it — and the caller
+records which, so a reader can check what the plan was based on. The gateway picks the model. There is no plan without one: a
 planner made of keywords used to stand in, and its plans read like a model's — steps, risk, a
 confidence it had invented — while understanding nothing of the requirement. With no lane able to
 answer, compiling now says so and writes nothing.
@@ -15,6 +16,9 @@ from pydantic import BaseModel, Field
 
 from ..data import roster
 from .gateway import Gateway, Result, extract_json
+
+#: What one retrieval piece may put in the prompt. Six of them stay under a few thousand tokens.
+PIECE_CHARS = 900
 
 LAYERS = ("Frontend", "Backend", "Database", "Security", "DevOps", "Documentation")
 
@@ -41,6 +45,8 @@ class PlanOut(BaseModel):
     steps: list[Step] = Field(min_length=1)
     testPlan: list[str] = Field(default_factory=list)
     openQuestions: list[str] = Field(default_factory=list)
+    #: What "done" means, one checkable sentence each. A person may edit them before dispatch.
+    acceptanceCriteria: list[str] = Field(default_factory=list)
 
 
 @dataclass
@@ -48,21 +54,31 @@ class Context:
     project: dict[str, Any]
     facts: list[dict[str, Any]]
     answers: list[dict[str, str]] = field(default_factory=list)
+    #: The project's instruction files, already read and capped (`services/instructions.py`).
+    instructions: str = ""
+    #: Retrieval's pieces for the requirement: `{kind, ref, path, text}`, code and documents only.
+    pieces: list[dict[str, Any]] = field(default_factory=list)
 
 
 SYSTEM = """You are the requirement compiler inside NeuroCode, an AI engineering OS. The operator writes
-requirements in English or Hinglish, often informally. Turn one requirement into an implementation plan
+requirements in any language, often informally. Turn one requirement into an implementation plan
 for the project described in the user message.
 
 Rules:
-- Use only what the context supports. Name a file, table or module only when a memory fact mentions it
-  or the stack makes it certain; otherwise describe it in words.
+- Use only what the context supports. Name an existing file, table or module only when a memory fact
+  or a code piece shows it, or the stack makes it certain; otherwise describe it in words.
+- A file the change must create may be named in affectedFiles too; it will be checked against the code
+  index and shown as a new file.
+- Follow the project's instructions where they bear on the plan: its conventions, its commands, what it
+  says must not be touched.
 - When a business decision is missing, put it in openQuestions instead of guessing.
 - Steps are small and ordered. Each step has exactly one owner from: {agents}.
 - End with a test step owned by {tester} and a review step owned by {reviewer}. When risk is HIGH
   or CRITICAL, add a final step "Your approval" owned by {commander}.
 - risk is CRITICAL for production data or money movement, HIGH for schema changes or financial logic.
-- Write businessRequirement and technicalRequirement in plain English even when the input is Hinglish.
+- Write businessRequirement and technicalRequirement in plain English whatever language the input is in.
+- acceptanceCriteria are what "done" means: 2 to 6 sentences, each one a person or a test can check
+  against the finished change ("An interstate invoice shows IGST and no CGST line"), never a step.
 
 Reply with one JSON object and nothing else, shaped like this:
 {schema}"""
@@ -72,7 +88,7 @@ SCHEMA_HINT = {
     "businessRequirement": "what this means for the business",
     "technicalRequirement": "what has to change in the code",
     "affectedModules": ["module or service names"],
-    "affectedFiles": ["paths, only when supported by a fact"],
+    "affectedFiles": ["paths, only when supported by a fact or a code piece, or a file the change creates"],
     "affectedDb": ["tables or procedures, only when supported by a fact"],
     "architectureImpact": "what changes structurally, or 'none'",
     "risk": "LOW | MEDIUM | HIGH | CRITICAL",
@@ -82,18 +98,28 @@ SCHEMA_HINT = {
     "steps": [{"label": "short step", "agent": "one owner", "detail": "one sentence"}],
     "testPlan": ["one test per item"],
     "openQuestions": ["business decisions the plan must not guess"],
+    "acceptanceCriteria": ["one checkable sentence per item"],
 }
 
 
 def messages(requirement: str, ctx: Context) -> list[dict[str, str]]:
+    """The prompt, stable parts first — the system text, the project, its instructions, then what this
+    requirement found — so a provider that caches a prompt's opening can reuse it across compiles."""
     import json
 
     p = ctx.project
     lines = [f"Project: {p['name']} · stack: {', '.join(p.get('stack', [])) or 'unknown'}", p.get("description", "")]
+    if ctx.instructions:
+        lines.append("\nThe project's instructions, from files in its repository (follow them where they "
+                     f"bear on the plan):\n{ctx.instructions}")
     if ctx.facts:
         lines.append("\nMemory facts (cite the ref when you rely on one):")
         lines += [f"- {f['ref']} · {f['title']}: {f['body'][:400]} (evidence: {', '.join(f.get('evidence', [])[:4])})"
                   for f in ctx.facts]
+    if ctx.pieces:
+        lines.append("\nCode and documents from this repository that bear on the requirement (the ref is "
+                     "path#symbol:line):")
+        lines += [f"[{x['kind']} · {x['ref']}]\n{x['text'][:PIECE_CHARS]}" for x in ctx.pieces]
     if ctx.answers:
         lines.append("\nQuestions the operator has already answered:")
         lines += [f"- {a['q']} → {a['a']}" for a in ctx.answers]
@@ -130,11 +156,24 @@ def layer_name(raw: Any) -> str | None:
     return {"db": "Database", "sql": "Database", "ui": "Frontend", "api": "Backend", "ops": "DevOps"}.get(s)
 
 
+#: Acceptance criteria a plan keeps, and how long one may be — the same rule for the model and a person.
+MAX_CRITERIA = 12
+MAX_CRITERION = 300
+
+
+def criteria(raw: Any) -> list[str]:
+    """Checkable sentences, trimmed, deduplicated and capped. Anything that is not text is dropped."""
+    items = raw if isinstance(raw, list) else []
+    clean = (" ".join(str(x).split())[:MAX_CRITERION] for x in items if isinstance(x, str))
+    return list(dict.fromkeys(c for c in clean if c))[:MAX_CRITERIA]
+
+
 def parse(raw: str) -> PlanOut:
     data = extract_json(raw)
     data["steps"] = [{**s, "agent": agent_name(str(s.get("agent", "")))}
                      for s in data.get("steps", []) if isinstance(s, dict) and s.get("label")]
     data["layers"] = list(dict.fromkeys(x for x in map(layer_name, data.get("layers", [])) if x))
+    data["acceptanceCriteria"] = criteria(data.get("acceptanceCriteria"))
     for key in ("risk", "priority"):
         if isinstance(data.get(key), str):
             data[key] = data[key].strip().upper()

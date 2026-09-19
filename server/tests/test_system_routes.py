@@ -13,7 +13,7 @@ import ast
 import threading
 from collections.abc import AsyncIterator
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -361,7 +361,7 @@ def test_the_route_map_is_what_the_call_sites_really_ask_for():
     """The screen's map of feature → role is a claim about code elsewhere. Compile asks for no role at
     all, whatever a plan might suggest, and this is what catches the day one of them changes."""
     asked = _asked_roles()
-    assert set(asked) == {"compile", "ask", "brainstorm", "extract", "agent", "review", "chat"}
+    assert set(asked) == {"compile", "ask", "brainstorm", "extract", "agent", "review", "chat", "compact"}
     for route in ROUTES:
         if route.feature in asked:
             assert route.role == asked[route.feature], route.feature
@@ -497,8 +497,10 @@ async def test_usage_is_priced_per_lane_and_grouped_by_agent_project_and_call(
     """Every dollar on the cost screen comes from here. DeepSeek is given a price for the test, because
     every lane in the catalogue is either free (priced at zero) or paid with no price declared, and a
     report that only ever sums zeros would pass whatever it multiplied."""
+    # One price all day and no other models, so the sums below do not depend on the hour the test runs in.
     monkeypatch.setattr(lanes, "LANES", tuple(
-        replace(x, usd_per_m_in=1.0, usd_per_m_out=2.0) if x.id == "deepseek" else x for x in lanes.LANES))
+        replace(x, usd_per_m_in=1.0, usd_per_m_out=2.0, off_peak=None, prices=()) if x.id == "deepseek" else x
+        for x in lanes.LANES))
     task = (await session.execute(select(Task).where(Task.ref == "TASK-492"))).scalar_one()
     run = await a_run(session, "RUN-7", status="done", steps=[], agent="Backend Engineer", task_id=task.id)
 
@@ -507,7 +509,7 @@ async def test_usage_is_priced_per_lane_and_grouped_by_agent_project_and_call(
 
     session.add_all([
         # Today: the backend agent by name on the priced lane, for a run in a project — $1 + $1 = $2.
-        line(at=utcnow(), feature="agent", lane="deepseek", model="deepseek-chat", tokens_in=1_000_000,
+        line(at=utcnow(), feature="agent", lane="deepseek", model="deepseek-flash", tokens_in=1_000_000,
              tokens_out=500_000, agent="Backend Engineer", project_id="erp", run_id=run.id),
         # Today: another agent on a lane nobody priced, in the same project.
         line(at=utcnow(), feature="review", lane="mystery", model="m", tokens_in=3000, tokens_out=1000,
@@ -519,7 +521,7 @@ async def test_usage_is_priced_per_lane_and_grouped_by_agent_project_and_call(
         # Yesterday: a person's call, answered by the rules, for the workspace.
         line(at=utcnow() - timedelta(days=1), feature="ask", lane="rules", model="", tokens_in=0, tokens_out=0),
         # Outside the week: counted nowhere below.
-        line(at=utcnow() - timedelta(days=20), feature="agent", lane="deepseek", model="deepseek-chat",
+        line(at=utcnow() - timedelta(days=20), feature="agent", lane="deepseek", model="deepseek-flash",
              tokens_in=9_000_000, tokens_out=0, agent="Backend Engineer", project_id="erp"),
     ])
     await session.flush()
@@ -553,7 +555,7 @@ async def test_usage_is_priced_per_lane_and_grouped_by_agent_project_and_call(
     assert len(costliest) == 4
     top = costliest[0]
     assert date.fromisoformat(top.pop("at")[:10])
-    assert top == {"lane": "deepseek", "model": "deepseek-chat", "feature": "agent", "agent": "backend",
+    assert top == {"lane": "deepseek", "model": "deepseek-flash", "feature": "agent", "agent": "backend",
                    "tokensIn": 1_000_000, "tokensOut": 500_000, "costUsd": 2.0, "runRef": "RUN-7",
                    "taskRef": "TASK-492"}
     # Free calls by size, and the one with no price last rather than guessed into place.
@@ -665,9 +667,14 @@ async def test_the_chain_on_screen_is_the_chain_a_call_walks(client: AsyncClient
     assert [c["lane"] for c in routes["agent"]["chain"]] == walked and len(walked) < len(open_lanes)
 
 
-async def test_a_paid_lane_with_no_price_is_unpriced_not_free(client: AsyncClient, session: AsyncSession):
-    """DeepSeek is paid and declares no price, so its $0 was a missing number rendered as "free"."""
-    session.add(AiCall(feature="agent", lane="deepseek", model="deepseek-chat", ms=500,
+async def test_a_paid_lane_with_no_price_is_unpriced_not_free(client: AsyncClient, session: AsyncSession,
+                                                               monkeypatch: pytest.MonkeyPatch):
+    """A paid lane that declares no price: its $0 was a missing number rendered as "free". DeepSeek
+    declares its prices now, so they are taken away here to keep the rule under test."""
+    monkeypatch.setattr(lanes, "LANES", tuple(
+        replace(x, usd_per_m_in=0.0, usd_per_m_out=0.0, usd_per_m_cached=None, prices=()) if x.id == "deepseek"
+        else x for x in lanes.LANES))
+    session.add(AiCall(feature="agent", lane="deepseek", model="deepseek-flash", ms=500,
                        tokens_in=1000, tokens_out=500, agent="Backend Engineer"))
     await session.flush()
 
@@ -678,3 +685,103 @@ async def test_a_paid_lane_with_no_price_is_unpriced_not_free(client: AsyncClien
 
     agent = next(a for a in (await client.get("/agents")).json()["agents"] if a["name"] == "Backend Engineer")
     assert agent["cost24h"] is None and agent["tokens24h"] == 1500
+
+
+# ── cache, the clock, and reasoning ──────────────────────────────
+def _at(peak: bool) -> datetime:
+    """A moment in the last six days inside DeepSeek's peak (a weekday, 02:30 UTC) or outside it (12:30)."""
+    now = datetime.now(UTC)
+    for back in range(1, 7):
+        day = now - timedelta(days=back)
+        if day.isoweekday() <= 5:
+            return day.replace(hour=2 if peak else 12, minute=30, second=0, microsecond=0)
+    raise AssertionError("a week always has a weekday")
+
+
+async def test_a_cache_hit_is_priced_as_one_and_off_peak_costs_half(client: AsyncClient, session: AsyncSession):
+    """DeepSeek's published prices (api-docs.deepseek.com/quick_start/pricing): flash $0.30 a million
+    fresh input tokens at peak, $0.006 cached, $1.20 out; everything half off-peak. A million input
+    tokens of which 400k were cached, and 100k out:
+    peak = 0.6 × 0.30 + 0.4 × 0.006 + 0.1 × 1.20 = 0.3024, and the cache saved 0.4 × (0.30 − 0.006) = 0.1176."""
+    session.add_all([
+        AiCall(at=_at(peak=True), feature="chat", lane="deepseek", model="deepseek-flash", ok=True, ms=10,
+               tokens_in=1_000_000, tokens_cached=400_000, tokens_out=100_000, tokens_reasoning=60_000),
+        AiCall(at=_at(peak=False), feature="compile", lane="deepseek", model="deepseek-flash", ok=True, ms=10,
+               tokens_in=1_000_000, tokens_cached=400_000, tokens_out=100_000, tokens_reasoning=0),
+        AiCall(at=_at(peak=True), feature="chat", lane="groq", model="llama-3.3-70b-versatile", ok=True, ms=10,
+               tokens_in=1000, tokens_out=10),
+        AiCall(at=_at(peak=True), feature="compile", lane="rules", model="offline planner", ok=True, ms=1),
+    ])
+    await session.flush()
+
+    report = (await client.get("/usage", params={"days": 7})).json()
+    assert report["totals"]["costUsd"] == round(0.3024 + 0.1512, 4) and report["totals"]["costComplete"]
+    cache = report["cache"]
+    totals = cache["totals"]
+    assert (totals["calls"], totals["tokensIn"], totals["tokensCached"]) == (3, 2_001_000, 800_000)
+    assert totals["tokensReasoning"] == 60_000 and totals["savedUsd"] == round(0.1176 + 0.0588, 4)
+    assert totals["cacheShare"] == round(800_000 / 2_001_000, 4)
+
+    lanes_ = {line["lane"]: line for line in cache["byLane"]}
+    assert set(lanes_) == {"deepseek", "groq"}                    # the rules read no prompt
+    assert lanes_["deepseek"]["costUsd"] == round(0.3024 + 0.1512, 4) and lanes_["groq"]["savedUsd"] == 0.0
+    assert lanes_["groq"]["cacheShare"] == 0.0
+    features = {line["feature"]: line for line in cache["byFeature"]}
+    assert features["chat"]["tokensReasoning"] == 60_000 and features["chat"]["savedUsd"] == 0.1176
+    assert features["compile"]["costUsd"] == 0.1512 and features["compile"]["savedUsd"] == 0.0588
+
+
+async def test_a_retired_or_unpriced_model_on_the_paid_lane_is_unknown_not_cheap(client: AsyncClient,
+                                                                                 session: AsyncSession):
+    session.add(AiCall(feature="chat", lane="deepseek", model="deepseek-chat", ok=True, ms=10,
+                       tokens_in=1000, tokens_cached=500, tokens_out=100))
+    await session.flush()
+    cache = (await client.get("/usage", params={"days": 7})).json()["cache"]
+    line = cache["byLane"][0]
+    assert line["costUsd"] is None and line["savedUsd"] is None and line["costComplete"] is False
+
+
+async def test_the_router_shows_each_lanes_window_retirement_and_cache(client: AsyncClient, session: AsyncSession,
+                                                                     lane_gateway: Gateway):
+    lane_gateway.store.save_setting("ai.lane.deepseek", {"model": "deepseek-chat"})
+    session.add(AiCall(feature="chat", lane="deepseek", model="deepseek-flash", ok=True, ms=10,
+                       tokens_in=2000, tokens_cached=1000, tokens_out=100, tokens_reasoning=40))
+    await session.flush()
+
+    report = (await client.get("/models")).json()
+    deepseek = next(lane for lane in report["lanes"] if lane["id"] == "deepseek")
+    assert deepseek["model"] == "deepseek-chat" and "retired" in deepseek["retired"]
+    assert deepseek["window"] is None                    # the window is the flash model's, not this one's
+    assert deepseek["models"] == ["deepseek-flash", "deepseek-v4-pro"] and deepseek["thinks"] == "deepseek"
+    assert deepseek["offPeak"]["factor"] == 0.5
+    assert (deepseek["tokensCached24h"], deepseek["tokensReasoning24h"]) == (1000, 40)
+    assert deepseek["cost24h"] is not None and deepseek["saved24h"] > 0
+    groq = next(lane for lane in report["lanes"] if lane["id"] == "groq")
+    assert groq["window"] == 131_072 and groq["retired"] is None and groq["thinks"] is None
+
+    admin = (await client.get("/admin/ai")).json()
+    assert "retired" in admin["deepseek"]["retired"]
+
+
+async def test_thinking_is_set_per_feature_by_an_admin_and_shown_on_the_router(client: AsyncClient,
+                                                                               session: AsyncSession,
+                                                                               lane_gateway: Gateway):
+    routes = {r["feature"]: r for r in (await client.get("/models")).json()["routes"]}
+    assert (routes["compile"]["thinking"], routes["agent"]["thinking"], routes["chat"]["thinking"]) == \
+        ("high", "off", "low")
+    assert routes["compact"]["role"] == "chat" and routes["embed"]["thinking"] is None
+
+    saved = await client.put("/admin/ai", json={"thinking": {"agent": "high", "chat": "off"}})
+    assert saved.status_code == 200
+    assert lane_gateway.thinking("agent") == "high" and lane_gateway.thinking("chat") == "off"
+    routes = {r["feature"]: r for r in (await client.get("/models")).json()["routes"]}
+    assert routes["agent"]["thinking"] == "high" and routes["agent"]["thinkingDefault"] == "off"
+
+    assert (await client.put("/admin/ai", json={"thinking": {"agent": "default"}})).status_code == 200
+    assert lane_gateway.thinking("agent") == "off"
+    assert (await client.put("/admin/ai", json={"thinking": {"agent": "turbo"}})).status_code == 400
+    assert (await client.put("/admin/ai", json={"thinking": {"nope": "low"}})).status_code == 400
+    assert lane_gateway.thinking("chat") == "off"            # a refused change changes nothing
+
+    refused = await client.put("/admin/ai", json={"thinking": {"chat": "high"}}, headers=await engineer(session))
+    assert refused.status_code == 403

@@ -1,15 +1,15 @@
-import { useState, type SyntheticEvent } from 'react';
-import { ArrowRight, Loader2, LockKeyhole, Mail, ShieldCheck } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Field, LogoMark } from '@/components/os';
+import { useState, type KeyboardEvent, type SyntheticEvent } from 'react';
+import { ArrowRight, Loader2 } from 'lucide-react';
+import { LogoSymbol } from '@/components/os/Logo';
+import { SignalGlow } from '@/components/os/Glow';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { cn } from '@/lib/utils';
 
-const POINTS = [
-  ['Everyone signs in as themselves', 'What each person can change follows their role, and the server enforces it.'],
-  ['Every change is on the record', 'Sign-ins and changes to access, keys or settings land in the audit log.'],
-  ['The workspace is yours', 'It lives in your own database. A model sees only what a step sends it.'],
-] as const;
+/* The sign-in screen, drawn the way a Mac asks for a password: one centred column, the app's icon, and
+   both fields in a single rounded group with the go button inside the password field. Everything is a
+   theme token except the mark's marigold — the mark, the light behind it, the focus ring and the go button —
+   which looks the same in every theme. */
 
 export default function Login() {
   const { workspace, login } = useAuth();
@@ -17,88 +17,114 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // Bumped on each refusal so the shake plays again for a second wrong password, not just the first.
+  const [refusals, setRefusals] = useState(0);
+  const [capsLock, setCapsLock] = useState(false);
+  const ready = !!email.trim() && !!password && !busy;
 
   const submit = async (e: SyntheticEvent) => {
     e.preventDefault();
-    if (!email.trim() || !password || busy) return;
+    if (!ready) return;
     setBusy(true);
     setError('');
     try {
-      await login(email.trim(), password);  // on success the workspace replaces this screen
+      await login(email.trim(), password); // on success the workspace replaces this screen
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'The local API did not answer. Is it still running?');
+      setRefusals((n) => n + 1);
+      setPassword('');
       setBusy(false);
     }
   };
+  const watchCaps = (e: KeyboardEvent<HTMLInputElement>) => setCapsLock(e.getModifierState('CapsLock'));
 
   return (
-    <div className="grid h-full w-full grid-cols-1 overflow-hidden bg-bg lg:grid-cols-[1.05fr_1fr]">
-      {/* ── Brand side ───────────────────────────────────────── */}
-      <aside className="rail-surface relative hidden min-h-0 flex-col justify-between overflow-hidden p-12 lg:flex">
-        <div className="grid-lines pointer-events-none absolute inset-0 opacity-[0.3]" />
-        <div className="relative flex items-center gap-3">
-          <LogoMark size={40} />
-          <span className="text-[20px] tracking-[-0.025em]">
-            <span className="font-bold" style={{ color: 'var(--rail-ink)' }}>Neuro</span>
-            <span className="font-semibold" style={{ color: 'var(--rail-accent)' }}>Code</span>
-          </span>
+    <div className="relative flex h-full w-full flex-col overflow-y-auto bg-bg">
+      <SignalGlow />
+
+      <main className="relative flex flex-1 flex-col items-center justify-center px-5 py-14">
+        <div className="nc-icon-in">
+          <LogoSymbol size={76} title="NeuroCode" />
         </div>
-        <div className="relative max-w-md">
-          <h1 className="text-[30px] leading-[1.2] font-semibold tracking-[-0.03em]" style={{ color: 'var(--rail-ink)' }}>
-            One workspace for the whole engineering team.
+
+        <div className="nc-arrive mt-7 flex w-full max-w-[340px] flex-col items-center [animation-delay:120ms]">
+          <h1 className="text-center text-[27px] leading-[1.15] font-semibold tracking-[-0.028em] text-ink">
+            Sign in to NeuroCode
           </h1>
-          <p className="mt-4 text-[15px] leading-relaxed" style={{ color: 'var(--rail-soft)' }}>
-            Requirements become plans, plans become reviewed work, and nothing risky ships without a person’s signature.
+          <p className="mt-2 text-center text-[15px] text-soft">
+            {workspace ? `${workspace.name} workspace` : 'Your engineering workspace'}
           </p>
-          <ul className="mt-8 space-y-4">
-            {POINTS.map(([title, text]) => (
-              <li key={title} className="flex gap-3">
-                <ShieldCheck className="mt-0.5 size-4 shrink-0" style={{ color: 'var(--rail-accent)' }} />
-                <span>
-                  <span className="block text-[14px] font-medium" style={{ color: 'var(--rail-ink)' }}>{title}</span>
-                  <span className="mt-0.5 block text-[13px]" style={{ color: 'var(--rail-dim)' }}>{text}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
+
+          <form onSubmit={submit} className="mt-8 w-full" noValidate>
+            <div
+              key={refusals}
+              className={cn(
+                'overflow-hidden rounded-[14px] border bg-surface/80 shadow-[0_22px_60px_-28px_var(--os-shadow)] backdrop-blur-xl transition-[border-color,box-shadow] duration-200',
+                error
+                  ? 'border-danger/55'
+                  : 'border-line focus-within:border-[rgb(255_159_28/0.6)] focus-within:ring-4 focus-within:ring-[rgb(255_159_28/0.16)]',
+                refusals > 0 && 'nc-shake',
+              )}
+            >
+              <input
+                type="email"
+                aria-label="Email"
+                placeholder="Email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="username"
+                autoFocus
+                spellCheck={false}
+                className="block h-[50px] w-full bg-transparent px-4 text-[15px] text-ink placeholder:text-dim focus:outline-none"
+              />
+              <div className="mx-4 h-px bg-line" aria-hidden />
+              <div className="flex items-center">
+                <input
+                  type="password"
+                  aria-label="Password"
+                  placeholder="Password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={watchCaps}
+                  onKeyUp={watchCaps}
+                  onBlur={() => setCapsLock(false)}
+                  autoComplete="current-password"
+                  className="block h-[50px] min-w-0 flex-1 bg-transparent pr-2 pl-4 text-[15px] text-ink placeholder:text-dim focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  aria-label="Sign in"
+                  disabled={!ready}
+                  className={cn(
+                    'mr-2.5 grid size-8 shrink-0 place-items-center rounded-full transition-[background-color,color,transform] duration-200 focus-visible:ring-2 focus-visible:ring-[rgb(255_159_28/0.6)] focus-visible:outline-none',
+                    ready
+                      ? 'bg-[#FF9F1C] text-[#1B1C20] hover:scale-[1.06] active:scale-95'
+                      : 'cursor-default border border-line text-dim',
+                  )}
+                >
+                  {busy ? <Loader2 className="size-4 animate-spin" /> : <ArrowRight className="size-4" strokeWidth={2.4} />}
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-3 min-h-[20px] text-center text-[13px] leading-relaxed" aria-live="polite">
+              {error ? (
+                <p role="alert" className="text-danger">{error}</p>
+              ) : capsLock ? (
+                <p className="text-soft">Caps Lock is on.</p>
+              ) : null}
+            </div>
+          </form>
+
+          <p className="mt-6 max-w-[300px] text-center text-[13px] leading-relaxed text-dim">
+            Forgot your password? An Owner or Admin can set a new one in People.
+          </p>
         </div>
-        <p className="relative font-mono text-[12px]" style={{ color: 'var(--rail-dim)' }}>v{__APP_VERSION__} · self-hosted</p>
-      </aside>
-
-      {/* ── Form side ────────────────────────────────────────── */}
-      <main className="flex min-h-0 items-center justify-center overflow-y-auto px-6 py-10">
-        <form onSubmit={submit} className="w-full max-w-[380px]">
-          <div className="mb-8 flex items-center gap-2.5 lg:hidden">
-            <LogoMark size={34} />
-            <span className="text-[17px] tracking-[-0.02em]">
-              <span className="font-bold text-ink">Neuro</span><span className="font-semibold text-brand">Code</span>
-            </span>
-          </div>
-
-          <h2 className="text-[22px] font-semibold tracking-[-0.02em] text-ink">
-            {workspace ? `Sign in to ${workspace.name}` : 'Sign in'}
-          </h2>
-          <p className="mt-1.5 text-[14px] text-soft">Use the account an Owner or Admin made for you.</p>
-
-          <div className="mt-7 space-y-3.5">
-            <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="username" autoFocus
-              icon={<Mail className="size-3.5" />} placeholder="you@company.com" />
-            <Field label="Password" type="password" value={password} onChange={setPassword} autoComplete="current-password"
-              icon={<LockKeyhole className="size-3.5" />} />
-            {error && <p role="alert" className="text-[13px] text-danger">{error}</p>}
-            <Button type="submit" size="lg" className="w-full" disabled={busy || !email.trim() || !password}>
-              {busy
-                ? <><Loader2 className="size-3.5 animate-spin" />Signing in…</>
-                : <>Sign in<ArrowRight className="size-3.5" /></>}
-            </Button>
-          </div>
-
-          <p className="mt-5 text-[12.5px] leading-relaxed text-dim">
-            Forgot your password? An Owner or Admin can set a new one for you in Admin → People.
-          </p>
-
-        </form>
       </main>
+
+      <footer className="relative pb-7 text-center text-[12px] text-dim">
+        NeuroCode {__APP_VERSION__}. Your workspace lives in your own database.
+      </footer>
     </div>
   );
 }

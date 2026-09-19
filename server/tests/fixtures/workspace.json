@@ -130,7 +130,7 @@
       "tests": 18,
       "progress": 62,
       "createdAt": "2026-09-10 09:12",
-      "requirement": "Invoice mein tax galat aa raha hai — CGST/SGST split interstate orders pe reverse ho raha hai. Fix karo.",
+      "requirement": "Invoice tax is wrong: the CGST/SGST split comes out reversed on interstate orders. Fix it.",
       "worktree": "task/invoice-tax-backend",
       "checklist": [
         {
@@ -184,7 +184,7 @@
       "tests": 24,
       "progress": 44,
       "createdAt": "2026-09-09 16:40",
-      "requirement": "Customer bulk upload chahiye — CSV se, validation ke saath, progress dikhe, partial failure pe rollback.",
+      "requirement": "We need customer bulk upload from CSV, with validation, visible progress and a rollback on partial failure.",
       "worktree": "task/bulk-upload-frontend",
       "checklist": [
         {
@@ -231,7 +231,7 @@
       "tests": 6,
       "progress": 30,
       "createdAt": "2026-09-10 08:02",
-      "requirement": "Users randomly logged out ho rahe hain ~20 min ke baad. Production issue, priority.",
+      "requirement": "Users are logged out at random after about 20 minutes. Production issue, high priority.",
       "blockedReason": "Needs production IIS session-state config — HIGH risk gate, awaiting human approval (APPR-118).",
       "worktree": "task/auth-session",
       "checklist": [
@@ -273,7 +273,7 @@
       "tests": 14,
       "progress": 100,
       "createdAt": "2026-09-08 11:15",
-      "requirement": "Reports module ka purana grid replace karo new DataGrid se, same columns aur export.",
+      "requirement": "Replace the old grid in the reports module with the new DataGrid, keeping the same columns and export.",
       "worktree": "task/reports-grid",
       "checklist": [
         {
@@ -314,7 +314,7 @@
       "tests": 9,
       "progress": 100,
       "createdAt": "2026-09-09 10:30",
-      "requirement": "Tax se related saare stored procedures audit karo, kaunse deprecated hain aur kaun call kar raha hai.",
+      "requirement": "Audit every tax-related stored procedure: which are deprecated, and what still calls them.",
       "worktree": "task/sproc-audit",
       "checklist": [
         {
@@ -356,7 +356,7 @@
       "tests": 12,
       "progress": 55,
       "createdAt": "2026-09-10 10:05",
-      "requirement": "OPD bill mein 1 rupee ka difference aa raha hai receipt aur ledger ke beech.",
+      "requirement": "The OPD bill is off by one rupee between the receipt and the ledger.",
       "worktree": "task/opd-rounding",
       "checklist": [
         {
@@ -389,7 +389,7 @@
       "tests": 0,
       "progress": 0,
       "createdAt": "2026-09-10 12:15",
-      "requirement": "Reorder point ka calculation purane fixed formula se hat ke consumption-based hona chahiye.",
+      "requirement": "The reorder point should move from the old fixed formula to one based on consumption.",
       "checklist": []
     },
     {
@@ -409,7 +409,7 @@
       "tests": 0,
       "progress": 0,
       "createdAt": "2026-09-10 12:20",
-      "requirement": "Bade reports ka Excel export timeout ho raha hai, streaming karna padega.",
+      "requirement": "Excel export of large reports times out; it has to stream.",
       "checklist": []
     },
     {
@@ -429,7 +429,7 @@
       "tests": 0,
       "progress": 0,
       "createdAt": "2026-09-10 12:41",
-      "requirement": "ADR-51 ke hisaab se 3 dead stored procedures ko deprecate karo.",
+      "requirement": "Deprecate the 3 dead stored procedures, as ADR-51 says.",
       "checklist": []
     },
     {
@@ -453,7 +453,7 @@
       "tests": 7,
       "progress": 100,
       "createdAt": "2026-09-05 09:00",
-      "requirement": "Invoice PDF ka layout naye branding ke hisaab se update karo.",
+      "requirement": "Update the invoice PDF layout to the new branding.",
       "checklist": []
     },
     {
@@ -478,7 +478,7 @@
       "tests": 13,
       "progress": 100,
       "createdAt": "2026-09-04 15:30",
-      "requirement": "Login pe brute force protection chahiye.",
+      "requirement": "Sign-in needs brute-force protection.",
       "checklist": []
     },
     {
@@ -499,7 +499,7 @@
       "tests": 0,
       "progress": 0,
       "createdAt": "2026-09-10 13:02",
-      "requirement": "Lab report finalize hote hi automatically IPD file mein attach ho jaye.",
+      "requirement": "A lab report should attach itself to the IPD file as soon as it is finalised.",
       "checklist": []
     },
     {
@@ -522,7 +522,7 @@
       "tests": 8,
       "progress": 100,
       "createdAt": "2026-09-09 09:45",
-      "requirement": "Discharge summary ke department-wise templates chahiye.",
+      "requirement": "Discharge summaries need a template per department.",
       "checklist": []
     }
   ],
@@ -532,7 +532,7 @@
       "ref": "PLAN-492",
       "taskRef": "TASK-492",
       "projectId": "erp",
-      "rawRequirement": "Invoice mein tax galat aa raha hai — CGST/SGST interstate orders pe reverse ho raha hai. Fix karo, aur purane invoices bhi theek karne padenge shayad.",
+      "rawRequirement": "Invoice tax is wrong: CGST and SGST come out reversed on interstate orders. Fix it; the old invoices may need correcting too.",
       "businessRequirement": "For an interstate sale the invoice must charge IGST against the place of supply. Today the system charges CGST+SGST against the billing state, so 41 invoices raised since 12 Aug carry the wrong tax heads and the wrong total.",
       "technicalRequirement": "Resolve tax jurisdiction once, in TaxService.ResolveJurisdiction, from the place-of-supply on the sales order — not from MST_CUSTOMER.state_code. SP_CalculateTax must consume the resolved jurisdiction instead of re-deriving it from the billing address at L288. Existing rounding behaviour is a contract and must not move.",
       "affectedModules": [
@@ -656,7 +656,7 @@
       "ref": "PLAN-488",
       "taskRef": "TASK-488",
       "projectId": "erp",
-      "rawRequirement": "Customer bulk upload chahiye — CSV se, validation ke saath, progress dikhe, aur agar beech mein fail ho to poora rollback ho jaye.",
+      "rawRequirement": "We need customer bulk upload from CSV, with validation and visible progress, and a full rollback if it fails halfway.",
       "businessRequirement": "An operator can import up to 50,000 customer records from a CSV, see per-row validation errors before committing, watch progress, and be guaranteed that a failure part-way through leaves the master data untouched.",
       "technicalRequirement": "Chunked upload to a staging table (ADR-49), server-side validation producing a row-indexed error envelope, and a single commit procedure that moves staging → MST_CUSTOMER inside one transaction. No direct write to MST_CUSTOMER from the service layer.",
       "affectedModules": [
@@ -778,7 +778,7 @@
       "ref": "PLAN-501",
       "taskRef": "TASK-501",
       "projectId": "erp",
-      "rawRequirement": "Users randomly logout ho rahe hain 20 minute ke baad. Production issue hai, urgent dekho.",
+      "rawRequirement": "Users are logged out at random after 20 minutes. It is a production issue; look at it urgently.",
       "businessRequirement": "A signed-in user must stay signed in for the full 8-hour working day unless they sign out or are idle past the configured timeout.",
       "technicalRequirement": "Session state is in-proc across three IIS nodes with no affinity, so every app-pool recycle silently drops every session on that node. Move to a Redis-backed session provider with a rolling restart and a proven revert.",
       "affectedModules": [
@@ -866,7 +866,7 @@
       "ref": "PLAN-503",
       "taskRef": "TASK-503",
       "projectId": "hims",
-      "rawRequirement": "OPD bill mein 1 rupee ka difference aa raha hai — receipt aur ledger match nahi kar rahe.",
+      "rawRequirement": "The OPD bill is off by one rupee: the receipt and the ledger do not match.",
       "businessRequirement": "The printed receipt total and the ledger posting for the same OPD bill must be identical, to the paisa, always.",
       "technicalRequirement": "Money is rounded in two independent places: BillingService.ComputeTotal (banker's rounding) and SP_PostOpdLedger (half-away-from-zero). Consolidate on the documented ledger behaviour and delete the second site.",
       "affectedModules": [
@@ -937,7 +937,7 @@
       "ref": "PLAN-519",
       "taskRef": "TASK-519",
       "projectId": "hims",
-      "rawRequirement": "Discharge summary ke department-wise templates chahiye — cardiology ka alag, ortho ka alag.",
+      "rawRequirement": "Discharge summaries need a template per department: one for cardiology, another for orthopaedics.",
       "businessRequirement": "Each department can maintain its own discharge summary layout without a developer, while the clinical fields that every summary must carry stay mandatory.",
       "technicalRequirement": "A template registry keyed by department with a shared mandatory-field core, rendered through one printer so pagination and signatures stay identical across departments.",
       "affectedModules": [
@@ -1164,7 +1164,7 @@
       "title": "Frontend state: no new state library, ever",
       "body": "React Context + useReducer for cross-screen state, local useState for everything else. TanStack Query only for server cache. A PR that adds Zustand/Redux/Jotai gets closed without review.",
       "reason": "Four state libraries already died in this codebase between 2013 and 2021; the migration cost each time was measured in months.",
-      "source": "PM instruction, 2025-01-09 (Hinglish: \"naya state library mat lana, jo hai usi mein karo\")",
+      "source": "PM instruction, 2025-01-09 (\"do not bring in a new state library; use the one we have\")",
       "projectId": "erp",
       "confidence": "HIGH",
       "createdAt": "2025-01-09",
@@ -1795,7 +1795,7 @@
       "title": "Show the plan before touching a file — every time, no exceptions",
       "body": "Agents post a numbered plan with file paths and expected diff size, wait for the approve click, then run. Even for a one-line fix. The PM reads plans faster than diffs.",
       "reason": "Explicit standing instruction; violated twice in June and both runs were reverted.",
-      "source": "PM instruction, 2026-06-03 (\"pehle plan dikhao, phir touch karo\")",
+      "source": "PM instruction, 2026-06-03 (\"show the plan first, then touch the code\")",
       "projectId": "global",
       "confidence": "HIGH",
       "createdAt": "2026-06-03",
@@ -1860,10 +1860,10 @@
       "id": "m001",
       "ref": "MEM-001",
       "category": "human",
-      "title": "The PM writes requirements in Hinglish — never ask him to rewrite them in English",
-      "body": "\"Invoice mein tax galat aa raha hai — CGST/SGST split interstate orders pe reverse ho raha hai. Fix karo.\" That is a complete requirement. The Commander compiles it; the PM does not translate. Asking for a formal spec is treated as friction.",
-      "reason": "He thinks in Hinglish and types fast; forcing English costs him time and loses nuance.",
-      "source": "312 requirements observed, 297 in Hinglish",
+      "title": "The PM writes requirements informally — never ask for them to be rewritten as a formal spec",
+      "body": "\"Invoice tax is wrong: the CGST/SGST split comes out reversed on interstate orders. Fix it.\" That is a complete requirement. The Commander compiles it; the PM does not expand it. Asking for a formal spec is treated as friction.",
+      "reason": "He types fast and informally; forcing a formal spec costs him time and loses nuance.",
+      "source": "312 requirements observed, 297 written informally",
       "projectId": "global",
       "confidence": "HIGH",
       "createdAt": "2025-01-02",
@@ -1875,7 +1875,7 @@
       ],
       "tags": [
         "human",
-        "hinglish",
+        "informal",
         "requirements"
       ],
       "pinned": true
@@ -1935,7 +1935,7 @@
       "title": "Prefers the existing pattern over a better one",
       "body": "If the codebase already does X in an ugly way in 40 places, the 41st does it the same way. \"Consistency beats correctness\" is a direct quote. New patterns need an ADR and his sign-off first.",
       "reason": "He is the only maintainer; two patterns means twice the context to hold.",
-      "source": "PM instruction, 2025-04-22 (\"jo pattern already hai wahi use karo\")",
+      "source": "PM instruction, 2025-04-22 (\"use the pattern that is already there\")",
       "projectId": "global",
       "confidence": "HIGH",
       "createdAt": "2025-04-22",

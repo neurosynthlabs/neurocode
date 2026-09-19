@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Loader2, Plus, PlugZap, Search, Server, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { Loader2, Play, Plus, PlugZap, Search, Server, ShieldAlert, ShieldCheck, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
@@ -8,7 +8,8 @@ import {
 } from '@/components/os';
 import { useAuth } from '@/lib/auth';
 import { useData } from '@/lib/data';
-import { LAUNCH_PERMISSION } from '@/lib/live/mcp';
+import { ApiError } from '@/lib/api';
+import { LAUNCH_PERMISSION, mcpApi, type ToolCall } from '@/lib/live/mcp';
 import type { McpServer } from '@/types';
 import { cn } from '@/lib/utils';
 import { ago } from './code/format';
@@ -76,6 +77,7 @@ export default function Mcp() {
   const [transport, setTransport] = useState('stdio');
   const [scope, setScope] = useState('project');
   const [effect, setEffect] = useState('ask');
+  const [trying, setTrying] = useState<{ server: string; tool: string } | null>(null);
 
   // The config the wizard will write, derived live from its inputs.
   const parts = cmd.trim().split(/\s+/).filter(Boolean);
@@ -108,6 +110,12 @@ export default function Mcp() {
       : m.transport !== 'stdio' ? null
         : m.untrusted ? 'Untrusted: its command is never launched. Trust it first.'
           : !mayLaunch ? `Launching a command needs ${LAUNCH_PERMISSION}.` : null;
+  /** Why this person cannot try this server's tools right now, or null when they can. */
+  const tryBlocker = (m: McpServer) =>
+    !can('mcp:manage') ? 'Your role cannot call MCP tools (mcp:manage).'
+      : m.untrusted ? 'Untrusted: none of its tools is called. Trust it first.'
+        : m.transport === 'stdio' && !mayLaunch ? `Calling a stdio server's tool launches it, which needs ${LAUNCH_PERMISSION}.`
+          : !m.checkedAt || m.status !== 'connected' ? 'It was not connected at its last check. Check it first.' : null;
 
   const check = async (m: McpServer) => {
     setChecking(m.id);
@@ -158,12 +166,13 @@ export default function Mcp() {
               <Stat label="Untrusted" value={untrusted.length} tone={untrusted.length ? 'warn' : 'neutral'} sub="never launched" icon={<ShieldAlert className="size-3" />} />
             </StatGrid>
 
-            <Panel className="border-warn/30 accent-left" eyebrow="Recorded, not yet enforced" title="Tool output is untrusted input">
+            <Panel className="border-warn/30 accent-left" eyebrow="Enforced on every call" title="Tool output is untrusted input">
               <p className="text-[13.5px] leading-relaxed text-ink-2">
-                A web page, an issue or a database row can contain text addressed to an agent. No agent in NeuroCode calls
-                MCP tools yet; a check only lists what a server offers. What is enforced today: an untrusted stdio
-                server's command is never launched. Each server's trust and default effect are recorded for when tools
-                can be called.
+                A web page, an issue or a database row can contain text addressed to an agent. No agent calls MCP tools
+                yet; a person can try one here. An untrusted server's command is never launched and none of its tools is
+                called. A tool is called only on a server its last check found connected, after the tool rules
+                (Permissions → Tool rules) and, where no rule covers it, the server's default effect. What a tool answers
+                is shown to you and never stored.
               </p>
               {untrusted.length > 0 && (
                 <div className="mt-2.5 flex flex-wrap gap-1">
@@ -231,17 +240,27 @@ export default function Mcp() {
                       <Empty title={srv.checkedAt ? 'The server listed no tools' : 'Tools are listed when the server is checked'}
                         hint={srv.checkedAt ? (srv.status === 'connected' ? 'It connected and offers none.' : 'The last check did not connect.') : 'A check connects once and asks the server what it offers.'} />
                     ) : (
-                      <DataTable head={['Tool', 'What it does', 'Risk']}>
+                      <DataTable head={['Tool', 'What it does', 'Risk', '']}>
                         {srv.tools.map((t) => (
-                          <Row key={t.name}>
+                          <Row key={t.name} active={trying?.server === srv.id && trying.tool === t.name}>
                             <Cell mono className="text-brand">{t.name}</Cell>
                             <Cell className="max-w-[520px] text-[12.5px] text-soft">{t.description}</Cell>
                             <Cell><RiskPill risk={t.risk} bare /></Cell>
+                            <Cell>
+                              <Button size="xs" variant="outline" disabled={!!tryBlocker(srv)} title={tryBlocker(srv) ?? undefined}
+                                onClick={() => setTrying({ server: srv.id, tool: t.name })}>
+                                <Play className="size-3" />Try
+                              </Button>
+                            </Cell>
                           </Row>
                         ))}
                       </DataTable>
                     )}
                   </Panel>
+
+                  {trying?.server === srv.id && srv.tools.some((t) => t.name === trying.tool) && (
+                    <TryTool key={`${srv.id}/${trying.tool}`} server={srv} tool={trying.tool} onClose={() => setTrying(null)} />
+                  )}
 
                   <Panel eyebrow="As reviewed in the wizard" title="Server config">
                     <Ascii className="max-h-[240px] overflow-auto">{srv.config ?? '// no config recorded for this server'}</Ascii>
@@ -352,5 +371,76 @@ export default function Mcp() {
         ]}
       />
     </Page>
+  );
+}
+
+/** One tool, called for real with the arguments typed here. The answer is shown, never stored. */
+function TryTool({ server, tool, onClose }: { server: McpServer; tool: string; onClose: () => void }) {
+  const { projects } = useData();
+  const [args, setArgs] = useState('{}');
+  const [project, setProject] = useState('workspace');
+  const [busy, setBusy] = useState(false);
+  const [answer, setAnswer] = useState<ToolCall | null>(null);
+  const risk = server.tools.find((t) => t.name === tool)?.risk;
+
+  let parsed: Record<string, unknown> | null = null;
+  let problem = '';
+  try {
+    const value: unknown = JSON.parse(args || '{}');
+    if (value && typeof value === 'object' && !Array.isArray(value)) parsed = value as Record<string, unknown>;
+    else problem = 'The arguments are a JSON object, like {"query": "…"}.';
+  } catch {
+    problem = 'Not valid JSON yet.';
+  }
+
+  const call = async () => {
+    if (!parsed) return;
+    setBusy(true);
+    try {
+      setAnswer(await mcpApi.call(server.id, tool, parsed, project === 'workspace' ? null : project));
+    } catch (e) {
+      setAnswer(null);
+      toast.error(`${tool} was not called`, { description: e instanceof ApiError ? e.message : 'The local API did not answer.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Panel className="accent-left" eyebrow={`${server.name} · ${risk ? `${risk.toLowerCase()} risk` : 'tool'} · the tool rules apply`}
+      title={<span className="flex items-center gap-2"><Play className="size-3.5 text-brand" /><Mono>{tool}</Mono></span>}
+      actions={<Button size="xs" variant="ghost" aria-label="Close" onClick={onClose}><X className="size-3" /></Button>}>
+      <label className="block">
+        <span className="mb-1.5 block text-[12.5px] font-medium text-soft">Arguments (JSON)</span>
+        <textarea value={args} onChange={(e) => setArgs(e.target.value)} rows={5} spellCheck={false}
+          className="focus-brand w-full rounded-lg border border-line bg-surface-2/60 px-3 py-2 font-mono text-[12.5px] text-ink focus-visible:outline-none" />
+      </label>
+      <div className="mt-2 flex flex-wrap items-end gap-2">
+        <SelectField className="w-56" label="Rules of" value={project} onChange={setProject}
+          options={[{ value: 'workspace', label: 'the workspace' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]} />
+        <Button size="sm" disabled={!parsed || busy} title={problem || undefined} onClick={() => void call()}>
+          {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}{busy ? 'Calling…' : 'Call'}
+        </Button>
+        {problem && <span className="text-[12px] text-warn">{problem}</span>}
+        {risk === 'HIGH' && !problem && <span className="text-[12px] text-dim">The server does not say this tool only reads. It may change things.</span>}
+      </div>
+      {answer && (
+        <div className="mt-3 border-t border-line pt-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Tag tone={!answer.ok ? 'danger' : answer.isError ? 'warn' : 'ok'}>
+              {!answer.ok ? 'call failed' : answer.isError ? 'the tool reported an error' : 'answered'}
+            </Tag>
+            {answer.ms !== null && <span className="tnum text-[12px] text-dim">{answer.ms} ms</span>}
+            {answer.truncated && <span className="text-[12px] text-dim">cut to the first 20,000 characters</span>}
+            <span className="text-[12px] text-dim">{answer.decision.why}</span>
+          </div>
+          {answer.ok ? (
+            <Ascii className="mt-2 max-h-[320px] overflow-auto whitespace-pre-wrap">{answer.text || '(the tool answered with no text)'}</Ascii>
+          ) : (
+            <p className="mt-2 text-[12.5px] text-danger">{answer.error}</p>
+          )}
+        </div>
+      )}
+    </Panel>
   );
 }

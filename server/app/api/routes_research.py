@@ -3,6 +3,9 @@
 Starting one answers at once with the queued report; the investigation runs in the background with
 sessions of its own, and the screen reads the report again while it is queued or running. Reading
 needs a session; starting and stopping one spends model calls, so both need `ai:use`.
+
+`web: true` adds the web as a source, when a search provider is configured (Settings → Web); it is the
+person's own ask, so a search no tool rule denies goes ahead.
 """
 from __future__ import annotations
 
@@ -18,6 +21,7 @@ from ..schemas.research import report_json, report_row_json
 from ..services import research as research_jobs
 from ..services.identity import Person
 from ..services.research import MAX_QUESTION, ResearchService
+from ..services.web import SECRET as WEB_SECRET
 from .deps import current_person, database, gateway, hand_off, require, session
 
 router = APIRouter(prefix="/research")
@@ -30,6 +34,7 @@ class ResearchIn(BaseModel):
     question: str = Field(min_length=3, max_length=MAX_QUESTION)
     projectId: str = Field(max_length=80)
     kinds: list[str] = Field(default_factory=lambda: ["code", "doc", "memory"], min_length=1, max_length=3)
+    web: bool = False
 
 
 @router.get("", dependencies=[Depends(current_person)])
@@ -44,8 +49,9 @@ async def reports(project: str | None = None, limit: int = Query(default=50, ge=
 async def start(body: ResearchIn, jobs: BackgroundTasks, who: Person = Depends(require("ai:use")),
                 open_session: AsyncSession = Depends(session), db: Database = Depends(database),
                 gw: Gateway = Depends(gateway)) -> dict[str, Any]:
-    row = await ResearchService(open_session).start(body.question, body.projectId, body.kinds, who)
-    await hand_off(open_session, jobs, research_jobs.investigate, db, gw, row.report.ref, who.id)
+    row = await ResearchService(open_session).start(body.question, body.projectId, body.kinds, who, web=body.web,
+                                                    web_ready=bool(gw.secrets.get(WEB_SECRET)))
+    await hand_off(open_session, jobs, research_jobs.investigate, db, gw, row.report.ref, who.id, body.web)
     return report_row_json(row)
 
 

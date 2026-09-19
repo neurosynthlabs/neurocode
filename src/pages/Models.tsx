@@ -8,7 +8,7 @@ import {
   Page, PageHeader, PageBody, Panel, Tag, Dot, Mono, Ascii, Toolbar, Field, SelectField,
   DataTable, Row, Cell, Stat, StatGrid, Bar, Segmented, Empty, KV,
 } from '@/components/os';
-import { ApiError, api, type AiPatch, type AiPreference, type LaneId } from '@/lib/api';
+import { ApiError, api, type AiPatch, type AiPreference, type LaneId, type ThinkingLevel } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { fetchModels, type FleetLane, type ModelsReport, type RouteLine } from '@/lib/live/models';
 import { useRemote } from '@/lib/remote';
@@ -25,7 +25,9 @@ const ROLE_TONE = { write: 'brand', review: 'violet', plan: 'info', chat: 'ok' }
 const GENERAL: { id: 'auto' | 'free' | 'local' | 'rules'; label: string }[] = [
   { id: 'auto', label: 'Auto' }, { id: 'free', label: 'Free only' }, { id: 'local', label: 'Local only' }, { id: 'rules', label: 'No model' },
 ];
+const LEVELS: ThinkingLevel[] = ['off', 'low', 'high', 'max'];
 const pct = (part: number, whole: number) => (whole ? Math.round((100 * part) / whole) : 0);
+const compact = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(n % 1_000_000 ? 2 : 0)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`);
 const money = (usd: number) => (usd === 0 ? 'free' : `$${usd.toFixed(usd < 1 ? 4 : 2)}`);
 const why = (e: unknown) => (e instanceof ApiError ? e.message : 'The local API did not answer.');
 
@@ -127,7 +129,7 @@ function LiveModels() {
           {tab === 'fleet' ? (
             <Panel flush>
               {list.length === 0 ? <Empty title="No lane matches" /> : (
-                <DataTable head={['Lane', 'Good at', 'Host', 'In / 1M', 'Out / 1M', 'Avg 24h', 'OK rate 24h', 'Calls 24h', 'Cost 24h', 'Status', ...(admin ? ['On', ''] : [])]}>
+                <DataTable head={['Lane', 'Good at', 'Host', 'In / 1M', 'Out / 1M', 'Avg 24h', 'OK rate 24h', 'Calls 24h', 'Cache 24h', 'Cost 24h', 'Status', ...(admin ? ['On', ''] : [])]}>
                   {list.map((l) => {
                     const okRate = l.calls24h ? pct(l.calls24h - l.failures24h, l.calls24h) : null;
                     return (
@@ -135,8 +137,10 @@ function LiveModels() {
                         <Cell className="font-medium text-ink">
                           {l.label} <Mono className="ml-1">{l.model}</Mono>
                           <span className="mt-0.5 block max-w-[380px] truncate text-[12px] font-normal text-dim">
-                            {l.free ? 'free' : 'paid'}{l.rpm ? ` · ${l.rpm}/min` : ''}{l.rpd ? ` · ${l.rpd}/day` : ''}{l.embed ? ` · embeds with ${l.embed}` : ''} · {l.note}
+                            {l.free ? 'free' : 'paid'}{l.window ? ` · ${compact(l.window)} context` : ''}{l.rpm ? ` · ${l.rpm}/min` : ''}{l.rpd ? ` · ${l.rpd}/day` : ''}{l.embed ? ` · embeds with ${l.embed}` : ''} · {l.note}
                           </span>
+                          {l.retired && <span className="mt-0.5 block max-w-[380px] text-[12px] font-normal whitespace-normal text-warn">{l.retired}</span>}
+                          {l.offPeak && <span className="mt-0.5 block max-w-[380px] text-[12px] font-normal whitespace-normal text-dim">{l.offPeak.words}</span>}
                         </Cell>
                         <Cell><span className="flex flex-wrap gap-1">{l.goodAt.map((g) => <Tag key={g} tone={ROLE_TONE[g]}>{g}</Tag>)}</span></Cell>
                         <Cell>{l.hosting === 'local'
@@ -147,6 +151,11 @@ function LiveModels() {
                         <Cell className="tnum">{l.calls24h ? `${l.avgMs24h.toLocaleString()} ms` : '—'}</Cell>
                         <Cell>{okRate === null ? <span className="text-dim">—</span> : <span className="flex items-center gap-2"><Bar className="w-14" pct={okRate} /><span className="tnum text-[12px]">{okRate}%</span></span>}</Cell>
                         <Cell className="tnum">{l.calls24h.toLocaleString()}</Cell>
+                        <Cell className="tnum">
+                          {l.tokensIn24h ? `${pct(l.tokensCached24h, l.tokensIn24h)}% hit` : <span className="text-dim">—</span>}
+                          {!!l.saved24h && <span className="block text-[12px] text-ok">saved {money(l.saved24h)}</span>}
+                          {l.tokensReasoning24h > 0 && <span className="block text-[12px] text-dim">{compact(l.tokensReasoning24h)} reasoning</span>}
+                        </Cell>
                         <Cell className={cn('tnum', l.cost24h === 0 ? 'text-ok' : l.cost24h === null ? 'text-dim' : 'text-ink')}>{l.cost24h === null ? 'unpriced' : money(l.cost24h)}</Cell>
                         <Cell>
                           <span className="flex items-center gap-1.5">
@@ -173,7 +182,7 @@ function LiveModels() {
             </Panel>
           ) : (
             <Panel eyebrow="Fixed in the code that makes each call" title="What each feature asks for" flush>
-              <DataTable head={['Feature', 'Asks for', 'Would try now', 'With no lane', 'Calls 24h', 'Offline 24h', 'Failed 24h']}>
+              <DataTable head={['Feature', 'Asks for', 'Would try now', 'Thinking', 'With no lane', 'Calls 24h', 'Offline 24h', 'Failed 24h']}>
                 {r.routes.map((line) => (
                   <Row key={line.feature}>
                     <Cell className="text-ink">
@@ -187,6 +196,10 @@ function LiveModels() {
                         <span className="flex flex-wrap gap-1">{line.chain.map((c) => <Mono key={c.lane}>{c.lane}</Mono>)}</span>
                       ) : <span className="text-[12.5px] text-dim">{line.feature === 'test' ? 'the lane named' : 'no lane open'}</span>}
                     </Cell>
+                    <Cell>
+                      <Thinking line={line} admin={admin} busy={busy === `thinking:${line.feature}`}
+                        onChange={(level) => void save({ thinking: { [line.feature]: level } }, `${line.feature} thinks ${level === 'default' ? `${line.thinkingDefault}, its default` : level}`, `thinking:${line.feature}`)} />
+                    </Cell>
                     <Cell className={cn('text-[12.5px]', line.offline ? 'text-ok' : 'text-warn')}>{line.offline ? 'rules answer' : 'no answer'}</Cell>
                     <Cell className="tnum">{line.calls24h.toLocaleString()}</Cell>
                     <Cell className="tnum">{line.offline24h.toLocaleString()}</Cell>
@@ -197,12 +210,32 @@ function LiveModels() {
               <div className="border-t border-line px-5 py-3">
                 <KV k="When a lane fails" v="the call moves to the next lane in the chain" />
                 <KV k="When every lane fails" v="features with an offline answer give it and say so; the rest say no lane answered" />
+                <KV k="Thinking" v="sent only to lanes that take it — DeepSeek's thinking, and Gemini's reasoning effort, where high is its most; every other lane is sent none" />
               </div>
             </Panel>
           )}
         </PageBody>
       )}
     </Page>
+  );
+}
+
+/** How hard a feature asks a model to think. An admin sets it here; the default is chosen per kind of work. */
+function Thinking({ line, admin, busy, onChange }: {
+  line: RouteLine; admin: boolean; busy: boolean; onChange: (level: ThinkingLevel | 'default') => void;
+}) {
+  if (!line.thinking) return <span className="text-[12.5px] text-dim">—</span>;
+  const custom = line.thinking !== line.thinkingDefault;
+  if (!admin) return <span className="text-[12.5px] text-ink-2">{line.thinking}{custom ? '' : <span className="text-dim"> · default</span>}</span>;
+  return (
+    <span className="flex items-center gap-1.5">
+      <select value={line.thinking} disabled={busy} aria-label={`How hard ${line.feature} thinks`}
+        onChange={(e) => onChange(e.target.value as ThinkingLevel)}
+        className="h-7 rounded-md border border-line-strong bg-surface-2 px-1.5 text-[12.5px] text-ink-2 disabled:opacity-60">
+        {LEVELS.map((level) => <option key={level} value={level} className="bg-surface">{level}{level === line.thinkingDefault ? ' (default)' : ''}</option>)}
+      </select>
+      {custom && <Button size="xs" variant="ghost" disabled={busy} onClick={() => onChange('default')}>reset</Button>}
+    </span>
   );
 }
 

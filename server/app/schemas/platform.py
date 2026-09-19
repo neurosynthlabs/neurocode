@@ -1,9 +1,9 @@
-"""MCP servers, in the shape the tools screens read."""
+"""MCP servers and tool rules, in the shape the tools and permissions screens read."""
 from __future__ import annotations
 
 from typing import Any
 
-from ..models import McpServer
+from ..models import McpServer, ToolRule
 from .work import when
 
 
@@ -20,3 +20,10 @@ def mcp_json(server: McpServer) -> dict[str, Any]:
         "untrusted": server.untrusted, "defaultEffect": server.default_effect,
         **({"config": server.config} if server.config else {}),
     }
+
+
+def tool_rule_json(rule: ToolRule, *, project_name: str | None = None, author: str | None = None) -> dict[str, Any]:
+    """A rule as the Permissions screen lists it. `projectId` null is the workspace's own rule."""
+    return {"id": rule.id, "projectId": rule.project_id, "projectName": project_name, "tool": rule.tool,
+            "pattern": rule.pattern, "action": rule.action, "note": rule.note, "createdBy": author,
+            "createdAt": when(rule.created_at), "updatedAt": when(rule.updated_at)}

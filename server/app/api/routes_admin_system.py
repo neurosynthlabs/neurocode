@@ -51,6 +51,9 @@ class AiPatch(BaseModel):
     rpm: int | None = Field(default=None, ge=0, le=10_000)
     rpd: int | None = Field(default=None, ge=0, le=1_000_000)
     enabled: bool | None = None
+    #: feature → off | low | high | max: how hard that feature asks a model to think. Only the features
+    #: named change; "default" puts one back to the default for its kind of work.
+    thinking: dict[str, str] | None = Field(default=None, max_length=20)
 
 
 class AiTest(BaseModel):
@@ -163,7 +166,8 @@ def _report(gw: Gateway) -> dict[str, Any]:
         "active": gw.status(),
         "deepseek": {"hasKey": bool(ds["key"]), "keyMask": Secrets.mask(ds["key"]),
                      "keySource": gw.key_source(), "model": ds["model"], "baseUrl": ds["baseUrl"],
-                     "rejected": gw.rejected()},
+                     "rejected": gw.rejected(),
+                     "retired": lanes.RETIRED.get("deepseek", {}).get(ds["model"])},
         "ollama": {"url": ol["url"], "model": ol["model"], "ready": gw.ollama_ready()},
         "lanes": gw.report(),
     }
@@ -199,6 +203,25 @@ def _lane(gw: Gateway, body: AiPatch) -> dict[str, Any]:
     return changed
 
 
+def _thinking(gw: Gateway, levels: dict[str, str]) -> dict[str, Any]:
+    """Save how hard each named feature thinks. Refused whole when any name or level is not one the
+    gateway knows, so a typo never half-applies."""
+    for feature, level in levels.items():
+        if feature not in lanes.THINKING_FEATURES:
+            raise Refused(f"there is no feature called {feature}; the features are: "
+                          f"{', '.join(lanes.THINKING_FEATURES)}", status=400)
+        if level not in (*lanes.LEVELS, "default"):
+            raise Refused(f"thinking must be one of: {', '.join(lanes.LEVELS)}, or default", status=400)
+    saved = dict(gw.store.setting("ai.thinking", {}) or {})
+    for feature, level in levels.items():
+        if level == "default":
+            saved.pop(feature, None)
+        else:
+            saved[feature] = level
+    gw.store.save_setting("ai.thinking", saved)
+    return {f"thinking.{feature}": level for feature, level in levels.items()}
+
+
 def _apply(gw: Gateway, body: AiPatch) -> dict[str, Any]:
     """Every change in one hop to the worker thread: the ledger and the secrets file both block.
     Returns what changed, in words fit for the audit log — and with no key among them."""
@@ -210,6 +233,8 @@ def _apply(gw: Gateway, body: AiPatch) -> dict[str, Any]:
         changed["preference"] = body.preference
     if body.lane is not None:
         changed.update(_lane(gw, body))
+    if body.thinking is not None:
+        changed.update(_thinking(gw, body.thinking))
     # DeepSeek and Ollama were configured before lanes existed, and the screen still sends them under
     # their own names. They are written back to the two keys the gateway still reads them from.
     for key, fields in (("ai.deepseek", (("deepseekModel", "model"), ("deepseekUrl", "baseUrl"))),

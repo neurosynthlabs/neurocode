@@ -6,6 +6,7 @@ there when you come back.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends
@@ -63,7 +64,10 @@ async def session_detail(ref: str, after: int = 0,
     if chat is None:
         raise NotFound(f"session {ref}")
     messages = await chats.messages(chat.id, after)
-    return {**chat_json(chat, project_name=await _name_of(open_session, chat.project_id)),
+    project = await ProjectRepository(open_session).get(chat.project_id)
+    # The instruction files its model is handed, read the way the answering loop reads them.
+    read = await asyncio.to_thread(chat_service.instruction_files, project)
+    return {**chat_json(chat, project_name=project.name if project else chat.project_id, instructions=read),
             "messages": [chat_message_json(m) for m in messages]}
 
 
@@ -77,6 +81,21 @@ async def ask(ref: str, body: AskIn, jobs: BackgroundTasks,
     await hand_off(open_session, jobs, chat_service.think, db, gw, ref, who.name)
     return {"message": chat_message_json(out["message"]),
             "session": chat_json(out["chat"], project_name=await _name_of(open_session, out["chat"].project_id))}
+
+
+@router.post("/{ref}/compact", status_code=201)
+async def compact(ref: str, who: Person = Depends(require("sessions:chat")),
+                  open_session: AsyncSession = Depends(session),
+                  gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """Fold the session's older turns into one summary a model writes. The turns stay, marked, for the
+    person to read; the model is sent the summary instead. Asked in the request, like Ask memory: the
+    person is waiting on it, and a background job would only make them wait for the stream instead."""
+    summary = await ChatService(open_session, gw).compact(ref, who.name)
+    chat = await ChatRepository(open_session).by_ref(ref)
+    if chat is None:
+        raise NotFound(f"session {ref}")
+    return {"summary": chat_message_json(summary),
+            "session": chat_json(chat, project_name=await _name_of(open_session, chat.project_id))}
 
 
 @router.post("/{ref}/cancel")
