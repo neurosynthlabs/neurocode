@@ -4,9 +4,10 @@ import { ChevronDown, ChevronRight, ExternalLink, FileCode, Folder, FolderSearch
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Cell, DataTable, Empty, Mono, Page, PageBody, PageHeader, Panel, RiskPill, Row, Stat, StatGrid, Tag } from '@/components/os';
-import { ApiError, api, type CodeSummary } from '@/lib/api';
+import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { FILE_BROWSER, absoluteIn, isDesktop, onPathMenu, openInEditor, revealInFinder } from '@/lib/desktop';
+import { byParser, codeApi, type LiveCodeSummary } from '@/lib/live/code';
 import { knowledgeApi, type RetrievalStatus } from '@/lib/live/knowledge';
 import { sourcesApi } from '@/lib/live/sources';
 import { useRemote } from '@/lib/remote';
@@ -22,7 +23,7 @@ export function LiveCode({ project }: { project: Project }) {
   const { can } = useAuth();
   // The index's finish time is on the project record, which streams in: a new index reloads every panel.
   const stamp = project.codeIndex?.at ?? 'none';
-  const s = useRemote(`${project.id}:${stamp}`, () => api.code.summary(project.id));
+  const s = useRemote(`${project.id}:${stamp}`, () => codeApi.summary(project.id));
 
   // ?path= (from Architecture or a link) opens a file; a click picks another until the link changes.
   const linked = useSearchParams()[0].get('path');
@@ -56,7 +57,7 @@ export function LiveCode({ project }: { project: Project }) {
     <Page>
       <PageHeader
         title="Code Intelligence"
-        subtitle={`Read from ${project.name} on this machine: Python through its own syntax tree, the other languages by patterns. Every number here is measured.`}
+        subtitle={`Read from ${project.name} on this machine, each language by the parser named below. Every number here is measured.`}
         actions={can('projects:onboard') && s.data?.canIndex && (
           <Button size="sm" variant="outline" onClick={() => void reindex()} disabled={indexing}>
             {indexing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}{indexing ? 'Indexing…' : 'Re-index'}
@@ -65,7 +66,9 @@ export function LiveCode({ project }: { project: Project }) {
       >
         {run && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pb-3 text-[12.5px] text-dim">
-            {Object.entries(run.parsers).map(([lang, parser]) => <Mono key={lang}>{lang} · {parser}</Mono>)}
+            {byParser(run.parsers).map(([parser, langs]) => (
+              <span key={parser} title={langs.join(', ')}><Mono>{parser}</Mono> {langs.length > 3 ? `${langs.length} languages` : langs.join(', ')}</span>
+            ))}
             <span>{run.files.toLocaleString()} files</span>
             <span>{run.symbols.toLocaleString()} symbols</span>
             <span>{run.edges.toLocaleString()} dependencies</span>
@@ -293,11 +296,13 @@ function Retrieval({ pid, stamp, canBuild, onOpen }: {
   );
 }
 
-function Overview({ summary, onOpen, onModule }: { summary: CodeSummary; onOpen: (path: string) => void; onModule: (m: string) => void }) {
+function Overview({ summary, onOpen, onModule }: { summary: LiveCodeSummary; onOpen: (path: string) => void; onModule: (m: string) => void }) {
   const run = summary.run;
   if (!run) return null;
   const hotspots = summary.hotspots ?? [];
   const db = summary.database;
+  const parsing = new Map((summary.parsing ?? []).map((p) => [p.language, p]));
+  const unparsed = summary.unparsed ?? [];
   return (
     <div className="space-y-4">
       <StatGrid cols={4}>
@@ -327,16 +332,24 @@ function Overview({ summary, onOpen, onModule }: { summary: CodeSummary; onOpen:
           )}
         </Panel>
         <Panel flush title="Languages" eyebrow="and the parser that read each">
-          <DataTable head={['Language', 'Files', 'Lines', 'Parser']}>
-            {(summary.languages ?? []).map((l) => (
-              <Row key={l.name}>
-                <Cell className="font-medium text-ink">{l.name}</Cell>
-                <Cell className="tnum">{l.files.toLocaleString()}</Cell>
-                <Cell className="tnum">{l.lines.toLocaleString()}</Cell>
-                <Cell>{run.parsers[l.name] ? <Mono>{run.parsers[l.name]}</Mono> : <span className="text-[12.5px] text-dim">counted only</span>}</Cell>
-              </Row>
-            ))}
+          <DataTable head={['Language', 'Files', 'Symbols', 'Parser']}>
+            {(summary.languages ?? []).map((l) => {
+              const read = parsing.get(l.name);
+              return (
+                <Row key={l.name}>
+                  <Cell className="font-medium text-ink">{l.name}</Cell>
+                  <Cell className="tnum">{l.files.toLocaleString()}</Cell>
+                  <Cell className="tnum">{read?.parser ? read.symbols.toLocaleString() : '—'}</Cell>
+                  <Cell className="whitespace-nowrap">{read?.parser ? <Mono>{read.parser}</Mono> : <span className="text-[12.5px] text-dim">counted only</span>}</Cell>
+                </Row>
+              );
+            })}
           </DataTable>
+          {unparsed.length > 0 && (
+            <p className="border-t border-line px-5 py-2.5 text-[12px] text-dim">
+              Seen but not read: {unparsed.join(', ')}. Their files are counted; nothing on this machine parses them, so they add no symbols or dependencies.
+            </p>
+          )}
         </Panel>
       </div>
 

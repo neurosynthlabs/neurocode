@@ -74,6 +74,8 @@ class CodeSymbol(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     kind: Mapped[str] = mapped_column(String(40), nullable=False, server_default="")
     line: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    #: The declaration's last line, where the parser knows it (tree-sitter and Python's ast do); null otherwise.
+    end_line: Mapped[int | None] = mapped_column(Integer)
     exported: Mapped[bool] = mapped_column(nullable=False, server_default="false")
 
     #: The name as words: TaxService and tax_service both become "tax service", so either finds it.

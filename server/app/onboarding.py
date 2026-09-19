@@ -29,6 +29,11 @@ LANGS = {
     ".rs": "Rust", ".rb": "Ruby", ".php": "PHP", ".swift": "Swift", ".dart": "Dart", ".cpp": "C++", ".cc": "C++",
     ".c": "C", ".h": "C", ".cshtml": "Razor", ".razor": "Razor", ".aspx": "ASP.NET WebForms", ".html": "HTML",
     ".css": "CSS", ".scss": "CSS", ".ps1": "PowerShell", ".sh": "Shell", ".yml": "YAML", ".yaml": "YAML",
+    # The languages the code index reads with tree-sitter, so the scan counts what the index parses.
+    ".cjs": "JavaScript", ".mts": "TypeScript", ".cts": "TypeScript", ".kts": "Kotlin", ".scala": "Scala",
+    ".sc": "Scala", ".hpp": "C++", ".hh": "C++", ".hxx": "C++", ".cxx": "C++", ".lua": "Lua", ".r": "R", ".jl": "Julia",
+    ".ex": "Elixir", ".exs": "Elixir", ".hs": "Haskell", ".ml": "OCaml", ".mli": "OCaml", ".zig": "Zig",
+    ".bash": "Shell", ".vue": "Vue", ".svelte": "Svelte", ".ipynb": "Jupyter Notebook",
 }
 GIT_URL = re.compile(r"^(?:(?:https?|ssh|git)://[^\s/@]+(?:@[^\s/]+)?/\S+|[\w.-]+@[\w.-]+:[\w./~-]+)$")
 

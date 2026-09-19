@@ -1,7 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  Code2, Eye, EyeOff, File, FileWarning, FolderOpen, FolderTree, Loader2, Lock, PanelBottom, RefreshCw, Search, ShieldAlert, X,
+  BookOpen, Code2, Eye, EyeOff, File, FileText, FileWarning, FolderOpen, FolderTree, Loader2, Lock, PanelBottom, RefreshCw, Search,
+  ShieldAlert, Table2, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -10,6 +11,7 @@ import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Empty, Kbd, Page } from '@/components/os';
 import type { EditorHandle } from '@/components/workbench/Editor';
+import type { NotebookHandle } from '@/components/workbench/NotebookView';
 import { FileTree, type TreeRoot } from '@/components/workbench/FileTree';
 import { FolderPicker } from '@/components/workbench/FolderPicker';
 import { StatusBar } from '@/components/workbench/StatusBar';
@@ -28,11 +30,25 @@ import type { Project } from '@/types';
 
 // CodeMirror is the heaviest thing here; it loads with the first file, not with the screen.
 const Editor = lazy(() => import('@/components/workbench/Editor'));
+// A notebook brings CodeMirror and a kernel's socket; a data file its grid. Each loads when one is opened.
+const NotebookView = lazy(() => import('@/components/workbench/NotebookView'));
+const DataView = lazy(() => import('@/components/workbench/DataView'));
 
 const reason = (e: unknown) => (e instanceof ApiError ? e.message : 'The local API did not answer. Is it still running?');
 
 /** What the Workbench has open: the active project's folders, or one folder opened from the machine. */
 type Place = { kind: 'project' } | { kind: 'folder'; path: string };
+
+/** Files shown in a view of their own rather than as text: a notebook, or a table of data. */
+type View = 'notebook' | 'data';
+function viewOf(path: string): View | null {
+  const name = path.toLowerCase();
+  if (name.endsWith('.ipynb')) return 'notebook';
+  if (/\.(csv|tsv|parquet|jsonl|ndjson|db|sqlite|sqlite3)$/.test(name)) return 'data';
+  return null;
+}
+/** Of those, the ones that are text underneath, which can also be opened as text. */
+const TEXTUAL = /\.(ipynb|csv|tsv|jsonl|ndjson)$/i;
 
 interface Tab {
   path: string;
@@ -44,7 +60,14 @@ interface Tab {
   size: number;
   reason: 'binary' | 'not UTF-8' | null;
   language: string | null;
+  /** Shown in its own view (a notebook, a table) instead of the editor; null when shown as text. */
+  view: View | null;
 }
+
+/** A tab for a file its own view reads: nothing is read here, the view reads what it needs. */
+const viewTab = (path: string, view: View): Tab => ({
+  path, sha1: '', text: null, version: 1, dirty: false, size: 0, reason: null, language: view === 'notebook' ? 'Jupyter' : 'Data', view,
+});
 
 /* Per-browser conveniences only: what was open, and the breakpoints set per project. Nothing here is a
    record anyone else needs, so it stays in this browser; a failure to read or write it is said in the
@@ -261,12 +284,20 @@ function Bench() {
   const openFile = useCallback(async (path: string, line?: number) => {
     const open = tabsRef.current.find((t) => t.path === path);
     if (open) { setActive(path); setTreeOpen(false); if (line) setReveal({ line, nonce: Date.now() }); return; }
+    const view = viewOf(path);
+    if (view) {
+      setTabs((was) => (was.some((t) => t.path === path) ? was : [...was, viewTab(path, view)]));
+      setActive(path);
+      setTreeOpen(false);
+      return;
+    }
     setOpening(path);
     try {
       const file = await machineApi.file(path);
       // The server answers with the real path; a link opened by its own name lands on its target's tab.
       setTabs((was) => (was.some((t) => t.path === file.path) ? was : [...was, {
         path: file.path, sha1: file.sha1, text: file.text, version: 1, dirty: false, size: file.size, reason: file.reason, language: file.language,
+        view: null,
       }]));
       setActive(file.path);
       setTreeOpen(false);
@@ -286,10 +317,13 @@ function Bench() {
     const last = stored<{ paths: string[]; active: string | null }>(TABS_KEY, { paths: [], active: null });
     void (async () => {
       for (const p of last.paths.slice(0, 20)) {
+        const view = viewOf(p);
+        if (view) { setTabs((was) => (was.some((t) => t.path === p) ? was : [...was, viewTab(p, view)])); continue; }
         try {
           const file = await machineApi.file(p);
           setTabs((was) => (was.some((t) => t.path === file.path) ? was : [...was, {
             path: file.path, sha1: file.sha1, text: file.text, version: 1, dirty: false, size: file.size, reason: file.reason, language: file.language,
+            view: null,
           }]));
         } catch { /* moved, deleted or no longer inside the roots: not reopened */ }
       }
@@ -306,9 +340,25 @@ function Bench() {
   const textTab = tabs.find((t) => t.path === (activeTab?.text != null ? activeTab.path : lastText) && t.text !== null) ?? null;
   const unsaved = tabs.filter((t) => t.dirty).length;
 
-  // A tab closed while active hands the focus to its neighbour.
+  // Open notebooks, for saving from outside them and for shutting their kernel down when their tab closes.
+  const notebookHandles = useRef(new Map<string, NotebookHandle>());
+  const handleRefs = useRef(new Map<string, (h: NotebookHandle | null) => void>());
+  const notebookRef = (path: string) => {
+    let set = handleRefs.current.get(path);
+    if (!set) {
+      set = (h) => { if (h) notebookHandles.current.set(path, h); else notebookHandles.current.delete(path); };
+      handleRefs.current.set(path, set);
+    }
+    return set;
+  };
+  const markDirty = useCallback((path: string, dirty: boolean) => {
+    setTabs((was) => was.map((t) => (t.path === path && t.dirty !== dirty ? { ...t, dirty } : t)));
+  }, []);
+
+  // A tab closed while active hands the focus to its neighbour. A notebook's kernel ends with its tab.
   const dropTab = (path: string) => {
     const was = tabsRef.current;
+    if (was.find((t) => t.path === path)?.view === 'notebook') void notebookHandles.current.get(path)?.close();
     const i = was.findIndex((t) => t.path === path);
     const next = was.filter((t) => t.path !== path);
     setTabs(next);
@@ -356,6 +406,26 @@ function Bench() {
       if (await save(path, text, now.sha1)) setConflict(null);
     } catch (e) {
       toast.error(`${baseName(path)} was not saved`, { description: reason(e) });
+    }
+  };
+
+  // A notebook or a CSV file can also be read as the text it is, and back.
+  const showAs = async (path: string, asText: boolean) => {
+    const tab = tabsRef.current.find((t) => t.path === path);
+    if (!tab) return;
+    if (tab.dirty) { toast(`Save ${baseName(path)} first`, { description: 'Switching how it is shown drops what is not saved.' }); return; }
+    const view = viewOf(path);
+    if (!asText) {
+      if (view) setTabs((was) => was.map((t) => (t.path === path ? viewTab(path, view) : t)));
+      return;
+    }
+    try {
+      const file = await machineApi.file(path);
+      setTabs((was) => was.map((t) => (t.path === path ? {
+        ...t, sha1: file.sha1, text: file.text, size: file.size, reason: file.reason, language: file.language, version: t.version + 1, dirty: false, view: null,
+      } : t)));
+    } catch (e) {
+      toast.error(`${baseName(path)} did not open as text`, { description: reason(e) });
     }
   };
 
@@ -426,6 +496,8 @@ function Bench() {
       if (key === 'p' && !e.shiftKey) { e.preventDefault(); setQuickOpen(true); }
       if (key === 's' && !e.defaultPrevented && active) {
         e.preventDefault();
+        const notebook = notebookHandles.current.get(active);
+        if (notebook && tabsRef.current.find((t) => t.path === active)?.view === 'notebook') { void notebook.save(); return; }
         const text = editor.current?.text(active);
         if (text !== null && text !== undefined) void save(active, text);
       }
@@ -555,6 +627,15 @@ function Bench() {
             {opening && !tabs.some((t) => t.path === opening) && (
               <div className="flex shrink-0 items-center gap-1.5 px-3 text-[12.5px] text-dim"><Loader2 className="size-3 animate-spin" />{baseName(opening)}</div>
             )}
+            {activeTab && TEXTUAL.test(activeTab.path) && viewOf(activeTab.path) && (
+              <div className="sticky right-0 ml-auto flex shrink-0 items-center bg-surface pr-2 pl-1">
+                <Button size="xs" variant="ghost" onClick={() => void showAs(activeTab.path, !!activeTab.view)}>
+                  {activeTab.view ? <><FileText className="size-3" />Open as text</>
+                    : viewOf(activeTab.path) === 'notebook' ? <><BookOpen className="size-3" />Open as notebook</>
+                      : <><Table2 className="size-3" />Open as table</>}
+                </Button>
+              </div>
+            )}
           </div>
 
           {/* The editor. It stays mounted while a binary file is shown, so the other tabs keep their history. */}
@@ -570,7 +651,7 @@ function Bench() {
                       <Button size="sm" variant="outline" onClick={() => navigate('/projects')}>Projects</Button>
                     </div>} />
             )}
-            {activeTab && activeTab.text === null && (
+            {activeTab && activeTab.text === null && !activeTab.view && (
               <Empty icon={<FileWarning className="size-6" />} title={activeTab.reason === 'binary' ? 'A binary file' : 'Not UTF-8 text'}
                 hint={`${baseName(activeTab.path)} is ${bytes(activeTab.size)}${activeTab.reason === 'binary' ? ' of binary data' : ' in an encoding other than UTF-8'}. The editor opens UTF-8 text, so it is not shown rather than shown wrong.`} />
             )}
@@ -595,6 +676,20 @@ function Bench() {
                 </Suspense>
               </div>
             )}
+            {/* Notebooks and data files stay mounted while another tab is shown: a notebook keeps its kernel's
+                socket and its unsaved cells, a table its page and sort. */}
+            {tabs.filter((t) => t.view).map((t) => (
+              <div key={t.path} className={cn('absolute inset-0', t.path !== active && 'hidden')}>
+                <Suspense fallback={<div className="flex h-full items-center justify-center gap-2 text-[13px] text-dim"><Loader2 className="size-4 animate-spin" />Opening {baseName(t.path)}…</div>}>
+                  {t.view === 'notebook' ? (
+                    <NotebookView ref={notebookRef(t.path)} path={t.path} projectId={place.kind === 'project' ? projectId : null}
+                      dark={baseMode === 'dark'} readOnly={isLocked(t.path)} onDirty={markDirty} />
+                  ) : (
+                    <DataView path={t.path} projectId={place.kind === 'project' ? projectId : null} />
+                  )}
+                </Suspense>
+              </div>
+            ))}
           </div>
 
           <WorkbenchPanels
@@ -609,7 +704,7 @@ function Bench() {
           />
 
           <StatusBar git={statusGit} unsaved={unsaved}
-            language={activeTab?.text != null ? (language ?? activeTab.language) : null}
+            language={activeTab?.text != null ? (language ?? activeTab.language) : activeTab?.view ? activeTab.language : null}
             cursor={activeTab?.text != null ? cursor : null}
             eol={activeTab?.text != null ? (activeTab.text.includes('\r\n') ? 'CRLF' : 'LF') : null} />
         </div>
@@ -649,6 +744,8 @@ function Bench() {
             <Button variant="outline" onClick={() => closing && dropTab(closing)}>Close without saving</Button>
             <Button onClick={() => {
               if (!closing) return;
+              const notebook = tabs.find((t) => t.path === closing)?.view === 'notebook' ? notebookHandles.current.get(closing) : undefined;
+              if (notebook) { void notebook.save().then((ok) => { if (ok) dropTab(closing); }); return; }
               const text = editor.current?.text(closing);
               if (text == null) return;
               void save(closing, text).then((ok) => { if (ok) dropTab(closing); });

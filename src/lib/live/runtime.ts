@@ -18,6 +18,21 @@ export interface RunCheck {
   summary: string;
   /** Its last lines, as printed. */
   output: string[];
+  /** What its output named, read into file:line:col — the first ones, in the run's worktree. */
+  problems?: CheckProblem[];
+  /** Every problem it named, by severity, and in all (more than `problems` may hold). */
+  problemCounts?: Partial<Record<CheckProblem['severity'], number>>;
+  problemTotal?: number;
+}
+
+export interface CheckProblem {
+  file: string;
+  line: number;
+  col: number;
+  severity: 'error' | 'warning' | 'info';
+  code: string | null;
+  message: string;
+  tool: string;
 }
 
 export interface GoalCriterion {

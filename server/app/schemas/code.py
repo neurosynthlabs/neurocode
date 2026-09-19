@@ -22,7 +22,7 @@ def run_json(run: CodeIndexRun) -> dict[str, Any]:
 
 
 def symbol_json(symbol: CodeSymbol) -> dict[str, Any]:
-    return {"name": symbol.name, "kind": symbol.kind, "line": symbol.line,
+    return {"name": symbol.name, "kind": symbol.kind, "line": symbol.line, "endLine": symbol.end_line,
             "exported": bool(symbol.exported)}
 
 

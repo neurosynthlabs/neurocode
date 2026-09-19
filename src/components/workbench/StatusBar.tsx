@@ -1,7 +1,9 @@
-import { ArrowDown, ArrowUp, CircleDot, GitBranch } from 'lucide-react';
+import { ArrowDown, ArrowUp, CircleDot, CircleX, GitBranch, Loader2, TriangleAlert } from 'lucide-react';
+import { problemsStore, useProblems } from '@/lib/live/diagnostics';
 import type { MachineGit } from '@/lib/live/machine';
 
-/** The Workbench's bottom line: git for the file's repository, and where the cursor is in which language. */
+/** The Workbench's bottom line: git for the file's repository, the problems the newest checks found, the language
+    server for the file shown, and where the cursor is in which language. */
 export function StatusBar({ git, language, cursor, eol, unsaved }: {
   git: MachineGit | null;
   language: string | null;
@@ -12,6 +14,8 @@ export function StatusBar({ git, language, cursor, eol, unsaved }: {
   unsaved: number;
 }) {
   const changed = git?.changed.length ?? 0;
+  const { counts, checking, lsp } = useProblems();
+  const server = lsp && lsp.status.state !== 'none' ? lsp.status : null;
   return (
     <footer className="flex h-7 shrink-0 items-center gap-4 overflow-x-auto border-t border-line/70 bg-surface px-3 text-[12px] whitespace-nowrap text-soft no-scrollbar">
       {git ? (
@@ -31,7 +35,29 @@ export function StatusBar({ git, language, cursor, eol, unsaved }: {
         <span>Not in a git repository</span>
       )}
       {unsaved > 0 && <span className="text-warn tnum">{unsaved} unsaved</span>}
+      {(counts || checking) && (
+        <button type="button" onClick={() => problemsStore.showProblems()} title="Show the problems"
+          aria-label={counts ? `${counts.error} errors and ${counts.warning} warnings — show the problems` : 'Checking — show the problems'}
+          className="inline-flex items-center gap-2 rounded px-1 hover:bg-surface-2 hover:text-ink">
+          {checking && <Loader2 className="size-3 animate-spin" />}
+          {counts && (
+            <>
+              <span className="inline-flex items-center gap-1 tnum"><CircleX className={counts.error ? 'size-3.5 text-danger' : 'size-3.5'} />{counts.error.toLocaleString()}</span>
+              <span className="inline-flex items-center gap-1 tnum"><TriangleAlert className={counts.warning ? 'size-3.5 text-warn' : 'size-3.5'} />{counts.warning.toLocaleString()}</span>
+            </>
+          )}
+        </button>
+      )}
       <span className="ml-auto" />
+      {server && (
+        <span title={server.message} className={server.state === 'failed' ? 'text-danger' : server.state === 'missing' ? 'text-dim' : undefined}>
+          {server.state === 'ready' ? server.message
+            : server.state === 'starting' ? `${server.server ?? 'Language server'} starting…`
+              : server.state === 'available' ? `${server.server} available`
+                : server.state === 'missing' ? `No ${server.language} language server`
+                  : `${server.server ?? 'Language server'} failed`}
+        </span>
+      )}
       {cursor && <span className="tnum">Ln {cursor.line}, Col {cursor.col}</span>}
       {eol && <span>{eol}</span>}
       {eol && <span>UTF-8</span>}

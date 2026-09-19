@@ -564,6 +564,7 @@ function ChecksPanel({ checks }: { checks: RunCheck[] }) {
               <Mono className="min-w-0 truncate">{c.command}</Mono>
             </div>
             {c.summary && <p className="mt-1 text-[12.5px] break-words text-dim">{c.summary}</p>}
+            {(c.problems?.length ?? 0) > 0 && <CheckProblems check={c} />}
             {c.output.length > 0 && (
               <details className="mt-1.5">
                 <summary className="cursor-pointer text-[12px] text-brand">Last {c.output.length} lines</summary>
@@ -574,6 +575,33 @@ function ChecksPanel({ checks }: { checks: RunCheck[] }) {
         ))}
       </div>
     </Panel>
+  );
+}
+
+const PROBLEM_TONE = { error: 'danger', warning: 'warn', info: 'neutral' } as const;
+
+/** What a check's output named, read into file:line:col — in the run's worktree, as the agent left it. */
+function CheckProblems({ check }: { check: RunCheck }) {
+  const shown = check.problems ?? [];
+  const counts = check.problemCounts ?? {};
+  const total = check.problemTotal ?? shown.length;
+  const said = (['error', 'warning', 'info'] as const).filter((k) => counts[k]).map((k) => plural(counts[k] ?? 0, k)).join(' · ');
+  return (
+    <details className="mt-1.5" open={check.status === 'failed'}>
+      <summary className="cursor-pointer text-[12px] text-brand">{plural(total, 'problem')}{said ? ` · ${said}` : ''}</summary>
+      <ul className="mt-1.5 space-y-1">
+        {shown.map((p, i) => (
+          <li key={`${p.file}:${p.line}:${p.col}:${i}`} className="flex min-w-0 items-start gap-2 text-[12.5px]">
+            <Tag tone={PROBLEM_TONE[p.severity]}>{p.severity}</Tag>
+            <span className="min-w-0 break-words text-ink-2">
+              <Mono className="[overflow-wrap:anywhere]">{p.file}:{p.line}:{p.col}</Mono> {p.message}
+              {p.code && <span className="text-dim"> · {p.tool} {p.code}</span>}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {total > shown.length && <p className="mt-1 text-[12px] text-dim">and {total - shown.length} more — the full output is in the run's log.</p>}
+    </details>
   );
 }
 

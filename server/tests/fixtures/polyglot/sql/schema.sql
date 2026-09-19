@@ -1,0 +1,6 @@
+CREATE TABLE Orders (id INT PRIMARY KEY);
+GO
+CREATE PROCEDURE sp_AddOrder @id INT AS
+BEGIN
+  INSERT INTO Orders (id) VALUES (@id);
+END

@@ -195,11 +195,17 @@ async def test_a_check_asks_first_then_runs_and_its_failure_reaches_the_review_a
     assert answer.value == "allowed"
     assert (check["name"], check["status"], check["exit"]) == ("lint", "failed", 2)
     assert "E501 line too long" in check["output"][0] and check["summary"].startswith("failed (exit 2)")
+    # What it printed is read into problems, named as the project names its files.
+    assert check["problems"] == [{"source": PROJECT, "file": "pkg/core.py", "line": 2, "col": 1, "endLine": None,
+                                  "endCol": None, "severity": "warning", "code": "E501",
+                                  "message": "line too long", "tool": "lint"}]
+    assert check["problemTotal"] == 1 and check["problemCounts"] == {"error": 0, "warning": 1, "info": 0}
     lint = next(x for x in run.steps if x.n == 3)
     assert lint.status == "done" and lint.detail.startswith("failed")
     # The reviewer was told, and so is the person signing.
     review_prompt = next(p for f, p in gateway.prompts if f == "review")
     assert "Check lint (make lint): failed" in review_prompt and "E501" in review_prompt
+    assert "warning pkg/core.py:2:1 E501 line too long" in review_prompt
     assert "checks: lint failed" in gate.payload, gate.payload
     assert gate.risk == "HIGH"
 

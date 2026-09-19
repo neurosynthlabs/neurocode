@@ -65,6 +65,16 @@ class Settings(BaseSettings):
     #: Where the folder browser may go, separated by ':'. `~` is the home of the account the API runs as.
     machine_roots: str = "~"
 
+    #: Jupyter kernels the Workbench's notebooks run on. Each is a process holding whatever the notebook
+    #: loaded (a dataframe, a model on the GPU), so the server keeps a ceiling on how many run at once, in
+    #: all and per person, and shuts one down once nobody has had its notebook open for `kernel_idle_minutes`
+    #: (0 keeps them until the notebook is closed or the API stops).
+    kernels_max: int = Field(default=8, ge=0, le=64)
+    kernels_per_person: int = Field(default=4, ge=1, le=64)
+    kernel_idle_minutes: int = Field(default=60, ge=0, le=7 * 24 * 60)
+    #: How long a kernel is given to start and answer its first request: a large environment imports slowly.
+    kernel_start_seconds: int = Field(default=60, ge=5, le=600)
+
     #: The routines' scheduler: a loop in the API's lifespan that fires due routines every thirty seconds.
     #: Several API processes may all run it — an advisory lock lets only one claim a routine — and the
     #: tests switch it off, so nothing fires on its own while a test is looking.

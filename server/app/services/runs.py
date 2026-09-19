@@ -66,7 +66,7 @@ from ..repositories import (
 from ..repositories.runtime import ResultsRepository
 from ..schemas.work import gate_kind
 from ..settings import settings
-from . import instructions
+from . import diagnostics, instructions
 from .taste import Applied, TasteService, applied_for
 from .code import roots, writable
 from .custom_agents import CustomAgentService
@@ -93,6 +93,9 @@ GATE_WORDS = ("approval", "approve", "sign-off", "sign off", "signature")
 GOAL_CHECK = "Completion check"
 #: How many of a check's last lines are kept on the run, to show and to hand the reviewer.
 CHECK_TAIL = 40
+#: How many of a check's lines are read for problems, and how many problems are kept on the run.
+CHECK_READ_LINES = 20_000
+CHECK_PROBLEMS = 200
 #: A person asking for the review again while one is being read: after this long it is taken as lost.
 REVIEWING_FOR = 900
 TEST_FILE = re.compile(r"(^|/)(tests?|spec)s?/|\.(test|spec)\.[jt]sx?$|_test\.py$|test_.*\.py$")
@@ -1989,7 +1992,11 @@ def _evidence(run: Run) -> str:
     for check in (run.review or {}).get("checks") or []:
         lines.append(f"Check {check['name']} ({check['command']}): {check.get('status', 'not run')}")
         if check.get("status") == "failed":
-            lines += [f"  {line}" for line in (check.get("output") or [])[-15:]]
+            # The problems it named, read from all it printed, say more than its last lines do.
+            named = check.get("problems") or []
+            lines += [f"  {p['severity']} {p['file']}:{p['line']}:{p['col']}{' ' + p['code'] if p.get('code') else ''} "
+                      f"{(p['message'].splitlines() or [''])[0][:200]}"
+                      for p in named[:15]] or [f"  {line}" for line in (check.get("output") or [])[-15:]]
     return "\n".join(lines)
 
 
@@ -2074,7 +2081,7 @@ async def _check(db: Database, ref: str, step_n: int) -> bool:
         run = await RunRepository(s).by_ref(ref)
         check = _check_at(run, step_n) or {}
         name, command = check.get("name", ""), check.get("command", "")
-        run_id = run.id
+        run_id, project_id_of_run = run.id, run.project_id
         # A further source's check runs in that source's worktree; the rest in the run's own.
         work = next((x.work for x in _parts(run) if check.get("label") and x.label == check["label"]), _work(run))
         is_tests = bool(check.get("tests"))
@@ -2111,15 +2118,26 @@ async def _check(db: Database, ref: str, step_n: int) -> bool:
     await _log(db, run_id, "tool", f"$ {command}", step_n)
     lines: list[str] = []
     tail: list[str] = []
+    # Every line goes to the problem reader too, not only the ones kept for the log: an error printed
+    # after line 400 is still an error in the file it names.
+    said: list[str] = []
 
     def keep(i: int, text: str) -> None:
         if i < TEST_LINES:
             lines.append(text)
+        if i < CHECK_READ_LINES:
+            said.append(text)
         tail.append(text)
         del tail[:-CHECK_TAIL]
 
     code, _ = await asyncio.to_thread(agent.run_tests, command.split(), work, keep, stopped(ref))
     interrupted = stopped(ref).is_set()
+    # The problems it named, placed in the project's files the way the Workbench names them: relative to
+    # the worktree, with the source's label in front for a further source.
+    label = check.get("label") or ""
+    problems, counts, found = ([], {}, 0) if interrupted else diagnostics.run_problems(
+        said, work=work, prefix=f"{label}/" if label else "", source=label or project_id_of_run, tool=name,
+        limit=CHECK_PROBLEMS)
 
     async with db.session() as s:
         run = await RunRepository(s).by_ref(ref)
@@ -2136,7 +2154,11 @@ async def _check(db: Database, ref: str, step_n: int) -> bool:
         said = " · ".join(t for t in tail[-3:] if t.strip())[:300]
         summary = ("passed" if passed else f"failed (exit {code})") + (f" · {said}" if said else "")
         _put_check(run, step_n, status="passed" if passed else "failed", exit=code, summary=summary[:300],
-                   output=tail[-CHECK_TAIL:])
+                   output=tail[-CHECK_TAIL:], problems=problems, problemCounts=counts, problemTotal=found)
+        if found:
+            await logs.write(run.id, level="info", step=step_n,
+                             line=f"{name}: {found} problems read from its output · {counts.get('error', 0)} errors · "
+                                  f"{counts.get('warning', 0)} warnings")
         step.detail = summary[:300]
         if is_tests:
             # A source's tests are the run's tests: one failing fails the step and the run's tests,

@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import codeindex, onboarding
@@ -29,7 +30,7 @@ from ..agent.git import safe_path
 from ..ai.gateway import Gateway
 from ..data import roster
 from ..data.engine import Database
-from ..models import Project, ProjectSource
+from ..models import CodeFile, CodeSymbol, Project, ProjectSource
 from ..repositories.base import NotFound
 from ..repositories.code import CodeEdgeRepository, CodeFileRepository, CodeIndexRepository, MAX_ENTRIES
 from ..repositories.retrieval import ChunkRepository, MAX_DOCS, MAX_DOC_PATHS
@@ -54,6 +55,8 @@ MAX_TEXT = 400_000
 GRAPH_MODULES = 36
 TOP_OBJECTS = 12
 DEPENDS_KINDS = ("imports", "uses")
+#: Languages whose dependencies are read exactly: Python's imports, and the SQL a schema declares.
+EXACT_LANGS = {"Python", "Jupyter Notebook", "T-SQL"}
 DATA_KINDS = ("reads", "writes", "calls")
 
 
@@ -227,12 +230,28 @@ class CodeService:
             return {"indexed": False, **state}
         return {"indexed": True, "run": run_json(run),
                 "languages": await self.index.languages(project_id),
+                **await self._parsing(project_id, run.parsers or {}),
                 "modules": await self._modules(project_id),
                 "hotspots": [{"path": path, "lines": lines, "complexity": complexity, "churn": churn,
                               "fanIn": reached, "risk": codeindex.risk_of(reached, complexity)}
                              for path, lines, complexity, churn, reached
                              in await self.index.hotspots(project_id)],
                 "database": await self._database(project_id), **state}
+
+    async def _parsing(self, project_id: str, parsers: dict[str, Any]) -> dict[str, Any]:
+        """Per language: its files, the symbols read out of them, and the parser that read them — and,
+        by name, the languages that were seen and that nothing here reads (YAML, CSS, Razor…), so a
+        project that is mostly one of those is not mistaken for an understood one. Counted from the
+        rows each time, like everything else on the summary."""
+        rows = (await self.session.execute(
+            select(CodeFile.lang, func.count(func.distinct(CodeFile.id)), func.count(CodeSymbol.id))
+            .outerjoin(CodeSymbol, CodeSymbol.file_id == CodeFile.id)
+            .where(CodeFile.project_id == project_id)
+            .group_by(CodeFile.lang))).all()
+        parsing = [{"language": lang, "files": int(files), "symbols": int(symbols),
+                    "parser": parsers.get(lang)}
+                   for lang, files, symbols in sorted(rows, key=lambda r: (-r[1], r[0]))]
+        return {"parsing": parsing, "unparsed": [p["language"] for p in parsing if not p["parser"]]}
 
     async def _modules(self, project_id: str) -> list[dict[str, Any]]:
         symbols = await self.index.symbols_per_module(project_id)
@@ -486,7 +505,7 @@ class CodeService:
             "target": label, "kind": "file" if path else "module" if module else "object",
             "risk": risk,
             "confidence": _confidence({x["lang"] for x in seed_rows + dependents},
-                                      unresolved, run.edges if run else 0),
+                                      unresolved, run.edges if run else 0, (run.parsers or {}) if run else {}),
             "counts": {"direct": len(direct), "dependents": len(dependents), "modules": len(modules),
                        "tests": len(tests), "data": len(data)},
             "blastRadius": [g for g in groups if g["items"]],
@@ -529,13 +548,20 @@ class CodeService:
         return {"nodes": nodes, "edges": edges, "modules": total, "truncated": total > limit}
 
 
-def _confidence(langs: set[str], unresolved: int, edges: int) -> int:
+def _confidence(langs: set[str], unresolved: int, edges: int, parsers: dict[str, Any]) -> int:
     """How far to trust the radius: the parsers that read it, less the imports nobody resolved.
 
-    Python is read by its own syntax tree, so a radius made only of Python and SQL is worth more than
-    one that leans on patterns — and every import the indexer could not place widens the true radius.
+    Python's imports are exact, so a radius made only of Python and SQL is worth the most. A syntax
+    tree reads every other language exactly too, but its imports name namespaces and packages that are
+    matched to files by rule, so it is worth a little less; a language nothing read is worth least —
+    and every import the indexer could not place widens the true radius.
     """
-    base = 90 if langs and langs <= {"Python", "T-SQL"} else 80 if "Python" in langs else 72
+    if langs and langs <= EXACT_LANGS:
+        base = 90
+    elif langs and all(parsers.get(lang) for lang in langs):
+        base = 80
+    else:
+        base = 72
     return max(40, base - min(20, round(100 * unresolved / max(1, edges + unresolved))))
 
 

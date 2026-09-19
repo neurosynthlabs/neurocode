@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from sqlalchemy import ColumnElement, and_, delete, func, not_, or_, select
+from sqlalchemy import ColumnElement, and_, delete, func, insert, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import codeindex
@@ -38,6 +38,10 @@ def _moment(value: str | datetime | None) -> datetime | None:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
+#: Rows per INSERT statement batch: bounded memory per round trip on a very large index.
+WRITE_BATCH = 20_000
+
+
 async def save_index(session: AsyncSession, project_id: str, root: str, idx: codeindex.Index,
                      scope: ColumnElement[bool] | None = None) -> None:
     """Replace a project's index — or, with `scope`, only the files it covers, so a source that could
@@ -56,12 +60,18 @@ async def save_index(session: AsyncSession, project_id: str, root: str, idx: cod
     ids = {path: file_id for path, file_id in (await session.execute(
         select(CodeFile.path, CodeFile.id).where(CodeFile.project_id == project_id))).all()}
 
-    session.add_all([CodeSymbol(project_id=project_id, file_id=ids[path], name=name, kind=kind,
-                                line=line, exported=bool(exported))
-                     for path, name, kind, line, exported in idx.symbols if path in ids])
-    session.add_all([CodeEdge(project_id=project_id, from_file=ids[a], to_file=ids[b] if b and b in ids else None,
-                              target=target, kind=kind)
-                     for a, b, target, kind in idx.edges if a in ids])
+    # Symbols and edges are written as plain rows, many to a statement, not as tracked objects: every
+    # language is read now, and a large repository holds hundreds of thousands of them — the ORM's
+    # bookkeeping per row was most of the time a re-index took. Nothing reads them back here.
+    symbols = [{"project_id": project_id, "file_id": ids[path], "name": name, "kind": kind, "line": line,
+                "end_line": end or None, "exported": bool(exported)}
+               for path, name, kind, line, exported, end in idx.symbols if path in ids]
+    edges = [{"project_id": project_id, "from_file": ids[a], "to_file": ids[b] if b and b in ids else None,
+              "target": target, "kind": kind}
+             for a, b, target, kind in idx.edges if a in ids]
+    for model, rows in ((CodeSymbol, symbols), (CodeEdge, edges)):
+        for i in range(0, len(rows), WRITE_BATCH):
+            await session.execute(insert(model), rows[i:i + WRITE_BATCH])
 
     run = await session.get(CodeIndexRun, project_id) or CodeIndexRun(project_id=project_id)
     stats = idx.stats()
@@ -135,7 +145,7 @@ def merge(parts: Sequence[tuple[str, codeindex.Index]]) -> codeindex.Index:
     if len(parts) == 1 and not parts[0][0]:
         return parts[0][1]
     files: list[dict[str, Any]] = []
-    symbols: list[tuple[str, str, str, int, bool]] = []
+    symbols: list[tuple[str, str, str, int, bool, int]] = []
     edges: list[tuple[str, str | None, str, str]] = []
     parsers: dict[str, str] = {}
     parsed = resolved = unresolved = db_objects = db_referenced = ms = 0
@@ -146,8 +156,8 @@ def merge(parts: Sequence[tuple[str, codeindex.Index]]) -> codeindex.Index:
             if prefix:
                 module = label if module == "(root)" else f"{label}/{module}"
             files.append({**f, "path": _under(prefix, f["path"]), "module": module})
-        symbols += [(_under(prefix, path), name, kind, line, exported)
-                    for path, name, kind, line, exported in idx.symbols]
+        symbols += [(_under(prefix, path), name, kind, line, exported, end)
+                    for path, name, kind, line, exported, end in idx.symbols]
         edges += [(_under(prefix, a), _under(prefix, b) if b else b, target, kind)
                   for a, b, target, kind in idx.edges]
         parsers.update(idx.parsers)

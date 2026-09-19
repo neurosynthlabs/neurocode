@@ -304,6 +304,52 @@ try {
     expect(found, 'search did not reach the second source');
   });
 
+  await step('a check runs the project\'s own TypeScript compiler from the Problems panel, and names the line', async () => {
+    // A TypeScript corner of the project, with its own compiler in node_modules/.bin as a real one has.
+    fs.mkdirSync(path.join(repo, 'web'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'node_modules', '.bin'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'tsconfig.json'), JSON.stringify({ compilerOptions: { strict: true, noEmit: true }, include: ['web/*.ts'] }));
+    fs.writeFileSync(path.join(repo, 'web', 'total.ts'), "export const total: number = 'not a number';\n");
+    fs.symlinkSync(path.join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc'), path.join(repo, 'node_modules', '.bin', 'tsc'));
+    await open(`/workbench?project=${project.id}`);
+    await page.getByRole('tab', { name: 'Problems', exact: true }).click();
+    await page.getByRole('button', { name: 'Check', exact: true }).first().click();
+    await page.getByText(/not assignable to type 'number'/).first().waitFor({ timeout: 60000 });
+    const [last] = await call(`/diagnostics/checks?projectId=${project.id}`).then((r) => r.items ?? r);
+    const found = (await call(`/diagnostics/checks/${last.id}`)).problems.find((x) => x.file.endsWith('web/total.ts'));
+    expect(found?.line === 1 && found.severity === 'error' && found.tool === 'tsc', `problem: ${JSON.stringify(found)}`);
+  });
+
+  await step('a CSV opens in the Workbench as data, measured by the server, and its SQL box reads nothing else', async () => {
+    fs.mkdirSync(path.join(repo, 'data'), { recursive: true });
+    const csv = path.join(repo, 'data', 'sales.csv');
+    fs.writeFileSync(csv, 'region,amount\nnorth,120\nsouth,80\nnorth,40\nwest,\n');
+    await open(`/workbench?project=${project.id}&path=data/sales.csv`);
+    await page.getByText('north').first().waitFor({ timeout: 15000 });
+    const stats = await call(`/data/stats?path=${encodeURIComponent(csv)}`);
+    const amount = stats.columns.find((c) => c.name === 'amount');
+    expect(stats.rows === 4 && amount.nulls === 1 && Number(amount.max) === 120, `stats: ${JSON.stringify(stats).slice(0, 200)}`);
+    const sum = await post('/data/query', { path: csv, sql: "SELECT sum(amount) AS total FROM data WHERE region = 'north'" });
+    expect(Number(sum.rows[0][0]) === 160, `sum: ${JSON.stringify(sum.rows)}`);
+    const sneaky = await fetch(`${API}/data/query`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: csv, sql: "SELECT * FROM read_csv('/etc/passwd')" }) });
+    expect(sneaky.status === 403, `a query reading another file got ${sneaky.status}`);
+  });
+
+  await step('a notebook in the project runs its cell through a real kernel', async () => {
+    const nb = path.join(repo, 'explore.ipynb');
+    fs.writeFileSync(nb, JSON.stringify({
+      cells: [{ cell_type: 'code', execution_count: null, id: 'c1', metadata: {}, outputs: [], source: ['print(6 * 7)'] }],
+      metadata: { kernelspec: { name: 'python3', display_name: 'Python 3', language: 'python' }, language_info: { name: 'python' } },
+      nbformat: 4, nbformat_minor: 5,
+    }));
+    // The kernel runs in the project's own environment, never the API's: give the project one that has ipykernel.
+    fs.symlinkSync(path.join(ROOT, 'server', '.venv'), path.join(repo, '.venv'));
+    await open(`/workbench?project=${project.id}&path=explore.ipynb`);
+    await page.getByRole('button', { name: /Run all/ }).first().click();
+    await page.getByText('42', { exact: true }).first().waitFor({ timeout: 60000 });
+  });
+
   await step('pasted notes become memory facts', async () => {
     await open('/memory');
     await page.getByRole('button', { name: /Add from text/ }).first().click();
