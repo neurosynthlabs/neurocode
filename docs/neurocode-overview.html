@@ -416,12 +416,12 @@
   </header>
 
   <div class="strip" role="group" aria-label="What is built today">
-    <div class="cell"><span class="n">124</span><span class="k">API endpoints</span></div>
-    <div class="cell"><span class="n">55</span><span class="k">Postgres tables</span></div>
-    <div class="cell"><span class="n">39</span><span class="k">screens</span></div>
+    <div class="cell"><span class="n">244</span><span class="k">API endpoints</span></div>
+    <div class="cell"><span class="n">70</span><span class="k">Postgres tables</span></div>
+    <div class="cell"><span class="n">40</span><span class="k">screens</span></div>
     <div class="cell"><span class="n">8</span><span class="k">model lanes</span></div>
-    <div class="cell"><span class="n">366</span><span class="k">backend tests</span></div>
-    <div class="cell"><span class="n">26</span><span class="k">end-to-end checks</span></div>
+    <div class="cell"><span class="n">795</span><span class="k">backend tests</span></div>
+    <div class="cell"><span class="n">38</span><span class="k">end-to-end checks</span></div>
     <div class="note mono">All figures are what the repository builds and passes today — not a roadmap. There is no sample data in it.</div>
   </div>
 
@@ -502,22 +502,22 @@
           repository: every symbol, what depends on what, and what breaks if this changes.</p>
       </div>
       <div class="cardx">
-        <span class="eyebrow">Platform</span>
-        <h3>Projects, MCP, models</h3>
-        <p>Onboard a repository from git or a local folder. Register MCP servers — whose output stays
-          untrusted until a person promotes it. Watch what every model call cost.</p>
+        <span class="eyebrow">Workbench</span>
+        <h3>Projects and this machine</h3>
+        <p>Start from a folder, an archive, a clone or a Blueprint. Then work on the machine itself —
+          files, terminals, a debugger, problems from your own checkers, notebooks and data files.</p>
       </div>
       <div class="cardx">
         <span class="eyebrow">Governance</span>
-        <h3>Approvals and decisions</h3>
-        <p>An inbox of things waiting for a human, and a record of decisions that were made once and
-          should not be re-argued.</p>
+        <h3>Rules, approvals, routines</h3>
+        <p>Tool rules that allow, ask or deny every edit and command, an inbox of what needs a human,
+          and routines that run on a schedule and still stop at your signature.</p>
       </div>
       <div class="cardx">
         <span class="eyebrow">Admin</span>
         <h3>People, roles, database</h3>
-        <p>Accounts, 32 permissions across five built-in roles, an append-only audit log, and the
-          database's own health — size, indexes, migrations, backups.</p>
+        <p>Accounts, 23 permissions across five built-in roles, personal access tokens, an append-only
+          audit log, and the database's own health — size, indexes, migrations, backups.</p>
       </div>
     </div>
   </section>
@@ -570,9 +570,10 @@
       <li class="stepr">
         <span class="idx">05</span>
         <div class="body">
-          <h3>They write, and the tests run</h3>
-          <p>The model returns whole files, never a patch that might half-apply. The project's own
-            test command runs in the worktree, and its output is part of the record.</p>
+          <h3>They write under the rules, and the tests run</h3>
+          <p>The model returns whole files, never a patch that might half-apply, and every edit and
+            command passes the tool rules first — an agent that is unsure stops and asks. The project's
+            own tests and checks run in the worktree, and what they print is part of the record.</p>
         </div>
       </li>
       <li class="stepr">
@@ -679,9 +680,10 @@
       <div class="prose">
         <p>
           Onboarding a repository indexes it: every file's language, size and complexity; every symbol
-          it declares; every edge between them. Python is parsed by its own syntax tree, so its
-          imports are exact. C#, Java, Go, TypeScript and T-SQL are read by pattern, and the index
-          records which parser read which language rather than pretending they are equal.
+          it declares; every edge between them. Python is parsed by its own syntax tree, and 25 more
+          languages — from TypeScript, Go, Rust and Java to Kotlin, C#, C++, Swift, R and Julia — by
+          tree-sitter grammars that ship with it, so nothing is downloaded. The index records which
+          parser read which language, and names the ones it saw but could not read.
         </p>
         <p>
           <strong>Impact analysis</strong> walks those edges backwards eight steps deep and answers
@@ -744,7 +746,8 @@
         <div class="row"><span>Audit log</span><span>append-only</span></div>
         <div class="row"><span>Per request</span><span>1 transaction</span></div>
         <div class="row"><span>Passwords</span><span>scrypt n=2¹⁴</span></div>
-        <div class="row"><span>Permissions</span><span>32 · 5 roles</span></div>
+        <div class="row"><span>Permissions</span><span>23 · 5 roles</span></div>
+        <div class="row"><span>Access tokens</span><span>no shell unless named</span></div>
         <div class="row"><span>MCP output</span><span>untrusted by default</span></div>
         <div class="row"><span>Your checkout</span><span>never written to</span></div>
       </div>
@@ -788,6 +791,13 @@
         measures it, indexes the code, and mines the git history. From that point on, typing a
         requirement into the Command Center is the whole workflow.
       </p>
+      <p>
+        The same workspace is in the terminal and on the desktop. <strong>nc</strong>, installed with
+        <code>uv tool install ./cli</code>, signs in with a personal token and does what the web does —
+        a full-screen chat, plans, approvals, runs with live logs, merge and push, every command with
+        <code>--json</code>. The <strong>desktop app</strong> is the same interface with native folder
+        dialogs, Reveal in Finder, Open in your editor, notifications and the approvals count on the Dock.
+      </p>
     </div>
   </section>
 
@@ -801,7 +811,7 @@
       <div class="prose">
         <p>
           A React 19 front end on Vite, TypeScript in strict mode, and a FastAPI back end over
-          Postgres 16 with SQLAlchemy and Alembic. Forty-three tables, all related, all typed, every
+          Postgres 16 with SQLAlchemy and Alembic. Seventy tables, all related, all typed, every
           one created by a migration — the schema is never written by hand.
         </p>
         <p>
@@ -823,10 +833,10 @@
         <div class="row"><span>API</span><span>FastAPI · async</span></div>
         <div class="row"><span>Database</span><span>Postgres 16</span></div>
         <div class="row"><span>Vectors</span><span>pgvector</span></div>
-        <div class="row"><span>Migrations</span><span>Alembic · 8</span></div>
+        <div class="row"><span>Migrations</span><span>Alembic · 24</span></div>
         <div class="row"><span>Isolation</span><span>git worktrees</span></div>
         <div class="row"><span>Live updates</span><span>server-sent events</span></div>
-        <div class="row"><span>Code, app + API</span><span>~43,500 lines</span></div>
+        <div class="row"><span>Code, app + API</span><span>~88,000 lines</span></div>
       </div>
     </div>
   </section>
@@ -843,15 +853,16 @@
     </div>
 
     <div class="status">
-      <div class="item"><span class="s on">Live</span><span class="t"><b>The whole engineering loop</b> — requirement, plan, questions, dispatch, parallel worktrees, tests, review, approval or a send-back with notes, merge.</span></div>
-      <div class="item"><span class="s on">Live</span><span class="t"><b>Memory, retrieval and the code index</b> — against real repositories, with real embeddings and real full-text ranking.</span></div>
-      <div class="item"><span class="s on">Live</span><span class="t"><b>Accounts, roles, approvals and the audit log</b> — enforced by the database, not by convention.</span></div>
+      <div class="item"><span class="s on">Live</span><span class="t"><b>The whole engineering loop, governed</b> — requirement, plan shaped with you, questions, dispatch, parallel worktrees under tool rules and gates, tests and checks, a review from another model, approval or a send-back with notes, merge or push.</span></div>
+      <div class="item"><span class="s on">Live</span><span class="t"><b>Memory, retrieval, taste and the code index</b> — against real repositories in 25+ languages, with real embeddings and real full-text ranking.</span></div>
+      <div class="item"><span class="s on">Live</span><span class="t"><b>The Workbench</b> — files, editor, terminals, run and debug (Python and Node), problems from the project's own checkers, language servers, Jupyter notebooks on a real kernel, and data files with a read-only SQL box.</span></div>
+      <div class="item"><span class="s on">Live</span><span class="t"><b>Three ways in</b> — the web app, <code>nc</code> in the terminal, and a desktop app for the Mac.</span></div>
+      <div class="item"><span class="s on">Live</span><span class="t"><b>Custom agents, reviews on demand, routines and Blueprints</b> — agents from your repository's own files, a review of any diff, work on a schedule that still waits for you, and a wizard from an idea to a designed, scaffolded system.</span></div>
+      <div class="item"><span class="s on">Live</span><span class="t"><b>Accounts, roles, tokens, approvals and the audit log</b> — enforced by the database, not by convention.</span></div>
       <div class="item"><span class="s on">Live</span><span class="t"><b>Model routing and the usage ledger</b> — eight lanes, real budgets, every call recorded with its tokens and its time.</span></div>
-      <div class="item"><span class="s on">Live</span><span class="t"><b>Sessions</b> — a conversation that can read the code and answer, saved turn by turn so a crash loses nothing.</span></div>
-      <div class="item"><span class="s on">Live</span><span class="t"><b>Every screen on a real back end</b> — workflows, evals, research, testing, Git, DevOps, skills, commands, hooks, plugins, MCP servers checked by a real client, cost priced per lane. No demo mode, no seed, no invented numbers.</span></div>
-      <div class="item"><span class="s on">Live</span><span class="t"><b>Checks on the real stack</b> — a throwaway Postgres, the API and a stub model: 366 API tests, a 26-step end-to-end run from an empty workspace, every route rendered in two themes, and a layout lint at phone and tablet widths.</span></div>
+      <div class="item"><span class="s on">Live</span><span class="t"><b>Checks on the real stack</b> — a throwaway Postgres, the API and a stub model: 795 API tests, a 38-step end-to-end run from an empty workspace to a notebook's kernel, every route rendered in two themes, and a layout lint at phone and tablet widths.</span></div>
+      <div class="item"><span class="s off">Ready</span><span class="t"><b>A server of your own</b> — Docker Compose with Postgres, the API and HTTPS, for a free Oracle Cloud VM. Going live on eurex.dev is the next step.</span></div>
       <div class="item"><span class="s off">Designed</span><span class="t"><b>Teams beyond one machine</b> — the data model has teams and roles, but it runs as a single process serving a single workspace.</span></div>
-      <div class="item"><span class="s off">Not yet</span><span class="t"><b>A hosted version</b> — it runs on your machine. The web app deployed on its own has nothing to show, and says it is not connected.</span></div>
     </div>
   </section>
 
