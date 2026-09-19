@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
 import { useData } from '@/lib/data';
+import { sourcesOf, type SourceSummary } from '@/lib/live/sources';
 import type { Project } from '@/types';
 
 interface Ctx {
@@ -9,6 +10,8 @@ interface Ctx {
   /** The active project; null while the workspace holds no project, which is how every workspace starts. */
   project: Project | null;
   all: Project[];
+  /** The active project's sources, the first one first — the folders and repositories it is worked on as. */
+  sources: SourceSummary[];
 }
 const C = createContext<Ctx | null>(null);
 
@@ -41,7 +44,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   // and to none at all when there are none. Screens check for null rather than read a stand-in.
   const project = projects.find((p) => p.id === picked) ?? projects[0] ?? null;
   return (
-    <C.Provider value={{ projectId: project?.id ?? null, setProjectId, project, all: projects }}>
+    <C.Provider value={{ projectId: project?.id ?? null, setProjectId, project, all: projects, sources: project ? sourcesOf(project) : [] }}>
       {children}
     </C.Provider>
   );

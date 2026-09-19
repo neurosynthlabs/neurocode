@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api import deps
 from app.api.app import create_api
 from app.data.loader import sync_roles
+from app.settings import settings
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
 HEADERS = {"X-NC-Client": "test"}
@@ -36,7 +37,30 @@ async def client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
 
 async def test_a_fresh_workspace_asks_to_be_set_up(client: AsyncClient):
     status = (await client.get("/auth/status")).json()
-    assert status == {"needsSetup": True, "user": None, "workspace": None}
+    assert status == {"needsSetup": True, "setupNeedsToken": False, "user": None, "workspace": None}
+
+
+async def test_a_server_with_a_setup_token_lets_only_its_holder_create_the_first_owner(client: AsyncClient,
+                                                                                    monkeypatch):
+    # A server on the internet: whoever finds the address first must not be able to claim the workspace.
+    monkeypatch.setattr(settings(), "setup_token", "s3t-up-token")
+    assert (await client.get("/auth/status")).json()["setupNeedsToken"] is True
+    for token in (None, "", "not-the-token"):
+        body = OWNER if token is None else {**OWNER, "setupToken": token}
+        refused = await client.post("/auth/setup", json=body)
+        assert refused.status_code == 403 and "NEUROCODE_SETUP_TOKEN" in refused.json()["detail"]
+    assert (await client.get("/auth/status")).json()["needsSetup"] is True       # nothing was made
+    made = await client.post("/auth/setup", json={**OWNER, "setupToken": " s3t-up-token "})
+    assert made.status_code == 201
+    assert (await client.get("/auth/status")).json()["setupNeedsToken"] is False
+
+
+async def test_the_session_cookie_is_https_only_when_the_server_is_served_over_https(client: AsyncClient,
+                                                                                    monkeypatch):
+    monkeypatch.setattr(settings(), "cookie_secure", True)
+    made = await client.post("/auth/setup", json=OWNER)
+    cookie = made.headers["set-cookie"]
+    assert "nc_session=" in cookie and "Secure" in cookie and "HttpOnly" in cookie
 
 
 async def test_setup_creates_the_first_owner_and_signs_them_in(client: AsyncClient):

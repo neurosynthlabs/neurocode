@@ -6,6 +6,8 @@ in and the answer out.
 """
 from __future__ import annotations
 
+import hmac
+
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -29,6 +31,8 @@ class SetupIn(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     email: str = Field(max_length=200)
     password: str = Field(max_length=200)
+    #: Only when the server was started with NEUROCODE_SETUP_TOKEN; ignored otherwise.
+    setupToken: str = Field(default="", max_length=200)
 
 
 class LoginIn(BaseModel):
@@ -43,7 +47,7 @@ class PasswordIn(BaseModel):
 
 def _cookie(response: Response, token: str) -> None:
     """HttpOnly, so no script can read it; SameSite=Lax, so another site cannot spend it."""
-    response.set_cookie(COOKIE, token, httponly=True, samesite="lax", secure=False,
+    response.set_cookie(COOKIE, token, httponly=True, samesite="lax", secure=settings().cookie_secure,
                         max_age=settings().session_days * 86_400, path="/")
 
 
@@ -60,10 +64,12 @@ def _ip(request: Request) -> str:
 async def status(who: Person | None = Depends(person_or_none),
                  identity: IdentityService = Depends(identity_service),
                  open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
-    """Public: does this workspace need its first Owner, and is the caller signed in?"""
+    """Public: does this workspace need its first Owner (and a setup token to make one), and is the caller
+    signed in?"""
     name = await WorkspaceRepository(open_session).name()
-    return {"needsSetup": await identity.count() == 0, "user": who.public() if who else None,
-            "workspace": {"name": name} if name else None}
+    needs = await identity.count() == 0
+    return {"needsSetup": needs, "setupNeedsToken": needs and bool(settings().setup_token),
+            "user": who.public() if who else None, "workspace": {"name": name} if name else None}
 
 
 @router.post("/setup", status_code=201)
@@ -73,6 +79,10 @@ async def setup(body: SetupIn, request: Request, response: Response,
     """First run only: name the workspace and create its first Owner, signed straight in."""
     if await identity.count() > 0:
         raise Refused("This workspace is already set up. Sign in instead.")
+    expected = settings().setup_token
+    if expected and not hmac.compare_digest(body.setupToken.strip().encode(), expected.encode()):
+        raise Refused("That setup token is not this server's. It is NEUROCODE_SETUP_TOKEN in the server's .env, "
+                      "printed when the server was first deployed.", status=403)
     identity.check(body.email, body.name, body.password)
     await WorkspaceRepository(open_session).name_it(body.workspace)
     owner = await identity.create(body.email, body.name, body.password, ["owner"])

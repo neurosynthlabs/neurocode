@@ -125,6 +125,12 @@
       "group": "Admin",
       "label": "Administer the workspace",
       "description": "The workspace name, AI providers and keys, and resetting data."
+    },
+    {
+      "id": "machine:access",
+      "group": "Admin",
+      "label": "Use this machine",
+      "description": "Browse and open folders on the machine the API runs on, edit files there, open a terminal, and run or debug a project."
     }
   ],
   "roles": [
@@ -153,7 +159,8 @@
         "roles:manage",
         "teams:manage",
         "audit:read",
-        "workspace:admin"
+        "workspace:admin",
+        "machine:access"
       ]
     },
     {

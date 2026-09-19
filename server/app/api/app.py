@@ -29,11 +29,13 @@ from . import (
     routes_admin_system,
     routes_ai,
     routes_auth,
+    routes_blueprints,
     routes_code,
     routes_evals,
     routes_extensions,
     routes_git,
     routes_knowledge,
+    routes_machine,
     routes_ops,
     routes_permissions,
     routes_plans,
@@ -42,6 +44,7 @@ from . import (
     routes_runs,
     routes_sessions,
     routes_system,
+    routes_terminal,
     routes_testing,
     routes_work,
     routes_workflows,
@@ -57,7 +60,7 @@ ROUTERS = (routes_auth.router, routes_work.router, routes_plans.router, routes_k
            routes_ai.router, routes_system.router, routes_admin.router, routes_admin_system.router,
            routes_testing.router, routes_git.router, routes_extensions.router, routes_workflows.router,
            routes_evals.router, routes_research.router, routes_ops.router, routes_permissions.router,
-           stream.router)
+           routes_machine.router, routes_terminal.router, routes_blueprints.router, stream.router)
 
 #: What a row that was in flight when the process died says about itself afterwards.
 INTERRUPTED = "interrupted: the server restarted"

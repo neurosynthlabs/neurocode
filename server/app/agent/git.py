@@ -406,7 +406,60 @@ def merge_into_checkout(repo: Path, branch: str, message: str) -> dict[str, Any]
         return {"merged": False, "into": into, "conflicts": files[:20], "commit": None, "undo": None}
     sha = git(["rev-parse", "HEAD"], repo).stdout.strip()
     return {"merged": True, "into": into, "conflicts": [], "commit": sha[:7],
-            "undo": f"git reset --hard {before[:7]}"}
+            "undo": f"git reset --hard {before[:7]}", "before": before}
+
+
+def undo_merge(repo: Path, before: str, commit: str) -> bool:
+    """Take back a merge this runtime made a moment ago — only while the checkout still stands exactly
+    on it, so nothing a person did since is ever thrown away. The tree was clean before the merge (it
+    is refused otherwise), so going back to `before` loses nothing but the merge. False when the
+    checkout moved on; the person then has the undo command, as always."""
+    head = git(["rev-parse", "HEAD"], repo).stdout.strip()
+    if not head.startswith(commit) or dirty(repo):
+        return False
+    return git(["reset", "--hard", before], repo).returncode == 0
+
+
+def label_patch(patch: str, label: str, prefix: str = "") -> str:
+    """One checkout's patch with its paths as the project names them: under the source's label, and
+    relative to the checkout rather than its repository (`prefix`). Only the header lines of each file
+    are rewritten — a removed line that happens to begin `-- a/` is content, and stays as it was."""
+    if not label and not prefix:
+        return patch
+    lead = f"{label}/" if label else ""
+    inner = f"{prefix}/" if prefix else ""
+
+    def moved(path: str) -> str:
+        quoted = path.startswith('"')
+        bare = path[1:] if quoted else path
+        side, _, rest = bare.partition("/")
+        rest = rest[len(inner):] if inner and rest.startswith(inner) else rest
+        out = f"{side}/{lead}{rest}"
+        return f'"{out}' if quoted else out
+
+    lines: list[str] = []
+    header = False
+    for line in patch.splitlines(keepends=True):
+        body = line.rstrip("\n")
+        end = line[len(body):]
+        if body.startswith("diff --git "):
+            header = True
+            left, sep, right = body[len("diff --git "):].partition(" b/")
+            line = f"diff --git {moved(left)}{sep and ' '}{moved('b/' + right) if sep else ''}{end}"
+        elif header and body.startswith("@@"):
+            header = False
+        elif header and (body.startswith("--- a/") or body.startswith("+++ b/")
+                         or body.startswith('--- "a/') or body.startswith('+++ "b/')):
+            line = f"{body[:4]}{moved(body[4:])}{end}"
+        elif header:
+            for word in ("rename from ", "rename to ", "copy from ", "copy to "):
+                if body.startswith(word):
+                    path = body[len(word):]
+                    rest = path[len(inner):] if inner and path.startswith(inner) else path
+                    line = f"{word}{lead}{rest}{end}"
+                    break
+        lines.append(line)
+    return "".join(lines)
 
 
 #: Patterns the offline reviewer looks for when no model can read the diff.

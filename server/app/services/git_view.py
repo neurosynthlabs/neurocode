@@ -41,7 +41,7 @@ from ..repositories.base import NotFound
 from ..repositories.runtime import RunRepository
 from ..repositories.work import ApprovalRepository, PlanRepository, ProjectRepository, TaskRepository
 from ..schemas.git import Head, Preview, RunFacts, Snapshot, WorktreeView, overview_json
-from .code import checkout
+from .code import roots
 from .errors import Refused
 
 log = logging.getLogger(__name__)
@@ -64,6 +64,7 @@ AGENT_EMAIL = next(a.split("=", 1)[1] for a in AUTHOR if a.startswith("user.emai
 SHA = re.compile(r"^[0-9a-f]{7,64}$")
 NOT_OURS = "Made outside NeuroCode — merge it with git."
 NO_CODE = "This project has no code on this machine to read. Onboard a repository to read one."
+NO_SOURCE = "This project has no source called {label}."
 
 #: The rules the runtime really enforces at a merge. The same for every collision, because nothing
 #: decides a collision case by case — they are listed so nobody expects that something does.
@@ -537,25 +538,41 @@ class GitViewService:
                                   if s.kind == "merge" and s.child_run_id in branch_of and s.detail)))
         return facts
 
-    async def _root(self, project: Project) -> Path:
-        root = checkout(project)
+    async def _where(self, project: Project, source: str | None) -> tuple[Path | None, list[str]]:
+        """The checkout of the source asked for — the first source when none is named — and the labels
+        of every source the project has on this machine, so the screen can offer the others."""
+        found = [x for x in await roots(self.session, project) if x.ready]
+        labels = [x.label for x in found]
+        if source is None or source == project.id:
+            first = next((x for x in found if x.primary), None)
+            return (first.root if first else None), labels
+        hit = next((x for x in found if not x.primary and x.label == source), None)
+        if hit is None:
+            raise NotFound(NO_SOURCE.format(label=source))
+        return hit.root, labels
+
+    async def _root(self, project: Project, source: str | None = None) -> Path:
+        root, _labels = await self._where(project, source)
         if root is None:
             raise Refused(NO_CODE)
         return root
 
-    async def overview(self, project_id: str) -> dict[str, Any]:
+    async def overview(self, project_id: str, source: str | None = None) -> dict[str, Any]:
+        """One source's repository — the first source's unless another is named — with the labels of
+        the others, since each source of a project is a repository of its own."""
         project = await self._project(project_id)
         awaiting = await ApprovalRepository(self.session).count(
             Approval.project_id == project_id, Approval.status == "pending", Approval.tool.like("Merge(%"))
-        root = checkout(project)
+        root, labels = await self._where(project, source)
+        mine = {"source": source or project.id, "sources": labels}
         if root is None:
-            return overview_json(Snapshot(available=False, reason=NO_CODE), awaiting_you=awaiting)
+            return {**overview_json(Snapshot(available=False, reason=NO_CODE), awaiting_you=awaiting), **mine}
         snap = await asyncio.to_thread(snapshot, root, await self._facts(project_id))
-        return overview_json(snap, awaiting_you=awaiting)
+        return {**overview_json(snap, awaiting_you=awaiting), **mine}
 
-    async def _available(self, project_id: str) -> tuple[Snapshot, list[RunFacts], Path]:
+    async def _available(self, project_id: str, source: str | None = None) -> tuple[Snapshot, list[RunFacts], Path]:
         project = await self._project(project_id)
-        root = await self._root(project)
+        root = await self._root(project, source)
         facts = await self._facts(project_id)
         snap = await asyncio.to_thread(snapshot, root, facts)
         if not snap.available:
@@ -565,10 +582,11 @@ class GitViewService:
             raise Refused(f"{project.name} is not a git repository.")
         return snap, facts, found[0]
 
-    async def diff(self, project_id: str, branch: str, against: Literal["base", "head"]) -> dict[str, Any]:
+    async def diff(self, project_id: str, branch: str, against: Literal["base", "head"],
+                   source: str | None = None) -> dict[str, Any]:
         """What a branch changed since its base — or, against the head, what merging it now would bring."""
         project = await self._project(project_id)
-        root = await self._root(project)
+        root = await self._root(project, source)
         facts = await self._facts(project_id)
 
         def read() -> dict[str, Any]:
@@ -591,9 +609,9 @@ class GitViewService:
 
         return await asyncio.to_thread(read)
 
-    async def commits(self, project_id: str, limit: int) -> dict[str, Any]:
+    async def commits(self, project_id: str, limit: int, source: str | None = None) -> dict[str, Any]:
         project = await self._project(project_id)
-        root = await self._root(project)
+        root = await self._root(project, source)
         facts = await self._facts(project_id)
 
         def read() -> dict[str, Any]:
@@ -610,7 +628,7 @@ class GitViewService:
 
         return await asyncio.to_thread(read)
 
-    async def conflicts(self, project_id: str) -> list[dict[str, Any]]:
-        snap, facts, repo = await self._available(project_id)
+    async def conflicts(self, project_id: str, source: str | None = None) -> list[dict[str, Any]]:
+        snap, facts, repo = await self._available(project_id, source)
         return await asyncio.to_thread(collisions, repo, snap, facts)
 

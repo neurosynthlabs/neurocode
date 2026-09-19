@@ -1,4 +1,4 @@
-import { useState, type SyntheticEvent } from 'react';
+import { useEffect, useState, type SyntheticEvent } from 'react';
 import { ArrowLeft, ArrowRight, Check, KeyRound, Loader2, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Field, SelectField } from '@/components/os';
@@ -41,17 +41,31 @@ export default function Setup() {
   const [password, setPassword] = useState('');
   const [again, setAgain] = useState('');
   const [key, setKey] = useState('');
+  const [token, setToken] = useState('');
+  // A server reachable from the internet asks for its setup token before anyone may become its first Owner.
+  const [needsToken, setNeedsToken] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   const fail = (e: unknown) => setError(e instanceof ApiError ? e.message : 'The local API did not answer. Is it still running?');
   const accountReady = !!name.trim() && EMAIL.test(email.trim()) && password.length >= 10 && password === again;
+  const workspaceReady = !!workspace.trim() && (!needsToken || !!token.trim());
+
+  useEffect(() => {
+    let live = true;
+    api.authStatus().then(
+      (s) => { if (live) setNeedsToken(!!s.setupNeedsToken); },
+      (e: unknown) => console.error('[NeuroCode] GET /auth/status failed:', e),
+    );
+    return () => { live = false; };
+  }, []);
 
   const create = async () => {
     setError('');
     setBusy(true);
     try {
-      await api.setup({ workspace: workspace.trim(), name: name.trim(), email: email.trim(), password });
+      await api.setup({ workspace: workspace.trim(), name: name.trim(), email: email.trim(), password,
+        ...(needsToken ? { setupToken: token.trim() } : {}) });
       setStep(2);
     } catch (e) {
       fail(e);
@@ -74,7 +88,7 @@ export default function Setup() {
   const submit = (e: SyntheticEvent) => {
     e.preventDefault();
     if (busy) return;
-    if (step === 0 && workspace.trim()) setStep(1);
+    if (step === 0 && workspaceReady) setStep(1);
     else if (step === 1 && accountReady) void create();
     else if (step === 2) void finish(true);
   };
@@ -112,8 +126,12 @@ export default function Setup() {
               <h2 className="text-[16px] font-semibold text-ink">Name your workspace</h2>
               <p className="mt-1 text-[13.5px] text-soft">Usually your company or team. You can rename it later in Admin → Workspace.</p>
               <Field className="mt-4" label="Workspace name" value={workspace} onChange={setWorkspace} placeholder="Acme Engineering" autoFocus />
+              {needsToken && (
+                <Field className="mt-3.5" label="Setup token" value={token} onChange={setToken} mono autoComplete="off"
+                  hint="This server asks for it once, before its first Owner is made. It is NEUROCODE_SETUP_TOKEN in the server's .env." />
+              )}
               <div className="mt-6 flex justify-end">
-                <Button type="submit" disabled={!workspace.trim()}>Continue<ArrowRight className="size-3.5" /></Button>
+                <Button type="submit" disabled={!workspaceReady}>Continue<ArrowRight className="size-3.5" /></Button>
               </div>
             </>
           )}

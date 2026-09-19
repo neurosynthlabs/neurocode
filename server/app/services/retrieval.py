@@ -24,7 +24,6 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import onboarding
 from ..agent.git import git, repo_of
 from ..ai.gateway import Gateway
 from ..data.base import utcnow
@@ -74,12 +73,15 @@ def _pad(vector: list[float]) -> list[float]:
     return list(vector[:EMBED_DIM]) + [0.0] * max(0, EMBED_DIM - len(vector))
 
 
-def _read_code(root: Path, files: list[tuple[str, str, list[tuple[str, str, int]]]]) -> list[dict[str, Any]]:
-    """Blocking: opens files. Called in a thread, never on the event loop."""
+def _read_code(root: Path, files: list[tuple[str, str, list[tuple[str, str, int]]]],
+               prefix: str = "") -> list[dict[str, Any]]:
+    """Blocking: opens files. Called in a thread, never on the event loop. The paths are the index's —
+    a further source's carry its label — and `prefix` is that label, taken off to find the file in its
+    own checkout."""
     out: list[dict[str, Any]] = []
     for path, lang, symbols in files:
         try:
-            lines = (root / path).read_text(errors="replace").splitlines()
+            lines = (root / path.removeprefix(prefix)).read_text(errors="replace").splitlines()
         except OSError:
             continue
         if not symbols:
@@ -115,13 +117,14 @@ def doc_files(root: Path, excluded: list[str]) -> list[Path]:
     return sorted(p for p in found if p.is_file())
 
 
-def _read_docs(root: Path, excluded: list[str]) -> list[dict[str, Any]]:
-    """The project's own writing: README, docs, notes — split at its headings. Blocking."""
+def _read_docs(root: Path, excluded: list[str], prefix: str = "") -> list[dict[str, Any]]:
+    """The project's own writing: README, docs, notes — split at its headings. Blocking. A further
+    source's documents are named under its label (`prefix`), as its code is."""
     out: list[dict[str, Any]] = []
     for path in doc_files(root, excluded):
         if len(out) >= MAX_DOC_CHUNKS:
             break
-        rel = path.relative_to(root).as_posix()
+        rel = prefix + path.relative_to(root).as_posix()
         try:
             text = path.read_text(errors="replace")
         except OSError:
@@ -318,7 +321,9 @@ class RetrievalService:
                 "them, and read the files if you need more:\n\n" + "\n\n".join(pieces)), found
 
     # ── building ─────────────────────────────────────────────────
-    async def _code_chunks(self, project: Project, root: Path) -> list[dict[str, Any]]:
+    async def _code_chunks(self, project: Project, sources: list[Any]) -> list[dict[str, Any]]:
+        """A piece per symbol, read from whichever checkout holds the file."""
+        from .code import split
         files = (await self.session.execute(
             select(CodeFile).where(CodeFile.project_id == project.id).order_by(CodeFile.path))).scalars()
         symbols_by_file: dict[int, list[tuple[str, str, int]]] = {}
@@ -326,8 +331,20 @@ class RetrievalService:
                 select(CodeSymbol.name, CodeSymbol.kind, CodeSymbol.line, CodeSymbol.file_id)
                 .where(CodeSymbol.project_id == project.id).order_by(CodeSymbol.line))).all():
             symbols_by_file.setdefault(file_id, []).append((name, kind, line))
-        spec = [(f.path, f.lang, symbols_by_file.get(f.id, [])) for f in files]
-        return await asyncio.to_thread(_read_code, root, spec)
+        by_source: dict[str, tuple[Any, list[tuple[str, str, list[tuple[str, str, int]]]]]] = {}
+        for f in files:
+            hit = split(sources, f.path)
+            if hit is not None:
+                by_source.setdefault(hit[0].label, (hit[0], []))[1].append(
+                    (f.path, f.lang, symbols_by_file.get(f.id, [])))
+
+        def read() -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
+            for source, spec in by_source.values():
+                out += _read_code(source.root, spec, source.prefix)
+            return out[:MAX_CHUNKS]
+
+        return await asyncio.to_thread(read)
 
     async def _memory_chunks(self) -> list[dict[str, Any]]:
         facts = (await self.session.execute(
@@ -378,14 +395,23 @@ class RetrievalService:
         project = await self.projects.get(project_id)
         if project is None:
             raise ValueError(f"project {project_id} is gone")
-        root = await asyncio.to_thread(onboarding.source_root, {
-            "id": project.id, "source": {"kind": project.source_kind, "repo": project.source_repo}
-            if project.source_kind else None})
+        from .code import roots
+        # Every source of the project on this machine: its code pieces, then its documents, each named
+        # under its source's label — so a question about the API finds the API's handler even when it
+        # was asked from the web app's side.
+        sources = [x for x in await roots(self.session, project) if x.ready]
+        here = [x for x in sources if await asyncio.to_thread(x.root.is_dir)]
+        excluded = list(project.excluded or [])
+
+        def docs() -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
+            for source in here:
+                out += _read_docs(source.root, excluded, source.prefix)
+            return out[:MAX_DOC_CHUNKS]
 
         rows: list[dict[str, Any]] = []
-        if root is not None and await asyncio.to_thread(root.is_dir):
-            rows = [*await self._code_chunks(project, root),
-                    *await asyncio.to_thread(_read_docs, root, project.excluded or [])][:MAX_CHUNKS]
+        if here:
+            rows = [*await self._code_chunks(project, here), *await asyncio.to_thread(docs)][:MAX_CHUNKS]
         made = await self._replace(project_id, rows)
         remembered = await self._replace(None, await self._memory_chunks())
 

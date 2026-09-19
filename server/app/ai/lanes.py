@@ -86,6 +86,10 @@ class Lane:
     thinks: str = ""
     #: The model names an admin is offered for this lane, beside typing one.
     models: tuple[str, ...] = field(default_factory=tuple)
+    #: The models on this lane that read images, each from its provider's documentation. Per model, not
+    #: per lane: an admin can point a lane at another model, and that one reads nothing we can vouch for.
+    #: A session sends a picture only to one of these; every other model is refused it in words.
+    vision: tuple[str, ...] = ()
 
     @property
     def needs_key(self) -> bool:
@@ -109,7 +113,9 @@ LANES: tuple[Lane, ...] = (
          # https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash — input limit 1,048,576 tokens.
          # https://ai.google.dev/gemini-api/docs/openai — `reasoning_effort`, and "none" turns 2.5's
          # thinking off; the endpoint returns no thoughts unless asked, so none are shown.
-         embed="text-embedding-004", window=1_048_576, thinks="effort"),
+         # https://ai.google.dev/gemini-api/docs/openai — "Image understanding": `image_url` parts with a
+         # base64 `data:` URL on the same endpoint.
+         embed="text-embedding-004", window=1_048_576, thinks="effort", vision=("gemini-2.5-flash",)),
     Lane("mistral", "Mistral", "openai", "mistral-small-latest", "https://api.mistral.ai/v1",
          True, 10, 400, (WRITE, REVIEW), "mistral_api_key", "MISTRAL_API_KEY", "https://console.mistral.ai/api-keys",
          "Free experimental tier.", embed="mistral-embed"),
@@ -119,7 +125,9 @@ LANES: tuple[Lane, ...] = (
     Lane("github", "GitHub Models", "openai", "openai/gpt-4.1-mini", "https://models.github.ai/inference",
          True, 10, 120, (REVIEW, CHAT), "github_models_token", "GITHUB_MODELS_TOKEN",
          "github.com/settings/tokens · fine-grained, Models: read",
-         "Free with a GitHub token you already have. Modest limits.", embed="openai/text-embedding-3-small"),
+         "Free with a GitHub token you already have. Modest limits.", embed="openai/text-embedding-3-small",
+         # https://developers.openai.com/api/docs/models/gpt-4.1-mini — "Input modalities: text, image".
+         vision=("openai/gpt-4.1-mini",)),
     # https://api-docs.deepseek.com/quick_start/pricing (read 2026-09-19): deepseek-flash and
     # deepseek-v4-pro, 1M context each; per million tokens at peak — flash $0.30 miss, $0.006 cache
     # hit, $1.20 out; v4-pro $1.32, $0.044, $3.96. Off-peak is half. Thinking is on by default at high
@@ -136,7 +144,10 @@ LANES: tuple[Lane, ...] = (
                           "Peak is 01:00–04:00 and 06:00–10:00 UTC, Monday to Friday; every other hour "
                           "costs half. Chinese public holidays are off-peak too, and are priced here "
                           "at peak — so on those days the figure is an upper bound."),
-         window=1_000_000, thinks="deepseek", models=("deepseek-flash", "deepseek-v4-pro")),
+         window=1_000_000, thinks="deepseek", models=("deepseek-flash", "deepseek-v4-pro"),
+         # https://api-docs.deepseek.com/guides/vision (read 2026-09-19): deepseek-flash takes `image_url`
+         # parts (JPEG, PNG, GIF, WebP); the pricing page lists vision as "Not supported" on v4-pro.
+         vision=("deepseek-flash",)),
     Lane("ollama", "Ollama · this Mac", "ollama", "qwen2.5-coder:7b", "http://127.0.0.1:11434",
          True, 0, 0, (WRITE, REVIEW, PLAN, CHAT), "", "", "https://ollama.com/download",
          "Local, free and unmetered. Slower, and bounded by this machine's memory.", embed="nomic-embed-text"),
@@ -260,6 +271,13 @@ def window_for(lane_id: str | None, model: str | None) -> int | None:
     return found.window or None if found else None
 
 
+def reads_images(lane_id: str | None, model: str | None) -> bool:
+    """Whether this model, on this lane, is documented to read images. Mistral is left out on purpose:
+    its docs name `mistral-small-2506` as the Small model that sees, not the `-latest` alias it serves."""
+    lane = _catalogue(lane_id or "")
+    return bool(lane and model and model in lane.vision)
+
+
 def priced(lane_id: str) -> bool:
     """Whether this lane's cost is known. A free lane's is — it is zero. A paid lane that declares no price
     is not: its $0 is a missing number, and showing it as "free" would be the one thing a cost column must
@@ -357,6 +375,7 @@ def describe(lane: Lane) -> dict[str, Any]:
             "needsKey": lane.needs_key, "signup": lane.signup, "note": lane.note, "api": lane.api,
             "retired": retired(lane), "window": window_for(lane.id, lane.model),
             "thinks": lane.thinks or None, "models": list(lane.models),
+            "vision": reads_images(lane.id, lane.model),
             "prices": [{"model": p.model, "usdPerMIn": p.per_m_in, "usdPerMCached": p.per_m_cached,
                         "usdPerMOut": p.per_m_out} for p in price_table(lane.id).values()],
             "offPeak": {"factor": peak.factor, "words": peak.words} if peak else None}

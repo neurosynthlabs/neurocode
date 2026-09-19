@@ -4,7 +4,7 @@
    moment a data file starts referencing it (scripts/smoke.mjs does not catch a missing one —
    it silently falls back to a circle). */
 import {
-  Activity, Blocks, Bot, Brain, BrainCircuit, Bug, Building2, Circle, Coins, Compass, Cpu, Crown, Database,
+  Activity, Blocks, Bot, Brain, BrainCircuit, Bug, Building2, Circle, Code2, Coins, Compass, Cpu, Crown, Database,
   Dna, Eye, FileClock, FileCode, FileText, FlaskConical, FolderKanban, Gauge, GitBranchPlus, GitCommit, GitMerge,
   History, KeyRound, LayoutDashboard, Library, Lightbulb, ListChecks, Mic, Microscope, Monitor, Network, Plug,
   Rocket, Scale, ScanEye, ScrollText, Server, Settings, ShieldAlert, ShieldCheck, Sparkles, SquareSlash, Table2,
@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 
 export const ICONS: Record<string, LucideIcon> = {
-  Activity, Blocks, Bot, Brain, BrainCircuit, Bug, Building2, Circle, Coins, Compass, Cpu, Crown, Database,
+  Activity, Blocks, Bot, Brain, BrainCircuit, Bug, Building2, Circle, Code2, Coins, Compass, Cpu, Crown, Database,
   Dna, Eye, FileClock, FileCode, FileText, FlaskConical, FolderKanban, Gauge, GitBranchPlus, GitCommit, GitMerge,
   History, KeyRound, LayoutDashboard, Library, Lightbulb, ListChecks, Mic, Microscope, Monitor, Network, Plug,
   Rocket, Scale, ScanEye, ScrollText, Server, Settings, ShieldAlert, ShieldCheck, Sparkles, SquareSlash, Table2,

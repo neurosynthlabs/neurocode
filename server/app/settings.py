@@ -52,6 +52,18 @@ class Settings(BaseSettings):
     worktrees_dir: Path = SERVER_DIR / ".worktrees"
     #: Where a project onboarded from a git URL is cloned. `.repos` is where clones have always gone.
     repos_dir: Path = SERVER_DIR / ".repos"
+    #: The Workbench's machine access — browsing folders, reading and saving files, a terminal, running and
+    #: debugging. On for a local install; a server reachable from the internet sets it false unless its
+    #: owner means to hand a shell to whoever signs in as an Owner.
+    machine_access: bool = True
+    #: Set on a server reachable from the internet: the setup wizard then asks for it before anyone may create
+    #: the first Owner, so whoever finds the address first cannot claim the workspace. Empty on a laptop.
+    setup_token: str = ""
+    #: The session cookie is sent over HTTPS only. On for anything served through TLS; off for plain
+    #: http://localhost, where a Secure cookie would never be sent back.
+    cookie_secure: bool = False
+    #: Where the folder browser may go, separated by ':'. `~` is the home of the account the API runs as.
+    machine_roots: str = "~"
 
     # ── the web layer ────────────────────────────────────────────
     #: Origins allowed to carry the session cookie. Local by default; add a domain to host it.

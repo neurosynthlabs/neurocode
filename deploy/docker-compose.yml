@@ -1,0 +1,63 @@
+# NeuroCode on one machine: Postgres with pgvector, the API, and Caddy serving the web app over HTTPS.
+# Only Caddy is reachable from outside (80 and 443); the database and the API listen on the private network.
+#
+#   cp .env.template .env   # then fill it in (setup-vm.sh does this with random secrets)
+#   docker compose up -d --build
+name: neurocode
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      NEUROCODE_DB_PASSWORD: ${NEUROCODE_DB_PASSWORD:?set NEUROCODE_DB_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d neurocode"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build: ../server
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      NEUROCODE_DATABASE_URL: postgresql+asyncpg://neurocode:${NEUROCODE_DB_PASSWORD}@db:5432/neurocode
+    volumes:
+      - data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8787/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  web:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../dist:/srv:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  data:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,32 @@
+# The one public door: HTTPS for the domain (Caddy gets and renews the certificate), the built web app, and the
+# API under /api on the same origin — so the session cookie never has to cross sites.
+{$DOMAIN} {
+	encode zstd gzip
+
+	# The API. The prefix is stripped, as the Vite proxy does in development. Streams are passed through as they
+	# arrive: server-sent events and the terminal's WebSocket would otherwise wait on a buffer.
+	handle_path /api/* {
+		reverse_proxy api:8787 {
+			flush_interval -1
+		}
+	}
+
+	# Fingerprinted assets never change under the same name.
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+
+	# The web app: a single page, so every other path is index.html.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options DENY
+		-Server
+	}
+}

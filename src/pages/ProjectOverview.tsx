@@ -1,8 +1,9 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ExternalLink, FileText, FolderGit2, Globe, Loader2, RefreshCw, Scale, Search, ShieldAlert } from 'lucide-react';
+import { Code2, ExternalLink, FileText, FolderGit2, Globe, Loader2, RefreshCw, Scale, Search, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { SourcesPanel } from '@/components/projects/SourcesPanel';
 import {
   Page, PageHeader, PageBody, Panel, Stat, StatGrid, Tag, RiskPill, Dot, Mono,
   DataTable, Row, Cell, MeterRow, Segmented, KV, BlockBar, Empty, SectionTitle, ListRow,
@@ -117,6 +118,9 @@ function Overview({ p }: { p: Project }) {
         subtitle={p.description}
         actions={
           <>
+            {p.source && can('machine:access') && (
+              <Button size="sm" variant="outline" onClick={() => openIn(`/workbench?project=${encodeURIComponent(p.id)}`)}><Code2 className="size-3.5" />Open in Workbench</Button>
+            )}
             <Button size="sm" variant="outline" onClick={() => openIn('/code')}><ExternalLink className="size-3.5" />Code intelligence</Button>
             {p.source && can('projects:onboard') && summary?.canIndex && (
               <Button size="sm" variant="outline" disabled={indexing} onClick={() => void reindex()}>
@@ -173,6 +177,8 @@ function Overview({ p }: { p: Project }) {
             </Panel>
           </div>
         </div>
+
+        <SourcesPanel p={p} />
 
         <div className="flex flex-wrap items-center gap-2">
           <Segmented

@@ -18,6 +18,10 @@ plan about the CSS. Every file is listed either way, and says whether it applied
 The text is capped. What did not fit is cut at a line, and the file that was cut says so, so a reader
 of the Instructions tab knows the model did not see the end of it.
 
+A project with several sources has a checkout root per source, and each is read the same way: the
+API's AGENTS.md is the API's, listed and handed over as `api/AGENTS.md`, and a rule's `paths:` in the
+API's rules is matched against the targets that fall inside the API. One cap covers them all.
+
 Blocking: it reads files. Callers run it with `asyncio.to_thread`.
 """
 from __future__ import annotations
@@ -30,8 +34,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_object_session
+
 from ..models import Project
-from .code import checkout
+from .code import Source, checkout, roots, split
 from .extensions import _words, front_matter
 
 #: What the model is handed of all the files together. Instructions are read on every compile and every
@@ -153,18 +159,21 @@ def _imports(text: str) -> list[str]:
 
 
 class _Reader:
-    def __init__(self, root: Path, targets: Sequence[str]) -> None:
+    def __init__(self, root: Path, targets: Sequence[str], prefix: str = "") -> None:
         self.root = root.resolve()
         self.targets = list(targets)
+        #: A further source's label and a slash: what its files are called inside the project.
+        self.prefix = prefix
         self.seen: set[Path] = set()
         self.out = Resolved()
         self.sections: list[tuple[dict[str, Any], str]] = []
 
     def rel(self, path: Path) -> str:
-        return path.resolve().relative_to(self.root).as_posix()
+        return self.prefix + path.resolve().relative_to(self.root).as_posix()
 
     def refuse(self, path: str, why: str, by: str) -> None:
-        self.out.refused.append({"path": path, "why": why, "from": by})
+        self.out.refused.append({"path": self.prefix + path if path and not by else path, "why": why,
+                                 "from": by})
 
     def read(self, path: Path, scope: Scope, *, by: str | None = None, hops: int = 0) -> None:
         """One file, and then what it imports, depth first — so an import sits right after its importer."""
@@ -213,34 +222,67 @@ class _Reader:
         self.read(target, scope, by=by, hops=hops)
 
     def text(self) -> str:
-        """Each applied file under its own path, in order, until the cap — the file that crosses it is cut
-        at a line, and every file after it is left out and says so."""
-        parts: list[str] = []
-        room = MAX_BYTES
-        for entry, body in self.sections:
-            if not body:
-                continue
-            section = f"=== {entry['path']} ===\n{body}\n"
-            size = len(section.encode())
-            if size <= room:
-                parts.append(section)
-                room -= size
-                continue
-            entry["cut"] = True
-            if room > 200:
-                kept = section.encode()[:room - 80].decode(errors="ignore")
-                kept = kept[:kept.rfind("\n")] if "\n" in kept else kept
-                left = size - len(kept.encode())
-                parts.append(f"{kept}\n[… {left:,} more bytes of {entry['path']} did not fit]\n")
-            room = 0
-        return "\n".join(parts).strip()
+        return _capped(self.sections)
+
+
+def _capped(sections: Sequence[tuple[dict[str, Any], str]]) -> str:
+    """Each applied file under its own path, in order, until the cap — the file that crosses it is cut
+    at a line, and every file after it is left out and says so."""
+    parts: list[str] = []
+    room = MAX_BYTES
+    for entry, body in sections:
+        if not body:
+            continue
+        section = f"=== {entry['path']} ===\n{body}\n"
+        size = len(section.encode())
+        if size <= room:
+            parts.append(section)
+            room -= size
+            continue
+        entry["cut"] = True
+        if room > 200:
+            kept = section.encode()[:room - 80].decode(errors="ignore")
+            kept = kept[:kept.rfind("\n")] if "\n" in kept else kept
+            left = size - len(kept.encode())
+            parts.append(f"{kept}\n[… {left:,} more bytes of {entry['path']} did not fit]\n")
+        room = 0
+    return "\n".join(parts).strip()
 
 
 def resolve(root: Path, targets: Sequence[str] = ()) -> Resolved:
     """The instructions at a checkout's root, for work on `targets` (paths relative to the root)."""
-    if not root.is_dir():
+    reader = _read(root, targets)
+    if reader is None:
         return Resolved()
-    reader = _Reader(root, targets)
+    reader.out.text = reader.text()
+    return reader.out
+
+
+def resolve_sources(sources: Sequence[Source], targets: Sequence[str] = ()) -> Resolved:
+    """The instructions of every checkout of a project, the first source first, under one cap. Targets
+    are project paths: each source is handed the ones that fall inside it, as paths of its own."""
+    out = Resolved()
+    sections: list[tuple[dict[str, Any], str]] = []
+    for source in sources:
+        if not source.ready:
+            continue
+        mine = [rel for hit in (split(list(sources), t) for t in targets if t and t.strip())
+                if hit is not None and hit[0] is source for rel in [hit[1]]]
+        reader = _read(source.root, mine, source.prefix)
+        if reader is None:
+            continue
+        out.files += reader.out.files
+        out.refused += reader.out.refused
+        sections += reader.sections
+    out.text = _capped(sections)
+    return out
+
+
+def _read(root: Path, targets: Sequence[str], prefix: str = "") -> _Reader | None:
+    """Every instruction file at one checkout root, read and not yet capped."""
+    if not root.is_dir():
+        return None
+    reader = _Reader(root, targets, prefix)
     for name in PROJECT_FILES:
         path = root / name
         if path.is_file():
@@ -259,16 +301,26 @@ def resolve(root: Path, targets: Sequence[str] = ()) -> Resolved:
                 reader.read(path, "rules")
             else:
                 reader.refuse(path.relative_to(root).as_posix(), "a link to somewhere outside the checkout", "")
-    reader.out.text = reader.text()
-    return reader.out
+    return reader
 
 
-async def for_project(project: Project | None, targets: Sequence[str] = ()) -> Resolved:
-    """The instructions of a project's checkout on this machine; nothing for a project without one."""
-    root = checkout(project) if project is not None else None
-    if root is None:
+async def for_project(project: Project | None, targets: Sequence[str] = (), *,
+                      session: AsyncSession | None = None) -> Resolved:
+    """The instructions of every checkout of a project on this machine; nothing for a project without
+    one. The sources are read through the session the project was loaded in when none is given; a
+    project held by no session can only say where its first source is, so only that root is read."""
+    if project is None:
         return Resolved()
-    return await asyncio.to_thread(resolve, root, targets)
+    session = session or async_object_session(project)
+    if session is not None:
+        found = await roots(session, project)
+    else:
+        first = checkout(project)
+        found = [Source(label=project.id, root=first, kind=project.source_kind or "local", primary=True)] \
+            if first is not None else []
+    if not found:
+        return Resolved()
+    return await asyncio.to_thread(resolve_sources, found, targets)
 
 
 def as_json(found: Resolved) -> dict[str, Any]:

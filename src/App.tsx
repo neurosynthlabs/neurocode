@@ -38,6 +38,7 @@ const Workflows = lazy(() => import('@/pages/Workflows'));
 const Testing = lazy(() => import('@/pages/Testing'));
 const Review = lazy(() => import('@/pages/Review'));
 const Git = lazy(() => import('@/pages/Git'));
+const Workbench = lazy(() => import('@/pages/Workbench'));
 const DevOps = lazy(() => import('@/pages/DevOps'));
 const Skills = lazy(() => import('@/pages/Skills'));
 const Commands = lazy(() => import('@/pages/Commands'));
@@ -147,6 +148,7 @@ function Shell() {
                   <Route path="/testing" element={<Testing />} />
                   <Route path="/review" element={<Review />} />
                   <Route path="/git" element={<Git />} />
+                  <Route path="/workbench" element={<Workbench />} />
                   <Route path="/devops" element={<DevOps />} />
                   <Route path="/skills" element={<Skills />} />
                   <Route path="/commands" element={<Commands />} />

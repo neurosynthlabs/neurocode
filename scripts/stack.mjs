@@ -85,6 +85,9 @@ export async function startStack({ name, apiPort, webPort, web = 'dev', fixture 
       NEUROCODE_REPOS_DIR: path.join(tmp, 'repos'),
       NEUROCODE_CLAUDE_HOME: claudeHome(path.join(tmp, 'claude')),
       NEUROCODE_COMPILER: '',
+      // The stack's own temporary folder is where the checks put the repositories they onboard, so it is a root
+      // the folder browser and local onboarding may reach, beside the home folder.
+      NEUROCODE_MACHINE_ROOTS: `${os.homedir()}:${tmp}`,
       ...Object.fromEntries(LANE_KEYS.map((k) => [k, ''])),
       // The one lane that answers is the stub.
       GROQ_API_KEY: 'stub', NEUROCODE_GROQ_URL: model.url,
@@ -98,6 +101,8 @@ export async function startStack({ name, apiPort, webPort, web = 'dev', fixture 
 
   const stack = {
     api: `http://127.0.0.1:${apiPort}`, web: `http://127.0.0.1:${webPort}`, model, tmp, token: '',
+    /** The last few thousand characters each process wrote, for a check that needs to say why something failed. */
+    logs: () => procs.map((p) => `── ${p.label} ──\n${p.log}`).join('\n'),
     async stop() {
       for (const p of procs) p.kill();
       await model.close();

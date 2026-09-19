@@ -14,6 +14,9 @@ const vendor = (pkgs: string) => new RegExp(`[\\\\/]node_modules[\\\\/](${pkgs})
 const apiProxy = {
   target: `http://127.0.0.1:${process.env.NC_API_PORT ?? 8787}`,
   rewrite: (p: string) => p.replace(/^\/api/, ''),
+  // The Workbench's terminal and debugger talk over WebSockets under /api too; without this the upgrade is
+  // dropped here and the socket never opens.
+  ws: true,
 }
 
 export default defineConfig({

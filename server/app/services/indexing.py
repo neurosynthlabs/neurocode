@@ -11,11 +11,12 @@ database from the row itself, so it cannot drift out of step the way a hand-writ
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
-from sqlalchemy import delete, select
+from sqlalchemy import ColumnElement, and_, delete, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import codeindex
@@ -37,9 +38,12 @@ def _moment(value: str | datetime | None) -> datetime | None:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
-async def save_index(session: AsyncSession, project_id: str, root: str, idx: codeindex.Index) -> None:
-    """Replace a project's index. Files go first; symbols and edges point at them by id."""
-    await session.execute(delete(CodeFile).where(CodeFile.project_id == project_id))
+async def save_index(session: AsyncSession, project_id: str, root: str, idx: codeindex.Index,
+                     scope: ColumnElement[bool] | None = None) -> None:
+    """Replace a project's index — or, with `scope`, only the files it covers, so a source that could
+    not be read this time keeps what it had. Files go first; symbols and edges point at them by id."""
+    await session.execute(delete(CodeFile).where(CodeFile.project_id == project_id,
+                                                 *([scope] if scope is not None else [])))
     await session.flush()
 
     session.add_all([CodeFile(project_id=project_id, path=f["path"], lang=f["lang"], module=f["module"],
@@ -61,6 +65,12 @@ async def save_index(session: AsyncSession, project_id: str, root: str, idx: cod
 
     run = await session.get(CodeIndexRun, project_id) or CodeIndexRun(project_id=project_id)
     stats = idx.stats()
+    if scope is not None:
+        # Part of the index was kept from before, so what it holds now is counted, not assumed.
+        await session.flush()
+        for name, model in (("files", CodeFile), ("symbols", CodeSymbol), ("edges", CodeEdge)):
+            stats[name] = int((await session.execute(select(func.count()).select_from(model).where(
+                model.project_id == project_id))).scalar_one())
     run.root, run.finished_at, run.ms = root, utcnow(), idx.ms
     run.files, run.symbols, run.edges = stats["files"], stats["symbols"], stats["edges"]
     run.unresolved, run.parsers = idx.unresolved, idx.parsers
@@ -71,7 +81,7 @@ async def save_index(session: AsyncSession, project_id: str, root: str, idx: cod
     # project that was never scanned has nothing to be a share of, and says so with no number.
     project = await session.get(Project, project_id)
     if project is not None:
-        project.understood_pct = (min(100, round(100 * len(idx.files) / project.files_count))
+        project.understood_pct = (min(100, round(100 * stats["files"] / project.files_count))
                                   if project.files_count else None)
     await session.flush()
 
@@ -92,6 +102,102 @@ async def build_index(session: AsyncSession, project_id: str, root: Path,
     try:
         idx = await asyncio.to_thread(codeindex.build, root, excluded)
         await save_index(session, project_id, str(root), idx)
+        return idx
+    finally:
+        INDEXING.discard(project_id)
+
+
+class Checkout(Protocol):
+    """What indexing needs to know of one of a project's sources (`services.code.Source`)."""
+
+    @property
+    def label(self) -> str: ...
+    @property
+    def root(self) -> Path: ...
+    @property
+    def primary(self) -> bool: ...
+    @property
+    def ready(self) -> bool: ...
+    @property
+    def prefix(self) -> str: ...
+
+
+def _under(prefix: str, name: str) -> str:
+    return f"{prefix}{name}" if prefix else name
+
+
+def merge(parts: Sequence[tuple[str, codeindex.Index]]) -> codeindex.Index:
+    """Several checkouts' indexes as one project's. A further source's paths are put under its label,
+    and so are its modules — `api/billing` — so search, impact and the graph span the whole project
+    without two sources' `src/main.py` ever becoming one file. `parts` are (prefix, index); the first
+    source's prefix is empty. Edges stay inside the checkout they were read in: nothing here guesses
+    that the web app's `fetch('/api/x')` is the API's handler."""
+    if len(parts) == 1 and not parts[0][0]:
+        return parts[0][1]
+    files: list[dict[str, Any]] = []
+    symbols: list[tuple[str, str, str, int, bool]] = []
+    edges: list[tuple[str, str | None, str, str]] = []
+    parsers: dict[str, str] = {}
+    parsed = resolved = unresolved = db_objects = db_referenced = ms = 0
+    for prefix, idx in parts:
+        label = prefix.rstrip("/")
+        for f in idx.files:
+            module = f["module"]
+            if prefix:
+                module = label if module == "(root)" else f"{label}/{module}"
+            files.append({**f, "path": _under(prefix, f["path"]), "module": module})
+        symbols += [(_under(prefix, path), name, kind, line, exported)
+                    for path, name, kind, line, exported in idx.symbols]
+        edges += [(_under(prefix, a), _under(prefix, b) if b else b, target, kind)
+                  for a, b, target, kind in idx.edges]
+        parsers.update(idx.parsers)
+        parsed += idx.parsed
+        resolved += idx.resolved
+        unresolved += idx.unresolved
+        db_objects += idx.db_objects
+        db_referenced += idx.db_referenced
+        ms += idx.ms
+    return codeindex.Index(files, symbols, edges, parsed, resolved, unresolved, db_objects, db_referenced,
+                           dict(sorted(parsers.items())), ms)
+
+
+def _scope(read: Sequence[Checkout], labels: Sequence[str]) -> ColumnElement[bool]:
+    """The index rows that belong to the sources that were read: a further source's under its label,
+    the first source's everything that is under no further source's label."""
+    parts: list[ColumnElement[bool]] = []
+    for source in read:
+        if source.primary:
+            others = [CodeFile.path.startswith(f"{label}/", autoescape=True) for label in labels]
+            parts.append(not_(or_(*others)) if others else CodeFile.path.is_not(None))
+        else:
+            parts.append(CodeFile.path.startswith(source.prefix, autoescape=True))
+    return or_(*parts) if parts else and_(CodeFile.path.is_(None))
+
+
+async def build_project_index(session: AsyncSession, project_id: str, sources: Sequence[Checkout],
+                              excluded: list[str]) -> codeindex.Index:
+    """Read every source of a project that is on this machine, and write them as one index.
+
+    A source whose folder is not there right now keeps the rows it had rather than vanishing from
+    search: a project is better off with a stale answer about its API than with none. With nothing
+    readable at all, it refuses in words and changes nothing.
+    """
+    INDEXING.add(project_id)
+    try:
+        ready = [x for x in sources if x.ready]
+
+        def read() -> list[tuple[Checkout, codeindex.Index]]:
+            return [(x, codeindex.build(x.root, excluded)) for x in ready if x.root.is_dir()]
+
+        parts = await asyncio.to_thread(read)
+        if not parts:
+            raise RuntimeError("none of this project's checkouts is on this machine")
+        idx = merge([(x.prefix, i) for x, i in parts])
+        labels = [x.label for x in sources if not x.primary]
+        first = next((x for x, _ in parts if x.primary), parts[0][0])
+        everything = len(parts) == len(sources)
+        await save_index(session, project_id, str(first.root), idx,
+                         None if everything else _scope([x for x, _ in parts], labels))
         return idx
     finally:
         INDEXING.discard(project_id)

@@ -20,6 +20,7 @@ export const NAV: NavItem[] = [
 
   { section: 'Build', sub: 'Planning',   to: '/plans',     label: 'Plans',           icon: 'GitBranchPlus', keywords: 'requirement compiler plan steps decomposition' },
   { section: 'Build', sub: 'Planning',   to: '/tasks',     label: 'Tasks',           icon: 'ListChecks',    keywords: 'kanban backlog epic breakdown board' },
+  { section: 'Build', sub: 'Execution',  to: '/workbench', label: 'Workbench',       icon: 'Code2',         perm: ['machine:access'], keywords: 'editor files folders open code terminal run debug breakpoints machine ide' },
   { section: 'Build', sub: 'Execution',  to: '/agents',    label: 'Agents',          icon: 'Bot',           keywords: 'architect frontend backend qa reviewer devops security' },
   { section: 'Build', sub: 'Execution',  to: '/runs',      label: 'Live Runs',       icon: 'Activity',      keywords: 'parallel agents terminal output progress' },
   { section: 'Build', sub: 'Execution',  to: '/workflows', label: 'Workflows',       icon: 'Workflow',      keywords: 'orchestration fan out pipeline judge panel scripts' },

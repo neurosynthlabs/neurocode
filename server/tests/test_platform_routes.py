@@ -89,3 +89,24 @@ async def test_a_config_that_is_not_json_is_refused(client: AsyncClient):
         "name": "broken", "transport": "http", "command": "x", "scope": "global",
         "defaultEffect": "deny", "config": "{not json"})
     assert refused.status_code == 422
+
+
+async def test_onboarding_a_folder_through_the_route_writes_the_project_and_hands_off_the_work(
+        client: AsyncClient, tmp_path, monkeypatch):
+    # The route, not the service: a name the route uses but never imported only fails here, at request time.
+    from app.api import routes_platform
+
+    handed: list[tuple] = []
+
+    async def hand_off(open_session, jobs, job, *args):
+        handed.append((job.__name__, args[-1].repo))
+
+    monkeypatch.setattr(routes_platform, "hand_off", hand_off)
+    folder = tmp_path / "ledger"
+    folder.mkdir()
+    made = await client.post("/projects", json={"source": "local", "repo": str(folder)})
+    assert made.status_code == 201, made.text
+    body = made.json()
+    assert body["status"] == "onboarding"
+    assert [(x["label"], x["kind"], x["id"]) for x in body["sources"]] == [("ledger", "local", None)]   # the primary
+    assert handed == [("onboard", str(folder))]

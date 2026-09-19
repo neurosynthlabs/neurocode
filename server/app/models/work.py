@@ -423,3 +423,107 @@ class ScheduleFire(Base):
     #: The first part of a webhook's payload, kept as quoted data — never read as an instruction.
     payload_excerpt: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
 
+
+class RunConfig(Base, Mixin):
+    """How a person runs or debugs this project on this machine — the Workbench's Run menu. A `run` is a
+    command in a folder of the checkout; a `debug` names a program and its arguments for a debugger. It
+    is what a person chose to launch, never something a model ran on its own."""
+
+    __tablename__ = "run_configs"
+    __table_args__ = (CheckConstraint("kind IN ('run', 'debug')", name="kind"),
+                      CheckConstraint("language IN ('python', 'node', 'shell')", name="language"))
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    kind: Mapped[str] = mapped_column(String(10), nullable=False, server_default="run")
+    language: Mapped[str] = mapped_column(String(10), nullable=False, server_default="shell")
+    #: For `run`: the command line. For `debug`: the program (a file in the checkout) or a module (`-m x`).
+    command: Mapped[str] = mapped_column(Text, nullable=False)
+    args: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    #: A folder inside the checkout, relative to its root.
+    cwd: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    #: Extra environment for this run only — shown masked on screen, because people put keys here.
+    env: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+
+class ProjectSource(Base, Mixin):
+    """A further folder or repository that belongs to a project — the API beside the web app, a shared
+    library, a data repository — so one project can hold several checkouts and be worked on as one. The
+    project's own `source_*` columns stay its first source; these are the rest, in the order shown."""
+
+    __tablename__ = "project_sources"
+    __table_args__ = (
+        CheckConstraint("kind IN ('local', 'git')", name="kind"),
+        CheckConstraint("role IN ('code', 'reference')", name="role"),
+        UniqueConstraint("project_id", "label"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    #: How it is named inside the project, and the folder its files appear under there: `api`, `web`, `ml`.
+    label: Mapped[str] = mapped_column(String(60), nullable=False)
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    #: A folder on this machine, or a clone URL with any credentials removed.
+    repo: Mapped[str] = mapped_column(Text, nullable=False)
+    branch: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    position: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    #: onboarding | active | failed — and why, when it failed.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="onboarding")
+    note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    #: `code` is worked on: agents may change it in worktrees. `reference` is only read — documents, a design
+    #: system, another team's repository — indexed for search and grounding, never written to.
+    role: Mapped[str] = mapped_column(String(10), nullable=False, server_default="code")
+
+
+class Blueprint(Base, Mixin):
+    """A system being designed in the Blueprint wizard: the answers a person gave, the architecture it became
+    (layers, technologies, services, environments), and what came of it — a project and its scaffold."""
+
+    __tablename__ = "blueprints"
+    __table_args__ = (CheckConstraint("status IN ('draft', 'final', 'scaffolded')", name="status"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    #: The catalogue template (a file id) or a person's own template it started from; empty for a blank start.
+    template: Mapped[str] = mapped_column(String(80), nullable=False, server_default="")
+    answers: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    spec: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    status: Mapped[str] = mapped_column(String(12), nullable=False, server_default="draft")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    #: The project it was scaffolded into, once it was.
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"))
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+
+class BlueprintTemplate(Base, Mixin):
+    """A person's own architecture template: saved from a blueprint or imported, beside the catalogue's."""
+
+    __tablename__ = "blueprint_templates"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    spec: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+
+class ProjectReference(Base, Mixin):
+    """Another project this one reads from: its code, documents and memory are searched and handed to models as
+    context for this project, and never written to from here. A library the app uses, the service it calls,
+    last year's version of the same product."""
+
+    __tablename__ = "project_references"
+    __table_args__ = (
+        UniqueConstraint("project_id", "referenced_id"),
+        CheckConstraint("project_id <> referenced_id", name="not_itself"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    referenced_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    #: Why it is referenced, in a person's words — shown to models beside what they read from it.
+    note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+

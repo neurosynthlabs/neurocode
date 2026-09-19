@@ -7,6 +7,10 @@ the whole list rather than one per project.
 Onboarding a repository — cloning, scanning, indexing — still runs on the old stack; it moves with the
 runtime in its own phase.
 
+A project's sources are here too: the folders and repositories it holds beside its first one. Adding
+one onboards it through the same pipeline as a project; the list says where each one is on this
+machine only to someone who may browse the machine.
+
 The web is here for the same reason MCP is: both are tools this server reaches out with on someone's
 behalf, behind the same address guard and the same tool rules. `/web` says whether search is set up and
 lets an admin set its key; `/web/search` and `/web/fetch` are a person trying it, and need `ai:use`,
@@ -27,14 +31,18 @@ from ..models import McpServer
 from ..repositories import ActivityRepository, NotFound, ProjectRepository
 from ..repositories.code import CodeIndexRepository
 from ..repositories.platform import McpRepository
+from ..repositories.sources import MAX_SOURCES, ProjectSourceRepository
 from ..schemas import project_json
 from ..schemas.platform import mcp_json
+from ..schemas.work import source_json
+from ..services.code import checkout, source_root
 from ..services.errors import Refused
 from ..services import instructions
 from ..services.identity import Person
 from ..services.mcp import MAX_ARGUMENTS, McpService
 from ..services.web import MAX_QUERY, MAX_URL, WebService
-from ..services.onboarding import OnboardingService, Spec, onboard
+from ..services.onboarding import OnboardingService, SourceService, SourceSpec, Spec, onboard, onboard_source, reread
+from ..settings import settings
 from .deps import current_person, database, gateway, hand_off, require, session
 
 router = APIRouter()
@@ -54,6 +62,22 @@ class ProjectIn(BaseModel):
     branch: str = Field(default="main", max_length=100)
     excluded: list[str] = Field(default_factory=list, max_length=50)
     rules: list[RuleIn] = Field(default_factory=list, max_length=20)
+
+
+class SourceIn(BaseModel):
+    """A further folder or repository for a project. Checked here and by the service; nothing touches git
+    until it passes."""
+
+    label: str = Field(min_length=1, max_length=60)
+    kind: Literal["git", "local"]
+    repo: str = Field(min_length=1, max_length=500)
+    branch: str = Field(default="main", max_length=100)
+
+
+class SourceEdit(BaseModel):
+    label: str | None = Field(default=None, min_length=1, max_length=60)
+    #: Its place among the further sources, from 0. The first source always stays first.
+    position: int | None = Field(default=None, ge=0, le=MAX_SOURCES)
 
 
 class McpIn(BaseModel):
@@ -104,8 +128,11 @@ async def projects(open_session: AsyncSession = Depends(session)) -> list[dict[s
     repo = ProjectRepository(open_session)
     found = await repo.all_ordered()
     counts = await repo.task_counts()
-    indexes = await CodeIndexRepository(open_session).for_projects([p.id for p in found])
-    return [project_json(p, tasks=counts.get(p.id), index=indexes.get(p.id)) for p in found]
+    ids = [p.id for p in found]
+    indexes = await CodeIndexRepository(open_session).for_projects(ids)
+    sources = await ProjectSourceRepository(open_session).for_projects(ids)
+    return [project_json(p, tasks=counts.get(p.id), index=indexes.get(p.id), sources=sources.get(p.id, []))
+            for p in found]
 
 
 @router.get("/projects/{pid}", dependencies=[Depends(current_person)])
@@ -116,7 +143,89 @@ async def project(pid: str, open_session: AsyncSession = Depends(session)) -> di
         raise NotFound(f"project {pid}")
     counts = await repo.task_counts()
     return project_json(found, tasks=counts.get(pid),
-                        index=await CodeIndexRepository(open_session).summary(pid))
+                        index=await CodeIndexRepository(open_session).summary(pid),
+                        sources=await ProjectSourceRepository(open_session).of(pid))
+
+
+def _may_see_the_machine(who: Person) -> bool:
+    """Where a checkout is on disk is the machine's business: said to someone who may browse it, on a
+    server that lets anyone browse it at all."""
+    return settings().machine_access and who.can("machine:access")
+
+
+@router.get("/projects/{pid}/sources")
+async def project_sources(pid: str, who: Person = Depends(current_person),
+                          open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
+    """Every source of the project, the first one first (`id` null), then the rest in their order."""
+    found = await ProjectRepository(open_session).get(pid)
+    if found is None:
+        raise NotFound(f"project {pid}")
+    show = _may_see_the_machine(who)
+    first = checkout(found)
+    out = [source_json(found, None, root=str(first) if first else None, show_root=show)] if found.source_kind else []
+    for row in await ProjectSourceRepository(open_session).of(pid):
+        where = source_root(row)
+        out.append(source_json(found, row, root=str(where) if where else None, show_root=show))
+    return out
+
+
+@router.post("/projects/{pid}/sources", status_code=201)
+async def add_source(pid: str, body: SourceIn, jobs: BackgroundTasks,
+                     who: Person = Depends(require("projects:onboard")),
+                     open_session: AsyncSession = Depends(session), db: Database = Depends(database),
+                     gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """Add a folder or a repository to the project. The row is written now; cloning, measuring and
+    indexing the whole project with it run after, and land in Activity as they finish."""
+    service = SourceService(open_session)
+    made = await service.add(pid, SourceSpec(label=body.label, kind=body.kind, repo=body.repo,
+                                             branch=body.branch), who.name)
+    project = await service.project(pid)
+    where = source_root(made)
+    doc = source_json(project, made, root=str(where) if where else None, show_root=_may_see_the_machine(who))
+    await hand_off(open_session, jobs, onboard_source, db, gw, pid, made.id)
+    return doc
+
+
+@router.patch("/projects/{pid}/sources/{source_id}")
+async def edit_source(pid: str, source_id: int, body: SourceEdit, jobs: BackgroundTasks,
+                      who: Person = Depends(require("projects:onboard")),
+                      open_session: AsyncSession = Depends(session), db: Database = Depends(database),
+                      gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """Rename or move a source. A rename indexes the project again, because every file of the source
+    is named under its label."""
+    if body.label is None and body.position is None:
+        raise Refused("Say what to change: a label or a position.", status=422)
+    service = SourceService(open_session)
+    changed, renamed = await service.update(pid, source_id, who.name, label=body.label, position=body.position)
+    project = await service.project(pid)
+    where = source_root(changed)
+    doc = source_json(project, changed, root=str(where) if where else None, show_root=_may_see_the_machine(who))
+    if renamed:
+        await hand_off(open_session, jobs, reread, db, gw, pid)
+    return doc
+
+
+@router.delete("/projects/{pid}/sources/{source_id}")
+async def remove_source(pid: str, source_id: int, jobs: BackgroundTasks,
+                        who: Person = Depends(require("projects:onboard")),
+                        open_session: AsyncSession = Depends(session), db: Database = Depends(database),
+                        gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """Take a source out of the project: its rows in the index go at once, the project's figures are
+    measured again after. Its folder, and a clone of it, are never deleted."""
+    gone = await SourceService(open_session).remove(pid, source_id, who.name)
+    await hand_off(open_session, jobs, reread, db, gw, pid)
+    return {"ok": True, "id": source_id, "label": gone.label}
+
+
+@router.post("/projects/{pid}/sources/{source_id}/reindex", status_code=202)
+async def reindex_source(pid: str, source_id: int, jobs: BackgroundTasks,
+                         who: Person = Depends(require("projects:onboard")),
+                         open_session: AsyncSession = Depends(session), db: Database = Depends(database),
+                         gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """Read a source again — and, when it failed, onboard it again from the start. Answered at once."""
+    source, again = await SourceService(open_session).reindex(pid, source_id, who.name)
+    await hand_off(open_session, jobs, *((onboard_source, db, gw, pid, source.id) if again else (reread, db, gw, pid)))
+    return {"ok": True, "onboarding": again}
 
 
 @router.get("/projects/{pid}/instructions", dependencies=[Depends(current_person)])
@@ -129,7 +238,7 @@ async def project_instructions(pid: str, target: list[str] = Query(default_facto
     found = await ProjectRepository(open_session).get(pid)
     if found is None:
         raise NotFound(f"project {pid}")
-    return instructions.as_json(await instructions.for_project(found, target))
+    return instructions.as_json(await instructions.for_project(found, target, session=open_session))
 
 
 @router.post("/projects", status_code=201)
@@ -142,7 +251,7 @@ async def create_project(body: ProjectIn, jobs: BackgroundTasks,
                 rules=[r.model_dump() for r in body.rules])
     project = await OnboardingService(open_session).create(spec, who.name)
     await hand_off(open_session, jobs, onboard, db, gw, project.id, spec)
-    return project_json(project)
+    return project_json(project, sources=[])
 
 
 @router.get("/mcp/servers", dependencies=[Depends(current_person)])

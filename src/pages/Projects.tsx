@@ -1,14 +1,18 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Search, Plus, GitBranch, Database, FileCode, Boxes, Check, Brain, Lock, FolderGit2 } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Search, Plus, GitBranch, Database, FileCode, Boxes, Check, Brain, Lock, FolderGit2, FolderOpen, X, Layers } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Dot, BlockBar, Segmented, Mono,
   SectionTitle, Empty, KV, Field, Wizard,
 } from '@/components/os';
+import { FolderPicker } from '@/components/workbench/FolderPicker';
+import { ApiError } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { useProject } from '@/lib/project-context';
 import { useData } from '@/lib/data';
 import { categoryLabel } from '@/lib/live/knowledge';
+import { LABEL, SOURCE_DOT, labelFrom, sourcesApi, sourcesOf, type SourceInput } from '@/lib/live/sources';
 import { cn } from '@/lib/utils';
 import { ago } from '@/lib/time';
 import type { MemoryFact, Project } from '@/types';
@@ -50,10 +54,24 @@ function repoProblem(source: 'git' | 'local', repo: string, branch: string): str
   return GIT_REF.test(branch.trim()) ? null : 'Branch name is empty or invalid';
 }
 
+/** What is wrong with a further source, or null when it can be added: the repository rules, and a label
+    that is a folder name no other source of the new project has taken. */
+function sourceProblem(draft: SourceInput, taken: string[]): string | null {
+  const label = draft.label.trim();
+  if (!label) return 'Give it a label — the folder its files appear under in the project';
+  if (!LABEL.test(label)) return 'A label is lower-case letters, digits, dots, dashes or underscores';
+  if (taken.includes(label)) return `Another source is already called ${label}`;
+  return repoProblem(draft.kind, draft.repo, draft.branch);
+}
+
+const NO_SOURCE: SourceInput = { label: '', kind: 'git', repo: '', branch: 'main' };
+
 export default function Projects() {
   const nav = useNavigate();
+  const { can } = useAuth();
   const { projectId, setProjectId, all: projects } = useProject();
   const { createProject, memory } = useData();
+  const [params, setParams] = useSearchParams();
   const [busy, setBusy] = useState(false);
   const [q, setQ] = useState('');
   const [kind, setKind] = useState('all');
@@ -65,6 +83,24 @@ export default function Projects() {
   const [branch, setBranch] = useState('main');
   const [excluded, setExcluded] = useState(DEFAULT_EXCLUDED);
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  // Further sources the new project holds beside its first one, and the one being written.
+  const [extras, setExtras] = useState<SourceInput[]>([]);
+  const [draft, setDraft] = useState<SourceInput>(NO_SOURCE);
+  const [browsing, setBrowsing] = useState<'first' | 'extra' | null>(null);
+  const browse = can('machine:access');
+
+  // The project navigator's "New project" lands here with ?new=1: the wizard is open until it is closed,
+  // and closing it tidies the address.
+  const askedNew = params.get('new') === '1';
+  const wizardOpen = newOpen || askedNew;
+  const setWizard = (open: boolean) => {
+    setNewOpen(open);
+    if (!open && askedNew) {
+      const next = new URLSearchParams(params);
+      next.delete('new');
+      setParams(next, { replace: true });
+    }
+  };
 
   const stages = STAGES.filter((st) => !st.gitOnly || source === 'git');
   const togglePick = (id: string) => setPicked((cur) => {
@@ -78,6 +114,20 @@ export default function Projects() {
     setBranch('main');
     setExcluded(DEFAULT_EXCLUDED);
     setPicked(new Set());
+    setExtras([]);
+    setDraft(NO_SOURCE);
+  };
+  const draftProblem = sourceProblem(draft, extras.map((x) => x.label.trim()));
+  const addDraft = () => {
+    if (draftProblem) return;
+    setExtras((cur) => [...cur, { ...draft, label: draft.label.trim(), repo: draft.repo.trim(), branch: draft.branch.trim() }]);
+    setDraft({ ...NO_SOURCE, kind: draft.kind });
+  };
+  /** A picked folder fills the path, and a label from its name when none was written. */
+  const onFolder = (path: string) => {
+    if (browsing === 'first') setRepo(path);
+    else setDraft((d) => ({ ...d, repo: path, label: d.label || labelFrom(path) }));
+    setBrowsing(null);
   };
 
   const list = useMemo(() => {
@@ -174,6 +224,16 @@ export default function Projects() {
 
                 <div className="flex-1 px-3.5 py-3">
                   <p className="mb-2.5 line-clamp-2 text-[12.5px] text-soft">{p.description}</p>
+                  {sourcesOf(p).length > 1 && (
+                    <div className="mb-2.5 flex flex-wrap items-center gap-1.5" aria-label="Sources">
+                      {sourcesOf(p).map((x) => (
+                        <span key={x.label} className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-2 px-2 py-px font-mono text-[11.5px] text-ink-2"
+                          title={x.status === 'active' ? undefined : x.status}>
+                          <Dot state={SOURCE_DOT[x.status]} />{x.id === null ? 'first source' : `${x.label}/`}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <div className="mb-3 flex flex-wrap gap-1">
                     {p.stack.map((s) => (
                       <span key={s} className="rounded-xs border border-line bg-surface-2 px-1.5 py-px text-[11.5px] text-ink-2">{s}</span>
@@ -282,8 +342,8 @@ export default function Projects() {
 
       {/* Onboarding wizard */}
       <Wizard
-        open={newOpen}
-        onOpenChange={setNewOpen}
+        open={wizardOpen}
+        onOpenChange={setWizard}
         title="Onboard a repository"
         description="NeuroCode reads the codebase before it is allowed to change anything: it measures it, indexes its code and builds retrieval over its code and documents."
         finishLabel="Start onboarding"
@@ -295,11 +355,25 @@ export default function Projects() {
             excluded: excluded.split(',').map((s) => s.trim()).filter(Boolean),
             rules: SUGGESTED_RULES.filter((r) => picked.has(r.id)),
           });
+          if (!doc) {
+            setBusy(false);
+            return;
+          }
+          // Each further source is added once the project exists; one the API refuses is said, and the
+          // rest still go in — they can be added again from the project's Sources section.
+          let added = 0;
+          for (const extra of extras) {
+            try {
+              await sourcesApi.add(doc.id, extra);
+              added += 1;
+            } catch (e) {
+              toast.error(`${extra.label} was not added`, { description: e instanceof ApiError ? e.message : 'The local API did not answer.' });
+            }
+          }
           setBusy(false);
-          if (!doc) return;
-          setNewOpen(false);
+          setWizard(false);
           toast.success(`${doc.name} is onboarding`, {
-            description: `${source === 'git' ? 'Cloning and measuring' : 'Measuring'} it now. Each stage lands in Activity.`,
+            description: `${source === 'git' ? 'Cloning and measuring' : 'Measuring'} it now${added ? `, with ${added} more ${added === 1 ? 'source' : 'sources'}` : ''}. Each stage lands in Activity.`,
           });
           resetDraft();
         }}
@@ -310,11 +384,19 @@ export default function Projects() {
             content: (
               <div className="space-y-3">
                 <Segmented options={[{ id: 'git', label: 'Git remote' }, { id: 'local', label: 'Local path' }]} value={source} onChange={setSource} />
-                <Field
-                  label={source === 'git' ? 'Clone URL' : 'Absolute path'}
-                  value={repo} onChange={setRepo} mono
-                  placeholder={source === 'git' ? 'git@github.com:org/repo.git' : '/Users/you/code/repo'}
-                />
+                <div className="flex items-end gap-2">
+                  <Field
+                    className="min-w-0 flex-1"
+                    label={source === 'git' ? 'Clone URL' : 'Absolute path'}
+                    value={repo} onChange={setRepo} mono
+                    placeholder={source === 'git' ? 'git@github.com:org/repo.git' : '/Users/you/code/repo'}
+                  />
+                  {source === 'local' && browse && (
+                    <Button type="button" variant="outline" size="sm" className="mb-px h-9" onClick={() => setBrowsing('first')}>
+                      <FolderOpen className="size-3.5" />Browse…
+                    </Button>
+                  )}
+                </div>
                 {source === 'git' && <Field label="Branch" value={branch} onChange={setBranch} mono />}
                 <div className="rounded-sm border border-line bg-base px-3 py-1.5">
                   <KV k="Access" v={source === 'git' ? 'cloned with your git credentials, read only' : 'read in place'} />
@@ -373,6 +455,62 @@ export default function Projects() {
             ),
           },
           {
+            id: 'sources', title: 'More sources', hint: extras.length ? `${extras.length} added` : 'optional',
+            content: (
+              <div className="space-y-3">
+                <p className="text-[13px] leading-relaxed text-soft">
+                  Add another folder or repository that belongs to this project — the API beside the web app, a shared
+                  library, a data repository. Each is onboarded the same way, and its files appear in the project under
+                  its label, so search, impact and runs span all of them.
+                </p>
+                {extras.length > 0 && (
+                  <div className="divide-y divide-line/60 rounded-lg border border-line">
+                    {extras.map((x) => (
+                      <div key={x.label} className="flex items-center gap-2.5 px-3 py-2">
+                        <Layers className="size-3.5 shrink-0 text-dim" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-mono text-[12.5px] text-ink">{x.label}/</span>
+                          <span className="block truncate font-mono text-[11.5px] text-dim">{x.repo}{x.kind === 'git' ? ` @ ${x.branch}` : ''}</span>
+                        </span>
+                        <Tag>{x.kind === 'git' ? 'git' : 'folder'}</Tag>
+                        <button type="button" aria-label={`Remove ${x.label}`} onClick={() => setExtras((cur) => cur.filter((y) => y.label !== x.label))}
+                          className="grid size-7 place-items-center rounded-md text-dim transition-colors hover:bg-surface-2 hover:text-ink">
+                          <X className="size-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="space-y-2.5 rounded-lg border border-line bg-base px-3 py-3">
+                  <Segmented options={[{ id: 'git', label: 'Git remote' }, { id: 'local', label: 'Local path' }]}
+                    value={draft.kind} onChange={(kind) => setDraft((d) => ({ ...d, kind }))} />
+                  <div className="flex items-end gap-2">
+                    <Field className="min-w-0 flex-1" mono value={draft.repo}
+                      label={draft.kind === 'git' ? 'Clone URL' : 'Absolute path'}
+                      placeholder={draft.kind === 'git' ? 'git@github.com:org/api.git' : '/Users/you/code/api'}
+                      onChange={(v) => setDraft((d) => ({ ...d, repo: v, label: d.label && d.label !== labelFrom(d.repo) ? d.label : labelFrom(v) }))} />
+                    {draft.kind === 'local' && browse && (
+                      <Button type="button" variant="outline" size="sm" className="mb-px h-9" onClick={() => setBrowsing('extra')}>
+                        <FolderOpen className="size-3.5" />Browse…
+                      </Button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                    <Field label="Label" mono value={draft.label} placeholder="api" onChange={(v) => setDraft((d) => ({ ...d, label: v }))}
+                      hint="The folder its files appear under in the project" />
+                    {draft.kind === 'git' && <Field label="Branch" mono value={draft.branch} onChange={(v) => setDraft((d) => ({ ...d, branch: v }))} />}
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[12px] text-dim">{draft.repo.trim() || draft.label.trim() ? draftProblem ?? 'Ready to add' : 'Optional — skip this step to onboard one source'}</span>
+                    <Button type="button" size="sm" variant="outline" disabled={!!draftProblem} onClick={addDraft}>
+                      <Plus className="size-3.5" />Add another folder or repository
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ),
+          },
+          {
             id: 'review', title: 'Review', hint: `${stages.length} stages`,
             content: (
               <div className="space-y-3">
@@ -381,6 +519,7 @@ export default function Projects() {
                   <KV k="Branch" v={source === 'git' ? branch : 'working tree'} mono />
                   <KV k="Excluded" v={`${excluded.split(',').map((x) => x.trim()).filter(Boolean).length} patterns`} />
                   <KV k="Rules recorded" v={`${picked.size} of ${SUGGESTED_RULES.length}`} />
+                  <KV k="More sources" v={extras.length ? extras.map((x) => x.label).join(', ') : 'none'} mono={extras.length > 0} />
                 </div>
                 <SectionTitle>What onboarding does</SectionTitle>
                 <div className="rounded-sm border border-line bg-base">
@@ -398,6 +537,12 @@ export default function Projects() {
             ),
           },
         ]}
+      />
+      <FolderPicker
+        open={browsing !== null}
+        title={browsing === 'first' ? 'Choose the project folder' : 'Choose a folder to add'}
+        onPick={onFolder}
+        onClose={() => setBrowsing(null)}
       />
     </Page>
   );

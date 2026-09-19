@@ -64,9 +64,15 @@ export interface AuthUser {
   id: string; email: string; name: string; status: 'active' | 'disabled'; roles: string[]; permissions: string[];
 }
 export interface Workspace { name: string }
-export interface AuthStatus { needsSetup: boolean; user: AuthUser | null; workspace: Workspace | null }
+export interface AuthStatus {
+  needsSetup: boolean;
+  /** A server on the internet asks for its setup token before the first Owner can be made. */
+  setupNeedsToken?: boolean;
+  user: AuthUser | null;
+  workspace: Workspace | null;
+}
 export interface SignedIn { user: AuthUser; workspace: Workspace | null }
-export interface SetupInput { workspace: string; name: string; email: string; password: string }
+export interface SetupInput { workspace: string; name: string; email: string; password: string; setupToken?: string }
 
 export interface Person {
   id: string; email: string; name: string; status: 'active' | 'disabled'; roles: string[]; teams: string[];
@@ -302,6 +308,30 @@ export interface SessionDoc {
   autoCompactAt: number;
   /** The project's instruction files its model is handed; absent when there was nothing to read. */
   instructions?: { path: string; bytes: number }[] | null;
+  /** Forked from another session: its id, and the turn it was forked at. */
+  parentId: string | null; forkedAt: number | null;
+  /** What "Allow for this session" has allowed here: a tool, what it covers, and who allowed it. */
+  grants: { tool: string; subject: string; covers: string | null; by: string; at: string }[];
+  /** The permission card the session waits on — nothing moves until a person answers it. */
+  waitingOn: { messageId: number; tool: string; subject: string } | null;
+}
+/** Something attached to a question: from the composer's @ picker, or an upload. */
+export interface ChatAttachment {
+  kind: 'file' | 'symbol' | 'fact' | 'plan' | 'upload'; ref: string; name: string;
+  /** Characters of it the model was handed, and whether the cap cut it. */
+  chars?: number; cut?: boolean;
+  /** A symbol's file and line. */
+  path?: string; line?: number;
+  /** An upload: a picture goes only to a lane that reads images. */
+  image?: boolean; mime?: string; bytes?: number;
+  /** Imported from an export, which carries no uploaded bytes. */
+  missing?: boolean;
+}
+/** A tool call that waits for a person — or waited, and what they said. */
+export interface ChatPermission {
+  tool: string; subject: string; why: string; ruleId: number | null; covers: string;
+  state: 'pending' | 'allowed' | 'refused' | 'lapsed';
+  scope?: 'once' | 'session' | 'refuse'; decidedBy?: string; decidedAt?: string;
 }
 /** One turn: your question, a tool call with what it found, an answer, a note, or a summary of folded turns. */
 export interface ChatMessage {
@@ -316,8 +346,15 @@ export interface ChatMessage {
   folded?: { turns: number; from: number | null; to: number | null };
   /** A turn folded into a summary: still here to read, no longer sent to the model. */
   compacted?: boolean;
+  attachments?: ChatAttachment[];
+  /** A permission card (tool = 'permission'). */
+  permission?: ChatPermission;
+  /** Replaced by an edit or a regeneration: the id of the question that replaced it. */
+  supersededBy?: number;
+  /** A question that replaced another: by an edit, or asked again to regenerate its answer (and on which lane). */
+  edited?: number; regenerated?: number;
 }
-export interface SessionDetail extends SessionDoc { messages: ChatMessage[] }
+export interface SessionDetail extends SessionDoc { messages: ChatMessage[]; parentRef: string | null }
 /** The words of an answer being written, appended by position; never stored — the finished turn replaces them. */
 export interface ChatStream {
   step: number; ms?: number;
@@ -536,8 +573,8 @@ export const api = {
   session: (ref: string, after = 0) => request<SessionDetail>(`/sessions/${seg(ref)}?after=${after}`),
   newSession: (projectId: string, title = '') => request<SessionDoc>('/sessions', POST({ projectId, title })),
   /** Ask, and let it think in the background: the turns arrive on the stream. */
-  askSession: (ref: string, text: string) =>
-    request<{ message: ChatMessage; session: SessionDoc }>(`/sessions/${seg(ref)}/messages`, POST({ text })),
+  askSession: (ref: string, text: string, attachments: Pick<ChatAttachment, 'kind' | 'ref' | 'name'>[] = []) =>
+    request<{ message: ChatMessage; session: SessionDoc }>(`/sessions/${seg(ref)}/messages`, POST({ text, attachments })),
   cancelSession: (ref: string) => request<SessionDoc>(`/sessions/${seg(ref)}/cancel`, POST()),
   compactSession: (ref: string) =>
     request<{ summary: ChatMessage; session: SessionDoc }>(`/sessions/${seg(ref)}/compact`, { ...POST(), signal: modelTimeout() }),

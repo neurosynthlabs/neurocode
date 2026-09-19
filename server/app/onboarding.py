@@ -68,6 +68,19 @@ def source_root(project: dict[str, Any]) -> Path | None:
     return Path(os.path.expanduser(src["repo"])) if (src.get("repo") or "").strip() else None
 
 
+def source_path(project_id: str, source_id: int, kind: str, repo: str) -> Path | None:
+    """Where one of a project's further sources lives on this machine.
+
+    A local one is the folder it names. A cloned one goes beside the project's own clone, under a name
+    made from the source's id rather than its label: a label can be renamed, and a rename must never
+    leave the clone behind under the old name. `+` cannot appear in a project id, so the folder can
+    never be mistaken for another project's clone.
+    """
+    if kind == "git":
+        return repos_dir() / f"{project_id}+{source_id}"
+    return Path(os.path.expanduser(repo)) if (repo or "").strip() else None
+
+
 def redact(text: str) -> str:
     """Strip credentials from every URL in the text: https://user:token@host → https://***@host."""
     return USERINFO.sub(r"\1***@", text)
@@ -152,6 +165,30 @@ def module_of(rel: str) -> str:
     return parts[0] if len(parts) >= 2 else "(root)"
 
 
+def combine(parts: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
+    """Several scans as one project: the counts added up, the languages weighed by their lines across
+    all of them, and a further source's modules named under its label, so `api/billing` and the web
+    app's `billing` stay two modules. `parts` are (prefix, scan) with the first source's prefix empty."""
+    if len(parts) == 1 and not parts[0][0]:
+        return parts[0][1]
+    by_lang: dict[str, int] = {}
+    files = lines = tables = procs = modules = 0
+    truncated = False
+    for _prefix, found in parts:
+        files += found["files"]
+        lines += found["lines"]
+        tables += found["dbTables"]
+        procs += found["storedProcs"]
+        modules += found["modules"]
+        truncated = truncated or found["truncated"]
+        for lang, n in (found.get("byLang") or {}).items():
+            by_lang[lang] = by_lang.get(lang, 0) + n
+    ranked = sorted(by_lang.items(), key=lambda kv: -kv[1])
+    languages = [{"name": lang, "pct": round(100 * n / lines)} for lang, n in ranked if lines and n / lines >= 0.02][:6]
+    return {"files": files, "lines": lines, "languages": languages, "dbTables": tables, "storedProcs": procs,
+            "modules": modules, "truncated": truncated, "byLang": by_lang}
+
+
 def scan(root: Path, excluded: list[str]) -> dict[str, Any]:
     by_lang: dict[str, int] = {}
     modules: set[str] = set()
@@ -169,7 +206,7 @@ def scan(root: Path, excluded: list[str]) -> dict[str, Any]:
     ranked = sorted(by_lang.items(), key=lambda kv: -kv[1])
     languages = [{"name": lang, "pct": round(100 * n / lines)} for lang, n in ranked if lines and n / lines >= 0.02][:6]
     return {"files": files, "lines": lines, "languages": languages, "dbTables": tables, "storedProcs": procs,
-            "modules": len(modules), "truncated": files >= MAX_FILES}
+            "modules": len(modules), "truncated": files >= MAX_FILES, "byLang": by_lang}
 
 
 def fmt_lines(n: int) -> str:

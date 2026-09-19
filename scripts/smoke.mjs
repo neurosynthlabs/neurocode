@@ -136,10 +136,8 @@ try {
     const local = dlg.getByRole('button', { name: /folder|local/i }).first();
     if (await local.count()) await local.click();
     await dlg.locator('input').first().fill(repo);
-    for (let n = 0; n < 3; n++) {
-      const next = dlg.getByRole('button', { name: /^Next/ });
-      if (!(await next.count())) break;
-      await next.click();
+    for (let n = 0; n < 8 && !(await dlg.getByRole('button', { name: /Start onboarding/ }).count()); n++) {
+      await dlg.getByRole('button', { name: /^Next/ }).click();
     }
     await dlg.getByRole('button', { name: /Start onboarding/ }).click();
     await dlg.waitFor({ state: 'detached', timeout: 5000 });

@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from ..models import ActivityEvent, Approval, Decision, Plan, Pref, Project, Setting, Task
+from ..models import ActivityEvent, Approval, Decision, Plan, Pref, Project, ProjectSource, Setting, Task
 
 SIZES = ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K"))
 #: Which task statuses the project card counts as "running", "in review" and "blocked".
@@ -76,9 +76,45 @@ def plan_json(plan: Plan, *, task_ref: str | None = None, run_ref: str | None = 
     }
 
 
+def first_source_status(project: Project) -> str:
+    """The first source's state, read off the project: it is onboarded with the project itself."""
+    if project.status == "onboarding":
+        return "onboarding"
+    return "failed" if project.description.startswith("Onboarding stopped") else "active"
+
+
+def source_summary(project: Project, sources: list[ProjectSource]) -> list[dict[str, Any]]:
+    """What the project picker shows of each source, first source first: `id` null is the first."""
+    first = ([{"id": None, "label": project.id, "kind": project.source_kind, "status": first_source_status(project)}]
+             if project.source_kind else [])
+    return first + [{"id": x.id, "label": x.label, "kind": x.kind, "status": x.status} for x in sources]
+
+
+def source_json(project: Project, source: ProjectSource | None, *, root: str | None = None,
+                show_root: bool = False) -> dict[str, Any]:
+    """One source as the Sources section and the Workbench read it. `source` None is the first source,
+    built from the project's own columns. `root` is where it is on this machine — sent only to someone
+    who may browse the machine (`show_root`), and null when it is not on this machine."""
+    if source is None:
+        doc: dict[str, Any] = {
+            "id": None, "label": project.id, "kind": project.source_kind, "repo": project.source_repo,
+            "branch": project.source_branch, "position": 0, "status": first_source_status(project),
+            "note": "", "primary": True, "createdAt": when(project.created_at)}
+    else:
+        doc = {"id": source.id, "label": source.label, "kind": source.kind, "repo": source.repo,
+               "branch": source.branch, "position": source.position, "status": source.status,
+               "note": source.note, "primary": False, "createdAt": when(source.created_at)}
+    if show_root:
+        doc["root"] = root
+    return doc
+
+
 def project_json(project: Project, *, tasks: dict[str, int] | None = None,
-                 index: dict[str, Any] | None = None) -> dict[str, Any]:
-    """`work` and `lines` are computed, not stored: a count that is kept is a count that drifts."""
+                 index: dict[str, Any] | None = None,
+                 sources: list[ProjectSource] | None = None) -> dict[str, Any]:
+    """`work` and `lines` are computed, not stored: a count that is kept is a count that drifts.
+    `sources` is the project's further sources; given, the document carries every source in order
+    (`sources: [{id, label, kind, status}]`, the first with id null)."""
     counts = tasks or {}
     return {
         "id": project.id, "name": project.name, "codename": project.codename,
@@ -96,6 +132,7 @@ def project_json(project: Project, *, tasks: dict[str, int] | None = None,
         "rules": project.rules or [], "languages": project.languages or [],
         "files": project.files_count, "excluded": project.excluded or [],
         **({"codeIndex": index} if index else {}),
+        **({"sources": source_summary(project, sources)} if sources is not None else {}),
     }
 
 

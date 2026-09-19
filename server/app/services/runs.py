@@ -10,6 +10,12 @@ runs is the project's own — the first time in a project, behind your approval.
 
 Every step commits in a transaction of its own. A crash mid-run therefore loses the step in flight,
 never the run: what was already done is already saved, and the screen shows exactly how far it got.
+
+A project with several sources is worked on as one. A run opens a worktree and a branch in every source
+its plan's files fall in; each file an agent writes goes to the worktree its label names; each source's
+own tests and checks run in its own worktree, behind approvals of their own; the review reads one
+patch of every source with the paths under their labels; and a merge or a push acts on each source,
+all of them or none. A project with one source runs exactly as it did before sources existed.
 """
 from __future__ import annotations
 
@@ -19,6 +25,7 @@ import os
 import re
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +55,7 @@ from ..repositories import (
 )
 from ..repositories.runtime import ResultsRepository
 from ..settings import settings
+from .code import roots
 from .errors import Denied, Refused
 
 log = logging.getLogger(__name__)
@@ -148,6 +156,163 @@ def _work(run: Run) -> Path:
     return Path(run.worktree) / run.prefix if run.prefix else Path(run.worktree)
 
 
+# ── runs across several sources ──────────────────────────────────
+@dataclass(slots=True)
+class Part:
+    """One checkout a run works in: its repository, the branch the run made there and the worktree it
+    writes in. A run on a project with one source has one part, built from the run's own columns, whose
+    label is empty — its paths are the checkout's own, exactly as before sources existed. A run that
+    touches further sources has a part per source it touches, kept on the run (`review.sources`), and
+    the label is how a project path is routed to it: `api/app/main.py` is `app/main.py` in the part
+    labelled `api`. The first part is always the run's own columns."""
+
+    label: str
+    repo: Path
+    prefix: str
+    base: str
+    branch: str
+    worktree: Path
+
+    @property
+    def work(self) -> Path:
+        return self.worktree / self.prefix if self.prefix else self.worktree
+
+    @property
+    def lead(self) -> str:
+        return f"{self.label}/" if self.label else ""
+
+    @property
+    def name(self) -> str:
+        """How the run's log and the signature call it."""
+        return self.label or "the first source"
+
+    def as_json(self) -> dict[str, Any]:
+        return {"label": self.label, "repo": str(self.repo), "prefix": self.prefix, "base": self.base,
+                "branch": self.branch, "worktree": str(self.worktree)}
+
+
+def _parts(run: Run) -> list[Part]:
+    listed = (run.review or {}).get("sources")
+    if not listed:
+        return [Part("", Path(run.repo), run.prefix, run.base, run.branch, Path(run.worktree))]
+    return [Part(x["label"], Path(x["repo"]), x.get("prefix", ""), x["base"], x["branch"], Path(x["worktree"]))
+            for x in listed]
+
+
+def _elsewhere(run: Run) -> frozenset[str]:
+    """The labels of the project's sources this run did not open: a path under one is refused, never
+    taken for a folder of the first source."""
+    return frozenset((run.review or {}).get("elsewhere") or [])
+
+
+def _route(parts: list[Part], path: str, elsewhere: frozenset[str] = frozenset()) -> tuple[Part, str] | None:
+    """The part a project path belongs to and the path inside it — None when it is in a source this run
+    did not open. On a single-source run every path is the one part's, unchanged."""
+    head, _, rest = path.strip().replace("\\", "/").partition("/")
+    for part in parts:
+        if part.label and part.label == head:
+            return part, rest
+    if head in elsewhere:
+        return None
+    first = next((x for x in parts if not x.label), None)
+    return (first, path) if first is not None else None
+
+
+def _touched(labels: list[str], targets: list[str]) -> list[str]:
+    """Which sources a plan's files fall in, in the project's order: "" is the first source, a label
+    each further one. A plan that names no file works in the first source, as it always did."""
+    hit: set[str] = set()
+    for target in targets:
+        head = str(target).strip().replace("\\", "/").split("/", 1)[0]
+        hit.add(head if head in labels else "")
+    return [x for x in ["", *labels] if x in hit]
+
+
+def _setup_parts(project: Project, sources: list[Any], targets: list[str]) -> list[dict[str, Any]]:
+    """Blocking. `_setup` for every source the plan's files fall in — each must be a git repository with
+    a commit to branch from — the first one first. For a project with one source, exactly `_setup`."""
+    extras = {x.label: x for x in sources if not x.primary}
+    if not extras:
+        return [{**_setup(project), "label": ""}]
+    wanted = _touched(list(extras), targets)
+    first = next((x for x in sources if x.primary), None)
+    if not wanted:
+        wanted = [""] if first is not None else [next(iter(extras))]
+    out: list[dict[str, Any]] = []
+    for label in wanted:
+        if not label:
+            out.append({**_setup(project), "label": ""})
+            continue
+        source = extras[label]
+        if not source.ready:
+            raise Refused(f"The {label} source of {project.name} is still being onboarded, so a run cannot "
+                          "branch from it yet.")
+        if not source.root.is_dir():
+            raise Refused(f"The {label} source of {project.name} is not on this machine any more.")
+        found = agent.repo_of(source.root)
+        if found is None:
+            raise Refused(f"The {label} source of {project.name} is not a git repository, so a run has nothing "
+                          "to branch from there.")
+        repo, prefix = found
+        head = agent.git(["rev-parse", "HEAD"], repo)
+        if head.returncode != 0:
+            raise Refused(f"The {label} source of {project.name} has no commit yet. Make one, and a run can "
+                          "branch from it.")
+        out.append({"repo": repo, "prefix": prefix, "base": head.stdout.strip(), "label": label,
+                    "tests": agent.detect_tests(source.root), "checks": agent.detect_checks(source.root)})
+    return out
+
+
+def _extra_checks(setups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every labelled part's tests and checks, as checks named after its source — each behind a first-
+    time approval of its own, because allowing the web app's `npm test` never allowed the API's command.
+    A part's tests are marked so, and fail the run the way the tests of a single source do."""
+    out: list[dict[str, Any]] = []
+    for setup in setups:
+        label = setup["label"]
+        if not label:
+            continue
+        if setup["tests"]:
+            out.append({"name": f"{label} tests", "command": setup["tests"]["command"], "label": label,
+                        "tests": True})
+        out += [{"name": f"{label} {c['name']}", "command": c["command"], "label": label}
+                for c in setup["checks"]]
+    return out
+
+
+def _patch(parts: list[Part]) -> tuple[str, str]:
+    """Blocking. The run's whole patch, read from its branches, and the commit the first part ends at.
+    One part: exactly the branch's own patch. Several: each part's, its paths under its source's label,
+    one after the other — so the review, the receipt, a merge and a push all read the same bytes."""
+    if len(parts) == 1 and not parts[0].label:
+        return agent.branch_diff(parts[0].repo, parts[0].base, parts[0].branch)
+    patches: list[str] = []
+    first = ""
+    for n, part in enumerate(parts):
+        patch, head = agent.branch_diff(part.repo, part.base, part.branch)
+        if n == 0:
+            first = head
+        if not head:
+            return "", ""
+        patches.append(agent.label_patch(patch, part.label, part.prefix))
+    return "".join(patches), first
+
+
+def _stats(parts: list[Part]) -> dict[str, int]:
+    """Blocking. What the run changed across every part, measured with git."""
+    total = {"files": 0, "insertions": 0, "deletions": 0, "commits": 0}
+    for part in parts:
+        for key, value in agent.stats(part.worktree, part.base).items():
+            total[key] += value
+    return total
+
+
+def _cleanup(run: Run) -> None:
+    """Blocking. Remove every worktree and branch the run made, in every repository it touched."""
+    for part in _parts(run):
+        agent.cleanup(part.repo, part.worktree, part.branch)
+
+
 def _by_agent(plan_steps: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     """The plan's work, grouped by the agent that owns it. A gate belongs to no agent: you are the gate."""
     groups: dict[str, list[dict[str, Any]]] = {}
@@ -182,10 +347,20 @@ class RunService:
         again with a reviewer's notes; the plan's steps stay exactly as they were agreed. `goal_budget`
         makes it a goal run: the run that leads ends with a completion check, and may try again on its
         own up to that many attempts in all; `attempt` says which try this one is."""
-        setup = await asyncio.to_thread(_setup, project)
+        sources = await roots(self.session, project)
+        setups = await asyncio.to_thread(_setup_parts, project, sources, list(plan.affected_files or []))
+        opened = {x["label"] for x in setups}
+        elsewhere = [x.label for x in sources if not x.primary and x.label not in opened]
         steps = [{"label": s.label, "agent": s.agent, "detail": s.detail} for s in plan.steps]
         groups = _by_agent(steps)
-        tests, checks, goal = setup["tests"], setup["checks"], goal_budget is not None
+        lead = setups[0]
+        # The first source's tests stay the run's own test step. A further source's run as checks named
+        # after it — and so do the tests of a further source that leads the run — each behind its own
+        # first-time approval.
+        tests = None if lead["label"] else lead["tests"]
+        checks = [*([] if lead["label"] else lead["checks"]), *_extra_checks(setups)]
+        goal = goal_budget is not None
+        setup = {"setups": setups, "elsewhere": elsewhere}
 
         if len(groups) <= 1:
             work = [s for items in groups.values() for s in items]
@@ -233,7 +408,9 @@ class RunService:
         for check in checks:
             out.append({"n": done + len(out) + 1, "kind": "test", "agent": roster.TESTER,
                         "label": f"Run the project's {check['name']} · {check['command']}",
-                        "check": {"name": check["name"], "command": check["command"]}})
+                        "check": {"name": check["name"], "command": check["command"],
+                                  **({"label": check["label"]} if check.get("label") else {}),
+                                  **({"tests": True} if check.get("tests") else {})}})
         out.append({"n": done + len(out) + 1, "kind": "review", "label": "Review the diff", "agent": roster.REVIEWER})
         if goal:
             out.append({"n": done + len(out) + 1, "kind": "review", "agent": GOAL_CHECK,
@@ -279,24 +456,41 @@ class RunService:
         await self.session.refresh(run, attribute_names=["steps", "conflicts"])
         return run
 
-    async def _new_run(self, plan: Any, task: Any, project: Project, by: str, setup: dict[str, Any], *,
+    async def _new_run(self, plan: Any, task: Any, project: Project, by: str, layout: dict[str, Any], *,
                        role: str, agent: str | None = None, lane: str | None = None,
                        suffix: str = "", brief: str | None = None, goal_budget: int | None = None,
                        attempt: int = 1) -> Run:
+        setups: list[dict[str, Any]] = layout["setups"]
+        setup = setups[0]
         ref = await self.runs.next_ref()
         stem = f"neurocode/{(task.ref if task else plan.ref).lower()}"
         wanted = f"{stem}-{suffix}" if suffix else stem
         branch = await asyncio.to_thread(agent_free_branch, setup["repo"], wanted)
-        tests = setup["tests"] or {}
+        tree = worktrees_dir() / project.id / ref
+        review: dict[str, Any] = {"findings": [], "verdict": "", "by": ""}
+        if len(setups) > 1 or setup["label"]:
+            # The parts are written on the run before it starts, so every step — and a restart after a
+            # crash — reads the same worktrees and branches.
+            parts = [Part(setup["label"], Path(setup["repo"]), setup["prefix"], setup["base"], branch, tree)]
+            for extra in setups[1:]:
+                parts.append(Part(extra["label"], Path(extra["repo"]), extra["prefix"], extra["base"],
+                                  await asyncio.to_thread(agent_free_branch, extra["repo"], wanted),
+                                  worktrees_dir() / project.id / f"{ref}+{extra['label']}"))
+            review["sources"] = [x.as_json() for x in parts]
+        if layout["elsewhere"]:
+            # A path under a source the run did not open is refused — never written as a folder of the
+            # first source that happens to share its name.
+            review["elsewhere"] = list(layout["elsewhere"])
+        tests = {} if setup["label"] else setup["tests"] or {}
         return await self.runs.add(Run(
             id=f"r{ref.split('-')[-1]}-{int(time.time())}", ref=ref, project_id=project.id,
             task_id=getattr(task, "id", None), plan_id=plan.id, status="queued", role=role,
             agent=agent, lane=lane, branch=branch,
-            worktree=str(worktrees_dir() / project.id / ref), repo=str(setup["repo"]), prefix=setup["prefix"],
+            worktree=str(tree), repo=str(setup["repo"]), prefix=setup["prefix"],
             base=setup["base"], requirement=brief or plan.raw_requirement, requested_by=by,
             targets=list(plan.affected_files or [])[:12],
             tests_command=tests.get("command", "") or "", tests_status="not run",
-            review={"findings": [], "verdict": "", "by": ""}, attempt=attempt, goal_budget=goal_budget))
+            review=review, attempt=attempt, goal_budget=goal_budget))
 
     async def _add_steps(self, run: Run, steps: list[dict[str, Any]]) -> None:
         checks: list[dict[str, Any]] = []
@@ -368,7 +562,7 @@ class RunService:
         children = (await self.runs.children_of([run.id])).get(run.id, [])
         for target in [run, *children]:                     # a merge run takes its agents' worktrees with it
             if not target.removed:
-                await asyncio.to_thread(agent.cleanup, Path(target.repo), Path(target.worktree), target.branch)
+                await asyncio.to_thread(_cleanup, target)
                 target.removed = True
         await self.session.flush()
         await self.activity.record(actor=by, actor_kind="human", action="Worktree discarded",
@@ -447,7 +641,7 @@ class RunService:
         children = (await self.runs.children_of([run.id])).get(run.id, [])
         for target in [run, *children]:
             if not target.removed:
-                await asyncio.to_thread(agent.cleanup, Path(target.repo), Path(target.worktree), target.branch)
+                await asyncio.to_thread(_cleanup, target)
                 target.removed = True
         if task is not None and task.status in ("review", "blocked"):
             task.status = "in_progress"
@@ -475,9 +669,11 @@ class RunService:
             raise Refused(f"{ref} is already merged into {run.merged['into']}.")
         # The checkout is asked first, as the Git screen asks it, so the reason a person sees there is
         # the one the merge gives; then the branch, then whether it is still what was reviewed.
-        if await asyncio.to_thread(agent.dirty, Path(run.repo)):
-            raise Refused(agent.DIRTY)
-        patch, head = await asyncio.to_thread(agent.branch_diff, Path(run.repo), run.base, run.branch)
+        parts = _parts(run)
+        for part in parts:
+            if await asyncio.to_thread(agent.dirty, part.repo):
+                raise Refused(agent.DIRTY if len(parts) == 1 else f"{part.name}: {agent.DIRTY}")
+        patch, head = await asyncio.to_thread(_patch, parts)
         if not head:
             raise Refused(f"{run.branch} no longer exists, so there is nothing to merge.")
         refusal = receipt_refusal(run, patch, "merge")
@@ -486,12 +682,13 @@ class RunService:
 
         message = f"Merge {run.ref}: {(run.requirement or run.ref)[:80]}\n\nNeuroCode {run.branch}"
         try:
-            result = await asyncio.to_thread(agent.merge_into_checkout, Path(run.repo), run.branch, message)
+            result = await asyncio.to_thread(_merge_parts, parts, message)
         except agent.Refused as refused:                    # a dirty tree: the reason is for the person
             raise Refused(str(refused)) from refused
         if result["merged"]:
             run.merged = {"into": result["into"], "commit": result["commit"], "at": utcnow().isoformat(),
-                          "by": by, "undo": result["undo"]}
+                          "by": by, "undo": result["undo"],
+                          **({"sources": result["sources"]} if "sources" in result else {})}
             await self.logs.write(run.id, level="ok",
                                   line=f"merged into {result['into']} as {result['commit']} · undo: {result['undo']}")
             await self.activity.record(actor=by, actor_kind="human", action="Merged",
@@ -524,8 +721,8 @@ class RunService:
                           "Approve its signature first.")
         if run.removed:
             raise Refused(f"{ref}'s branch was removed, so there is nothing to push.")
-        repo = Path(run.repo)
-        patch, head = await asyncio.to_thread(agent.branch_diff, repo, run.base, run.branch)
+        parts = _parts(run)
+        patch, head = await asyncio.to_thread(_patch, parts)
         if not head:
             raise Refused(f"{run.branch} no longer exists, so there is nothing to push.")
         if not patch.strip():
@@ -534,7 +731,7 @@ class RunService:
         if refusal:
             raise Refused(refusal)
         try:
-            pushed = await asyncio.to_thread(agent.push, repo, run.branch, remote)
+            pushed = await asyncio.to_thread(_push_parts, parts, remote)
         except agent.Refused as refused:                    # no remote, bad credentials, a moved branch
             await self.logs.write(run.id, level="err", line=f"push refused · {refused}"[:300])
             raise Refused(str(refused)) from refused
@@ -599,7 +796,15 @@ class RunService:
         tree = Path(run.worktree)
         if run.removed or not await asyncio.to_thread(tree.exists):
             return {"patch": "", "truncated": False, "stat": stat, "gone": True}
-        patch = await asyncio.to_thread(agent.diff, tree, run.base)
+        parts = _parts(run)
+
+        def read() -> str:
+            if len(parts) == 1 and not parts[0].label:
+                return agent.diff(tree, run.base)
+            return "".join(agent.label_patch(agent.diff(x.worktree, x.base), x.label, x.prefix)
+                           for x in parts if x.worktree.exists())
+
+        patch = await asyncio.to_thread(read)
         return {"patch": patch[:MAX_DIFF], "truncated": len(patch) > MAX_DIFF, "stat": stat, "gone": False}
 
 
@@ -660,6 +865,47 @@ def _rework_brief(requirement: str, run: Run, notes: str, by: str) -> str:
         if review.get("verdict"):
             lines.append(f"Verdict: {review['verdict']}")
     return "\n".join(lines)
+
+
+def _merge_parts(parts: list[Part], message: str) -> dict[str, Any]:
+    """Blocking. Merge every part into what its repository has checked out — all of them or none. One
+    part answers exactly as `merge_into_checkout` does. With several, a collision in one takes back the
+    merges already made in the others (only while each checkout still stands on its merge), so a
+    project is never left half-merged across its sources; each source's undo command is kept."""
+    if len(parts) == 1 and not parts[0].label:
+        return agent.merge_into_checkout(parts[0].repo, parts[0].branch, message)
+    done: list[tuple[Part, dict[str, Any]]] = []
+    for part in parts:
+        result = agent.merge_into_checkout(part.repo, part.branch, message)
+        if not result["merged"]:
+            undone = [x.name for x, merged in done if agent.undo_merge(x.repo, merged["before"], merged["commit"])]
+            kept = [f"{x.name}: {merged['undo']}" for x, merged in done if x.name not in undone]
+            return {"merged": False, "into": result["into"], "commit": None, "undo": None,
+                    "conflicts": [f"{part.lead}{f}" for f in result["conflicts"]],
+                    "sources": [{"label": x.label, "merged": False, "undone": x.name in undone} for x, _ in done]
+                    + [{"label": part.label, "merged": False, "conflicts": result["conflicts"]}],
+                    "kept": kept}
+        done.append((part, result))
+    first = done[0][1]
+    return {"merged": True, "into": first["into"], "conflicts": [], "commit": first["commit"], "undo": first["undo"],
+            "sources": [{"label": x.label, "into": r["into"], "commit": r["commit"], "undo": r["undo"]}
+                        for x, r in done]}
+
+
+def _push_parts(parts: list[Part], remote: str | None) -> dict[str, Any]:
+    """Blocking. Push every part's branch to its own repository's remote. One part answers exactly as
+    `push` does; several answer with the first part's push and every source's under `sources`."""
+    if len(parts) == 1 and not parts[0].label:
+        return agent.push(parts[0].repo, parts[0].branch, remote)
+    pushed: list[tuple[Part, dict[str, Any]]] = []
+    for part in parts:
+        try:
+            pushed.append((part, agent.push(part.repo, part.branch, remote)))
+        except agent.Refused as refused:
+            # A push cannot be taken back from here, so the ones already made are named.
+            went = ", ".join(x.name for x, _ in pushed)
+            raise agent.Refused(f"{part.name}: {refused}" + (f" ({went} already pushed)" if went else "")) from refused
+    return {**pushed[0][1], "sources": [{"label": part.label, **out} for part, out in pushed]}
 
 
 def agent_free_branch(repo: Path, wanted: str) -> str:
@@ -754,8 +1000,9 @@ async def _finish(db: Database, ref: str, status: str, note: str) -> None:
     _STOPPED.pop(ref, None)
 
 
-async def _context(session: AsyncSession, run: Run, step: RunStep, work: Path) -> list[tuple[str, str]]:
-    """The files this step may change: what the plan named, plus what the index finds for its words."""
+async def _context(session: AsyncSession, run: Run, step: RunStep) -> list[tuple[str, str]]:
+    """The files this step may change: what the plan named, plus what the index finds for its words —
+    each read from the worktree of the source its label names."""
     wanted: list[str] = list(run.targets or [])
     words = func.plainto_tsquery("simple", step.label)
     rows = (await session.execute(
@@ -765,6 +1012,8 @@ async def _context(session: AsyncSession, run: Run, step: RunStep, work: Path) -
     wanted += list(rows)
 
     refused: list[str] = []
+    closed: list[str] = []
+    parts, elsewhere = _parts(run), _elsewhere(run)
 
     def read() -> list[tuple[str, str]]:
         files: list[tuple[str, str]] = []
@@ -778,7 +1027,16 @@ async def _context(session: AsyncSession, run: Run, step: RunStep, work: Path) -
             # the way a write is. Reading is not the harmless half: whatever is read here is sent to
             # a provider, so "../../../.ssh/id_rsa" would be an exfiltration, not a bad diff.
             try:
-                f = work / agent.safe_path(rel)
+                agent.safe_path(rel)
+            except agent.Refused:
+                refused.append(rel)
+                continue
+            hit = _route(parts, rel, elsewhere)
+            if hit is None:
+                closed.append(rel)
+                continue
+            try:
+                f = hit[0].work / agent.safe_path(hit[1])
             except agent.Refused:
                 refused.append(rel)
                 continue
@@ -801,6 +1059,10 @@ async def _context(session: AsyncSession, run: Run, step: RunStep, work: Path) -
         await RunLogRepository(session).write(
             run.id, level="warn", step=step.n,
             line=f"ignored {len(refused)} path(s) outside the worktree: {', '.join(refused[:5])}")
+    if closed:
+        await RunLogRepository(session).write(
+            run.id, level="info", step=step.n,
+            line=f"not read: {len(closed)} path(s) in sources this run did not open: {', '.join(closed[:5])}")
     return found
 
 
@@ -828,12 +1090,32 @@ async def _pause(db: Database, ref: str, step_n: int, *, title: str, tool: str, 
                                            level="warn", project_id=run.project_id)
 
 
+def _apply(parts: list[Part], elsewhere: frozenset[str],
+           files: list[tuple[str, str]]) -> tuple[list[str], list[Part]]:
+    """Blocking. Write what the model proposed, each file in the worktree of the source its path names.
+    Every path is checked before any is written, so a refused one leaves nothing half-applied; a path in a
+    source this run did not open is refused the same way as one that leaves the worktree. Returns the
+    written paths as the project names them, and the parts that were written to."""
+    routed: dict[int, list[tuple[str, str]]] = {}
+    for path, content in files:
+        agent.safe_path(path)
+        hit = _route(parts, path, elsewhere)
+        if hit is None:
+            head = path.strip().split("/", 1)[0]
+            raise agent.Refused(f"refused to write {path}: {head} is a source this run did not open")
+        routed.setdefault(parts.index(hit[0]), []).append((hit[1], content))
+    written: list[str] = []
+    for n, items in routed.items():
+        written += [parts[n].lead + rel for rel in agent.apply_files(parts[n].work, items)]
+    return written, [parts[n] for n in routed]
+
+
 async def _edit(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool:
     async with db.read() as s:
         run = await RunRepository(s).by_ref(ref)
         step = next(x for x in run.steps if x.n == step_n)
-        work = _work(run)
-        files = await _context(s, run, step, work)
+        parts, elsewhere = _parts(run), _elsewhere(run)
+        files = await _context(s, run, step)
         prompt = [
             {"role": "system", "content": EDIT_SYSTEM},
             {"role": "user", "content": f"You are the {step.agent}.\nProject: {run.project_id}\n"
@@ -842,8 +1124,8 @@ async def _edit(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool:
                                         + ("\n\n".join(f"--- {rel}\n{text}" for rel, text in files)
                                            or "(no file matched; create what the step needs)")},
         ]
-        lane, run_id, base = run.lane, run.id, run.base
-        project_id, label, worktree = run.project_id, step.label, run.worktree
+        lane, run_id = run.lane, run.id
+        project_id, label = run.project_id, step.label
         who = step.agent or run.agent or ""
 
     try:
@@ -860,8 +1142,8 @@ async def _edit(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool:
         return False
 
     try:
-        written = await asyncio.to_thread(agent.apply_files, work,
-                                          [(f.path, f.content) for f in result.data.files])
+        written, touched = await asyncio.to_thread(_apply, parts, elsewhere,
+                                                   [(f.path, f.content) for f in result.data.files])
     except agent.Refused as refused:
         async with db.session() as s:
             run = await RunRepository(s).by_ref(ref)
@@ -873,8 +1155,9 @@ async def _edit(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool:
     committed = False
     if written:
         message = f"{label}\n\n{result.data.summary.strip()[:500]}\n\nNeuroCode {ref}"
-        committed = await asyncio.to_thread(agent.commit, work, message)
-    stat = await asyncio.to_thread(agent.stats, Path(worktree), base) if committed else None
+        for part in touched:
+            committed = await asyncio.to_thread(agent.commit, part.work, message) or committed
+    stat = await asyncio.to_thread(_stats, parts) if committed else None
 
     async with db.session() as s:
         run = await RunRepository(s).by_ref(ref)
@@ -908,6 +1191,7 @@ async def _merge_step(db: Database, ref: str, step_n: int) -> bool:
         child = await runs.get(step.child_run_id) if step.child_run_id else None
         details = (run.worktree, run.base, run.branch, child.branch if child else step.detail,
                    child.status if child else "done", child.agent if child else "")
+        mine, theirs = _parts(run), (_parts(child) if child else [])
 
     worktree, base, into, branch, child_status, child_agent = details
     if child_status not in ("done", "failed", "cancelled"):
@@ -917,8 +1201,23 @@ async def _merge_step(db: Database, ref: str, step_n: int) -> bool:
             step.status, step.detail = "skipped", f"{child_agent} is still working; nothing was merged."
         return False
 
-    ok, conflicts = await asyncio.to_thread(agent.merge_branch, Path(worktree), branch, base, into)
-    stat = await asyncio.to_thread(agent.stats, Path(worktree), base)
+    if len(mine) == 1 and not mine[0].label:
+        ok, conflicts = await asyncio.to_thread(agent.merge_branch, Path(worktree), branch, base, into)
+        stat = await asyncio.to_thread(agent.stats, Path(worktree), base)
+    else:
+        # Each source's branch of the agent's run into the same source's worktree of this one.
+        ok, conflicts = False, []
+        for part in mine:
+            other = next((x for x in theirs if x.label == part.label), None)
+            if other is None:
+                continue
+            merged, clash = await asyncio.to_thread(agent.merge_branch, part.worktree, other.branch, part.base,
+                                                    part.branch)
+            ok = ok or merged
+            conflicts += [part.lead + f for f in clash]
+        if conflicts:
+            ok = False
+        stat = await asyncio.to_thread(_stats, mine)
 
     async with db.session() as s:
         run = await RunRepository(s).by_ref(ref)
@@ -1069,14 +1368,16 @@ def _evidence(run: Run) -> str:
 async def _review(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool:
     async with db.read() as s:
         run = await RunRepository(s).by_ref(ref)
-        repo, base, branch, requirement = Path(run.repo), run.base, run.branch, run.requirement
+        base, requirement = run.base, run.requirement
         lane, project_id, run_id = run.lane, run.project_id, run.id
         reviewer = next((x.agent for x in run.steps if x.n == step_n), "") or roster.REVIEWER
         evidence, checks = _evidence(run), list((run.review or {}).get("checks") or [])
+        parts = _parts(run)
 
     # Read from the branch itself, the same way merge and push read it, so the receipt's fingerprint
-    # is of exactly the patch the reviewer was handed — and of exactly what would land.
-    whole, head = await asyncio.to_thread(agent.branch_diff, repo, base, branch)
+    # is of exactly the patch the reviewer was handed — and of exactly what would land. Across several
+    # sources it is one patch, every path under its source's label.
+    whole, head = await asyncio.to_thread(_patch, parts)
     diff = whole[:MAX_DIFF]
     receipt = {"sha256": agent.fingerprint(whole), "head": head, "base": base, "bytes": len(whole),
                "truncated": len(whole) > MAX_DIFF, "at": utcnow().isoformat()}
@@ -1127,7 +1428,10 @@ async def _check(db: Database, ref: str, step_n: int) -> bool:
         run = await RunRepository(s).by_ref(ref)
         check = _check_at(run, step_n) or {}
         name, command = check.get("name", ""), check.get("command", "")
-        work, run_id = _work(run), run.id
+        run_id = run.id
+        # A further source's check runs in that source's worktree; the rest in the run's own.
+        work = next((x.work for x in _parts(run) if check.get("label") and x.label == check["label"]), _work(run))
+        is_tests = bool(check.get("tests"))
         setting = await s.get(Setting, check_key(run.project_id, name)) if name else None
         allowed = setting.value if setting else None
         project = await ProjectRepository(s).get(run.project_id)
@@ -1182,6 +1486,15 @@ async def _check(db: Database, ref: str, step_n: int) -> bool:
         _put_check(run, step_n, status="passed" if passed else "failed", exit=code, summary=summary[:300],
                    output=tail[-CHECK_TAIL:])
         step.detail = summary[:300]
+        if is_tests:
+            # A source's tests are the run's tests: one failing fails the step and the run's tests,
+            # exactly as the first source's own would.
+            if not passed:
+                step.status = "failed"
+                run.tests_status = "failed"
+                run.tests_summary = f"{name}: {summary}"[:300]
+            elif run.tests_status == "not run":
+                run.tests_status, run.tests_summary = "passed", f"{name}: {summary}"[:300]
         await logs.write(run.id, level="ok" if passed else "err", step=step_n,
                          line=f"{name} {'passed' if passed else f'failed (exit {code})'}")
     return False
@@ -1205,7 +1518,8 @@ async def _gate_summary(s: AsyncSession, run: Run) -> tuple[str, str, str, str]:
                   else f"tests {run.tests_status}" + (f" · {run.tests_summary}" if run.tests_summary else ""))
     conflicts = list(run.conflicts)
     review = run.review or {}
-    lines = [f"branch {run.branch} from {run.base[:7]}",
+    extra = [f"{x.label}: branch {x.branch} from {x.base[:7]}" for x in _parts(run)[1:]]
+    lines = [f"branch {run.branch} from {run.base[:7]}", *extra,
              f"{run.diff_files} files · +{run.diff_insertions} −{run.diff_deletions} · "
              f"{run.diff_commits} commits",
              tests_line,
@@ -1346,11 +1660,12 @@ async def _goal(db: Database, gateway: Gateway, ref: str, step_n: int) -> str:
         tests = "passed" if run.tests_status == "passed" or calm else run.tests_status
         checks = [{"name": c["name"], "status": c.get("status", "not run"), "summary": c.get("summary", "")}
                   for c in (run.review or {}).get("checks") or []]
-        repo, base, branch, requirement = Path(run.repo), run.base, run.branch, run.requirement
+        requirement = run.requirement
         attempt, budget, run_id, project_id = run.attempt, run.goal_budget or 1, run.id, run.project_id
         evidence = _evidence(run)
+        parts = _parts(run)
 
-    patch, _ = await asyncio.to_thread(agent.branch_diff, repo, base, branch)
+    patch, _ = await asyncio.to_thread(_patch, parts)
     paths = set(re.findall(r"^\+\+\+ b/(.+)$", patch, re.M)) | set(re.findall(r"^--- a/(.+)$", patch, re.M))
     problems: list[str] = []
     if tests == "failed":
@@ -1480,15 +1795,18 @@ async def execute(db: Database, gateway: Gateway, ref: str, resume_from: int | N
             return
         if resume_from is None:
             stopped(ref).clear()
+            parts = _parts(run)
             try:
-                await asyncio.to_thread(agent.open_worktree, Path(run.repo), run.branch, run.base,
-                                        Path(run.worktree))
+                for part in parts:
+                    await asyncio.to_thread(agent.open_worktree, part.repo, part.branch, part.base, part.worktree)
             except Exception as e:
                 run.status, run.finished_at, run.note = "failed", utcnow(), str(e)[:200]
                 await RunLogRepository(s).write(run.id, level="err", line=str(e)[:300])
                 return
-            await RunLogRepository(s).write(run.id, level="ok",
-                                            line=f"worktree ready · {run.branch} from {run.base[:7]}")
+            for part in parts:
+                where = f"{part.label} · " if part.label else ""
+                await RunLogRepository(s).write(run.id, level="ok",
+                                                line=f"worktree ready · {where}{part.branch} from {part.base[:7]}")
             await ActivityRepository(s).record(
                 actor=roster.ORCHESTRATOR, actor_kind="agent", action="Run started",
                 detail=f"{ref} · {len(run.steps)} steps on {run.branch}", project_id=run.project_id)
@@ -1640,8 +1958,9 @@ async def resume(db: Database, gateway: Gateway, ref: str, step_n: int, approved
         step.status, step.detail = "failed", "You refused the changes."
         await RunLogRepository(s).write(run.id, level="warn", step=step_n,
                                         line="refused — removing the branch and its worktree")
-        repo, tree, branch_name = Path(run.repo), Path(run.worktree), run.branch
-    await asyncio.to_thread(agent.cleanup, repo, tree, branch_name)
+        parts = _parts(run)
+    for part in parts:
+        await asyncio.to_thread(agent.cleanup, part.repo, part.worktree, part.branch)
     async with db.session() as s:
         run = await RunRepository(s).by_ref(ref)
         run.removed = True

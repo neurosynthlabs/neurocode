@@ -90,12 +90,16 @@ async def _runs(open_session: AsyncSession, runs: list[Any]) -> list[dict[str, A
 
 
 async def _projects(open_session: AsyncSession, projects: list[Any]) -> list[dict[str, Any]]:
-    # What `GET /projects` adds: the open-work counts and the code index.
+    # What `GET /projects` adds: the open-work counts, the code index and the project's sources.
     from ..repositories import CodeIndexRepository, ProjectRepository
+    from ..repositories.sources import ProjectSourceRepository
     from ..schemas.work import project_json
+    ids = [p.id for p in projects]
     counts = await ProjectRepository(open_session).task_counts()
-    indexes = await CodeIndexRepository(open_session).for_projects([p.id for p in projects])
-    return [project_json(p, tasks=counts.get(p.id), index=indexes.get(p.id)) for p in projects]
+    indexes = await CodeIndexRepository(open_session).for_projects(ids)
+    sources = await ProjectSourceRepository(open_session).for_projects(ids)
+    return [project_json(p, tasks=counts.get(p.id), index=indexes.get(p.id), sources=sources.get(p.id, []))
+            for p in projects]
 
 
 async def _decisions(open_session: AsyncSession, decisions: list[Any]) -> list[dict[str, Any]]:

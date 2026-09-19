@@ -77,14 +77,33 @@ def chat_message_json(message: ChatMessage) -> dict[str, Any]:
                        ("detail", message.detail)):
         if value:
             out[key] = value
-    if message.tool:
+    if message.tool == "permission":
+        # A permission card: what waits, what the rules said, what "for this session" would cover, and —
+        # once a person answered — who, and how. `arguments` stays the call the model asked for.
+        asked = message.arguments or {}
+        out["arguments"] = asked.get("input") or {}
+        out["permission"] = {k: asked.get(k) for k in ("tool", "subject", "why", "ruleId", "covers", "state",
+                                                        "scope", "decidedBy", "decidedAt")}
+        out["ok"] = message.ok
+    elif message.tool:
         out["arguments"] = message.arguments or {}
         out["ok"] = message.ok
+    if message.attachments:
+        out["attachments"] = message.attachments
+    # An edited or regenerated question says which turn it replaced, and a replaced turn which replaced it:
+    # the screen builds the "1/2 · 2/2" switch from these two.
+    if message.superseded_by:
+        out["supersededBy"] = message.superseded_by
+    if message.role == "you":
+        asked = message.arguments or {}
+        for key in ("edited", "regenerated", "lane"):
+            if asked.get(key):
+                out[key] = asked[key]
     # What the model reasoned before this turn, when the lane returned it, and for how long — shown
     # folded. A summary says which turns it folded; a folded turn says so, and is still here to read.
     if message.reasoning:
         out["reasoning"] = message.reasoning
-    thought = (message.arguments or {}).get("thought") if not message.tool else None
+    thought = (message.arguments or {}).get("thought") if message.role == "assistant" else None
     if thought:
         out["thought"] = {"ms": thought.get("ms"), "tokens": thought.get("tokens")}
     if message.role == "summary":
@@ -96,10 +115,13 @@ def chat_message_json(message: ChatMessage) -> dict[str, Any]:
 
 
 def chat_json(chat: Chat, *, project_name: str = "",
-              instructions: Sequence[dict[str, Any]] | None = None) -> dict[str, Any]:
+              instructions: Sequence[dict[str, Any]] | None = None,
+              waiting: ChatMessage | None = None) -> dict[str, Any]:
     """`instructions` is the project's instruction files the session's model is handed, `[{path, bytes}]`
     (`Resolved.brief()`), read by the caller. Left out when the caller did not read them, so a list that
-    was never looked at is never mistaken for a project that has none."""
+    was never looked at is never mistaken for a project that has none. `waiting` is the permission card
+    the session waits on, when the caller looked and it waits on one."""
+    asked = (waiting.arguments or {}) if waiting is not None else {}
     return {
         "id": chat.id, "ref": chat.ref, "projectId": chat.project_id, "projectName": project_name,
         "title": chat.title, "status": chat.status, "startedAt": when(chat.created_at),
@@ -109,6 +131,13 @@ def chat_json(chat: Chat, *, project_name: str = "",
         # of the model that answered it (null when its provider publishes none that this catalogue cites).
         "contextTokens": chat.context_tokens, "contextWindow": lanes.window_for(chat.lane, chat.model),
         "autoCompactAt": AUTO_COMPACT_AT,
+        # Forked from another session: the parent's id and the turn it was forked at.
+        "parentId": chat.parent_id, "forkedAt": chat.forked_at,
+        # What "Allow for this session" has allowed here, and who allowed it.
+        "grants": [{"tool": g.get("tool"), "subject": g.get("subject"), "covers": g.get("covers"),
+                    "by": g.get("by"), "at": g.get("at")} for g in (chat.grants or []) if isinstance(g, dict)],
+        "waitingOn": ({"messageId": waiting.id, "tool": asked.get("tool"), "subject": asked.get("subject")}
+                      if waiting is not None else None),
         **({"instructions": [{"path": f["path"], "bytes": f["bytes"]} for f in instructions]}
            if instructions is not None else {}),
     }

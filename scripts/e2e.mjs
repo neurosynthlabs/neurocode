@@ -135,7 +135,10 @@ try {
     const dlg = page.locator('[data-slot="dialog-content"]');
     await dlg.getByRole('button', { name: 'Local path', exact: true }).click();
     await dlg.locator('input').first().fill(repo);
-    for (let n = 0; n < 3; n++) await dlg.getByRole('button', { name: /^Next/ }).click();
+    // Through however many steps the wizard has, to the one that starts it.
+    for (let n = 0; n < 8 && !(await dlg.getByRole('button', { name: /Start onboarding/ }).count()); n++) {
+      await dlg.getByRole('button', { name: /^Next/ }).click();
+    }
     await dlg.getByRole('button', { name: /Start onboarding/ }).click();
     project = await until(async () => (await call('/projects')).find((x) => x.status === 'active'), 'onboarding');
     expect(project.stack.includes('Python') && project.files >= 3, `measured ${project.files} files, stack ${project.stack}`);
@@ -247,6 +250,59 @@ try {
     await until(async () => !fs.existsSync(run.worktree), 'the worktree going away', 5000);
   });
 
+  await step('the Workbench opens a file of the project, and a save lands only on what was opened', async () => {
+    await open(`/workbench?project=${project.id}&path=pkg/core.py`);
+    await page.locator('.cm-content', { hasText: 'def total' }).first().waitFor({ timeout: 15000 });
+    const file = path.join(repo, 'pkg', 'core.py');
+    const opened = await call(`/machine/file?path=${encodeURIComponent(file)}`);
+    const text = `${opened.text}\n\ndef grand_total(rows):\n    return total(rows)\n`;
+    const saved = await call('/machine/file', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: file, text, expectSha1: opened.sha1 }) });
+    expect(saved.sha1 !== opened.sha1 && fs.readFileSync(file, 'utf8').includes('grand_total'), 'the save did not reach the disk');
+    const stale = await fetch(`${API}/machine/file`, { method: 'PUT',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: file, text: 'overwritten', expectSha1: opened.sha1 }) });
+    expect(stale.status === 409 && fs.readFileSync(file, 'utf8').includes('grand_total'), `a stale save got ${stale.status}`);
+  });
+
+  await step('a terminal in the Workbench runs a command on this machine', async () => {
+    await page.getByRole('tab', { name: 'Terminal', exact: true }).click();
+    await page.getByRole('button', { name: 'New terminal' }).first().click();
+    await page.locator('.xterm').first().waitFor({ timeout: 10000 });
+    await page.locator('.xterm').first().click();
+    await sleep(600);
+    await page.keyboard.type('echo neurocode-$((20+22))');
+    await page.keyboard.press('Enter');
+    await page.locator('.xterm-rows', { hasText: 'neurocode-42' }).first().waitFor({ timeout: 10000 });
+    const [open] = (await call('/machine/terminals')).filter((t) => t.status !== 'exited');
+    expect(open, 'no terminal is listed as open');
+    await call(`/machine/terminals/${open.id}`, { method: 'DELETE' });
+  });
+
+  await step('a run configuration runs its command to the end', async () => {
+    const made = await post(`/projects/${project.id}/run-configs`,
+      { name: 'Say it works', kind: 'run', language: 'shell', command: 'echo run-ok', args: [], cwd: '', env: {} });
+    const started = await post(`/run-configs/${made.id}/start`);
+    const done = await until(async () => { const t = await call(`/machine/terminals/${started.id}`); return t.status === 'exited' && t; },
+      'the run finishing', 15000);
+    expect(done.exitCode === 0, `the run exited with ${done.exitCode}`);
+  });
+
+  await step('a project holds a second source, indexed under its label, and search spans both', async () => {
+    const api = path.join(stack.tmp, 'ledger-api');
+    fs.mkdirSync(api, { recursive: true });
+    fs.writeFileSync(path.join(api, 'billing.py'), 'def charge_customer(amount):\n    return round(amount, 2)\n');
+    spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: api });
+    await post(`/projects/${project.id}/sources`, { label: 'api', kind: 'local', repo: api, branch: '' });
+    await until(async () => (await call(`/projects/${project.id}/sources`)).find((x) => x.label === 'api' && x.status === 'active'),
+      'the second source onboarding', 30000);
+    const found = await until(async () => {
+      const hits = JSON.stringify(await call(`/projects/${project.id}/code/search?q=charge_customer`));
+      return hits.includes('api/billing.py') && hits;
+    }, 'the second source reaching the index', 20000);
+    expect(found, 'search did not reach the second source');
+  });
+
   await step('pasted notes become memory facts', async () => {
     await open('/memory');
     await page.getByRole('button', { name: /Add from text/ }).first().click();
@@ -305,7 +361,11 @@ try {
     await page.getByText('The stub model answers without reading anything.').waitFor({ timeout: 20000 });
     const doc = await call(`/sessions/${session.ref}`);
     const turns = doc.messages.filter((m) => m.tool !== 'grounding');
-    expect(turns[0]?.text.startsWith('where are invoice totals') && turns.some((m) => m.role !== 'you'), `turns: ${doc.messages.map((m) => m.role)}`);
+    expect(turns[0]?.text.startsWith('where are invoice totals') && turns.some((m) => m.role !== 'you'), `turns: ${doc.messages.map((m) => m.role)}`);    const forked = await post(`/sessions/${session.ref}/fork`, { at: turns[turns.length - 1].id });
+    const copy = await call(`/sessions/${forked.ref}`);
+    expect(copy.messages.some((m) => m.text?.startsWith('where are invoice totals')), 'the fork lost the question');
+    const md = await call(`/sessions/${session.ref}/export?format=md`);
+    expect(md.text.includes('where are invoice totals') && md.filename.endsWith('.md'), 'the export is missing the conversation');
   });
 
   await step('registering an MCP server persists it, untrusted', async () => {
