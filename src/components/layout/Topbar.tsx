@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
-  Bell, Check, ChevronDown, Code2, FolderGit2, FolderOpen, Layers, Menu, Palette, Plus, Search, ShieldAlert,
+  Bell, BookOpen, Check, ChevronDown, Code2, FolderGit2, FolderOpen, Layers, Menu, Palette, Plus, Search, ShieldAlert,
 } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { BlockBar, Dot } from '@/components/os';
@@ -12,7 +12,7 @@ import { useAuth } from '@/lib/auth';
 import { useTheme } from '@/lib/theme';
 import { useProject } from '@/lib/project-context';
 import { useData } from '@/lib/data';
-import { SOURCE_DOT, sourcesOf } from '@/lib/live/sources';
+import { SOURCE_DOT, readOnly, referencesOf, sourcesOf } from '@/lib/live/sources';
 import type { Project } from '@/types';
 import { ThemeCustomizer } from './ThemeCustomizer';
 import { MODES } from './theme-modes';
@@ -135,6 +135,7 @@ export function Topbar({
               )}
               {found.map((p) => {
                 const sources = sourcesOf(p);
+                const reads = referencesOf(p).map((id) => projects.find((x) => x.id === id)).filter((x): x is Project => !!x);
                 return (
                   <div key={p.id} className={cn('group flex items-start gap-1 transition-colors hover:bg-surface-2', p.id === projectId && 'bg-surface-2')}
                     style={{ borderRadius: 'var(--radius)' }}>
@@ -151,8 +152,15 @@ export function Topbar({
                             {sources.map((x) => (
                               <span key={x.label} className="inline-flex items-center gap-1 rounded-full border border-line bg-surface px-1.5 py-px font-mono text-[11px] text-ink-2">
                                 <Dot state={SOURCE_DOT[x.status]} className="size-1.5" />{x.id === null ? 'first source' : `${x.label}/`}
+                                {readOnly(x) && <span className="text-dim">· read only</span>}
                               </span>
                             ))}
+                          </span>
+                        )}
+                        {reads.length > 0 && (
+                          <span className="mt-1.5 flex min-w-0 items-center gap-1 text-[12px] text-dim" title="Read only: searched beside this project's own code">
+                            <BookOpen className="size-3 shrink-0" />
+                            <span className="truncate">Reads {reads.map((x) => x.name).join(', ')}</span>
                           </span>
                         )}
                         <span className="mt-1.5 flex items-center gap-2">

@@ -1,0 +1,331 @@
+{
+ "id": "django-monolith",
+ "name": "Django monolith",
+ "summary": "One Django project with server-rendered pages (htmx for interaction), the admin for back-office work, Postgres, and Celery for background jobs. The fastest route to a data-heavy product for a Python team.",
+ "fitsWhen": [
+  {
+   "answer": "team",
+   "is": [
+    "python"
+   ],
+   "says": "the team writes Python"
+  },
+  {
+   "answer": "productType",
+   "is": [
+    "internal-tool",
+    "web-app",
+    "marketplace",
+    "saas"
+   ],
+   "says": "a web product with forms and back-office work"
+  },
+  {
+   "answer": "data",
+   "is": [
+    "relational"
+   ],
+   "says": "the data is relational"
+  },
+  {
+   "answer": "teamSize",
+   "is": [
+    "solo",
+    "small"
+   ],
+   "says": "a small team"
+  },
+  {
+   "answer": "budget",
+   "is": [
+    "minimal",
+    "moderate"
+   ],
+   "says": "the budget is tight"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "needs",
+   "is": [
+    "offline",
+    "mobile"
+   ],
+   "says": "it needs a rich offline or mobile client"
+  },
+  {
+   "answer": "productType",
+   "is": [
+    "realtime"
+   ],
+   "says": "the product is mostly realtime"
+  }
+ ],
+ "layers": {
+  "frontend": {
+   "choice": "htmx",
+   "alternatives": [
+    "react"
+   ],
+   "why": "Server-rendered templates with htmx keep one codebase; add React for the one screen that needs it."
+  },
+  "backend": {
+   "choice": "django",
+   "alternatives": [
+    "rails",
+    "laravel",
+    "fastapi"
+   ],
+   "why": "ORM, migrations, admin, auth and forms included; the admin covers back-office screens on day one."
+  },
+  "database": {
+   "choice": "postgres",
+   "alternatives": [
+    "mysql"
+   ],
+   "why": "Django's best-supported database."
+  },
+  "cache": {
+   "choice": "redis",
+   "alternatives": [
+    "valkey"
+   ],
+   "why": "Cache and Celery broker."
+  },
+  "queue": {
+   "choice": "celery",
+   "alternatives": [],
+   "why": "Emails, imports and scheduled jobs (celery beat)."
+  },
+  "auth": {
+   "choice": "django-allauth",
+   "alternatives": [
+    "keycloak"
+   ],
+   "why": "Built on Django's own auth; social logins and email verification."
+  },
+  "infra": {
+   "choice": "docker-compose",
+   "alternatives": [],
+   "why": "Web, worker, beat, Postgres and Redis on one host."
+  },
+  "ci-cd": {
+   "choice": "github-actions",
+   "alternatives": [],
+   "why": "Tests and migrations check on every pull request."
+  },
+  "observability": {
+   "choice": "sentry",
+   "alternatives": [
+    "opentelemetry"
+   ],
+   "why": "Django integration with request context."
+  },
+  "testing": {
+   "choice": "pytest",
+   "alternatives": [
+    "playwright"
+   ],
+   "why": "pytest-django against a real Postgres."
+  },
+  "hosting": {
+   "choice": "render",
+   "alternatives": [
+    "heroku",
+    "fly-io",
+    "vm"
+   ],
+   "why": "Web + worker + Postgres without a cluster."
+  }
+ },
+ "services": [
+  {
+   "name": "web",
+   "kind": "web",
+   "tech": "django",
+   "responsibilities": [
+    "Pages, forms and the admin",
+    "Domain logic in the apps' services"
+   ],
+   "talksTo": [
+    "db",
+    "cache"
+   ]
+  },
+  {
+   "name": "worker",
+   "kind": "worker",
+   "tech": "celery",
+   "responsibilities": [
+    "Background and scheduled jobs"
+   ],
+   "talksTo": [
+    "db",
+    "cache"
+   ]
+  }
+ ],
+ "dataStores": [
+  {
+   "name": "db",
+   "tech": "postgres",
+   "purpose": "System of record, Django migrations"
+  },
+  {
+   "name": "cache",
+   "tech": "redis",
+   "purpose": "Cache and broker"
+  }
+ ],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "Each developer's machine",
+   "hosting": "docker compose: web (runserver), worker, beat, Postgres, Redis"
+  },
+  {
+   "name": "staging",
+   "purpose": "A copy of production for checking a release",
+   "hosting": "Render services from main"
+  },
+  {
+   "name": "prod",
+   "purpose": "What people use",
+   "hosting": "Render services with managed Postgres, daily backups"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "lint",
+    "does": "ruff"
+   },
+   {
+    "name": "migrations",
+    "does": "manage.py makemigrations --check"
+   },
+   {
+    "name": "test",
+    "does": "pytest-django with Postgres"
+   },
+   {
+    "name": "deploy",
+    "does": "main to staging, tags to prod; migrate as a release step"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "compose",
+  "tools": [
+   "docker",
+   "docker-compose"
+  ],
+  "notes": [
+   "gunicorn behind the platform's proxy",
+   "Static files served by WhiteNoise or a CDN"
+  ]
+ },
+ "observability": {
+  "tools": [
+   "sentry"
+  ],
+  "notes": [
+   "Structured logs",
+   "Celery task failures reported"
+  ]
+ },
+ "security": {
+  "auth": "Django sessions with CSRF protection on every form",
+  "secrets": "Environment variables; SECRET_KEY never committed",
+  "notes": [
+   "Validate every input at the API boundary and return typed errors, never stack traces.",
+   "Parameterised queries only (the ORM), so no SQL is built from strings.",
+   "Set secure, HttpOnly, SameSite cookies or short-lived tokens; rate-limit sign-in.",
+   "Check authorisation on every endpoint on the server, not only in the UI (OWASP A01 Broken Access Control).",
+   "Run manage.py check --deploy in CI."
+  ]
+ },
+ "folderLayout": "config/\n  settings/\n    base.py\n    dev.py\n    prod.py\n  urls.py\n  celery.py\napps/\n  accounts/\n  core/\ntemplates/\nstatic/\nmanage.py\npyproject.toml",
+ "conventions": [
+  "One Django app per domain area",
+  "Business rules in services.py, not in views or models' save()",
+  "Templates render partials that htmx swaps"
+ ],
+ "adrs": [
+  {
+   "title": "A monolith first",
+   "decision": "One Django project holds every feature.",
+   "why": "A small team moves fastest with one deploy and one database; boundaries are kept as Django apps.",
+   "alternatives": [
+    "microservices"
+   ]
+  },
+  {
+   "title": "Server-rendered UI",
+   "decision": "Templates with htmx instead of a SPA.",
+   "why": "No separate front-end build or API contract to keep in step.",
+   "alternatives": [
+    "react spa"
+   ]
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "app",
+    "layout": "A Django project with config/ and apps/",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "What it is, how to run it with docker compose, and the management commands."
+     },
+     {
+      "path": "pyproject.toml",
+      "template": "Django 5, psycopg, celery, redis, django-allauth, gunicorn, whitenoise; dev: pytest-django, ruff."
+     },
+     {
+      "path": "manage.py",
+      "template": "Django's manage script using config.settings.dev."
+     },
+     {
+      "path": "config/settings/base.py",
+      "template": "Settings read from the environment: DATABASE_URL, REDIS_URL, SECRET_KEY, allowed hosts; installed apps include allauth and apps.core."
+     },
+     {
+      "path": "config/settings/dev.py",
+      "template": "DEBUG on, console email."
+     },
+     {
+      "path": "config/settings/prod.py",
+      "template": "DEBUG off, secure cookies, HSTS."
+     },
+     {
+      "path": "config/urls.py",
+      "template": "Admin, allauth and core URLs."
+     },
+     {
+      "path": "config/celery.py",
+      "template": "Celery app reading Django settings."
+     },
+     {
+      "path": "apps/core/views.py",
+      "template": "A home view and a health view that checks the database."
+     },
+     {
+      "path": "templates/base.html",
+      "template": "Base template loading htmx."
+     },
+     {
+      "path": "docker-compose.yml",
+      "template": "web, worker, beat, Postgres 16, Redis 7."
+     },
+     {
+      "path": ".github/workflows/ci.yml",
+      "template": "ruff, makemigrations --check and pytest against Postgres."
+     }
+    ]
+   }
+  ]
+ }
+}

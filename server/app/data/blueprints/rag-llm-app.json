@@ -1,0 +1,336 @@
+{
+ "id": "rag-llm-app",
+ "name": "RAG and LLM app with evals and guardrails",
+ "summary": "An assistant that answers from your own documents: ingestion and chunking, embeddings in pgvector (Qdrant is the swap), an agent graph that retrieves and cites, evaluations that run in CI, and guardrails on input and output.",
+ "fitsWhen": [
+  {
+   "answer": "productType",
+   "is": [
+    "llm-app"
+   ],
+   "says": "an app built on a language model"
+  },
+  {
+   "answer": "data",
+   "is": [
+    "vectors",
+    "documents",
+    "files"
+   ],
+   "says": "the knowledge lives in documents"
+  },
+  {
+   "answer": "needs",
+   "is": [
+    "ai",
+    "search"
+   ],
+   "says": "it needs AI answers or semantic search"
+  },
+  {
+   "answer": "team",
+   "is": [
+    "python",
+    "typescript"
+   ],
+   "says": "the team writes Python or TypeScript"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "compliance",
+   "is": [
+    "hipaa"
+   ],
+   "says": "data may not leave your servers unless a local model is used"
+  },
+  {
+   "answer": "budget",
+   "is": [
+    "minimal"
+   ],
+   "says": "per-token model costs are a problem"
+  }
+ ],
+ "layers": {
+  "frontend": {
+   "choice": "nextjs",
+   "alternatives": [
+    "react"
+   ],
+   "why": "Streams answers token by token and shows citations."
+  },
+  "backend": {
+   "choice": "fastapi",
+   "alternatives": [
+    "nestjs"
+   ],
+   "why": "Python has the widest choice of retrieval, evaluation and model libraries."
+  },
+  "ai-ml": {
+   "choice": "langgraph",
+   "alternatives": [
+    "llamaindex",
+    "langchain"
+   ],
+   "why": "Retrieval, tool calls and human review as an explicit graph with checkpoints."
+  },
+  "database": {
+   "choice": "pgvector",
+   "alternatives": [
+    "qdrant",
+    "opensearch"
+   ],
+   "why": "Vectors next to the rows they describe, with SQL filters for permissions."
+  },
+  "queue": {
+   "choice": "celery",
+   "alternatives": [
+    "temporal"
+   ],
+   "why": "Ingestion and re-embedding run in the background."
+  },
+  "auth": {
+   "choice": "authjs",
+   "alternatives": [
+    "clerk",
+    "keycloak"
+   ],
+   "why": "Answers only draw on documents the person may read."
+  },
+  "observability": {
+   "choice": "opentelemetry",
+   "alternatives": [
+    "sentry",
+    "promptfoo"
+   ],
+   "why": "Every model call traced with tokens, latency and cost."
+  },
+  "testing": {
+   "choice": "ragas",
+   "alternatives": [
+    "promptfoo",
+    "pytest"
+   ],
+   "why": "Faithfulness and relevance scored on a fixed question set in CI."
+  },
+  "infra": {
+   "choice": "docker-compose",
+   "alternatives": [
+    "kubernetes"
+   ],
+   "why": "API, worker, Postgres and (optionally) a local model server."
+  },
+  "ci-cd": {
+   "choice": "github-actions",
+   "alternatives": [],
+   "why": "Unit tests, evals on a fixed set, images."
+  },
+  "hosting": {
+   "choice": "fly-io",
+   "alternatives": [
+    "aws",
+    "vm"
+   ],
+   "why": "Containers; models through a provider API or vLLM/Ollama on your own GPU."
+  }
+ },
+ "services": [
+  {
+   "name": "web",
+   "kind": "web",
+   "tech": "nextjs",
+   "responsibilities": [
+    "Chat UI with streaming and citations"
+   ],
+   "talksTo": [
+    "api"
+   ]
+  },
+  {
+   "name": "api",
+   "kind": "api",
+   "tech": "fastapi",
+   "responsibilities": [
+    "Retrieval with permission filters",
+    "Runs the agent graph",
+    "Streams answers"
+   ],
+   "talksTo": [
+    "db",
+    "llm"
+   ]
+  },
+  {
+   "name": "ingest",
+   "kind": "worker",
+   "tech": "celery",
+   "responsibilities": [
+    "Parses, chunks and embeds documents",
+    "Re-embeds when the model changes"
+   ],
+   "talksTo": [
+    "db",
+    "llm",
+    "files"
+   ]
+  },
+  {
+   "name": "llm",
+   "kind": "service",
+   "tech": "litellm",
+   "responsibilities": [
+    "One interface to hosted and local models",
+    "Budgets and fallbacks"
+   ],
+   "talksTo": []
+  }
+ ],
+ "dataStores": [
+  {
+   "name": "db",
+   "tech": "pgvector",
+   "purpose": "Documents, chunks, embeddings and permissions in Postgres"
+  },
+  {
+   "name": "files",
+   "tech": "s3",
+   "purpose": "Original uploaded documents"
+  }
+ ],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "Each developer's machine",
+   "hosting": "docker compose with Ollama for a free local model"
+  },
+  {
+   "name": "staging",
+   "purpose": "A copy of production for checking a release",
+   "hosting": "The hosted model with a small budget"
+  },
+  {
+   "name": "prod",
+   "purpose": "What people use",
+   "hosting": "Hosted model with budgets, fallbacks and evals gating releases"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "test",
+    "does": "pytest"
+   },
+   {
+    "name": "evals",
+    "does": "ragas/promptfoo on the fixed question set; fail below the threshold"
+   },
+   {
+    "name": "image",
+    "does": "Build images"
+   },
+   {
+    "name": "deploy",
+    "does": "Staging on main, prod on tags"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "compose",
+  "tools": [
+   "docker",
+   "docker-compose"
+  ],
+  "notes": [
+   "Embedding model and dimension recorded with every chunk"
+  ]
+ },
+ "observability": {
+  "tools": [
+   "opentelemetry",
+   "sentry"
+  ],
+  "notes": [
+   "Tokens and cost per request",
+   "Thumbs up/down stored with the trace"
+  ]
+ },
+ "security": {
+  "auth": "Retrieval filters by the person's permissions before the model sees a chunk",
+  "secrets": "Provider keys only on the server",
+  "notes": [
+   "Treat retrieved text as data, not instructions (prompt injection, OWASP LLM01)",
+   "Guardrails on output: no secrets, no personal data from other users",
+   "Log prompts with care: they contain user data"
+  ]
+ },
+ "folderLayout": "web/\napi/\n  app/\n    graph/\n    retrieval/\n    ingest/\n  evals/\n    questions.jsonl\ndocker-compose.yml",
+ "conventions": [
+  "Every answer carries the chunk ids it used",
+  "Prompts live in files and are versioned",
+  "A change to prompts or retrieval must not lower eval scores"
+ ],
+ "adrs": [
+  {
+   "title": "Vectors in Postgres",
+   "decision": "Embeddings live in pgvector beside the documents.",
+   "why": "Permission filters and joins in SQL; one database to back up.",
+   "alternatives": [
+    "qdrant"
+   ]
+  },
+  {
+   "title": "Evals gate releases",
+   "decision": "A fixed question set is scored in CI.",
+   "why": "Model and prompt changes regress silently otherwise.",
+   "alternatives": []
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "app",
+    "layout": "Web, API, ingestion and evals in one repository",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "How documents become answers, how to run it with a local model, and how evals run."
+     },
+     {
+      "path": "docker-compose.yml",
+      "template": "Postgres with pgvector, Redis, Ollama, the API and the worker."
+     },
+     {
+      "path": "api/pyproject.toml",
+      "template": "fastapi, sqlalchemy, pgvector, langgraph, litellm, celery; dev: pytest, ragas."
+     },
+     {
+      "path": "api/app/main.py",
+      "template": "FastAPI with /health and a streaming /ask route."
+     },
+     {
+      "path": "api/app/retrieval/search.py",
+      "template": "Vector search over chunks filtered by the caller's permissions."
+     },
+     {
+      "path": "api/app/ingest/chunk.py",
+      "template": "Splits documents at headings into overlapping chunks."
+     },
+     {
+      "path": "api/evals/questions.jsonl",
+      "template": "Five example questions with the expected source document ids."
+     },
+     {
+      "path": "web/package.json",
+      "template": "Next.js chat UI."
+     },
+     {
+      "path": ".github/workflows/ci.yml",
+      "template": "pytest and the eval run."
+     }
+    ]
+   }
+  ]
+ }
+}

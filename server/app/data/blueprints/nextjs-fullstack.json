@@ -1,0 +1,298 @@
+{
+ "id": "nextjs-fullstack",
+ "name": "Full-stack Next.js",
+ "summary": "One Next.js app renders pages on the server and holds the API routes and server actions, with Postgres through Drizzle and Auth.js for sign-in. Few moving parts, good for SEO, fast to ship.",
+ "fitsWhen": [
+  {
+   "answer": "team",
+   "is": [
+    "typescript"
+   ],
+   "says": "the team writes TypeScript"
+  },
+  {
+   "answer": "needs",
+   "is": [
+    "seo"
+   ],
+   "says": "pages must rank in search engines"
+  },
+  {
+   "answer": "timeline",
+   "is": [
+    "weeks"
+   ],
+   "says": "it must ship in weeks"
+  },
+  {
+   "answer": "hosting",
+   "is": [
+    "paas",
+    "serverless"
+   ],
+   "says": "a managed platform is fine"
+  },
+  {
+   "answer": "teamSize",
+   "is": [
+    "solo",
+    "small"
+   ],
+   "says": "a small team"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "productType",
+   "is": [
+    "event-driven",
+    "data-platform"
+   ],
+   "says": "the heart of it is services or data pipelines"
+  },
+  {
+   "answer": "needs",
+   "is": [
+    "offline"
+   ],
+   "says": "it must work offline"
+  }
+ ],
+ "layers": {
+  "frontend": {
+   "choice": "nextjs",
+   "alternatives": [
+    "nuxt",
+    "sveltekit",
+    "remix"
+   ],
+   "why": "Server rendering, streaming and route handlers in one framework; Nuxt or SvelteKit are the same shape for Vue or Svelte teams."
+  },
+  "backend": {
+   "choice": "nextjs",
+   "alternatives": [
+    "hono",
+    "trpc"
+   ],
+   "why": "Route handlers and server actions keep the API next to the pages that use it."
+  },
+  "database": {
+   "choice": "postgres",
+   "alternatives": [
+    "sqlite"
+   ],
+   "why": "Relational data; a serverless Postgres (Neon) pairs with serverless functions."
+  },
+  "auth": {
+   "choice": "authjs",
+   "alternatives": [
+    "better-auth",
+    "clerk"
+   ],
+   "why": "OAuth and email sign-in with sessions in the database, no extra service."
+  },
+  "cache": {
+   "choice": "redis",
+   "alternatives": [],
+   "why": "Only when rate limits or a job queue are needed."
+  },
+  "ci-cd": {
+   "choice": "github-actions",
+   "alternatives": [],
+   "why": "Checks on every pull request; the platform builds previews."
+  },
+  "observability": {
+   "choice": "sentry",
+   "alternatives": [
+    "opentelemetry"
+   ],
+   "why": "Errors from both the browser and the server functions."
+  },
+  "testing": {
+   "choice": "playwright",
+   "alternatives": [
+    "vitest"
+   ],
+   "why": "End-to-end tests matter most when the server renders the pages."
+  },
+  "hosting": {
+   "choice": "vercel",
+   "alternatives": [
+    "netlify",
+    "fly-io",
+    "vm"
+   ],
+   "why": "Preview deployments per branch; a Node server on Fly or a VM also runs Next.js."
+  }
+ },
+ "services": [
+  {
+   "name": "app",
+   "kind": "web",
+   "tech": "nextjs",
+   "responsibilities": [
+    "Pages rendered on the server",
+    "Route handlers and server actions for writes",
+    "Drizzle for data access"
+   ],
+   "talksTo": [
+    "db"
+   ]
+  }
+ ],
+ "dataStores": [
+  {
+   "name": "db",
+   "tech": "neon",
+   "purpose": "Serverless Postgres; migrations through drizzle-kit"
+  }
+ ],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "Each developer's machine",
+   "hosting": "next dev against a local Postgres in Docker"
+  },
+  {
+   "name": "staging",
+   "purpose": "A copy of production for checking a release",
+   "hosting": "Vercel preview deployments with a Neon branch per pull request"
+  },
+  {
+   "name": "prod",
+   "purpose": "What people use",
+   "hosting": "Vercel production with the main Neon branch"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "lint",
+    "does": "next lint / eslint"
+   },
+   {
+    "name": "typecheck",
+    "does": "tsc --noEmit"
+   },
+   {
+    "name": "test",
+    "does": "vitest"
+   },
+   {
+    "name": "e2e",
+    "does": "Playwright against the preview URL"
+   },
+   {
+    "name": "migrate",
+    "does": "drizzle-kit migrate before promotion"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "serverless",
+  "tools": [],
+  "notes": [
+   "No servers to patch; long jobs need a queue elsewhere because functions time out"
+  ]
+ },
+ "observability": {
+  "tools": [
+   "sentry"
+  ],
+  "notes": [
+   "Vercel logs for requests",
+   "Web vitals from the browser"
+  ]
+ },
+ "security": {
+  "auth": "Auth.js database sessions; check the session in every server action and route handler",
+  "secrets": "Vercel environment variables per environment",
+  "notes": [
+   "Validate every input at the API boundary and return typed errors, never stack traces.",
+   "Parameterised queries only (the ORM), so no SQL is built from strings.",
+   "Set secure, HttpOnly, SameSite cookies or short-lived tokens; rate-limit sign-in.",
+   "Check authorisation on every endpoint on the server, not only in the UI (OWASP A01 Broken Access Control).",
+   "Server actions are public endpoints: validate their input with zod."
+  ]
+ },
+ "folderLayout": "app/\n  (marketing)/\n  (app)/dashboard/\n  api/\nlib/\n  db/schema.ts\n  auth.ts\ndrizzle/\npublic/\npackage.json",
+ "conventions": [
+  "Server components by default; 'use client' only where interaction needs it",
+  "Every write goes through a server action or route handler that checks the session",
+  "Schema in lib/db/schema.ts, migrations generated and committed"
+ ],
+ "adrs": [
+  {
+   "title": "One app instead of front end plus API",
+   "decision": "Pages, API and server actions live in one Next.js app.",
+   "why": "Fewer deploys and no CORS; the API has no second client yet.",
+   "alternatives": [
+    "spa + separate api"
+   ]
+  },
+  {
+   "title": "Serverless Postgres",
+   "decision": "Neon Postgres with branching.",
+   "why": "Scales to zero and gives each preview its own database branch.",
+   "alternatives": [
+    "supabase",
+    "postgres on a vm"
+   ]
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "web",
+    "layout": "A single Next.js app",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "What it is, how to run it locally with Docker Postgres, and the environment variables."
+     },
+     {
+      "path": "package.json",
+      "template": "next, react, react-dom, drizzle-orm, postgres, next-auth, zod; dev: typescript, drizzle-kit, vitest, @playwright/test; scripts dev, build, start, lint, test."
+     },
+     {
+      "path": "app/layout.tsx",
+      "template": "Root layout with the site title and a main element."
+     },
+     {
+      "path": "app/page.tsx",
+      "template": "Landing page rendered on the server."
+     },
+     {
+      "path": "app/api/health/route.ts",
+      "template": "GET returning ok and a database check."
+     },
+     {
+      "path": "lib/db/schema.ts",
+      "template": "Drizzle schema with the Auth.js tables."
+     },
+     {
+      "path": "lib/db/index.ts",
+      "template": "Drizzle client from DATABASE_URL."
+     },
+     {
+      "path": "lib/auth.ts",
+      "template": "Auth.js configuration with the Drizzle adapter and one OAuth provider read from env."
+     },
+     {
+      "path": "drizzle.config.ts",
+      "template": "drizzle-kit config pointing at lib/db/schema.ts."
+     },
+     {
+      "path": ".github/workflows/ci.yml",
+      "template": "Lint, typecheck and test on pull requests."
+     },
+     {
+      "path": ".env.example",
+      "template": "DATABASE_URL, AUTH_SECRET and the OAuth client id and secret, with placeholder values."
+     }
+    ]
+   }
+  ]
+ }
+}

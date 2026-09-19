@@ -1,0 +1,297 @@
+{
+ "id": "rails-laravel-monolith",
+ "name": "Rails or Laravel monolith",
+ "summary": "A convention-heavy monolith: Ruby on Rails with Hotwire (or Laravel with Blade and Livewire-style interaction), Postgres, and a Redis-backed job queue. Built for small teams shipping a lot of CRUD fast.",
+ "fitsWhen": [
+  {
+   "answer": "team",
+   "is": [
+    "ruby",
+    "php"
+   ],
+   "says": "the team writes Ruby or PHP"
+  },
+  {
+   "answer": "productType",
+   "is": [
+    "web-app",
+    "saas",
+    "marketplace",
+    "internal-tool"
+   ],
+   "says": "a web product with many forms and records"
+  },
+  {
+   "answer": "teamSize",
+   "is": [
+    "solo",
+    "small"
+   ],
+   "says": "a small team"
+  },
+  {
+   "answer": "timeline",
+   "is": [
+    "weeks",
+    "months"
+   ],
+   "says": "it must ship soon"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "productType",
+   "is": [
+    "ml-service",
+    "data-platform",
+    "llm-app"
+   ],
+   "says": "the core is machine learning or data"
+  },
+  {
+   "answer": "team",
+   "is": [
+    "python",
+    "typescript"
+   ],
+   "says": "nobody on the team writes Ruby or PHP"
+  }
+ ],
+ "layers": {
+  "frontend": {
+   "choice": "hotwire",
+   "alternatives": [
+    "htmx",
+    "react"
+   ],
+   "why": "HTML over the wire keeps the UI in the monolith; Laravel teams use Blade with the same idea."
+  },
+  "backend": {
+   "choice": "rails",
+   "alternatives": [
+    "laravel",
+    "django"
+   ],
+   "why": "Conventions decide most structure; generators, ActiveRecord, Action Mailer and Active Job included."
+  },
+  "database": {
+   "choice": "postgres",
+   "alternatives": [
+    "mysql"
+   ],
+   "why": "Both frameworks support it well."
+  },
+  "cache": {
+   "choice": "redis",
+   "alternatives": [
+    "valkey"
+   ],
+   "why": "Cache and job backend."
+  },
+  "queue": {
+   "choice": "sidekiq",
+   "alternatives": [],
+   "why": "Background jobs; Laravel uses its own queue on Redis."
+  },
+  "auth": {
+   "choice": "devise",
+   "alternatives": [],
+   "why": "Rails' standard auth; Laravel ships its own starter kits."
+  },
+  "infra": {
+   "choice": "docker",
+   "alternatives": [],
+   "why": "One image for web and jobs."
+  },
+  "ci-cd": {
+   "choice": "github-actions",
+   "alternatives": [],
+   "why": "Tests and linters on pull requests."
+  },
+  "observability": {
+   "choice": "sentry",
+   "alternatives": [],
+   "why": "Errors with request context."
+  },
+  "testing": {
+   "choice": "rspec",
+   "alternatives": [
+    "phpunit",
+    "playwright"
+   ],
+   "why": "RSpec (or PHPUnit for Laravel) with system tests in a browser."
+  },
+  "hosting": {
+   "choice": "heroku",
+   "alternatives": [
+    "render",
+    "fly-io",
+    "vm"
+   ],
+   "why": "Git-push deploys with managed Postgres and Redis."
+  }
+ },
+ "services": [
+  {
+   "name": "web",
+   "kind": "web",
+   "tech": "rails",
+   "responsibilities": [
+    "Pages, forms and APIs",
+    "Domain models and rules"
+   ],
+   "talksTo": [
+    "db",
+    "cache"
+   ]
+  },
+  {
+   "name": "jobs",
+   "kind": "worker",
+   "tech": "sidekiq",
+   "responsibilities": [
+    "Mailers, imports, scheduled jobs"
+   ],
+   "talksTo": [
+    "db",
+    "cache"
+   ]
+  }
+ ],
+ "dataStores": [
+  {
+   "name": "db",
+   "tech": "postgres",
+   "purpose": "System of record"
+  },
+  {
+   "name": "cache",
+   "tech": "redis",
+   "purpose": "Cache and job queue"
+  }
+ ],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "Each developer's machine",
+   "hosting": "bin/dev with Postgres and Redis in Docker"
+  },
+  {
+   "name": "staging",
+   "purpose": "A copy of production for checking a release",
+   "hosting": "A review app per pull request"
+  },
+  {
+   "name": "prod",
+   "purpose": "What people use",
+   "hosting": "Two dynos (web, jobs) with managed Postgres and Redis"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "lint",
+    "does": "rubocop (or pint)"
+   },
+   {
+    "name": "security",
+    "does": "brakeman (or composer audit)"
+   },
+   {
+    "name": "test",
+    "does": "rspec (or phpunit) with Postgres and Redis services"
+   },
+   {
+    "name": "deploy",
+    "does": "main to staging, tags to prod; db:migrate as the release phase"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "paas",
+  "tools": [
+   "docker"
+  ],
+  "notes": [
+   "Procfile with web and worker processes"
+  ]
+ },
+ "observability": {
+  "tools": [
+   "sentry"
+  ],
+  "notes": [
+   "Lograge (or Laravel's JSON log channel) for one-line request logs"
+  ]
+ },
+ "security": {
+  "auth": "Framework sessions with CSRF tokens on every form",
+  "secrets": "Rails credentials or environment variables; master key never committed",
+  "notes": [
+   "Validate every input at the API boundary and return typed errors, never stack traces.",
+   "Parameterised queries only (the ORM), so no SQL is built from strings.",
+   "Set secure, HttpOnly, SameSite cookies or short-lived tokens; rate-limit sign-in.",
+   "Check authorisation on every endpoint on the server, not only in the UI (OWASP A01 Broken Access Control).",
+   "Strong parameters (or FormRequest validation) on every controller action."
+  ]
+ },
+ "folderLayout": "app/\n  models/\n  controllers/\n  views/\n  jobs/\nconfig/\ndb/migrate/\nspec/\nProcfile\nGemfile",
+ "conventions": [
+  "Fat models are split into service objects once they pass ~200 lines",
+  "Every table change is a migration",
+  "System tests for every critical flow"
+ ],
+ "adrs": [
+  {
+   "title": "Conventions over custom structure",
+   "decision": "Follow the framework's layout and generators.",
+   "why": "New developers find things where the framework says they are.",
+   "alternatives": [
+    "custom architecture"
+   ]
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "app",
+    "layout": "A Rails app skeleton (switch to Laravel's layout if chosen)",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "What it is, bin/setup and bin/dev, and how jobs run."
+     },
+     {
+      "path": "Gemfile",
+      "template": "rails, pg, puma, redis, sidekiq, devise, turbo-rails, stimulus-rails; test: rspec-rails, capybara."
+     },
+     {
+      "path": "config/database.yml",
+      "template": "Postgres for development, test and production from DATABASE_URL."
+     },
+     {
+      "path": "config/routes.rb",
+      "template": "Root route and a health check route."
+     },
+     {
+      "path": "app/controllers/health_controller.rb",
+      "template": "Returns ok after a database ping."
+     },
+     {
+      "path": "Procfile",
+      "template": "web: puma; worker: sidekiq."
+     },
+     {
+      "path": "docker-compose.yml",
+      "template": "Postgres 16 and Redis 7 for development."
+     },
+     {
+      "path": ".github/workflows/ci.yml",
+      "template": "rubocop, brakeman and rspec with Postgres and Redis services."
+     }
+    ]
+   }
+  ]
+ }
+}

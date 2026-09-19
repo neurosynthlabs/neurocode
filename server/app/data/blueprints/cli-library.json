@@ -1,0 +1,222 @@
+{
+ "id": "cli-library",
+ "name": "Command-line tool or library",
+ "summary": "A package with a clean public API and a thin command-line interface on top, tested across versions and published to its registry with automated releases. Go, Python and Rust shown; pick the one the users install.",
+ "fitsWhen": [
+  {
+   "answer": "productType",
+   "is": [
+    "cli-library"
+   ],
+   "says": "a command-line tool or library"
+  },
+  {
+   "answer": "audience",
+   "is": [
+    "developers"
+   ],
+   "says": "developers use it"
+  },
+  {
+   "answer": "hosting",
+   "is": [
+    "on-device"
+   ],
+   "says": "it runs on the user's machine"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "productType",
+   "is": [
+    "web-app",
+    "saas",
+    "mobile-app"
+   ],
+   "says": "people use it through a UI"
+  },
+  {
+   "answer": "needs",
+   "is": [
+    "multi-tenant",
+    "realtime"
+   ],
+   "says": "it needs accounts or live data"
+  }
+ ],
+ "layers": {
+  "backend": {
+   "choice": "cobra",
+   "alternatives": [
+    "typer",
+    "clap",
+    "click"
+   ],
+   "why": "Subcommands, flags, help and shell completions; Typer for Python, clap for Rust."
+  },
+  "ci-cd": {
+   "choice": "goreleaser",
+   "alternatives": [
+    "github-actions"
+   ],
+   "why": "Cross-compiled binaries, checksums, Homebrew formula and a changelog from tags."
+  },
+  "testing": {
+   "choice": "testcontainers",
+   "alternatives": [
+    "pytest",
+    "hypothesis"
+   ],
+   "why": "Golden-file tests of command output plus unit tests of the library."
+  },
+  "hosting": {
+   "choice": "pypi-npm",
+   "alternatives": [
+    "github-pages"
+   ],
+   "why": "Published to the language's registry; docs on a static site."
+  },
+  "observability": {
+   "choice": "opentelemetry",
+   "alternatives": [],
+   "why": "Optional and off by default; a CLI should not phone home."
+  }
+ },
+ "services": [
+  {
+   "name": "cli",
+   "kind": "cli",
+   "tech": "cobra",
+   "responsibilities": [
+    "Parses arguments",
+    "Calls the library",
+    "Formats output for humans and --json"
+   ],
+   "talksTo": [
+    "lib"
+   ]
+  },
+  {
+   "name": "lib",
+   "kind": "library",
+   "tech": "go",
+   "responsibilities": [
+    "The public API",
+    "No I/O it was not asked to do"
+   ],
+   "talksTo": []
+  }
+ ],
+ "dataStores": [],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "go run / pip install -e .",
+   "hosting": "Local"
+  },
+  {
+   "name": "staging",
+   "purpose": "A release candidate tag installed from the registry's test index",
+   "hosting": "Registry"
+  },
+  {
+   "name": "prod",
+   "purpose": "A tagged release",
+   "hosting": "Registry"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "lint",
+    "does": "golangci-lint (or ruff, clippy)"
+   },
+   {
+    "name": "test",
+    "does": "Tests on Linux, macOS and Windows"
+   },
+   {
+    "name": "release",
+    "does": "Tag → goreleaser builds and publishes"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "package",
+  "tools": [],
+  "notes": [
+   "No servers"
+  ]
+ },
+ "observability": {
+  "tools": [],
+  "notes": [
+   "--verbose and --debug flags instead of telemetry"
+  ]
+ },
+ "security": {
+  "auth": "Credentials read from the environment or the OS keychain, never from flags (they end up in shell history)",
+  "secrets": "Release signing keys in CI secrets",
+  "notes": [
+   "Signed checksums for every release",
+   "Dependencies pinned and updated by Renovate"
+  ]
+ },
+ "folderLayout": "cmd/tool/main.go\ninternal/cli/\npkg/tool/  (the public library)\ntestdata/\n.goreleaser.yaml",
+ "conventions": [
+  "Semantic versioning; the public API changes only in a major release",
+  "Every command supports --json output",
+  "Exit codes documented"
+ ],
+ "adrs": [
+  {
+   "title": "Library first, CLI second",
+   "decision": "All behaviour lives in the library; the CLI only parses and prints.",
+   "why": "Other programs can use the library, and tests do not need to run the binary.",
+   "alternatives": []
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "tool",
+    "layout": "A Go module with a Cobra CLI (adapt to Python or Rust if chosen)",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "Install, usage examples and the exit codes."
+     },
+     {
+      "path": "go.mod",
+      "template": "Module with cobra."
+     },
+     {
+      "path": "cmd/tool/main.go",
+      "template": "Calls the root command."
+     },
+     {
+      "path": "internal/cli/root.go",
+      "template": "Root command with --json and --verbose flags and a version subcommand."
+     },
+     {
+      "path": "pkg/tool/tool.go",
+      "template": "The library's first function, documented."
+     },
+     {
+      "path": "pkg/tool/tool_test.go",
+      "template": "A table-driven test of that function."
+     },
+     {
+      "path": ".goreleaser.yaml",
+      "template": "Builds for linux, darwin and windows on amd64 and arm64 with checksums."
+     },
+     {
+      "path": ".github/workflows/ci.yml",
+      "template": "Lint and test on three operating systems; release on tags."
+     }
+    ]
+   }
+  ]
+ }
+}

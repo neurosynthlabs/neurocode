@@ -1,0 +1,326 @@
+{
+ "id": "mobile-api",
+ "name": "Mobile app and API",
+ "summary": "A React Native app built with Expo (Flutter is the listed swap) talking to a typed API with Postgres, push notifications and offline caching on the device.",
+ "fitsWhen": [
+  {
+   "answer": "productType",
+   "is": [
+    "mobile-app"
+   ],
+   "says": "the product is a mobile app"
+  },
+  {
+   "answer": "needs",
+   "is": [
+    "mobile",
+    "offline"
+   ],
+   "says": "it needs a phone app or offline use"
+  },
+  {
+   "answer": "team",
+   "is": [
+    "typescript",
+    "dart"
+   ],
+   "says": "the team writes TypeScript or Dart"
+  },
+  {
+   "answer": "audience",
+   "is": [
+    "consumers"
+   ],
+   "says": "consumers use it"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "productType",
+   "is": [
+    "content-site",
+    "data-platform"
+   ],
+   "says": "it is content or data work"
+  },
+  {
+   "answer": "needs",
+   "is": [
+    "seo"
+   ],
+   "says": "search ranking matters more than an app"
+  }
+ ],
+ "layers": {
+  "mobile": {
+   "choice": "expo",
+   "alternatives": [
+    "react-native",
+    "flutter",
+    "swiftui",
+    "jetpack-compose"
+   ],
+   "why": "One TypeScript codebase for iOS and Android, managed native modules and over-the-air updates."
+  },
+  "backend": {
+   "choice": "fastapi",
+   "alternatives": [
+    "nestjs",
+    "django"
+   ],
+   "why": "A typed API with an OpenAPI document the app's client is generated from."
+  },
+  "database": {
+   "choice": "postgres",
+   "alternatives": [],
+   "why": "System of record on the server."
+  },
+  "cache": {
+   "choice": "redis",
+   "alternatives": [],
+   "why": "Rate limits and push notification queues."
+  },
+  "queue": {
+   "choice": "celery",
+   "alternatives": [
+    "bullmq"
+   ],
+   "why": "Push notifications and emails outside the request."
+  },
+  "auth": {
+   "choice": "supabase-auth",
+   "alternatives": [
+    "firebase-auth",
+    "clerk",
+    "auth0"
+   ],
+   "why": "Phone, email and social sign-in with tokens the API verifies."
+  },
+  "ci-cd": {
+   "choice": "github-actions",
+   "alternatives": [
+    "fastlane"
+   ],
+   "why": "API checks in CI; app builds and store submission through EAS."
+  },
+  "observability": {
+   "choice": "sentry",
+   "alternatives": [],
+   "why": "Crash reports from the app and errors from the API in one place."
+  },
+  "testing": {
+   "choice": "detox",
+   "alternatives": [
+    "jest",
+    "pytest"
+   ],
+   "why": "End-to-end tests on simulators; pytest for the API."
+  },
+  "hosting": {
+   "choice": "app-stores",
+   "alternatives": [
+    "fly-io",
+    "render"
+   ],
+   "why": "The app ships through the stores; the API runs on a managed platform."
+  }
+ },
+ "services": [
+  {
+   "name": "app",
+   "kind": "mobile",
+   "tech": "expo",
+   "responsibilities": [
+    "Screens and offline cache",
+    "Registers for push notifications"
+   ],
+   "talksTo": [
+    "api"
+   ]
+  },
+  {
+   "name": "api",
+   "kind": "api",
+   "tech": "fastapi",
+   "responsibilities": [
+    "Domain rules",
+    "Sends push through Expo's push service"
+   ],
+   "talksTo": [
+    "db",
+    "cache",
+    "worker"
+   ]
+  },
+  {
+   "name": "worker",
+   "kind": "worker",
+   "tech": "celery",
+   "responsibilities": [
+    "Push, email, scheduled jobs"
+   ],
+   "talksTo": [
+    "db",
+    "cache"
+   ]
+  }
+ ],
+ "dataStores": [
+  {
+   "name": "db",
+   "tech": "postgres",
+   "purpose": "Server-side records"
+  },
+  {
+   "name": "cache",
+   "tech": "redis",
+   "purpose": "Queues and rate limits"
+  }
+ ],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "Expo Go or a dev build against a local API",
+   "hosting": "Local"
+  },
+  {
+   "name": "staging",
+   "purpose": "An internal build (TestFlight / internal testing) against the staging API",
+   "hosting": "EAS + Render"
+  },
+  {
+   "name": "prod",
+   "purpose": "Store releases against the production API",
+   "hosting": "App stores + Render"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "lint",
+    "does": "eslint, ruff"
+   },
+   {
+    "name": "test",
+    "does": "jest for the app, pytest for the API"
+   },
+   {
+    "name": "build",
+    "does": "eas build on tags"
+   },
+   {
+    "name": "submit",
+    "does": "eas submit to the stores after review"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "paas",
+  "tools": [
+   "docker"
+  ],
+  "notes": [
+   "API as a container; the app has no servers of its own"
+  ]
+ },
+ "observability": {
+  "tools": [
+   "sentry"
+  ],
+  "notes": [
+   "Release health per app version"
+  ]
+ },
+ "security": {
+  "auth": "Short-lived access tokens with refresh tokens in the device's secure storage",
+  "secrets": "No secrets inside the app bundle; everything secret stays on the API",
+  "notes": [
+   "Certificate pinning only if the threat model needs it",
+   "Validate every request on the API; the app can be modified"
+  ]
+ },
+ "folderLayout": "mobile/\n  app/  (expo-router screens)\n  components/\n  lib/api.ts\n  app.json\napi/\n  app/\n  tests/",
+ "conventions": [
+  "Old app versions stay in use for months: the API never breaks a released client",
+  "Screens read through a cache layer so they work offline",
+  "Every API change is additive"
+ ],
+ "adrs": [
+  {
+   "title": "Cross-platform app",
+   "decision": "One Expo codebase for iOS and Android.",
+   "why": "One team ships both platforms; native modules only where needed.",
+   "alternatives": [
+    "swiftui + jetpack-compose",
+    "flutter"
+   ]
+  },
+  {
+   "title": "The API keeps old clients working",
+   "decision": "API versions are additive; breaking changes get a new route.",
+   "why": "Store releases cannot be forced on every phone.",
+   "alternatives": []
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "mobile",
+    "layout": "An Expo app with expo-router",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "How to run the app on a simulator and against which API."
+     },
+     {
+      "path": "package.json",
+      "template": "expo, expo-router, react-native, @tanstack/react-query, expo-notifications, expo-secure-store; dev: jest-expo, typescript."
+     },
+     {
+      "path": "app.json",
+      "template": "Expo config with the app name, bundle identifiers and the notifications plugin."
+     },
+     {
+      "path": "app/_layout.tsx",
+      "template": "Root stack layout with a QueryClientProvider."
+     },
+     {
+      "path": "app/index.tsx",
+      "template": "Home screen calling the API's /health."
+     },
+     {
+      "path": "lib/api.ts",
+      "template": "API client with the base URL from app config and the token from secure storage."
+     }
+    ]
+   },
+   {
+    "label": "api",
+    "layout": "A FastAPI service",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "How to run the API and its tests."
+     },
+     {
+      "path": "pyproject.toml",
+      "template": "fastapi, uvicorn, sqlalchemy, asyncpg, alembic, celery, redis; dev: pytest."
+     },
+     {
+      "path": "app/main.py",
+      "template": "FastAPI app with /health and a device-registration route for push tokens."
+     },
+     {
+      "path": "tests/test_health.py",
+      "template": "Checks /health answers 200."
+     },
+     {
+      "path": "docker-compose.yml",
+      "template": "Postgres and Redis for local development."
+     }
+    ]
+   }
+  ]
+ }
+}

@@ -3,8 +3,6 @@ import {
   ShieldCheck,
   ShieldAlert,
   ShieldX,
-  Check,
-  X,
   Search,
   Box,
   Globe,
@@ -37,6 +35,7 @@ import {
   Segmented,
 } from '@/components/os';
 import { ApiError } from '@/lib/api';
+import { GateActions } from '@/components/runs/GateActions';
 import { useAuth } from '@/lib/auth';
 import { useData } from '@/lib/data';
 import { useRemote } from '@/lib/remote';
@@ -52,9 +51,10 @@ import {
   type RuleTrial,
   type ToolRule,
 } from '@/lib/live/work';
+import { gateKind } from '@/lib/live/runtime';
 import { ago } from '@/lib/time';
 import { cn } from '@/lib/utils';
-import type { ApprovalRequest, Project } from '@/types';
+import type { Project } from '@/types';
 
 /* Permissions: the gates the runtime really has, and nothing it does not. An agent works alone inside its
    own worktree; the first run of a project's tests asks you once and the answer is kept; a run that
@@ -112,7 +112,7 @@ export default function Permissions() {
   const [tab, setTab] = useState<'inbox' | 'rules' | 'tools' | 'sandbox'>('inbox');
   const [answer, setAnswer] = useState('all');
   const [q, setQ] = useState('');
-  const { approvals, runs, projects, decide: record } = useData();
+  const { approvals, projects } = useData();
 
   // "The last 7 days" counts back from when the page was opened.
   const [openedAt] = useState(() => Date.now());
@@ -146,33 +146,6 @@ export default function Permissions() {
       ),
     };
   }, [resolved, openedAt]);
-
-  /** Which kind of step a gate stopped: what approving or refusing it actually does depends on it. */
-  const kindOf = (a: ApprovalRequest) => runs.find((r) => r.ref === a.runRef)?.steps.find((s) => s.n === a.step)?.kind;
-
-  const decide = async (a: ApprovalRequest, v: 'approve' | 'deny') => {
-    if (!(await record(a.ref, v))) return;
-    const kind = kindOf(a);
-    if (v === 'approve') {
-      toast.success(`${a.ref} approved`, {
-        description:
-          kind === 'test'
-            ? 'The tests run now, and this project will not ask again.'
-            : kind === 'handoff'
-              ? 'The branch is yours to merge.'
-              : 'Your signature is recorded against this action.',
-      });
-    } else {
-      toast(`${a.ref} denied`, {
-        description:
-          kind === 'test'
-            ? 'Tests will not run in this project; the run carries on without them.'
-            : kind === 'handoff'
-              ? 'The branch and its worktree are removed.'
-              : 'Your answer is recorded.',
-      });
-    }
-  };
 
   const lanes = (models.data?.lanes ?? []).filter((l) => l.ready);
   const calls = models.data?.totals24h.calls ?? 0;
@@ -269,30 +242,19 @@ export default function Permissions() {
                     }
                     actions={
                       <span className="flex items-center gap-2">
+                        {gateKind(a) === 'question' && <Tag tone="info">Agent asks</Tag>}
                         <Tag tone="neutral">{projectLabel(projects, a.projectId)}</Tag>
                         <RiskPill risk={a.risk} />
                       </span>
                     }
                   >
-                    <SectionTitle>What it is about</SectionTitle>
+                    <SectionTitle>{gateKind(a) === 'question' ? 'What the agent asks' : 'What it is about'}</SectionTitle>
                     <pre className="ascii rounded-sm border border-line bg-base p-3 whitespace-pre-wrap">
                       {a.payload}
                     </pre>
                     <SectionTitle className="mt-3">Why it is asking</SectionTitle>
                     <p className="text-[13.5px] leading-relaxed text-ink-2">{a.reason}</p>
-                    <div className="mt-3 flex items-center gap-2 border-t border-line pt-3">
-                      <Button size="sm" onClick={() => void decide(a, 'approve')}>
-                        <Check className="size-3.5" />
-                        Approve
-                      </Button>
-                      <Button size="sm" variant="destructive" onClick={() => void decide(a, 'deny')}>
-                        <X className="size-3.5" />
-                        Deny
-                      </Button>
-                      <span className="ml-auto text-[12px] text-dim">
-                        Your decision is recorded under your name, and it is final.
-                      </span>
-                    </div>
+                    <GateActions approval={a} />
                   </Panel>
                 ))}
               </div>

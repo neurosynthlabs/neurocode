@@ -1,18 +1,24 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Plus, GitBranch, Database, FileCode, Boxes, Check, Brain, Lock, FolderGit2, FolderOpen, X, Layers } from 'lucide-react';
+import {
+  Search, Plus, GitBranch, Database, FileCode, Boxes, Check, Brain, Lock, FolderGit2, FolderOpen, X, Layers, FileArchive,
+  FolderPlus, Upload, Loader2, BookOpen,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Dot, BlockBar, Segmented, Mono,
   SectionTitle, Empty, KV, Field, Wizard,
 } from '@/components/os';
+import { RolePick } from '@/components/projects/SourcesPanel';
 import { FolderPicker } from '@/components/workbench/FolderPicker';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useProject } from '@/lib/project-context';
 import { useData } from '@/lib/data';
 import { categoryLabel } from '@/lib/live/knowledge';
-import { LABEL, SOURCE_DOT, labelFrom, sourcesApi, sourcesOf, type SourceInput } from '@/lib/live/sources';
+import { ARCHIVES, bytes, joinPath, machineApi, type NewProjectOptions } from '@/lib/live/machine';
+import { LABEL, SOURCE_DOT, labelFrom, readOnly, referencesApi, sourcesApi, sourcesOf, type SourceInput } from '@/lib/live/sources';
+import { useRemote } from '@/lib/remote';
 import { cn } from '@/lib/utils';
 import { ago } from '@/lib/time';
 import type { MemoryFact, Project } from '@/types';
@@ -41,6 +47,35 @@ const STAGES = [
   { id: 'retrieval', label: 'Retrieval', detail: 'Code, documents and memory split into pieces, embedded when a lane is configured' },
 ];
 
+/* What unpacking an archive, and starting an empty project, add in front of the stages above. */
+const ARCHIVE_STAGES = [
+  { id: 'check', label: 'Check every entry', detail: 'Nothing leaves the folder, no links, at most 50,000 entries and 2 GB — or nothing is written', gitOnly: false },
+  { id: 'unpack', label: 'Unpack', detail: 'Into a new folder, never an existing one; a single top folder is dropped', gitOnly: false },
+];
+const EMPTY_STAGES = [
+  { id: 'create', label: 'Create', detail: 'A new folder, git init on main, and a README committed once', gitOnly: false },
+];
+
+/** The four ways a project begins. Importing and starting empty write on this machine, so they need machine:access. */
+type Door = 'folder' | 'archive' | 'clone' | 'empty';
+const DOORS: { id: Door; title: string; hint: string; icon: typeof FolderOpen; machine: boolean }[] = [
+  { id: 'folder', title: 'Open a folder on this machine', hint: 'Read where it is. Nothing is copied.', icon: FolderOpen, machine: false },
+  { id: 'archive', title: 'Import an archive', hint: 'A .zip, .tar.gz or .tgz, unpacked into a new folder', icon: FileArchive, machine: true },
+  { id: 'clone', title: 'Clone a repository', hint: 'A shallow clone of one branch', icon: GitBranch, machine: false },
+  { id: 'empty', title: 'Start an empty project', hint: 'A new folder with git and a README', icon: FolderPlus, machine: true },
+];
+
+/** What is wrong with a new folder's name, or null: one plain name that is not hidden. */
+function nameProblem(name: string): string | null {
+  const n = name.trim();
+  if (!n) return 'Name its folder';
+  if (n === '.' || n === '..' || /[/\\]/.test(n)) return 'Name its folder with one plain name, not a path';
+  if (n.startsWith('.')) return 'A name starting with a dot would be a hidden folder';
+  return null;
+}
+
+const reason = (e: unknown) => (e instanceof ApiError ? e.message : 'The local API did not answer. Is it still running?');
+
 const DEFAULT_EXCLUDED = 'node_modules, bin, obj, dist, **/*.designer.cs';
 const GIT_URL = /^(git@[\w.-]+:[\w.~/-]+?(\.git)?|(https?|ssh):\/\/[^\s/]+\/[\w.~/-]+?(\.git)?)\/?$/i;
 const GIT_REF = /^(?!-)(?!.*\.\.)(?!.*\/$)[\w./-]+$/;
@@ -64,7 +99,7 @@ function sourceProblem(draft: SourceInput, taken: string[]): string | null {
   return repoProblem(draft.kind, draft.repo, draft.branch);
 }
 
-const NO_SOURCE: SourceInput = { label: '', kind: 'git', repo: '', branch: 'main' };
+const NO_SOURCE: SourceInput = { label: '', kind: 'git', repo: '', branch: 'main', role: 'code' };
 
 export default function Projects() {
   const nav = useNavigate();
@@ -79,14 +114,23 @@ export default function Projects() {
   const [sort, setSort] = useState<Sort>('active');
   const [newOpen, setNewOpen] = useState(false);
   const [repo, setRepo] = useState('');
-  const [source, setSource] = useState<'git' | 'local'>('git');
+  const [door, setDoor] = useState<Door>('folder');
+  const source: 'git' | 'local' = door === 'clone' ? 'git' : 'local';
   const [branch, setBranch] = useState('main');
+  // An archive: one on this machine (surveyed before anything is written) or one this browser uploads.
+  const [archiveFrom, setArchiveFrom] = useState<'machine' | 'upload'>('machine');
+  const [archivePath, setArchivePath] = useState('');
+  const [upload, setUpload] = useState<File | null>(null);
+  const [into, setInto] = useState('');
+  const [folderName, setFolderName] = useState('');
+  const [progress, setProgress] = useState<number | null>(null);
+  const [readsFrom, setReadsFrom] = useState<Set<string>>(() => new Set());
   const [excluded, setExcluded] = useState(DEFAULT_EXCLUDED);
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   // Further sources the new project holds beside its first one, and the one being written.
   const [extras, setExtras] = useState<SourceInput[]>([]);
   const [draft, setDraft] = useState<SourceInput>(NO_SOURCE);
-  const [browsing, setBrowsing] = useState<'first' | 'extra' | null>(null);
+  const [browsing, setBrowsing] = useState<'first' | 'extra' | 'archive' | 'into' | null>(null);
   const browse = can('machine:access');
 
   // The project navigator's "New project" lands here with ?new=1: the wizard is open until it is closed,
@@ -102,7 +146,41 @@ export default function Projects() {
     }
   };
 
-  const stages = STAGES.filter((st) => !st.gitOnly || source === 'git');
+  const onDisk = STAGES.filter((st) => !st.gitOnly || source === 'git');
+  const stages = door === 'archive' ? [...ARCHIVE_STAGES, ...onDisk] : door === 'empty' ? [...EMPTY_STAGES, ...onDisk] : onDisk;
+  const makes = door === 'archive' || door === 'empty';
+
+  // An archive on this machine is read before anything is written: its entries, every one checked, and what
+  // it unpacks to. A refusal (a path out of the folder, a link, a bomb) is said here, at the first step.
+  const surveyPath = door === 'archive' && archiveFrom === 'machine' && ARCHIVES.some((a) => archivePath.trim().toLowerCase().endsWith(a))
+    ? archivePath.trim() : null;
+  const survey = useRemote(surveyPath ? `survey:${surveyPath}` : null, () => machineApi.archive(surveyPath ?? ''));
+  // The folder name follows the archive until a person writes their own.
+  const [namedFor, setNamedFor] = useState<string | null>(null);
+  const suggested = door === 'archive'
+    ? (archiveFrom === 'machine' ? survey.data?.suggestedName : upload?.name.replace(/\.(zip|tar\.gz|tgz)$/i, '')) ?? null : null;
+  if (suggested && namedFor !== suggested && (!folderName || folderName === namedFor)) {
+    setNamedFor(suggested);
+    setFolderName(suggested);
+  }
+  const target = into.trim() && folderName.trim() ? joinPath(into.trim(), folderName.trim()) : null;
+
+  const startProblem = (): string | null => {
+    if (door === 'clone' || door === 'folder') return repoProblem(source, repo, branch);
+    if (!browse) return 'This needs the “Use this machine” permission, which the Owner role holds';
+    if (door === 'archive') {
+      if (archiveFrom === 'machine') {
+        if (!archivePath.trim()) return 'Choose an archive';
+        if (!surveyPath) return 'Choose a .zip, .tar.gz or .tgz file';
+        if (survey.error) return survey.error;
+        if (!survey.data) return 'Reading the archive…';
+      } else if (!upload) return 'Choose a file to upload';
+      else if (!ARCHIVES.some((a) => upload.name.toLowerCase().endsWith(a))) return `${upload.name} is not a .zip, .tar.gz or .tgz file`;
+    }
+    if (!/^(\/|~\/)/.test(into.trim())) return 'Choose the folder to make it in';
+    return nameProblem(folderName);
+  };
+  const problem = startProblem();
   const togglePick = (id: string) => setPicked((cur) => {
     const next = new Set(cur);
     if (next.has(id)) next.delete(id); else next.add(id);
@@ -110,8 +188,13 @@ export default function Projects() {
   });
   const resetDraft = () => {
     setRepo('');
-    setSource('git');
+    setDoor('folder');
     setBranch('main');
+    setArchivePath('');
+    setUpload(null);
+    setFolderName('');
+    setNamedFor(null);
+    setReadsFrom(new Set());
     setExcluded(DEFAULT_EXCLUDED);
     setPicked(new Set());
     setExtras([]);
@@ -126,8 +209,39 @@ export default function Projects() {
   /** A picked folder fills the path, and a label from its name when none was written. */
   const onFolder = (path: string) => {
     if (browsing === 'first') setRepo(path);
+    else if (browsing === 'archive') setArchivePath(path);
+    else if (browsing === 'into') setInto(path);
     else setDraft((d) => ({ ...d, repo: path, label: d.label || labelFrom(path) }));
     setBrowsing(null);
+  };
+  const toggleRead = (id: string) => setReadsFrom((cur) => {
+    const next = new Set(cur);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  /** Make the project through the door chosen. Null when it was refused — the toast says why. */
+  const begin = async (): Promise<Project | null> => {
+    const options: NewProjectOptions = {
+      excluded: excluded.split(',').map((x) => x.trim()).filter(Boolean),
+      rules: SUGGESTED_RULES.filter((r) => picked.has(r.id)),
+    };
+    if (door === 'clone' || door === 'folder') {
+      return createProject({ source, repo: repo.trim(), branch: branch.trim(), ...options });
+    }
+    try {
+      if (door === 'empty') return (await machineApi.emptyProject(into.trim(), folderName.trim(), options)).project;
+      if (archiveFrom === 'upload' && upload) {
+        setProgress(0);
+        return (await machineApi.uploadArchive(upload, into.trim(), folderName.trim(), options, setProgress)).project;
+      }
+      return (await machineApi.importArchive(archivePath.trim(), into.trim(), folderName.trim(), options)).project;
+    } catch (e) {
+      toast.error(door === 'empty' ? 'No project was made' : 'Nothing was imported', { description: reason(e) });
+      return null;
+    } finally {
+      setProgress(null);
+    }
   };
 
   const list = useMemo(() => {
@@ -194,8 +308,8 @@ export default function Projects() {
       <PageBody className="space-y-5">
         {projects.length === 0 ? (
           <Empty icon={<FolderGit2 className="size-6" />} title="No projects yet"
-            hint="Onboard a repository to start. NeuroCode reads it before it changes anything."
-            action={<Button size="sm" variant="outline" onClick={() => setNewOpen(true)}>Onboard a repository</Button>} />
+            hint="Open a folder on this machine, import an archive, clone a repository or start an empty one. NeuroCode reads it before it changes anything."
+            action={<Button size="sm" variant="outline" onClick={() => setNewOpen(true)}>New project</Button>} />
         ) : list.length === 0 ? (
           <Empty title="No project matches those filters" hint="Clear the search or widen the kind/status filter." />
         ) : (
@@ -344,17 +458,13 @@ export default function Projects() {
       <Wizard
         open={wizardOpen}
         onOpenChange={setWizard}
-        title="Onboard a repository"
+        title="New project"
         description="NeuroCode reads the codebase before it is allowed to change anything: it measures it, indexes its code and builds retrieval over its code and documents."
-        finishLabel="Start onboarding"
+        finishLabel={door === 'archive' ? 'Import and onboard' : door === 'empty' ? 'Create and onboard' : 'Start onboarding'}
         busy={busy}
         onFinish={async () => {
           setBusy(true);
-          const doc = await createProject({
-            source, repo: repo.trim(), branch: branch.trim(),
-            excluded: excluded.split(',').map((s) => s.trim()).filter(Boolean),
-            rules: SUGGESTED_RULES.filter((r) => picked.has(r.id)),
-          });
+          const doc = await begin();
           if (!doc) {
             setBusy(false);
             return;
@@ -370,37 +480,129 @@ export default function Projects() {
               toast.error(`${extra.label} was not added`, { description: e instanceof ApiError ? e.message : 'The local API did not answer.' });
             }
           }
+          for (const id of readsFrom) {
+            try {
+              await referencesApi.add(doc.id, id, '');
+            } catch (e) {
+              toast.error(`${projects.find((x) => x.id === id)?.name ?? id} was not referenced`, { description: reason(e) });
+            }
+          }
           setBusy(false);
           setWizard(false);
+          const doing = door === 'clone' ? 'Cloning and measuring' : door === 'archive' ? 'Unpacking and measuring' : 'Measuring';
           toast.success(`${doc.name} is onboarding`, {
-            description: `${source === 'git' ? 'Cloning and measuring' : 'Measuring'} it now${added ? `, with ${added} more ${added === 1 ? 'source' : 'sources'}` : ''}. Each stage lands in Activity.`,
+            description: `${doing} it now${added ? `, with ${added} more ${added === 1 ? 'source' : 'sources'}` : ''}. Each stage lands in Activity.`,
           });
           resetDraft();
         }}
         steps={[
           {
-            id: 'repo', title: 'Repository', hint: 'where the code lives',
-            valid: repoProblem(source, repo, branch) === null, blocker: repoProblem(source, repo, branch) ?? undefined,
+            id: 'repo', title: 'Start', hint: DOORS.find((d) => d.id === door)?.title.split(' ')[0] ?? 'where it comes from',
+            valid: problem === null, blocker: problem ?? undefined,
             content: (
               <div className="space-y-3">
-                <Segmented options={[{ id: 'git', label: 'Git remote' }, { id: 'local', label: 'Local path' }]} value={source} onChange={setSource} />
-                <div className="flex items-end gap-2">
-                  <Field
-                    className="min-w-0 flex-1"
-                    label={source === 'git' ? 'Clone URL' : 'Absolute path'}
-                    value={repo} onChange={setRepo} mono
-                    placeholder={source === 'git' ? 'git@github.com:org/repo.git' : '/Users/you/code/repo'}
-                  />
-                  {source === 'local' && browse && (
-                    <Button type="button" variant="outline" size="sm" className="mb-px h-9" onClick={() => setBrowsing('first')}>
-                      <FolderOpen className="size-3.5" />Browse…
-                    </Button>
-                  )}
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="group" aria-label="How the project begins">
+                  {DOORS.map((d) => {
+                    const off = d.machine && !browse;
+                    const Icon = d.icon;
+                    return (
+                      <button key={d.id} type="button" aria-pressed={door === d.id} disabled={off} onClick={() => setDoor(d.id)}
+                        className={cn('flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors',
+                          door === d.id ? 'border-brand/60 bg-brand/8' : 'border-line hover:bg-surface-2', off && 'cursor-not-allowed opacity-50')}>
+                        <Icon className={cn('mt-0.5 size-4 shrink-0', door === d.id ? 'text-brand' : 'text-dim')} />
+                        <span className="min-w-0">
+                          <span className="block text-[13.5px] font-medium text-ink">{d.title}</span>
+                          <span className="block text-[12px] text-dim">{off ? 'Needs the “Use this machine” permission' : d.hint}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
-                {source === 'git' && <Field label="Branch" value={branch} onChange={setBranch} mono />}
+
+                {(door === 'clone' || door === 'folder') && (
+                  <>
+                    <div className="flex items-end gap-2">
+                      <Field
+                        className="min-w-0 flex-1"
+                        label={source === 'git' ? 'Clone URL' : 'Absolute path'}
+                        value={repo} onChange={setRepo} mono
+                        placeholder={source === 'git' ? 'git@github.com:org/repo.git' : '/Users/you/code/repo'}
+                      />
+                      {source === 'local' && browse && (
+                        <Button type="button" variant="outline" size="sm" className="mb-px h-9" onClick={() => setBrowsing('first')}>
+                          <FolderOpen className="size-3.5" />Browse…
+                        </Button>
+                      )}
+                    </div>
+                    {source === 'git' && <Field label="Branch" value={branch} onChange={setBranch} mono />}
+                  </>
+                )}
+
+                {door === 'archive' && (
+                  <div className="space-y-2.5">
+                    <Segmented options={[{ id: 'machine', label: 'On this machine' }, { id: 'upload', label: 'Upload from this browser' }]}
+                      value={archiveFrom} onChange={setArchiveFrom} />
+                    {archiveFrom === 'machine' ? (
+                      <div className="flex items-end gap-2">
+                        <Field className="min-w-0 flex-1" label="Archive" value={archivePath} onChange={setArchivePath} mono
+                          placeholder="/Users/you/Desktop/shop-main.zip" />
+                        <Button type="button" variant="outline" size="sm" className="mb-px h-9" onClick={() => setBrowsing('archive')}>
+                          <FileArchive className="size-3.5" />Choose…
+                        </Button>
+                      </div>
+                    ) : (
+                      <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-line-strong px-3 py-3 hover:bg-surface-2">
+                        <Upload className="size-4 shrink-0 text-brand" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] text-ink">{upload ? upload.name : 'Choose a .zip, .tar.gz or .tgz file'}</span>
+                          <span className="block text-[12px] text-dim">{upload ? bytes(upload.size) : 'It is sent to the API, checked like any archive, unpacked, and the copy deleted.'}</span>
+                        </span>
+                        <input type="file" accept={ARCHIVES.join(',')} className="sr-only"
+                          onChange={(e) => setUpload(e.target.files?.[0] ?? null)} />
+                      </label>
+                    )}
+                    {archiveFrom === 'machine' && surveyPath && (
+                      survey.error ? (
+                        <p className="rounded-lg border border-danger/40 bg-danger/5 px-3 py-2 text-[12.5px] text-danger [overflow-wrap:anywhere]">{survey.error}</p>
+                      ) : !survey.data ? (
+                        <p className="flex items-center gap-2 text-[12.5px] text-dim"><Loader2 className="size-3.5 animate-spin" />Reading every entry of the archive…</p>
+                      ) : (
+                        <div className="rounded-lg border border-line bg-base px-3 py-2 text-[12.5px]">
+                          <p className="text-ink-2">
+                            {survey.data.name} · {bytes(survey.data.bytes)} → {survey.data.files.toLocaleString()} {survey.data.files === 1 ? 'file' : 'files'}, {bytes(survey.data.total)} unpacked
+                          </p>
+                          {survey.data.top && <p className="text-dim">Its single top folder <span className="font-mono">{survey.data.top}/</span> is dropped, so the files sit at the project's root.</p>}
+                          {survey.data.sample.length > 0 && (
+                            <p className="mt-1 truncate font-mono text-[11.5px] text-dim" title={survey.data.sample.join('\n')}>{survey.data.sample.slice(0, 6).join('  ')}</p>
+                          )}
+                        </div>
+                      )
+                    )}
+                  </div>
+                )}
+
+                {makes && (
+                  <div className="space-y-2.5">
+                    <div className="flex items-end gap-2">
+                      <Field className="min-w-0 flex-1" label={door === 'archive' ? 'Unpack into' : 'Make it in'} value={into} onChange={setInto} mono
+                        placeholder="/Users/you/code" />
+                      {browse && (
+                        <Button type="button" variant="outline" size="sm" className="mb-px h-9" onClick={() => setBrowsing('into')}>
+                          <FolderOpen className="size-3.5" />Browse…
+                        </Button>
+                      )}
+                    </div>
+                    <Field label="Folder name" value={folderName} onChange={setFolderName} mono placeholder="shop"
+                      hint={target ? `A new folder, ${target} — refused if it already exists, never merged.` : 'A new folder; one that already exists is refused, never merged.'} />
+                  </div>
+                )}
+
                 <div className="rounded-sm border border-line bg-base px-3 py-1.5">
-                  <KV k="Access" v={source === 'git' ? 'cloned with your git credentials, read only' : 'read in place'} />
-                  <KV k="Changes" v="none until you dispatch a plan" />
+                  {door === 'clone' && <KV k="Access" v="cloned with your git credentials, read only" />}
+                  {door === 'folder' && <KV k="Access" v="read in place, nothing copied" />}
+                  {door === 'archive' && <KV k="Writes" v={`only ${target ?? 'the new folder'}, after every entry is checked`} />}
+                  {door === 'empty' && <KV k="Writes" v={`${target ?? 'the new folder'}: git init, a README, one commit`} />}
+                  <KV k="Changes" v="none to its code until you dispatch a plan" />
                 </div>
               </div>
             ),
@@ -455,7 +657,7 @@ export default function Projects() {
             ),
           },
           {
-            id: 'sources', title: 'More sources', hint: extras.length ? `${extras.length} added` : 'optional',
+            id: 'sources', title: 'More sources', hint: extras.length || readsFrom.size ? `${extras.length + readsFrom.size} added` : 'optional',
             content: (
               <div className="space-y-3">
                 <p className="text-[13px] leading-relaxed text-soft">
@@ -472,6 +674,7 @@ export default function Projects() {
                           <span className="block truncate font-mono text-[12.5px] text-ink">{x.label}/</span>
                           <span className="block truncate font-mono text-[11.5px] text-dim">{x.repo}{x.kind === 'git' ? ` @ ${x.branch}` : ''}</span>
                         </span>
+                        {readOnly(x) && <Tag tone="violet">reference</Tag>}
                         <Tag>{x.kind === 'git' ? 'git' : 'folder'}</Tag>
                         <button type="button" aria-label={`Remove ${x.label}`} onClick={() => setExtras((cur) => cur.filter((y) => y.label !== x.label))}
                           className="grid size-7 place-items-center rounded-md text-dim transition-colors hover:bg-surface-2 hover:text-ink">
@@ -482,8 +685,14 @@ export default function Projects() {
                   </div>
                 )}
                 <div className="space-y-2.5 rounded-lg border border-line bg-base px-3 py-3">
-                  <Segmented options={[{ id: 'git', label: 'Git remote' }, { id: 'local', label: 'Local path' }]}
-                    value={draft.kind} onChange={(kind) => setDraft((d) => ({ ...d, kind }))} />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Segmented options={[{ id: 'git', label: 'Git remote' }, { id: 'local', label: 'Local path' }]}
+                      value={draft.kind} onChange={(kind) => setDraft((d) => ({ ...d, kind }))} />
+                    <RolePick value={draft.role ?? 'code'} onChange={(role) => setDraft((d) => ({ ...d, role }))} label="What this source is" />
+                  </div>
+                  {draft.role === 'reference' && (
+                    <p className="text-[12px] text-dim">A reference: documents, a design system, another repository — indexed and read for grounding, never written by an agent.</p>
+                  )}
                   <div className="flex items-end gap-2">
                     <Field className="min-w-0 flex-1" mono value={draft.repo}
                       label={draft.kind === 'git' ? 'Clone URL' : 'Absolute path'}
@@ -503,10 +712,28 @@ export default function Projects() {
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-[12px] text-dim">{draft.repo.trim() || draft.label.trim() ? draftProblem ?? 'Ready to add' : 'Optional — skip this step to onboard one source'}</span>
                     <Button type="button" size="sm" variant="outline" disabled={!!draftProblem} onClick={addDraft}>
-                      <Plus className="size-3.5" />Add another folder or repository
+                      <Plus className="size-3.5" />{draft.role === 'reference' ? 'Add a reference' : 'Add another folder or repository'}
                     </Button>
                   </div>
                 </div>
+                {projects.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="flex items-center gap-1.5 text-[12.5px] font-medium text-soft"><BookOpen className="size-3.5" />Reads from other projects</p>
+                    <p className="text-[12px] text-dim">Their code, documents and memory are searched beside this project's own, labelled as a reference, and never written from here.</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {projects.map((x) => {
+                        const on = readsFrom.has(x.id);
+                        return (
+                          <button key={x.id} type="button" aria-pressed={on} onClick={() => toggleRead(x.id)}
+                            className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12.5px] transition-colors',
+                              on ? 'border-brand/60 bg-brand/10 text-ink' : 'border-line text-soft hover:bg-surface-2')}>
+                            {on ? <Check className="size-3 text-brand" /> : <Dot state={x.status} />}{x.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
             ),
           },
@@ -515,12 +742,26 @@ export default function Projects() {
             content: (
               <div className="space-y-3">
                 <div className="grid grid-cols-1 gap-x-6 rounded-sm border border-line bg-base px-3 py-1.5 sm:grid-cols-2">
-                  <KV k="Source" v={repo.trim() || 'not entered'} mono />
-                  <KV k="Branch" v={source === 'git' ? branch : 'working tree'} mono />
+                  <KV k="From" v={DOORS.find((d) => d.id === door)?.title ?? ''} />
+                  {door === 'clone' || door === 'folder' ? (
+                    <>
+                      <KV k="Source" v={repo.trim() || 'not entered'} mono />
+                      <KV k="Branch" v={source === 'git' ? branch : 'working tree'} mono />
+                    </>
+                  ) : (
+                    <>
+                      {door === 'archive' && <KV k="Archive" v={archiveFrom === 'upload' ? upload?.name ?? 'not chosen' : archivePath.trim() || 'not chosen'} mono />}
+                      <KV k="New folder" v={target ?? 'not chosen'} mono />
+                    </>
+                  )}
                   <KV k="Excluded" v={`${excluded.split(',').map((x) => x.trim()).filter(Boolean).length} patterns`} />
                   <KV k="Rules recorded" v={`${picked.size} of ${SUGGESTED_RULES.length}`} />
-                  <KV k="More sources" v={extras.length ? extras.map((x) => x.label).join(', ') : 'none'} mono={extras.length > 0} />
+                  <KV k="More sources" v={extras.length ? extras.map((x) => (readOnly(x) ? `${x.label} (reference)` : x.label)).join(', ') : 'none'} mono={extras.length > 0} />
+                  <KV k="Reads from" v={readsFrom.size ? projects.filter((x) => readsFrom.has(x.id)).map((x) => x.name).join(', ') : 'no other project'} />
                 </div>
+                {progress !== null && (
+                  <p className="flex items-center gap-2 text-[12.5px] text-soft"><Loader2 className="size-3.5 animate-spin" />Uploading the archive · {Math.round(progress * 100)}%</p>
+                )}
                 <SectionTitle>What onboarding does</SectionTitle>
                 <div className="rounded-sm border border-line bg-base">
                   {stages.map((st, n) => (
@@ -540,7 +781,12 @@ export default function Projects() {
       />
       <FolderPicker
         open={browsing !== null}
-        title={browsing === 'first' ? 'Choose the project folder' : 'Choose a folder to add'}
+        mode={browsing === 'archive' ? 'file' : 'folder'}
+        accept={ARCHIVES}
+        purpose={browsing === 'archive' ? 'import-archive' : browsing === 'into' ? 'project-parent' : 'project-folder'}
+        title={browsing === 'first' ? 'Choose the project folder' : browsing === 'archive' ? 'Choose an archive to import'
+          : browsing === 'into' ? (door === 'archive' ? 'Choose where to unpack it' : 'Choose where to make it') : 'Choose a folder to add'}
+        confirmLabel={browsing === 'into' ? 'Make it here' : undefined}
         onPick={onFolder}
         onClose={() => setBrowsing(null)}
       />

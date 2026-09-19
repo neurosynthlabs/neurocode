@@ -78,10 +78,43 @@ class Source:
     primary: bool
     id: int | None = None
     ready: bool = True
+    #: `code` is worked on; `reference` is only read (see `writable`). The first source is always code.
+    role: str = "code"
 
     @property
     def prefix(self) -> str:
         return "" if self.primary else f"{self.label}/"
+
+
+def writable(source: Source) -> bool:
+    """Whether agents may change this source. A reference — documents, a design system, another team's
+    repository — is indexed and read for grounding, and never written to: the compiler reports a target
+    there as not writable, and the runtime refuses to open a worktree on it."""
+    return source.role != "reference"
+
+
+def writable_at(sources: list[Source], path: str) -> bool:
+    """Whether a project path lands in a source agents may change. A path in a reference source is not,
+    and neither is one whose source is not on this machine — nothing can be written where nothing is.
+    The compiler's file check and the runtime's worktree choice ask this, so both say the same.
+
+    A path whose first part holds a colon is a referenced project's (`payments:app/charge.py`, as
+    retrieval and the session tools name them) and is never writable from this project."""
+    if ":" in path.strip().replace("\\", "/").split("/", 1)[0]:
+        return False
+    hit = split(sources, path)
+    return hit is not None and writable(hit[0])
+
+
+async def is_writable(session: AsyncSession, project: Project, path: str) -> bool:
+    """`writable_at` for one path of one project, reading its sources."""
+    return writable_at(await roots(session, project), path)
+
+
+def reference_labels(sources: list[Source]) -> set[str]:
+    """The labels of a project's reference sources: their files are read, labelled "reference", and
+    never written — what retrieval, the mentions list and the Workbench mark them with."""
+    return {x.label for x in sources if not writable(x)}
 
 
 def checkout(project: Project) -> Path | None:
@@ -106,7 +139,7 @@ def sources_from(project: Project, rows: list[ProjectSource]) -> list[Source]:
         where = source_root(row)
         if where is not None:
             out.append(Source(label=row.label, root=where, kind=row.kind, primary=False, id=row.id,
-                              ready=row.status == "active"))
+                              ready=row.status == "active", role=row.role))
     return out
 
 

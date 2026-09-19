@@ -2,9 +2,15 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Search, Pin, Archive, FileSearch, TriangleAlert, Globe, Layers, FilePlus2, Loader2, Sparkles, Zap, Split, Activity,
+  Download, Check, X, Pencil, ChevronDown, ChevronUp, Scale,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Switch } from '@/components/ui/switch';
+import { ApiError } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
+import { SIGNAL_LABEL, tasteApi, tasteMarkdown, type TasteKind, type TasteRule, type TasteSignal } from '@/lib/live/taste';
 import type { Extracted } from '@/lib/api';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Mono, Segmented, ListRow, Empty,
@@ -33,7 +39,7 @@ export default function Memory() {
   const [cat, setCat] = useState<MemoryCategory | 'all'>('all');
   const [q, setQ] = useState('');
   const [sel, setSel] = useState<string | null>(null);
-  const [tab, setTab] = useState<'facts' | 'health' | 'conflicts'>('facts');
+  const [tab, setTab] = useState<'facts' | 'health' | 'conflicts' | 'taste'>('facts');
   const [adding, setAdding] = useState(false);
   const [marking, setMarking] = useState<{ a: string } | null>(null);
 
@@ -117,6 +123,7 @@ export default function Memory() {
               { id: 'facts', label: `Facts (${scoped.length})` },
               { id: 'health', label: 'Use & health' },
               { id: 'conflicts', label: `Conflicts (${conflicts.length})` },
+              { id: 'taste', label: 'Taste' },
             ]}
             value={tab}
             onChange={setTab}
@@ -274,6 +281,11 @@ export default function Memory() {
         ))}
 
         {tab === 'health' && <Health live={live} conflicts={conflicts.length} />}
+
+        {tab === 'taste' && (
+          <Taste projectId={scope === 'global' || !projectId ? null : projectId}
+            scopeName={scope === 'global' || !project ? 'the workspace' : project.name} />
+        )}
 
         {tab === 'conflicts' && (
           <div className="space-y-3">
@@ -547,5 +559,290 @@ function AddFromText({ open, onOpenChange, projectId, onAdded }: {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/* ── Taste ──────────────────────────────────────────────────────── */
+
+const KIND_TONE: Record<TasteKind, 'ok' | 'danger' | 'warn' | 'info' | 'violet'> = {
+  accept: 'ok', refuse: 'danger', rework_note: 'warn', edit_delta: 'info', plan_edit: 'violet',
+};
+const reasonOf = (e: unknown) => (e instanceof ApiError ? e.message : 'The local API did not answer.');
+
+/** How this team likes the work done: rules learnt from its own decisions, each adopted by a person before any model sees it. */
+function Taste({ projectId, scopeName }: { projectId: string | null; scopeName: string }) {
+  const { can } = useAuth();
+  const mayWrite = can('memory:write');
+  const scopeKey = projectId ?? 'workspace';
+  const rules = useRemote(`taste:${scopeKey}`, () => tasteApi.rules(projectId));
+  const signals = useRemote(`taste-signals:${scopeKey}`, () => tasteApi.signals(projectId, 30));
+  const [learning, setLearning] = useState(false);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [editing, setEditing] = useState<{ id: number; text: string } | null>(null);
+  const [evidenceOf, setEvidenceOf] = useState<TasteRule | null>(null);
+  const [showRetired, setShowRetired] = useState(false);
+
+  const items = rules.data?.items ?? [];
+  const proposed = items.filter((r) => r.status === 'proposed');
+  const active = items.filter((r) => r.status === 'active');
+  const retired = items.filter((r) => r.status === 'retired');
+  const counts = rules.data?.signals;
+  const reload = () => { rules.reload(); signals.reload(); };
+
+  const learn = async () => {
+    setLearning(true);
+    try {
+      const done = await tasteApi.learn(projectId);
+      const n = done.proposed.length;
+      toast.success(n ? `${n} rule${n === 1 ? '' : 's'} proposed` : 'Nothing new came of them', {
+        description: `Read ${done.read} signal${done.read === 1 ? '' : 's'}${done.harvested ? `, ${done.harvested} gathered from recent decisions` : ''} · ${done.model}.`
+          + (n ? ' Adopt the ones that are true; nothing reaches a model until you do.' : ''),
+      });
+      reload();
+    } catch (e) {
+      toast.error('Nothing learnt', { description: reasonOf(e) });
+    } finally {
+      setLearning(false);
+    }
+  };
+
+  const change = async (rule: TasteRule, next: { text?: string; status?: 'active' | 'retired' }, said: string) => {
+    setBusy(rule.id);
+    try {
+      await tasteApi.change(rule.id, next);
+      toast(said, { description: rule.ref });
+      setEditing(null);
+      rules.reload();
+    } catch (e) {
+      toast.error('Not changed', { description: reasonOf(e) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const exportMd = () => {
+    const blob = new Blob([tasteMarkdown(items, scopeName)], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'taste.md';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const meta = (r: TasteRule) => (
+    <span className="text-[11.5px] text-dim">
+      <span className="text-ok">{r.support} for</span> · <span className={r.contradict ? 'text-warn' : undefined}>{r.contradict} against</span>
+      {r.projectId === null && ' · workspace'}
+      {r.status === 'active' && r.adoptedBy ? ` · adopted by ${r.adoptedBy}${r.adoptedAt ? ` ${ago(r.adoptedAt)}` : ''}` : ''}
+      {r.status === 'proposed' && r.proposedBy ? ` · proposed by ${r.proposedBy} ${ago(r.createdAt)}` : ''}
+    </span>
+  );
+
+  const words = (r: TasteRule) => editing?.id === r.id ? (
+    <form className="mt-1 space-y-1.5" onSubmit={(e) => { e.preventDefault(); void change(r, { text: editing.text }, 'Rule reworded'); }}>
+      <textarea autoFocus rows={2} maxLength={300} value={editing.text} aria-label={`Reword ${r.ref}`}
+        onChange={(e) => setEditing({ id: r.id, text: e.target.value })}
+        className="w-full resize-y rounded-sm border border-line bg-base px-2.5 py-1.5 text-[13px] text-ink focus-visible:border-brand focus-visible:outline-none" />
+      <div className="flex gap-1.5">
+        <Button size="xs" type="submit" disabled={busy === r.id || editing.text.trim().length < 8}><Check />Save</Button>
+        <Button size="xs" type="button" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
+      </div>
+    </form>
+  ) : <p className="text-[13.5px] leading-snug text-ink">{r.text}</p>;
+
+  const evidenceButton = (r: TasteRule) => (
+    <Button size="xs" variant="ghost" onClick={() => setEvidenceOf(r)}><Scale />Evidence ({r.evidence})</Button>
+  );
+
+  if (rules.loading && !rules.data) {
+    return <p className="flex items-center gap-2 p-2 text-[13px] text-dim"><Loader2 className="size-3.5 animate-spin" />Reading what the team has decided…</p>;
+  }
+  if (rules.error && !rules.data) {
+    return (
+      <Empty icon={<TriangleAlert className="size-6" />} title="Taste did not load" hint={rules.error}
+        action={<Button size="sm" variant="outline" onClick={reload}>Try again</Button>} />
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <p className="max-w-3xl text-[13px] text-soft">
+          How {scopeName === 'the workspace' ? 'this workspace' : scopeName} likes the work done, learnt from what people did: runs accepted or refused
+          beside what the review found, runs sent back with notes, plans reshaped before dispatch, and their own commits on an agent’s branch.
+          A model proposes rules from those signals; a rule reaches the compiler, the agents and the reviewer only once someone adopts it.
+        </p>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <Button size="sm" variant="outline" disabled={active.length === 0} onClick={exportMd}
+            title={active.length ? 'The active rules as a Markdown file' : 'Adopt a rule first'}>
+            <Download className="size-3.5" />Export taste.md
+          </Button>
+          <Button size="sm" disabled={!mayWrite || learning} onClick={learn}
+            title={mayWrite ? 'Gathers recent decisions, then asks a model to propose rules from the unread signals' : 'Needs the memory:write permission'}>
+            {learning ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+            {learning ? 'Learning…' : 'Learn from my decisions'}
+          </Button>
+        </div>
+      </div>
+
+      <StatGrid cols={4}>
+        <Stat label="Signals not read yet" value={counts ? counts.unread.toLocaleString() : '…'}
+          sub={counts ? `${counts.total.toLocaleString()} kept in all` : undefined} tone={counts?.unread ? 'brand' : undefined} />
+        <Stat label="Proposed" value={rules.data?.counts.proposed ?? 0} sub="waiting for your word" tone={proposed.length ? 'warn' : undefined} />
+        <Stat label="Active" value={rules.data?.counts.active ?? 0} sub="handed to every model" tone={active.length ? 'ok' : undefined} />
+        <Stat label="Retired" value={rules.data?.counts.retired ?? 0} sub="rejected or switched off" />
+      </StatGrid>
+
+      <Panel eyebrow={proposed.length ? 'Adopt what is true, reject what is not' : 'From the last time it learnt'}
+        title={`Proposed (${proposed.length})`} flush>
+        {proposed.length === 0 ? (
+          <p className="px-5 py-3 text-[13px] text-dim">
+            {counts?.total
+              ? 'Nothing is waiting. Learn from your decisions to read the signals that came in since.'
+              : 'Nothing yet. Signals arrive as you accept, refuse or send back runs, shape plans, and commit on a run’s branch; then Learn from my decisions.'}
+          </p>
+        ) : (
+          <div className="divide-y divide-line">
+            {proposed.map((r) => (
+              <div key={r.id} className="px-5 py-3">
+                <div className="flex flex-wrap items-center gap-2"><Mono>{r.ref}</Mono>{meta(r)}</div>
+                <div className="mt-1">{words(r)}</div>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  <Button size="xs" disabled={!mayWrite || busy === r.id} onClick={() => void change(r, { status: 'active' }, 'Rule adopted')}><Check />Adopt</Button>
+                  <Button size="xs" variant="ghost" disabled={!mayWrite || busy === r.id} onClick={() => setEditing({ id: r.id, text: r.text })}><Pencil />Edit</Button>
+                  <Button size="xs" variant="ghost" disabled={!mayWrite || busy === r.id} onClick={() => void change(r, { status: 'retired' }, 'Rule rejected')}><X />Reject</Button>
+                  {evidenceButton(r)}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+
+      <Panel eyebrow="Handed to the compiler, the agents and the reviewer after the project's instruction files"
+        title={`Active (${active.length})`} flush>
+        {active.length === 0 ? (
+          <p className="px-5 py-3 text-[13px] text-dim">No rule is active. Adopt a proposed one, and plans record it under “Taste applied”.</p>
+        ) : (
+          <div className="divide-y divide-line">
+            {active.map((r) => (
+              <div key={r.id} className="flex items-start gap-3 px-5 py-3">
+                <Switch className="mt-1" checked disabled={!mayWrite || busy === r.id} aria-label={`Switch off ${r.ref}`}
+                  onCheckedChange={(on) => { if (!on) void change(r, { status: 'retired' }, 'Rule switched off'); }} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2"><Mono tone="brand">{r.ref}</Mono>{meta(r)}</div>
+                  <div className="mt-1">{words(r)}</div>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    <Button size="xs" variant="ghost" disabled={!mayWrite || busy === r.id} onClick={() => setEditing({ id: r.id, text: r.text })}><Pencil />Edit</Button>
+                    {evidenceButton(r)}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {retired.length > 0 && (
+          <>
+            <button type="button" onClick={() => setShowRetired(!showRetired)}
+              className="flex w-full items-center gap-1.5 border-t border-line px-5 py-2 text-left text-[12px] text-dim hover:text-ink-2">
+              {showRetired ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}{retired.length} retired
+            </button>
+            {showRetired && (
+              <div className="divide-y divide-line border-t border-line">
+                {retired.map((r) => (
+                  <div key={r.id} className="flex items-start gap-3 px-5 py-2.5">
+                    <Switch className="mt-1" checked={false} disabled={!mayWrite || busy === r.id} aria-label={`Switch on ${r.ref}`}
+                      onCheckedChange={(on) => { if (on) void change(r, { status: 'active' }, 'Rule switched on'); }} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2"><Mono>{r.ref}</Mono>{meta(r)}</div>
+                      <p className="mt-0.5 text-[13px] text-soft">{r.text}</p>
+                    </div>
+                    {evidenceButton(r)}
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </Panel>
+
+      <Panel eyebrow="The moments it learns from, newest first" title="Signals" flush>
+        {signals.error ? (
+          <div className="flex items-center gap-2 px-5 py-3 text-[13px] text-danger">
+            <span className="min-w-0 flex-1">The signals did not load: {signals.error}</span>
+            <Button size="xs" variant="outline" onClick={signals.reload}>Try again</Button>
+          </div>
+        ) : !signals.data ? (
+          <p className="flex items-center gap-2 px-5 py-3 text-[13px] text-dim"><Loader2 className="size-3.5 animate-spin" />Reading the signals…</p>
+        ) : signals.data.length === 0 ? (
+          <p className="px-5 py-3 text-[13px] text-dim">
+            None kept yet. Accepting or refusing a run, sending one back with notes, editing a plan’s steps and your own commits on a
+            run’s branch before it merges are each kept as a signal. Decisions already made are gathered when you press Learn.
+          </p>
+        ) : (
+          <div className="divide-y divide-line">
+            {signals.data.map((sig) => <SignalRow key={sig.id} signal={sig} />)}
+          </div>
+        )}
+      </Panel>
+
+      <Evidence rule={evidenceOf} onClose={() => setEvidenceOf(null)} />
+    </div>
+  );
+}
+
+function SignalRow({ signal }: { signal: TasteSignal }) {
+  return (
+    <div className="flex items-start gap-2.5 px-5 py-2">
+      <span className="w-32 shrink-0"><Tag tone={KIND_TONE[signal.kind]}>{SIGNAL_LABEL[signal.kind]}</Tag></span>
+      <span className="min-w-0 flex-1 text-[12.5px] text-ink-2 [overflow-wrap:anywhere]">{signal.summary}</span>
+      <span className="shrink-0 text-right text-[11.5px] text-dim">
+        {signal.stance ? <span className={signal.stance === 'for' ? 'text-ok' : 'text-warn'}>{signal.stance} · </span> : null}
+        {signal.distilled ? '' : 'unread · '}{ago(signal.at)}
+      </span>
+    </div>
+  );
+}
+
+/** The drawer: every signal a rule cites, for it or against it, with what each was built from. */
+function Evidence({ rule, onClose }: { rule: TasteRule | null; onClose: () => void }) {
+  const found = useRemote(rule ? `taste-evidence:${rule.id}:${rule.updatedAt}` : null, () => tasteApi.evidence(rule?.id ?? 0));
+  const [open, setOpen] = useState<number | null>(null);
+  return (
+    <Sheet open={!!rule} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <SheetContent side="right" className="w-full gap-0 overflow-y-auto p-0 sm:w-[560px] sm:max-w-none">
+        {rule && (
+          <>
+            <SheetHeader className="border-b border-line px-5 pt-5 pb-4">
+              <Mono tone="brand">{rule.ref}</Mono>
+              <SheetTitle className="mt-2 text-[15px] text-ink">{rule.text}</SheetTitle>
+              <SheetDescription className="text-[12.5px] text-soft">
+                {rule.support} signal{rule.support === 1 ? '' : 's'} for it, {rule.contradict} against — counted from the signals it cites, not taken from the model.
+              </SheetDescription>
+            </SheetHeader>
+            <div className="divide-y divide-line">
+              {found.loading && <p className="flex items-center gap-2 px-5 py-3 text-[13px] text-dim"><Loader2 className="size-3.5 animate-spin" />Reading the evidence…</p>}
+              {found.error && <p className="px-5 py-3 text-[13px] text-danger">The evidence did not load: {found.error}</p>}
+              {found.data && found.data.signals.length === 0 && (
+                <p className="px-5 py-3 text-[13px] text-dim">The signals it cited are gone: their project was removed.</p>
+              )}
+              {found.data?.signals.map((sig) => (
+                <div key={sig.id}>
+                  <button type="button" className="w-full text-left hover:bg-surface-2/50" onClick={() => setOpen(open === sig.id ? null : sig.id)}>
+                    <SignalRow signal={sig} />
+                  </button>
+                  {open === sig.id && (
+                    <pre className="mx-5 mb-3 max-h-72 overflow-auto rounded-sm border border-line bg-base p-2.5 font-mono text-[11.5px] whitespace-pre-wrap text-ink-2">
+                      {typeof sig.payload.patch === 'string' ? sig.payload.patch : JSON.stringify(sig.payload, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </SheetContent>
+    </Sheet>
   );
 }

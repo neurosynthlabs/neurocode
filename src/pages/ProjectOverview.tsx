@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Code2, ExternalLink, FileText, FolderGit2, Globe, Loader2, RefreshCw, Scale, Search, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { ReferencesPanel } from '@/components/projects/ReferencesPanel';
 import { SourcesPanel } from '@/components/projects/SourcesPanel';
 import {
   Page, PageHeader, PageBody, Panel, Stat, StatGrid, Tag, RiskPill, Dot, Mono,
@@ -179,6 +180,8 @@ function Overview({ p }: { p: Project }) {
         </div>
 
         <SourcesPanel p={p} />
+
+        <ReferencesPanel p={p} />
 
         <div className="flex flex-wrap items-center gap-2">
           <Segmented

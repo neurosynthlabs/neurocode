@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react';
-import { ChevronRight, File, FilePlus, Folder, FolderOpen, FolderPlus, GitBranch, Link2, Loader2, RefreshCw } from 'lucide-react';
+import { ChevronRight, File, FilePlus, Folder, FolderOpen, FolderPlus, GitBranch, Link2, Loader2, Lock, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -19,6 +19,10 @@ export interface TreeRoot {
   path: string | null;
   git: MachineGit | null;
   note?: string;
+  /** Only read here: a reference source, or a project this one references. Nothing is made in it from the tree. */
+  readOnly?: boolean;
+  /** A heading drawn above the first root of a group ("References"); roots without one come first. */
+  group?: string;
 }
 
 type Loaded = { state: 'loading' } | { state: 'error'; error: string } | { state: 'ok'; listing: MachineListing };
@@ -203,10 +207,12 @@ export function FileTree({ roots, activePath, hidden, refresh, onOpen, onCreated
   if (roots.length === 0) return null;
   return (
     <div className="flex flex-col gap-1 pb-3">
-      {roots.map((root) => {
+      {roots.map((root, i) => {
         const open = !!root.path && expanded.has(root.path);
+        const heading = root.group && root.group !== roots[i - 1]?.group ? root.group : null;
         return (
           <section key={root.key} className="min-w-0">
+            {heading && <h3 className="eyebrow mt-2 border-t border-line/60 px-3 pt-3 pb-1">{heading}</h3>}
             <div className="sticky top-0 z-10 flex items-center gap-1 bg-surface/95 px-2 py-1.5 backdrop-blur">
               <button type="button" disabled={!root.path} onClick={() => root.path && toggle(root.path)}
                 className="flex min-w-0 flex-1 items-center gap-1 text-left">
@@ -217,8 +223,18 @@ export function FileTree({ roots, activePath, hidden, refresh, onOpen, onCreated
                     <GitBranch className="size-3 shrink-0" />{root.git.branch}
                   </span>
                 )}
+                {root.readOnly && (
+                  <span className="ml-1 inline-flex shrink-0 items-center gap-1 rounded-full border border-line px-1.5 text-[10.5px] text-dim"
+                    title="Read for search and grounding; agents never write here, and the editor opens its files read only.">
+                    <Lock className="size-2.5" />read only
+                  </span>
+                )}
               </button>
-              {root.path && (
+              {root.path && root.readOnly && (
+                <Tooltip><TooltipTrigger render={<Button size="icon-xs" variant="ghost" aria-label={`Read ${root.label} again`} onClick={() => root.path && load(root.path)} />}>
+                  <RefreshCw className="size-3.5" /></TooltipTrigger><TooltipContent>Refresh</TooltipContent></Tooltip>
+              )}
+              {root.path && !root.readOnly && (
                 <span className="flex shrink-0 items-center">
                   <Tooltip><TooltipTrigger render={<Button size="icon-xs" variant="ghost" aria-label={`New file in ${root.label}`} onClick={() => startCreate(root, 'file')} />}>
                     <FilePlus className="size-3.5" /></TooltipTrigger><TooltipContent>New file</TooltipContent></Tooltip>

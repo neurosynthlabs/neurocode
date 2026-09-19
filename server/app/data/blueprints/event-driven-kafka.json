@@ -1,0 +1,328 @@
+{
+ "id": "event-driven-kafka",
+ "name": "Event-driven services on Kafka",
+ "summary": "Services that publish facts to Kafka and react to each other's events, with the transactional outbox and change data capture so no event is lost. For domains where many consumers need the same stream of changes.",
+ "fitsWhen": [
+  {
+   "answer": "data",
+   "is": [
+    "events"
+   ],
+   "says": "the data is a stream of events"
+  },
+  {
+   "answer": "productType",
+   "is": [
+    "event-driven",
+    "data-platform"
+   ],
+   "says": "a system of services reacting to events"
+  },
+  {
+   "answer": "scale",
+   "is": [
+    "large"
+   ],
+   "says": "large volume is expected"
+  },
+  {
+   "answer": "team",
+   "is": [
+    "java",
+    "kotlin",
+    "go"
+   ],
+   "says": "the team writes Java, Kotlin or Go"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "teamSize",
+   "is": [
+    "solo"
+   ],
+   "says": "one person would operate Kafka"
+  },
+  {
+   "answer": "budget",
+   "is": [
+    "minimal"
+   ],
+   "says": "the budget is tight"
+  },
+  {
+   "answer": "timeline",
+   "is": [
+    "weeks"
+   ],
+   "says": "it must ship in weeks"
+  }
+ ],
+ "layers": {
+  "backend": {
+   "choice": "spring-boot",
+   "alternatives": [
+    "go",
+    "quarkus"
+   ],
+   "why": "Spring for Apache Kafka and Spring Data cover producers, consumers and transactions."
+  },
+  "queue": {
+   "choice": "kafka",
+   "alternatives": [
+    "nats",
+    "rabbitmq"
+   ],
+   "why": "A replayable, partitioned log: new consumers can read history, ordering holds per key."
+  },
+  "database": {
+   "choice": "postgres",
+   "alternatives": [],
+   "why": "Each service's state, and its outbox table."
+  },
+  "data": {
+   "choice": "debezium",
+   "alternatives": [
+    "flink"
+   ],
+   "why": "Change data capture publishes the outbox rows to Kafka reliably."
+  },
+  "infra": {
+   "choice": "kubernetes",
+   "alternatives": [],
+   "why": "Kafka and the services run as workloads; a managed Kafka removes most of the burden."
+  },
+  "ci-cd": {
+   "choice": "github-actions",
+   "alternatives": [
+    "argo-cd"
+   ],
+   "why": "Build, test, publish images; GitOps for deploys."
+  },
+  "observability": {
+   "choice": "opentelemetry",
+   "alternatives": [
+    "prometheus",
+    "grafana"
+   ],
+   "why": "Consumer lag and end-to-end traces across topics."
+  },
+  "testing": {
+   "choice": "testcontainers",
+   "alternatives": [
+    "junit"
+   ],
+   "why": "Integration tests against a real Kafka and Postgres."
+  },
+  "hosting": {
+   "choice": "aws",
+   "alternatives": [
+    "gcp",
+    "azure"
+   ],
+   "why": "A managed Kafka service and managed Postgres."
+  }
+ },
+ "services": [
+  {
+   "name": "orders",
+   "kind": "api",
+   "tech": "spring-boot",
+   "responsibilities": [
+    "Accepts commands",
+    "Writes state and an outbox row in one transaction"
+   ],
+   "talksTo": [
+    "orders-db"
+   ]
+  },
+  {
+   "name": "cdc",
+   "kind": "pipeline",
+   "tech": "debezium",
+   "responsibilities": [
+    "Streams outbox rows into Kafka topics"
+   ],
+   "talksTo": [
+    "orders-db",
+    "events"
+   ]
+  },
+  {
+   "name": "billing",
+   "kind": "worker",
+   "tech": "spring-boot",
+   "responsibilities": [
+    "Consumes order events, invoices customers"
+   ],
+   "talksTo": [
+    "events",
+    "billing-db"
+   ]
+  },
+  {
+   "name": "analytics-sink",
+   "kind": "pipeline",
+   "tech": "kafka",
+   "responsibilities": [
+    "Copies events to the warehouse"
+   ],
+   "talksTo": [
+    "events"
+   ]
+  }
+ ],
+ "dataStores": [
+  {
+   "name": "orders-db",
+   "tech": "postgres",
+   "purpose": "Orders state and outbox"
+  },
+  {
+   "name": "billing-db",
+   "tech": "postgres",
+   "purpose": "Billing state"
+  },
+  {
+   "name": "events",
+   "tech": "kafka",
+   "purpose": "Topics per event type, keyed by aggregate id"
+  }
+ ],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "docker compose with Kafka (KRaft), Postgres and Debezium",
+   "hosting": "Docker"
+  },
+  {
+   "name": "staging",
+   "purpose": "Same topology on a small managed Kafka",
+   "hosting": "Managed Kafka"
+  },
+  {
+   "name": "prod",
+   "purpose": "Replicated Kafka across zones",
+   "hosting": "Managed Kafka"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "test",
+    "does": "Unit and Testcontainers integration tests"
+   },
+   {
+    "name": "schemas",
+    "does": "Event schema compatibility check"
+   },
+   {
+    "name": "image",
+    "does": "Build and push images"
+   },
+   {
+    "name": "deploy",
+    "does": "Promote through GitOps"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "kubernetes",
+  "tools": [
+   "kubernetes",
+   "helm",
+   "terraform"
+  ],
+  "notes": [
+   "Topics, partitions and retention defined as code"
+  ]
+ },
+ "observability": {
+  "tools": [
+   "opentelemetry",
+   "prometheus",
+   "grafana"
+  ],
+  "notes": [
+   "Alert on consumer lag",
+   "Dead-letter topics watched"
+  ]
+ },
+ "security": {
+  "auth": "Services authenticate to Kafka with SASL/mTLS; ACLs per topic",
+  "secrets": "Vault or the cloud's secret manager",
+  "notes": [
+   "Events carry no secrets or unnecessary personal data",
+   "Retention matches the data policy (GDPR erasure needs a plan)"
+  ]
+ },
+ "folderLayout": "services/\n  orders/\n  billing/\nschemas/\n  orders/order-placed.v1.json\ndeploy/\ndocker-compose.yml",
+ "conventions": [
+  "Events are named in the past tense (OrderPlaced)",
+  "Consumers are idempotent",
+  "The outbox is written in the same transaction as the state",
+  "Schemas evolve additively"
+ ],
+ "adrs": [
+  {
+   "title": "Transactional outbox with CDC",
+   "decision": "Services write events to an outbox table; Debezium publishes them.",
+   "why": "Avoids the dual-write problem where the database commit and the publish can disagree.",
+   "alternatives": [
+    "publish directly from the service"
+   ]
+  },
+  {
+   "title": "Kafka as the backbone",
+   "decision": "Kafka carries every domain event.",
+   "why": "Replay and many independent consumers of the same history.",
+   "alternatives": [
+    "nats",
+    "rabbitmq"
+   ]
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "platform",
+    "layout": "Services, event schemas and a local stack",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "The events, the services, and how to start the local stack."
+     },
+     {
+      "path": "docker-compose.yml",
+      "template": "Kafka in KRaft mode, Postgres, Kafka Connect with Debezium."
+     },
+     {
+      "path": "schemas/orders/order-placed.v1.json",
+      "template": "JSON Schema for the OrderPlaced event."
+     },
+     {
+      "path": "services/orders/build.gradle.kts",
+      "template": "Spring Boot with spring-kafka, data-jpa, postgres driver, testcontainers."
+     },
+     {
+      "path": "services/orders/src/main/java/app/orders/OrdersApplication.java",
+      "template": "Spring Boot entry point."
+     },
+     {
+      "path": "services/orders/src/main/resources/application.yml",
+      "template": "Datasource and Kafka settings from environment variables."
+     },
+     {
+      "path": "services/billing/build.gradle.kts",
+      "template": "Spring Boot consumer service."
+     },
+     {
+      "path": ".github/workflows/ci.yml",
+      "template": "Gradle build and tests per service."
+     }
+    ]
+   }
+  ]
+ }
+}

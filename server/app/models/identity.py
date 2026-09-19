@@ -176,3 +176,25 @@ class Setting(Base, Mixin):
 
     key: Mapped[str] = mapped_column(String(120), primary_key=True)
     value: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+
+class ApiToken(Base):
+    """A personal token for a script or the terminal client: it acts as its person, limited to the scopes it
+    was given (never more than the person holds), until it expires or is revoked. Only its hash is kept; the
+    token is shown once, when it is made."""
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    #: The first characters, shown in lists so a person can tell tokens apart.
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    #: Permissions it may use; an empty list means all of its person's.
+    scopes: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+

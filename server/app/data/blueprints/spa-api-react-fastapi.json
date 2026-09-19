@@ -1,0 +1,355 @@
+{
+ "id": "spa-api-react-fastapi",
+ "name": "SPA + API: React, FastAPI and Postgres",
+ "summary": "A React single-page app talking to a typed Python API over JSON, with Postgres behind it. The common default for a product with a signed-in web UI and a Python-leaning team.",
+ "fitsWhen": [
+  {
+   "answer": "productType",
+   "is": [
+    "web-app",
+    "saas",
+    "internal-tool"
+   ],
+   "says": "a web app people sign in to"
+  },
+  {
+   "answer": "team",
+   "is": [
+    "python",
+    "typescript"
+   ],
+   "says": "the team writes Python or TypeScript"
+  },
+  {
+   "answer": "data",
+   "is": [
+    "relational"
+   ],
+   "says": "the data is relational"
+  },
+  {
+   "answer": "needs",
+   "is": [
+    "background-jobs"
+   ],
+   "says": "background jobs are needed"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "needs",
+   "is": [
+    "seo"
+   ],
+   "says": "pages must rank in search engines (a SPA renders in the browser)"
+  },
+  {
+   "answer": "productType",
+   "is": [
+    "content-site"
+   ],
+   "says": "it is mostly content"
+  }
+ ],
+ "layers": {
+  "frontend": {
+   "choice": "react",
+   "alternatives": [
+    "vue",
+    "svelte",
+    "angular"
+   ],
+   "why": "Largest ecosystem and hiring pool; with Vite the dev loop is fast and the build is a static bundle any CDN can serve."
+  },
+  "backend": {
+   "choice": "fastapi",
+   "alternatives": [
+    "django",
+    "nestjs",
+    "flask"
+   ],
+   "why": "Typed request/response models give validation and an OpenAPI document for free, and the front end can generate its client from it."
+  },
+  "database": {
+   "choice": "postgres",
+   "alternatives": [
+    "mysql"
+   ],
+   "why": "Relational integrity, JSONB for the odd flexible field, and full-text search before a search engine is needed."
+  },
+  "cache": {
+   "choice": "redis",
+   "alternatives": [
+    "valkey"
+   ],
+   "why": "Sessions, rate limits and the job queue's broker in one small service."
+  },
+  "queue": {
+   "choice": "celery",
+   "alternatives": [
+    "temporal"
+   ],
+   "why": "Emails, exports and imports leave the request path and are retried."
+  },
+  "auth": {
+   "choice": "authjs",
+   "alternatives": [
+    "keycloak",
+    "auth0",
+    "clerk"
+   ],
+   "why": "Cookie sessions issued by the API; an external identity provider only when enterprise SSO is asked for."
+  },
+  "infra": {
+   "choice": "docker-compose",
+   "alternatives": [
+    "kubernetes"
+   ],
+   "why": "One compose file runs the whole stack locally and on a single server; move to Kubernetes only when there are many services."
+  },
+  "ci-cd": {
+   "choice": "github-actions",
+   "alternatives": [
+    "gitlab-ci"
+   ],
+   "why": "Lint, typecheck, tests and image builds on every pull request."
+  },
+  "observability": {
+   "choice": "opentelemetry",
+   "alternatives": [
+    "sentry",
+    "prometheus"
+   ],
+   "why": "Traces from the browser call to the SQL query; exported to whatever backend is chosen later."
+  },
+  "testing": {
+   "choice": "pytest",
+   "alternatives": [
+    "playwright",
+    "vitest"
+   ],
+   "why": "pytest for the API against a real Postgres; Vitest and Playwright for the UI."
+  },
+  "hosting": {
+   "choice": "render",
+   "alternatives": [
+    "fly-io",
+    "aws",
+    "vm"
+   ],
+   "why": "Managed web service, worker and Postgres from git with no cluster to run."
+  }
+ },
+ "services": [
+  {
+   "name": "web",
+   "kind": "web",
+   "tech": "react",
+   "responsibilities": [
+    "Renders every screen",
+    "Calls the API with the session cookie",
+    "Holds no secrets"
+   ],
+   "talksTo": [
+    "api"
+   ]
+  },
+  {
+   "name": "api",
+   "kind": "api",
+   "tech": "fastapi",
+   "responsibilities": [
+    "Owns the domain rules and validation",
+    "Reads and writes Postgres through SQLAlchemy",
+    "Enqueues slow work"
+   ],
+   "talksTo": [
+    "db",
+    "cache",
+    "worker"
+   ]
+  },
+  {
+   "name": "worker",
+   "kind": "worker",
+   "tech": "celery",
+   "responsibilities": [
+    "Runs emails, exports and imports",
+    "Retries with backoff"
+   ],
+   "talksTo": [
+    "db",
+    "cache"
+   ]
+  }
+ ],
+ "dataStores": [
+  {
+   "name": "db",
+   "tech": "postgres",
+   "purpose": "The system of record; schema changed only through Alembic migrations"
+  },
+  {
+   "name": "cache",
+   "tech": "redis",
+   "purpose": "Sessions, rate limits and the job broker"
+  }
+ ],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "Each developer's machine",
+   "hosting": "docker compose up: web, api, worker, Postgres, Redis"
+  },
+  {
+   "name": "staging",
+   "purpose": "A copy of production for checking a release",
+   "hosting": "A Render preview of the main branch with its own database"
+  },
+  {
+   "name": "prod",
+   "purpose": "What people use",
+   "hosting": "Render web service + worker + managed Postgres with daily backups"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "lint",
+    "does": "ruff and eslint"
+   },
+   {
+    "name": "typecheck",
+    "does": "mypy and tsc --noEmit"
+   },
+   {
+    "name": "test",
+    "does": "pytest against a Postgres service container, vitest"
+   },
+   {
+    "name": "e2e",
+    "does": "Playwright against the composed stack"
+   },
+   {
+    "name": "build",
+    "does": "Docker images tagged with the commit"
+   },
+   {
+    "name": "deploy",
+    "does": "main deploys to staging; a tag deploys to prod"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "compose",
+  "tools": [
+   "docker",
+   "docker-compose"
+  ],
+  "notes": [
+   "One Dockerfile per service",
+   "Migrations run as a release step, never at app start"
+  ]
+ },
+ "observability": {
+  "tools": [
+   "opentelemetry",
+   "sentry"
+  ],
+  "notes": [
+   "Structured JSON logs with a request id",
+   "A /health endpoint that checks the database"
+  ]
+ },
+ "security": {
+  "auth": "HttpOnly session cookies set by the API; CSRF header on writes",
+  "secrets": "Environment variables from the host's secret store; .env only for local dev and never committed",
+  "notes": [
+   "Validate every input at the API boundary and return typed errors, never stack traces.",
+   "Parameterised queries only (the ORM), so no SQL is built from strings.",
+   "Set secure, HttpOnly, SameSite cookies or short-lived tokens; rate-limit sign-in.",
+   "Check authorisation on every endpoint on the server, not only in the UI (OWASP A01 Broken Access Control)."
+  ]
+ },
+ "folderLayout": "web/\n  src/\n    pages/\n    components/\n    lib/api.ts\n  package.json\napi/\n  app/\n    main.py\n    routes/\n    services/\n    models/\n  alembic/\n  tests/\n  pyproject.toml\ndocker-compose.yml",
+ "conventions": [
+  "API routes are thin: validation in Pydantic models, rules in services, SQL in repositories",
+  "Every schema change is an Alembic migration",
+  "The front end's API client is generated from the OpenAPI document",
+  "Tests hit a real Postgres, not mocks"
+ ],
+ "adrs": [
+  {
+   "title": "Single-page app over server-rendered pages",
+   "decision": "The UI is a React SPA served as static files.",
+   "why": "The product is used signed in, so search indexing does not matter and a rich client pays off.",
+   "alternatives": [
+    "nextjs",
+    "django"
+   ]
+  },
+  {
+   "title": "One API service, not microservices",
+   "decision": "All domain logic lives in one FastAPI service.",
+   "why": "One team, one deploy, transactions across the whole domain; split later along real seams.",
+   "alternatives": [
+    "go microservices"
+   ]
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "app",
+    "layout": "web/ and api/ in one repository, run together by docker compose",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "What the system is, how to start it with docker compose, and where each part lives."
+     },
+     {
+      "path": "docker-compose.yml",
+      "template": "Services web (Vite dev server), api (uvicorn --reload), worker (celery), db (postgres:16) and cache (redis:7), with a named volume for Postgres."
+     },
+     {
+      "path": "api/pyproject.toml",
+      "template": "Python 3.12 project with fastapi, uvicorn, sqlalchemy[asyncio], asyncpg, alembic, celery, redis; dev: pytest, ruff, mypy."
+     },
+     {
+      "path": "api/app/main.py",
+      "template": "FastAPI app with a /health route that checks the database, CORS for the web origin, and the routers included."
+     },
+     {
+      "path": "api/app/db.py",
+      "template": "Async SQLAlchemy engine and session dependency reading DATABASE_URL."
+     },
+     {
+      "path": "api/tests/test_health.py",
+      "template": "pytest that calls /health through httpx and expects 200."
+     },
+     {
+      "path": "web/package.json",
+      "template": "Vite + React + TypeScript app with scripts dev, build, test (vitest), lint."
+     },
+     {
+      "path": "web/src/main.tsx",
+      "template": "React entry that renders App."
+     },
+     {
+      "path": "web/src/App.tsx",
+      "template": "A first screen that calls the API's /health and shows the answer."
+     },
+     {
+      "path": ".github/workflows/ci.yml",
+      "template": "GitHub Actions: lint, typecheck and tests for api/ and web/ on every pull request."
+     },
+     {
+      "path": ".gitignore",
+      "template": "Ignores node_modules, dist, .venv, __pycache__, .env."
+     }
+    ]
+   }
+  ]
+ }
+}

@@ -18,10 +18,18 @@ from .work import when
 AUTO_COMPACT_AT = 0.8
 
 
-def run_step_json(step: RunStep) -> dict[str, Any]:
+def run_step_json(step: RunStep, *, grounding: dict[str, Any] | None = None,
+                  taken_back: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One step. What an agent step was handed (`grounding`: the instruction files, retrieval's pieces and
+    the files it read), the question it asked and the answer it got, the commit it left, and — for a
+    step a revert took back — which revert, are there only when they are."""
     return {"n": step.n, "kind": step.kind, "label": step.label, "agent": step.agent,
             "status": step.status, "detail": step.detail, "ms": step.ms,
-            **({"child": step.child_run_id} if step.child_run_id else {})}
+            **({"child": step.child_run_id} if step.child_run_id else {}),
+            **({"commitSha": step.commit_sha} if step.commit_sha else {}),
+            **({"question": step.question, "answer": step.answer or None} if step.question else {}),
+            **({"grounding": grounding} if grounding else {}),
+            **({"takenBack": taken_back} if taken_back else {})}
 
 
 def run_log_json(line: RunLog) -> dict[str, Any]:
@@ -31,12 +39,20 @@ def run_log_json(line: RunLog) -> dict[str, Any]:
 
 #: Kept on the run's review document, but shown beside it: the project's checks, a goal run's
 #: completion check, and a re-read in flight, which the screen reads from the run's own step.
-_BESIDE_REVIEW = ("checks", "goal", "reviewing")
+_BESIDE_REVIEW = ("checks", "goal", "reviewing", "grounding", "commits", "asks", "reverts", "references",
+                  "sources", "elsewhere", "awaiting")
 
 
 def run_json(run: Run, *, project_name: str = "", children: Sequence[Run] = (),
              task_ref: str | None = None, plan_ref: str | None = None) -> dict[str, Any]:
     review = run.review or {"findings": [], "verdict": "", "by": ""}
+    grounding = review.get("grounding") or {}
+    reverts = review.get("reverts") or []
+    # A step shows the revert that last took it back, while it still stands taken back.
+    taken: dict[int, dict[str, Any]] = {}
+    for revert in reverts:
+        for n in revert.get("steps") or []:
+            taken[n] = {"to": revert.get("to"), "by": revert.get("by"), "at": revert.get("at")}
     return {
         "id": run.id, "ref": run.ref, "projectId": run.project_id, "projectName": project_name,
         "taskRef": task_ref, "planRef": plan_ref, "requirement": run.requirement,
@@ -44,7 +60,8 @@ def run_json(run: Run, *, project_name: str = "", children: Sequence[Run] = (),
         "prefix": run.prefix, "base": run.base, "shortBase": run.base[:7],
         "startedAt": when(run.created_at), "finishedAt": when(run.finished_at),
         "requestedBy": run.requested_by, "targets": run.targets or [],
-        "steps": [run_step_json(s) for s in run.steps],
+        "steps": [run_step_json(s, grounding=grounding.get(str(s.n)),
+                                taken_back=taken.get(s.n) if s.status == "skipped" else None) for s in run.steps],
         # The totals are null when the runner's output was in no shape the parser knows.
         "tests": {"command": run.tests_command or None, "argv": None, "status": run.tests_status,
                   "summary": run.tests_summary, "passed": run.tests_passed, "failed": run.tests_failed,
@@ -64,6 +81,12 @@ def run_json(run: Run, *, project_name: str = "", children: Sequence[Run] = (),
                       for c in run.conflicts],
         "merged": run.merged,
         "pushed": run.pushed,
+        # What a person allowed beyond the tool rules, the reverts made, and the sources only read.
+        "grants": [{k: g.get(k) for k in ("tool", "subject", "scope", "step", "by", "at", "used")}
+                   for g in run.grants or []],
+        "reverts": [{k: r.get(k) for k in ("to", "by", "at", "steps", "redo")} for r in reverts],
+        "references": [x.get("label") for x in review.get("references") or []],
+        "sources": [x.get("label") or "" for x in review.get("sources") or []],
         **({"waitingOn": run.waiting_on} if run.waiting_on else {}),
     }
 

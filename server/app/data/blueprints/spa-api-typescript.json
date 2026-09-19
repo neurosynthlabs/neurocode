@@ -1,0 +1,354 @@
+{
+ "id": "spa-api-typescript",
+ "name": "SPA + API in TypeScript: Vue and NestJS",
+ "summary": "One language end to end: a Vue single-page app and a NestJS API sharing types, with Postgres through Prisma. Angular, Spring Boot and ASP.NET Core are the listed swaps for teams on those stacks.",
+ "fitsWhen": [
+  {
+   "answer": "team",
+   "is": [
+    "typescript"
+   ],
+   "says": "the team writes TypeScript"
+  },
+  {
+   "answer": "productType",
+   "is": [
+    "web-app",
+    "saas",
+    "internal-tool"
+   ],
+   "says": "a web app people sign in to"
+  },
+  {
+   "answer": "teamSize",
+   "is": [
+    "small",
+    "large"
+   ],
+   "says": "more than one developer shares the code"
+  },
+  {
+   "answer": "data",
+   "is": [
+    "relational"
+   ],
+   "says": "the data is relational"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "needs",
+   "is": [
+    "seo"
+   ],
+   "says": "pages must rank in search engines"
+  },
+  {
+   "answer": "team",
+   "is": [
+    "python"
+   ],
+   "says": "the team is mostly Python"
+  }
+ ],
+ "layers": {
+  "frontend": {
+   "choice": "vue",
+   "alternatives": [
+    "angular",
+    "react",
+    "svelte"
+   ],
+   "why": "Single-file components and an official router and store; Angular is the swap for teams that want one opinionated framework."
+  },
+  "backend": {
+   "choice": "nestjs",
+   "alternatives": [
+    "spring-boot",
+    "aspnet-core",
+    "fastify"
+   ],
+   "why": "Modules and dependency injection give a large codebase a shape; Spring Boot or ASP.NET Core when the team is on the JVM or .NET."
+  },
+  "database": {
+   "choice": "postgres",
+   "alternatives": [
+    "mysql"
+   ],
+   "why": "Relational integrity and JSONB."
+  },
+  "cache": {
+   "choice": "redis",
+   "alternatives": [
+    "valkey"
+   ],
+   "why": "Caching and the BullMQ queue."
+  },
+  "queue": {
+   "choice": "bullmq",
+   "alternatives": [
+    "rabbitmq"
+   ],
+   "why": "Background jobs in the same language as the API."
+  },
+  "auth": {
+   "choice": "keycloak",
+   "alternatives": [
+    "auth0",
+    "clerk",
+    "authjs"
+   ],
+   "why": "OIDC from a self-hosted identity provider, so SSO and roles are configuration rather than code."
+  },
+  "infra": {
+   "choice": "docker-compose",
+   "alternatives": [
+    "kubernetes"
+   ],
+   "why": "Compose locally and on one host."
+  },
+  "ci-cd": {
+   "choice": "github-actions",
+   "alternatives": [
+    "gitlab-ci"
+   ],
+   "why": "One workflow for both apps."
+  },
+  "observability": {
+   "choice": "opentelemetry",
+   "alternatives": [
+    "sentry",
+    "grafana"
+   ],
+   "why": "Vendor-neutral traces and metrics."
+  },
+  "testing": {
+   "choice": "vitest",
+   "alternatives": [
+    "jest",
+    "playwright"
+   ],
+   "why": "Vitest for both apps; Playwright end to end."
+  },
+  "hosting": {
+   "choice": "fly-io",
+   "alternatives": [
+    "render",
+    "aws",
+    "azure"
+   ],
+   "why": "Containers near users without running a cluster."
+  }
+ },
+ "services": [
+  {
+   "name": "web",
+   "kind": "web",
+   "tech": "vue",
+   "responsibilities": [
+    "Screens and client state (Pinia)",
+    "Calls the API with a bearer token from Keycloak"
+   ],
+   "talksTo": [
+    "api",
+    "idp"
+   ]
+  },
+  {
+   "name": "api",
+   "kind": "api",
+   "tech": "nestjs",
+   "responsibilities": [
+    "Domain modules with guards for roles",
+    "Prisma for data access",
+    "Queues slow work on BullMQ"
+   ],
+   "talksTo": [
+    "db",
+    "cache"
+   ]
+  },
+  {
+   "name": "idp",
+   "kind": "service",
+   "tech": "keycloak",
+   "responsibilities": [
+    "Sign-in, SSO, roles"
+   ],
+   "talksTo": []
+  }
+ ],
+ "dataStores": [
+  {
+   "name": "db",
+   "tech": "postgres",
+   "purpose": "System of record, migrated by Prisma Migrate"
+  },
+  {
+   "name": "cache",
+   "tech": "redis",
+   "purpose": "BullMQ queues and short-lived caches"
+  }
+ ],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "Each developer's machine",
+   "hosting": "docker compose: web, api, Postgres, Redis, Keycloak"
+  },
+  {
+   "name": "staging",
+   "purpose": "A copy of production for checking a release",
+   "hosting": "Fly.io apps from main"
+  },
+  {
+   "name": "prod",
+   "purpose": "What people use",
+   "hosting": "Fly.io apps with managed Postgres and backups"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "install",
+    "does": "npm ci with a cache"
+   },
+   {
+    "name": "lint",
+    "does": "eslint + prettier --check"
+   },
+   {
+    "name": "typecheck",
+    "does": "tsc --noEmit in both apps"
+   },
+   {
+    "name": "test",
+    "does": "vitest; API tests against a Postgres service"
+   },
+   {
+    "name": "e2e",
+    "does": "Playwright"
+   },
+   {
+    "name": "deploy",
+    "does": "fly deploy on main (staging) and on tags (prod)"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "compose",
+  "tools": [
+   "docker",
+   "docker-compose"
+  ],
+  "notes": [
+   "Shared types live in a packages/shared workspace"
+  ]
+ },
+ "observability": {
+  "tools": [
+   "opentelemetry",
+   "sentry"
+  ],
+  "notes": [
+   "Request ids propagated from web to API",
+   "Nest's logger in JSON"
+  ]
+ },
+ "security": {
+  "auth": "OIDC authorization code flow with PKCE against Keycloak; the API validates JWTs and roles",
+  "secrets": "Fly secrets; nothing in the repository",
+  "notes": [
+   "Validate every input at the API boundary and return typed errors, never stack traces.",
+   "Parameterised queries only (the ORM), so no SQL is built from strings.",
+   "Set secure, HttpOnly, SameSite cookies or short-lived tokens; rate-limit sign-in.",
+   "Check authorisation on every endpoint on the server, not only in the UI (OWASP A01 Broken Access Control)."
+  ]
+ },
+ "folderLayout": "apps/\n  web/  (Vue + Vite)\n  api/  (NestJS)\n    src/modules/\n    prisma/schema.prisma\npackages/\n  shared/  (DTO types)\npackage.json  (npm workspaces)\ndocker-compose.yml",
+ "conventions": [
+  "One Nest module per bounded context",
+  "DTOs validated with class-validator at the edge",
+  "Shared types only in packages/shared",
+  "Prisma migrations reviewed like code"
+ ],
+ "adrs": [
+  {
+   "title": "TypeScript on both sides",
+   "decision": "Web and API are TypeScript in one npm workspace.",
+   "why": "One language, shared types, one toolchain for a small team.",
+   "alternatives": [
+    "python api",
+    "java api"
+   ]
+  },
+  {
+   "title": "Self-hosted identity provider",
+   "decision": "Keycloak handles sign-in and roles.",
+   "why": "SSO and role management without writing auth code; no per-user fees.",
+   "alternatives": [
+    "auth0",
+    "clerk"
+   ]
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "app",
+    "layout": "An npm workspace with apps/web, apps/api and packages/shared",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "How to start the stack, the workspace layout, and the commands."
+     },
+     {
+      "path": "package.json",
+      "template": "npm workspaces apps/* and packages/*, with scripts dev, build, test, lint across them."
+     },
+     {
+      "path": "docker-compose.yml",
+      "template": "Postgres 16, Redis 7 and Keycloak for local development."
+     },
+     {
+      "path": "apps/api/package.json",
+      "template": "NestJS app with @nestjs/core, prisma, bullmq, class-validator; scripts start:dev, test."
+     },
+     {
+      "path": "apps/api/src/main.ts",
+      "template": "Nest bootstrap with a global validation pipe and CORS for the web origin."
+     },
+     {
+      "path": "apps/api/src/health.controller.ts",
+      "template": "GET /health returning status and a database check."
+     },
+     {
+      "path": "apps/api/prisma/schema.prisma",
+      "template": "Postgres datasource and a generator; no models yet."
+     },
+     {
+      "path": "apps/web/package.json",
+      "template": "Vue 3 + Vite + TypeScript with vue-router and pinia; scripts dev, build, test."
+     },
+     {
+      "path": "apps/web/src/main.ts",
+      "template": "Creates the Vue app with the router and Pinia."
+     },
+     {
+      "path": "apps/web/src/App.vue",
+      "template": "A first screen calling the API's /health."
+     },
+     {
+      "path": "packages/shared/src/index.ts",
+      "template": "Exports the first shared type, HealthStatus."
+     },
+     {
+      "path": ".github/workflows/ci.yml",
+      "template": "Install, lint, typecheck and test the workspace on pull requests."
+     }
+    ]
+   }
+  ]
+ }
+}

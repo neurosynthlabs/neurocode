@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowDown, FileCode, Database, Boxes, HelpCircle, FlaskConical, Play, Cpu, RefreshCw, Check, Workflow,
-  BookOpen, ListChecks, Pencil,
+  BookOpen, ListChecks, Pencil, Plus, Trash2, ChevronUp, ChevronDown, MessageSquare, Wand2, History, Lock,
+  PauseCircle, Loader2, RotateCcw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -12,8 +13,13 @@ import {
 import { inFlight, useData } from '@/lib/data';
 import { ApiError, type RunDoc } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { instructionsApi, type GroundedPlan } from '@/lib/live/instructions';
-import { runtimeApi } from '@/lib/live/runtime';
+import { useAccess } from '@/lib/access';
+import { instructionsApi } from '@/lib/live/instructions';
+import {
+  COMMENT_KINDS, newer, plansApi,
+  type CommentKind, type PlanComment, type PlanRevision, type ShapedPlan, type StepChange,
+} from '@/lib/live/plans';
+import { useRemote } from '@/lib/remote';
 import { workflowsApi } from '@/lib/live/workflows';
 import { projectLabel } from '@/lib/live/work';
 import { cn } from '@/lib/utils';
@@ -33,28 +39,31 @@ const STAGES = [
 ] as const;
 
 /** One affected file, and what checking it against the code index said. */
-function FileLine({ path, p }: { path: string; p: GroundedPlan }) {
+function FileLine({ path, p }: { path: string; p: ShapedPlan }) {
   const check = p.fileCheck;
   const candidates = check?.ambiguous[path];
+  const closed = check?.readOnly?.[path];
   return (
     <div className="flex items-center gap-2 px-3.5 py-1.5">
       <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-2" title={path}>{path}</span>
+      {closed && <span title={`Agents never write here: ${closed}`}><Tag tone="violet"><Lock className="size-3" />{closed.startsWith('reference') ? 'reference, read only' : 'read only'}</Tag></span>}
       {check?.newFiles.includes(path) && <span title="Not in the code index: a file this change creates"><Tag tone="brand">new</Tag></span>}
       {candidates && <span title={`Matches ${candidates.join(', ')} in the code index`}><Tag tone="warn">{candidates.length}+ matches</Tag></span>}
     </div>
   );
 }
 
-/** What the compiler was handed: instruction files, code and document pieces, remembered facts. */
-function GroundedIn({ p }: { p: GroundedPlan }) {
+/** What the compiler was handed: instruction files, the team's taste, code and document pieces, remembered facts. */
+function GroundedIn({ p }: { p: ShapedPlan }) {
   const grounding = p.grounding ?? [];
   const told = grounding.filter((g) => g.kind === 'instructions');
-  const pieces = grounding.filter((g) => g.kind !== 'instructions');
+  const taste = grounding.filter((g) => g.kind === 'taste');
+  const pieces = grounding.filter((g) => g.kind === 'code' || g.kind === 'doc');
   const facts = p.cited ?? [];
   if (!p.compiler) {
     return <p className="px-3.5 py-3 text-[13px] text-dim">Written by a workflow, not compiled — nothing was handed to a model.</p>;
   }
-  if (told.length + pieces.length + facts.length === 0) {
+  if (told.length + taste.length + pieces.length + facts.length === 0) {
     return <p className="px-3.5 py-3 text-[13px] text-dim">Nothing: no instruction files, no indexed code and no memory matched. The plan rests on the requirement alone.</p>;
   }
   const group = (label: string, items: { key: string; main: string; sub?: string }[]) => items.length > 0 && (
@@ -70,6 +79,7 @@ function GroundedIn({ p }: { p: GroundedPlan }) {
   return (
     <div className="divide-y divide-line">
       {group('Instruction files', told.map((g) => ({ key: g.path, main: g.path, sub: `sha ${g.ref.slice(0, 7)}` })))}
+      {group('Taste applied', taste.map((g) => ({ key: g.ref, main: g.ref, sub: 'adopted in Memory → Taste' })))}
       {group('Code and documents from retrieval', pieces.map((g) => ({ key: g.ref, main: g.ref, sub: g.kind === 'doc' ? 'document' : undefined })))}
       {group('Memory facts', facts.map((ref) => ({ key: ref, main: ref })))}
     </div>
@@ -93,6 +103,7 @@ export default function Plans() {
   const nav = useNavigate();
   const { plans, runs, projects, settleQuestion, dispatchPlan, recompile } = useData();
   const { can } = useAuth();
+  const { agents } = useAccess();
   const [workflows, setWorkflows] = useState<Record<string, string>>({});
   const wanted = useSearchParams()[0].get('ref');
   // ?ref= (⌘K) opens a plan, also when this screen is already showing; a click picks another until the link changes.
@@ -100,15 +111,26 @@ export default function Plans() {
   const sel = (picked && picked.link === wanted ? picked.ref : null) ?? wanted ?? plans[0]?.ref ?? '';
   // An answer being typed belongs to one plan's question, so opening another plan never shows it.
   const [typing, setTyping] = useState<{ plan: string; index: number; text: string } | null>(null);
-  const [working, setWorking] = useState<'dispatch' | 'recompile' | 'criteria' | null>(null);
-  // Criteria being edited belong to one plan, like an answer being typed. `saved` is the server's answer to
-  // a save and the store's criteria at that moment: it is shown only while the store still holds those, so
-  // the list never flashes back to the old sentences, and whatever the stream delivers next wins.
+  const [working, setWorking] = useState<'dispatch' | 'recompile' | 'criteria' | 'step' | 'comment' | 'revise' | null>(null);
+  // Criteria being edited belong to one plan, like an answer being typed.
   const [criteriaDraft, setCriteriaDraft] = useState<{ plan: string; text: string } | null>(null);
-  const [saved, setSaved] = useState<{ doc: GroundedPlan; before: string } | null>(null);
+  // The plan as the last call answered it. The same document reaches the store on the change stream a moment
+  // later; until then — and whichever arrives first — the newer of the two is shown (`newer`, by updatedAt),
+  // so an edit never flashes back to what it replaced.
+  const [fresh, setFresh] = useState<ShapedPlan | null>(null);
+  // A step being edited or added, a step whose removal waits for a second click, and a comment being written:
+  // each belongs to one plan, so opening another never shows it.
+  const [stepDraft, setStepDraft] = useState<StepDraft | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
   // "Run until done": attempts in all, the first included — the API takes 1 to 5.
   const [goal, setGoal] = useState<{ on: boolean; budget: number }>({ on: false, budget: 3 });
-  const p = useMemo(() => plans.find((x) => x.ref === sel) ?? plans[0], [plans, sel]);
+  // "Pause before each step": the run waits for an approval between one step and the next.
+  const [stepGate, setStepGate] = useState(false);
+  const held = useMemo(() => plans.find((x) => x.ref === sel) ?? plans[0], [plans, sel]);
+  const p: ShapedPlan | undefined = held && newer(held as ShapedPlan, fresh);
+  // Comments are not in the store: read for the open plan, again when it is revised or edited.
+  const comments = useRemote(p ? `comments:${p.ref}:${p.revision ?? 1}` : null, () => plansApi.comments(p?.ref ?? ''));
   // Workflow names, only when a plan came from one: the plan keeps the id, the workflow keeps the name.
   const fromWorkflow = plans.some((x) => x.workflowId);
   useEffect(() => {
@@ -136,11 +158,14 @@ export default function Plans() {
     );
   }
 
-  const held: GroundedPlan = p;
-  const g: GroundedPlan = saved?.doc.ref === p.ref && (held.acceptanceCriteria ?? []).join('\n') === saved.before
-    ? { ...p, acceptanceCriteria: saved.doc.acceptanceCriteria, criteriaEdited: saved.doc.criteriaEdited }
-    : p;
+  const g = p;
   const criteria = g.acceptanceCriteria ?? [];
+  const shapeable = !inFlight(p) && can('plans:compile');
+  const names = agents.length ? agents.map((a) => a.name) : Array.from(new Set(p.steps.map((s) => s.agent)));
+  const editingStep = stepDraft?.plan === p.ref ? stepDraft : null;
+  const writing = commentDraft?.plan === p.ref ? commentDraft : null;
+  const thread = comments.data?.items ?? [];
+  const openComments = thread.filter((c) => !c.resolved);
   const editingCriteria = criteriaDraft?.plan === p.ref ? criteriaDraft : null;
   const run = runOf.get(p.ref);
   const draft = typing?.plan === p.ref ? typing : null;
@@ -160,10 +185,10 @@ export default function Plans() {
   const dispatch = async () => {
     setWorking('dispatch');
     let ok: boolean;
-    if (untilDone) {
-      // The store's own dispatch sends no budget; the plan and its run arrive on the stream either way.
+    if (untilDone || stepGate) {
+      // The store's own dispatch sends no options; the plan and its run arrive on the stream either way.
       try {
-        await runtimeApi.dispatch(p.ref, { goalBudget: goal.budget });
+        setFresh(await plansApi.dispatch(p.ref, { goalBudget: untilDone ? goal.budget : undefined, stepGate }));
         ok = true;
       } catch (e) {
         toast.error('Not dispatched', { description: e instanceof ApiError ? e.message : 'The local API did not answer.' });
@@ -174,20 +199,87 @@ export default function Plans() {
     }
     setWorking(null);
     if (!ok) return;
+    const paced = stepGate ? ' It waits for your approval before each step after the first — look in Approvals.' : '';
     toast.success(`${p.ref} dispatched`, {
       description: untilDone
-        ? `${p.taskRef} runs until its acceptance criteria are met, ${goal.budget} attempt${goal.budget > 1 ? 's' : ''} at most. It still stops at your signature.`
-        : `${p.taskRef} is in progress. Its run, once one starts, is in Live runs.`,
+        ? `${p.taskRef} runs until its acceptance criteria are met, ${goal.budget} attempt${goal.budget > 1 ? 's' : ''} at most. It still stops at your signature.${paced}`
+        : `${p.taskRef} is in progress. Its run, once one starts, is in Live runs.${paced}`,
     });
     nav('/tasks');
+  };
+
+  /** One shaping call: the answer is shown at once, a refusal is a toast in the server's words. */
+  const shape = async (kind: 'step' | 'comment' | 'revise', call: () => Promise<ShapedPlan | null>, failed: string) => {
+    setWorking(kind);
+    try {
+      const doc = await call();
+      if (doc) setFresh(doc);
+      return true;
+    } catch (e) {
+      toast.error(failed, { description: e instanceof ApiError ? e.message : 'The local API did not answer.' });
+      return false;
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const saveStep = async (draft: StepDraft) => {
+    const body = { label: draft.label.trim(), agent: draft.agent, detail: draft.detail.trim() };
+    const ok = await shape('step', () => (draft.stepId
+      ? plansApi.editStep(p.ref, draft.stepId, body)
+      : plansApi.addStep(p.ref, { ...body, at: draft.at ?? undefined })), draft.stepId ? 'Step not saved' : 'Step not added');
+    if (ok) setStepDraft(null);
+  };
+
+  const moveStep = (index: number, by: -1 | 1) => {
+    const order = p.steps.map((s) => s.id);
+    const [taken] = order.splice(index, 1);
+    order.splice(index + by, 0, taken);
+    void shape('step', () => plansApi.reorder(p.ref, order), 'Steps not reordered');
+  };
+
+  const removeStep = async (stepId: string) => {
+    if (removing !== stepId) { setRemoving(stepId); return; }
+    setRemoving(null);
+    // A comment on the step it removes is now on no step: read them again so they say so.
+    if (await shape('step', () => plansApi.removeStep(p.ref, stepId), 'Step not removed')) comments.reload();
+  };
+
+  const saveComment = async (draft: CommentDraft) => {
+    const ok = await shape('comment', async () => {
+      await plansApi.comment(p.ref, { kind: draft.kind, body: draft.body.trim(), stepId: draft.stepId });
+      return null;
+    }, 'Comment not saved');
+    if (!ok) return;
+    setCommentDraft(null);
+    comments.reload();
+  };
+
+  const resolveComment = async (c: PlanComment, resolved: boolean) => {
+    const ok = await shape('comment', async () => { await plansApi.resolve(p.ref, c.id, resolved); return null; },
+      resolved ? 'Comment not resolved' : 'Comment not reopened');
+    if (ok) comments.reload();
+  };
+
+  const revise = async () => {
+    let changes: StepChange[] = [];
+    const ok = await shape('revise', async () => {
+      const doc = await plansApi.revise(p.ref);
+      changes = doc.changes;
+      return doc;
+    }, 'Not revised');
+    if (!ok) return;
+    const moved = changes.filter((c) => c.op !== 'same').length;
+    toast.success(`${p.ref} revised`, {
+      description: `Revision ${(p.revision ?? 1) + 1}: ${moved ? `${moved} step${moved === 1 ? '' : 's'} changed` : 'no step changed'}. What changed is under “Revisions”.`,
+    });
   };
 
   const saveCriteria = async (text: string) => {
     setWorking('criteria');
     try {
-      const before = (held.acceptanceCriteria ?? []).join('\n');
       const doc = await instructionsApi.setCriteria(p.ref, text.split('\n').map((x) => x.trim()).filter(Boolean));
-      setSaved({ doc, before });
+      setFresh(doc);
       setCriteriaDraft(null);
       toast.success('Acceptance criteria saved', { description: `${doc.acceptanceCriteria?.length ?? 0} for ${doc.ref}. A re-compile keeps them.` });
     } catch (e) {
@@ -248,6 +340,8 @@ export default function Plans() {
             <Tag tone="neutral">{projectLabel(projects, p.projectId)}</Tag>
             <RiskPill risk={p.risk} />
             <CompiledBy p={p} workflow={workflow} />
+            {(p.revision ?? 1) > 1 && <Tag tone="info"><History className="size-3" />revision {p.revision}</Tag>}
+            {p.stepGate && <span title="Dispatched to wait for your approval before each step"><Tag tone="warn"><PauseCircle className="size-3" />pauses before each step</Tag></span>}
             <span className="ml-auto text-[12.5px] text-dim">{p.compiler ? 'compiled' : 'written'} {ago(p.createdAt)}</span>
           </div>
 
@@ -305,27 +399,79 @@ export default function Plans() {
 
             {/* Steps */}
             <Panel
-              eyebrow={run ? `${run.ref} · ${finished(run)} of ${run.steps.length} run steps finished` : 'Implementation plan'}
+              eyebrow={run ? `${run.ref} · ${finished(run)} of ${run.steps.length} run steps finished`
+                : shapeable ? 'Implementation plan · yours to shape until it is dispatched' : 'Implementation plan'}
               title={`${p.steps.length} step${p.steps.length === 1 ? '' : 's'}, as agreed`}
-              actions={run && (
+              actions={run ? (
                 <span className="flex items-center gap-2">
                   <BlockBar pct={(finished(run) / Math.max(1, run.steps.length)) * 100} width={14} />
                   <Button size="xs" variant="ghost" onClick={() => nav(`/runs?ref=${run.ref}`)}>Open run</Button>
                 </span>
-              )}
+              ) : shapeable && !editingStep ? (
+                <Button size="xs" variant="ghost" disabled={working !== null}
+                  onClick={() => setStepDraft({ plan: p.ref, stepId: null, label: '', agent: names[0] ?? '', detail: '', at: null })}>
+                  <Plus className="size-3" />Add step
+                </Button>
+              ) : undefined}
               flush
             >
               <div className="divide-y divide-line">
-                {p.steps.map((s) => (
-                  <div key={s.id} className="flex items-start gap-3 px-3.5 py-2.5">
-                    <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[12px] text-dim">{s.n}</span>
-                    <span className="min-w-0 flex-1">
-                      <span className="text-[13.5px] font-medium text-ink">{s.label}</span>
-                      {s.detail && <span className="block text-[12.5px] text-dim">{s.detail}</span>}
-                    </span>
-                    <span className="shrink-0 text-right text-[12px] text-soft">{s.agent}</span>
+                {p.steps.map((s, i) => editingStep?.stepId === s.id ? (
+                  <StepEditor key={s.id} draft={editingStep} names={names} busy={working === 'step'}
+                    onChange={setStepDraft} onSave={saveStep} onCancel={() => setStepDraft(null)} />
+                ) : (
+                  <div key={s.id} className="group">
+                    <div className="flex items-start gap-3 px-3.5 py-2.5">
+                      <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[12px] text-dim">{s.n}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="text-[13.5px] font-medium text-ink">{s.label}</span>
+                        {s.detail && <span className="block text-[12.5px] text-dim">{s.detail}</span>}
+                        {openComments.some((c) => c.stepId === s.id) && (
+                          <span className="mt-1 flex flex-wrap gap-1">
+                            {openComments.filter((c) => c.stepId === s.id).map((c) => (
+                              <span key={c.id} title={c.body}><Tag tone={KIND_TONE[c.kind]}><MessageSquare className="size-3" />{kindLabel(c.kind)}</Tag></span>
+                            ))}
+                          </span>
+                        )}
+                      </span>
+                      <span className="shrink-0 text-right text-[12px] text-soft">{s.agent}</span>
+                    </div>
+                    {shapeable && (
+                      <div className="-mt-1.5 flex flex-wrap items-center gap-0.5 px-3.5 pb-2 pl-10 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100">
+                        <Button size="icon-xs" variant="ghost" aria-label={`Move step ${s.n} up`} disabled={i === 0 || working !== null} onClick={() => moveStep(i, -1)}><ChevronUp /></Button>
+                        <Button size="icon-xs" variant="ghost" aria-label={`Move step ${s.n} down`} disabled={i === p.steps.length - 1 || working !== null} onClick={() => moveStep(i, 1)}><ChevronDown /></Button>
+                        <Button size="xs" variant="ghost" disabled={working !== null}
+                          onClick={() => setStepDraft({ plan: p.ref, stepId: s.id, label: s.label, agent: s.agent, detail: s.detail, at: null })}>
+                          <Pencil />Edit
+                        </Button>
+                        <Button size="xs" variant="ghost" disabled={working !== null}
+                          onClick={() => setCommentDraft({ plan: p.ref, stepId: s.id, kind: 'comment', body: '' })}>
+                          <MessageSquare />Comment
+                        </Button>
+                        <Button size="xs" variant="ghost" disabled={working !== null}
+                          onClick={() => setStepDraft({ plan: p.ref, stepId: null, label: '', agent: s.agent, detail: '', at: s.n + 1 })}>
+                          <Plus />Add after
+                        </Button>
+                        <Button size="xs" variant={removing === s.id ? 'destructive' : 'ghost'} disabled={working !== null || p.steps.length <= 1}
+                          onClick={() => void removeStep(s.id)} onBlur={() => setRemoving(null)}>
+                          <Trash2 />{removing === s.id ? 'Remove?' : 'Remove'}
+                        </Button>
+                      </div>
+                    )}
+                    {writing?.stepId === s.id && (
+                      <CommentComposer draft={writing} steps={p.steps} busy={working === 'comment'}
+                        onChange={setCommentDraft} onSave={saveComment} onCancel={() => setCommentDraft(null)} />
+                    )}
+                    {editingStep && !editingStep.stepId && editingStep.at === s.n + 1 && (
+                      <StepEditor draft={editingStep} names={names} busy={working === 'step'}
+                        onChange={setStepDraft} onSave={saveStep} onCancel={() => setStepDraft(null)} />
+                    )}
                   </div>
                 ))}
+                {editingStep && !editingStep.stepId && (editingStep.at === null || editingStep.at > p.steps.length + 1) && (
+                  <StepEditor draft={editingStep} names={names} busy={working === 'step'}
+                    onChange={setStepDraft} onSave={saveStep} onCancel={() => setStepDraft(null)} />
+                )}
               </div>
             </Panel>
           </div>
@@ -453,6 +599,17 @@ export default function Plans() {
             </Panel>
           </div>
 
+          <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <CommentsPanel
+              p={p} shapeable={shapeable} loading={comments.loading} error={comments.error} onRetry={comments.reload}
+              thread={thread} writing={writing?.stepId === null ? writing : null} working={working}
+              onWrite={() => setCommentDraft({ plan: p.ref, stepId: null, kind: 'comment', body: '' })}
+              onChange={setCommentDraft} onSave={saveComment} onCancel={() => setCommentDraft(null)}
+              onResolve={resolveComment} onRevise={revise}
+            />
+            <RevisionsPanel p={p} />
+          </div>
+
           <Panel className="mt-3" eyebrow="Verification" title={<span className="flex items-center gap-1.5"><FlaskConical className="size-3.5 text-brand" />Test plan</span>} flush>
             {p.testPlan.length === 0 && <p className="px-3.5 py-3 text-[13px] text-dim">No test plan was written for this plan.</p>}
             <div className="divide-y divide-line">
@@ -489,14 +646,266 @@ export default function Plans() {
                   </select>
                 )}
                 {criteria.length === 0 && <span className="text-[12px] text-dim">needs acceptance criteria</span>}
+                <label className="ml-2 flex items-center gap-1.5" title="The run stops at an approval between one step and the next, so you read each step's work before the next one starts.">
+                  <input type="checkbox" checked={stepGate} onChange={(e) => setStepGate(e.target.checked)} className="accent-brand" />
+                  Pause before each step
+                </label>
               </span>
             )}
             {!underway && open > 0 && (
               <span className="text-[12px] text-warn">Answer or defer {open} open question{open > 1 ? 's' : ''} to dispatch.</span>
             )}
+            {!underway && openComments.length > 0 && (
+              <span className="text-[12px] text-dim">{openComments.length} open comment{openComments.length > 1 ? 's' : ''} — revise to fold {openComments.length > 1 ? 'them' : 'it'} in, or resolve.</span>
+            )}
           </div>
         </div>
       </PageBody>
     </Page>
+  );
+}
+
+/* ── Shaping a plan before dispatch ─────────────────────────────── */
+
+interface StepDraft {
+  plan: string;
+  /** Null for a new step. */
+  stepId: string | null;
+  label: string;
+  agent: string;
+  detail: string;
+  /** Where a new step goes, 1 for first; null for last. */
+  at: number | null;
+}
+
+interface CommentDraft {
+  plan: string;
+  /** Null for a comment on the whole plan. */
+  stepId: string | null;
+  kind: CommentKind;
+  body: string;
+}
+
+const KIND_TONE: Record<CommentKind, 'neutral' | 'info' | 'danger' | 'violet' | 'warn'> = {
+  comment: 'neutral', split: 'info', remove: 'danger', why: 'violet', risky: 'warn',
+};
+const kindLabel = (kind: CommentKind) => COMMENT_KINDS.find((k) => k.id === kind)?.label ?? kind;
+
+const FIELD = 'w-full rounded-sm border border-line bg-base px-2.5 py-1.5 text-[13px] text-ink placeholder:text-dim focus-visible:border-brand focus-visible:outline-none';
+
+/** A step's label, owner and detail, as a form: editing one, or writing a new one. */
+function StepEditor({ draft, names, busy, onChange, onSave, onCancel }: {
+  draft: StepDraft; names: string[]; busy: boolean;
+  onChange: (next: StepDraft) => void; onSave: (d: StepDraft) => void; onCancel: () => void;
+}) {
+  const owners = names.includes(draft.agent) || !draft.agent ? names : [draft.agent, ...names];
+  return (
+    <form className="space-y-1.5 bg-surface-2/40 px-3.5 py-2.5"
+      onSubmit={(e) => { e.preventDefault(); if (draft.label.trim()) onSave(draft); }}>
+      <p className="text-[12px] font-medium text-dim">
+        {draft.stepId ? 'Edit this step' : draft.at ? `New step, at position ${draft.at}` : 'New step, at the end'}
+      </p>
+      <div className="flex flex-col gap-1.5 sm:flex-row">
+        <input autoFocus value={draft.label} maxLength={200} aria-label="Step"
+          onChange={(e) => onChange({ ...draft, label: e.target.value })}
+          placeholder="What this step does, in a few words" className={cn(FIELD, 'min-w-0 flex-1')} />
+        <select value={draft.agent} aria-label="Owner" onChange={(e) => onChange({ ...draft, agent: e.target.value })}
+          className={cn(FIELD, 'h-[34px] sm:w-52')}>
+          {owners.map((n) => <option key={n} value={n}>{n}</option>)}
+        </select>
+      </div>
+      <textarea rows={2} value={draft.detail} maxLength={2000} aria-label="Detail"
+        onChange={(e) => onChange({ ...draft, detail: e.target.value })}
+        placeholder="One sentence the agent is told with it (optional)" className={cn(FIELD, 'resize-y')} />
+      <div className="flex gap-1.5">
+        <Button size="xs" type="submit" disabled={busy || !draft.label.trim() || !draft.agent}>
+          {busy ? <Loader2 className="animate-spin" /> : <Check />}{draft.stepId ? 'Save step' : 'Add step'}
+        </Button>
+        <Button size="xs" type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
+      </div>
+    </form>
+  );
+}
+
+/** Writing a comment: its kind, and the words. On a step, or on the whole plan. */
+function CommentComposer({ draft, steps, busy, onChange, onSave, onCancel }: {
+  draft: CommentDraft; steps: Plan['steps']; busy: boolean;
+  onChange: (next: CommentDraft) => void; onSave: (d: CommentDraft) => void; onCancel: () => void;
+}) {
+  const step = steps.find((s) => s.id === draft.stepId);
+  // Split and remove are about one step; on the whole plan they have nothing to act on.
+  const kinds = COMMENT_KINDS.filter((k) => step || (k.id !== 'split' && k.id !== 'remove'));
+  return (
+    <form className="space-y-1.5 px-3.5 py-2.5 md:pl-10"
+      onSubmit={(e) => { e.preventDefault(); if (draft.body.trim()) onSave(draft); }}>
+      <div className="flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Kind of comment">
+        {kinds.map((k) => (
+          <button key={k.id} type="button" role="radio" aria-checked={draft.kind === k.id} title={k.hint}
+            onClick={() => onChange({ ...draft, kind: k.id })}
+            className={cn('rounded-sm border px-2 py-0.5 text-[12px] transition-colors',
+              draft.kind === k.id ? 'border-brand bg-brand/10 font-medium text-brand' : 'border-line bg-surface text-soft hover:text-ink-2')}>
+            {k.label}
+          </button>
+        ))}
+        <span className="ml-1 text-[11.5px] text-dim">{step ? `on step ${step.n}` : 'on the whole plan'}</span>
+      </div>
+      <textarea autoFocus rows={2} value={draft.body} maxLength={4000} aria-label="Comment"
+        onChange={(e) => onChange({ ...draft, body: e.target.value })}
+        placeholder={COMMENT_KINDS.find((k) => k.id === draft.kind)?.hint + ' — say what, and why…'}
+        className={cn(FIELD, 'resize-y')} />
+      <div className="flex gap-1.5">
+        <Button size="xs" type="submit" disabled={busy || !draft.body.trim()}>
+          {busy ? <Loader2 className="animate-spin" /> : <MessageSquare />}Add comment
+        </Button>
+        <Button size="xs" type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
+      </div>
+    </form>
+  );
+}
+
+/** Comments on the plan, and the one button that hands the open ones to the compiler. */
+function CommentsPanel({
+  p, shapeable, loading, error, onRetry, thread, writing, working, onWrite, onChange, onSave, onCancel, onResolve, onRevise,
+}: {
+  p: ShapedPlan; shapeable: boolean; loading: boolean; error: string | null; onRetry: () => void;
+  thread: PlanComment[]; writing: CommentDraft | null; working: string | null;
+  onWrite: () => void; onChange: (d: CommentDraft) => void; onSave: (d: CommentDraft) => void; onCancel: () => void;
+  onResolve: (c: PlanComment, resolved: boolean) => void; onRevise: () => void;
+}) {
+  const [showResolved, setShowResolved] = useState(false);
+  const open = thread.filter((c) => !c.resolved);
+  const resolved = thread.filter((c) => c.resolved);
+  const row = (c: PlanComment) => (
+    <div key={c.id} className="px-3.5 py-2.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Tag tone={KIND_TONE[c.kind]}>{kindLabel(c.kind)}</Tag>
+        <span className="text-[12px] text-dim">{c.step ? `step ${c.step.n} · ${c.step.label}` : 'the whole plan'}</span>
+        <span className="ml-auto text-[11.5px] text-dim">{c.by ?? 'someone'} · {ago(c.createdAt)}{c.revision !== (p.revision ?? 1) ? ` · revision ${c.revision}` : ''}</span>
+      </div>
+      <p className={cn('mt-1 text-[13px] [overflow-wrap:anywhere]', c.resolved ? 'text-soft' : 'text-ink-2')}>{c.body}</p>
+      {c.reply && <p className="mt-1 border-l-2 border-line pl-2 text-[12.5px] text-soft"><span className="text-dim">Compiler: </span>{c.reply}</p>}
+      {shapeable && (
+        <Button size="xs" variant="ghost" className="mt-1 -ml-2" disabled={working !== null} onClick={() => onResolve(c, !c.resolved)}>
+          {c.resolved ? <><RotateCcw />Reopen</> : <><Check />Resolve</>}
+        </Button>
+      )}
+    </div>
+  );
+  return (
+    <Panel
+      eyebrow={open.length ? `${open.length} open · handed to the compiler when you revise` : 'Notes for the next revision'}
+      title={<span className="flex items-center gap-1.5"><MessageSquare className="size-3.5 text-brand" />Comments</span>}
+      actions={shapeable && !writing ? <Button size="xs" variant="ghost" disabled={working !== null} onClick={onWrite}><Plus className="size-3" />On the plan</Button> : undefined}
+      flush
+    >
+      {writing && <CommentComposer draft={writing} steps={p.steps} busy={working === 'comment'} onChange={onChange} onSave={onSave} onCancel={onCancel} />}
+      {loading && thread.length === 0 ? (
+        <p className="flex items-center gap-2 px-3.5 py-3 text-[13px] text-dim"><Loader2 className="size-3.5 animate-spin" />Reading the comments…</p>
+      ) : error ? (
+        <div className="flex items-center gap-2 px-3.5 py-3 text-[13px] text-danger">
+          <span className="min-w-0 flex-1">The comments did not load: {error}</span>
+          <Button size="xs" variant="outline" onClick={onRetry}>Try again</Button>
+        </div>
+      ) : thread.length === 0 && !writing ? (
+        <p className="px-3.5 py-3 text-[13px] text-dim">
+          {shapeable
+            ? 'No comments yet. Leave one on a step — split it, ask why, flag a risk — or on the whole plan. Revising hands the open ones to the compiler, which writes the next revision and answers each.'
+            : 'No comments were left on this plan.'}
+        </p>
+      ) : (
+        <div className="divide-y divide-line">
+          {open.map(row)}
+          {resolved.length > 0 && (
+            <button type="button" onClick={() => setShowResolved(!showResolved)}
+              className="flex w-full items-center gap-1.5 px-3.5 py-2 text-left text-[12px] text-dim hover:text-ink-2">
+              {showResolved ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+              {resolved.length} resolved
+            </button>
+          )}
+          {showResolved && resolved.map(row)}
+        </div>
+      )}
+      {shapeable && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-line px-3.5 py-2.5">
+          <Button size="sm" variant="outline" disabled={open.length === 0 || working !== null} onClick={onRevise}>
+            {working === 'revise' ? <Loader2 className="animate-spin" /> : <Wand2 />}
+            {working === 'revise' ? 'Revising…' : `Revise with comments${open.length ? ` (${open.length})` : ''}`}
+          </Button>
+          <span className="text-[11.5px] text-dim">Needs a model. Answered questions and your own criteria are kept.</span>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+const OP_TONE: Record<StepChange['op'], 'ok' | 'danger' | 'warn' | 'info' | 'neutral'> = {
+  added: 'ok', removed: 'danger', changed: 'warn', moved: 'info', same: 'neutral',
+};
+
+/** Every earlier revision, and what changed from it into the next: step by step, with the comments it answered. */
+function RevisionsPanel({ p }: { p: ShapedPlan }) {
+  const revisions = p.revisions ?? [];
+  const [picked, setPicked] = useState<{ plan: string; revision: number } | null>(null);
+  const [showSame, setShowSame] = useState(false);
+  const chosen: PlanRevision | undefined = revisions.find((r) => picked?.plan === p.ref && r.revision === picked.revision)
+    ?? revisions[revisions.length - 1];
+  if (!chosen) {
+    return (
+      <Panel eyebrow="What changed between revisions" title={<span className="flex items-center gap-1.5"><History className="size-3.5 text-brand" />Revisions</span>}>
+        <p className="text-[13px] text-dim">This is the first revision. Revising with comments writes the next, and keeps this one’s steps here to compare.</p>
+      </Panel>
+    );
+  }
+  const into = chosen.revision + 1;
+  const changes = chosen.changes.filter((c) => showSame || c.op !== 'same');
+  const same = chosen.changes.length - chosen.changes.filter((c) => c.op !== 'same').length;
+  return (
+    <Panel
+      eyebrow={`${chosen.by} · ${ago(chosen.at)} · ${chosen.model}`}
+      title={<span className="flex items-center gap-1.5"><History className="size-3.5 text-brand" />Revision {chosen.revision} → {into}</span>}
+      actions={revisions.length > 1 ? (
+        <select value={chosen.revision} aria-label="Revision"
+          onChange={(e) => setPicked({ plan: p.ref, revision: Number(e.target.value) })}
+          className="h-7 rounded-sm border border-line bg-base px-1.5 text-[12.5px] text-ink focus-visible:border-brand focus-visible:outline-none">
+          {revisions.map((r) => <option key={r.revision} value={r.revision}>{r.revision} → {r.revision + 1}</option>)}
+        </select>
+      ) : undefined}
+      flush
+    >
+      {chosen.summary && <p className="px-3.5 py-2.5 text-[13px] text-ink-2">{chosen.summary}</p>}
+      <div className="divide-y divide-line border-t border-line">
+        {changes.map((c, i) => (
+          <div key={`${c.op}-${c.was ?? 'x'}-${c.n ?? 'x'}-${i}`} className="flex items-start gap-2.5 px-3.5 py-1.5">
+            <span className="w-16 shrink-0"><Tag tone={OP_TONE[c.op]}>{c.op}</Tag></span>
+            <span className="min-w-0 flex-1 text-[13px]">
+              <span className={cn(c.op === 'removed' ? 'text-dim line-through' : 'text-ink-2')}>{c.label}</span>
+              <span className="text-dim"> · {c.agent}</span>
+              {c.before && c.before.label !== c.label && <span className="block text-[12px] text-dim">was “{c.before.label}”</span>}
+              {c.before && c.before.agent !== c.agent && <span className="block text-[12px] text-dim">owner was {c.before.agent}</span>}
+              {c.before && c.before.detail !== c.detail && c.before.label === c.label && <span className="block text-[12px] text-dim">detail reworded</span>}
+            </span>
+            <span className="tnum shrink-0 font-mono text-[11.5px] text-dim">
+              {c.was ?? '·'}→{c.n ?? '·'}
+            </span>
+          </div>
+        ))}
+        {same > 0 && (
+          <button type="button" onClick={() => setShowSame(!showSame)} className="w-full px-3.5 py-2 text-left text-[12px] text-dim hover:text-ink-2">
+            {showSame ? 'Hide' : 'Show'} {same} unchanged step{same === 1 ? '' : 's'}
+          </button>
+        )}
+      </div>
+      {chosen.comments.length > 0 && (
+        <div className="space-y-1.5 border-t border-line px-3.5 py-2.5">
+          <p className="text-[12px] font-medium text-dim">The comments it answered</p>
+          {chosen.comments.map((c) => (
+            <div key={c.id} className="text-[12.5px]">
+              <span className="text-ink-2"><Tag tone={KIND_TONE[c.kind]}>{kindLabel(c.kind)}</Tag> {c.body}</span>
+              {c.reply && <span className="block pl-1 text-soft">→ {c.reply}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
   );
 }

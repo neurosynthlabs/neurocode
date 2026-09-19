@@ -1,0 +1,3810 @@
+{
+ "version": 1,
+ "tech": [
+  {
+   "id": "python",
+   "name": "Python",
+   "category": "language",
+   "languages": [
+    "python"
+   ],
+   "kind": "language",
+   "maturity": "mature",
+   "license": "PSF-2.0",
+   "pairsWith": [
+    "fastapi",
+    "django",
+    "pytest"
+   ],
+   "notes": "General-purpose, dynamically typed; the default language of data and machine-learning work."
+  },
+  {
+   "id": "typescript",
+   "name": "TypeScript",
+   "category": "language",
+   "languages": [
+    "typescript"
+   ],
+   "kind": "language",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "react",
+    "nestjs",
+    "vitest"
+   ],
+   "notes": "A typed superset of JavaScript that compiles to JavaScript; used on both the browser and Node.js."
+  },
+  {
+   "id": "javascript",
+   "name": "JavaScript",
+   "category": "language",
+   "languages": [
+    "javascript"
+   ],
+   "kind": "language",
+   "maturity": "mature",
+   "license": "ECMA-262 standard",
+   "pairsWith": [
+    "nodejs",
+    "react"
+   ],
+   "notes": "The language every browser runs; also runs on servers through Node.js, Deno and Bun."
+  },
+  {
+   "id": "go",
+   "name": "Go",
+   "category": "language",
+   "languages": [
+    "go"
+   ],
+   "kind": "language",
+   "maturity": "mature",
+   "license": "BSD-3-Clause",
+   "pairsWith": [
+    "chi",
+    "gin",
+    "grpc"
+   ],
+   "notes": "Compiled, statically typed, garbage collected; builds single static binaries and has goroutines for concurrency."
+  },
+  {
+   "id": "java",
+   "name": "Java",
+   "category": "language",
+   "languages": [
+    "java"
+   ],
+   "kind": "language",
+   "maturity": "mature",
+   "license": "GPL-2.0-with-classpath-exception",
+   "pairsWith": [
+    "spring-boot",
+    "quarkus",
+    "junit"
+   ],
+   "notes": "Runs on the JVM; OpenJDK is the reference implementation. Long-term-support releases every two years."
+  },
+  {
+   "id": "kotlin",
+   "name": "Kotlin",
+   "category": "language",
+   "languages": [
+    "kotlin"
+   ],
+   "kind": "language",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "jetpack-compose",
+    "spring-boot",
+    "kotlin-multiplatform"
+   ],
+   "notes": "JVM language fully interoperable with Java; Google's preferred language for Android."
+  },
+  {
+   "id": "swift",
+   "name": "Swift",
+   "category": "language",
+   "languages": [
+    "swift"
+   ],
+   "kind": "language",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "swiftui"
+   ],
+   "notes": "Apple's compiled language for iOS, macOS and other Apple platforms; also runs on Linux."
+  },
+  {
+   "id": "csharp",
+   "name": "C#",
+   "category": "language",
+   "languages": [
+    "csharp"
+   ],
+   "kind": "language",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "aspnet-core",
+    "xunit"
+   ],
+   "notes": "Statically typed language of .NET; .NET is open source and cross-platform."
+  },
+  {
+   "id": "rust",
+   "name": "Rust",
+   "category": "language",
+   "languages": [
+    "rust"
+   ],
+   "kind": "language",
+   "maturity": "mature",
+   "license": "MIT OR Apache-2.0",
+   "pairsWith": [
+    "axum",
+    "actix-web",
+    "tauri",
+    "clap"
+   ],
+   "notes": "Compiled with no garbage collector; memory safety is checked at compile time by the borrow checker."
+  },
+  {
+   "id": "ruby",
+   "name": "Ruby",
+   "category": "language",
+   "languages": [
+    "ruby"
+   ],
+   "kind": "language",
+   "maturity": "mature",
+   "license": "Ruby OR BSD-2-Clause",
+   "pairsWith": [
+    "rails",
+    "rspec",
+    "sidekiq"
+   ],
+   "notes": "Dynamically typed, object-oriented; best known through Ruby on Rails."
+  },
+  {
+   "id": "php",
+   "name": "PHP",
+   "category": "language",
+   "languages": [
+    "php"
+   ],
+   "kind": "language",
+   "maturity": "mature",
+   "license": "PHP-3.01",
+   "pairsWith": [
+    "laravel",
+    "phpunit"
+   ],
+   "notes": "Server-side scripting language; runs a large share of the web through WordPress and Laravel."
+  },
+  {
+   "id": "elixir",
+   "name": "Elixir",
+   "category": "language",
+   "languages": [
+    "elixir"
+   ],
+   "kind": "language",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "phoenix"
+   ],
+   "notes": "Functional language on the Erlang VM (BEAM): lightweight processes and supervision trees for fault tolerance."
+  },
+  {
+   "id": "dart",
+   "name": "Dart",
+   "category": "language",
+   "languages": [
+    "dart"
+   ],
+   "kind": "language",
+   "maturity": "stable",
+   "license": "BSD-3-Clause",
+   "pairsWith": [
+    "flutter"
+   ],
+   "notes": "Google's client-optimised language; compiles ahead of time to native code and to JavaScript. Flutter's language."
+  },
+  {
+   "id": "nodejs",
+   "name": "Node.js",
+   "category": "language",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "runtime",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "express",
+    "nestjs",
+    "fastify"
+   ],
+   "notes": "JavaScript runtime built on V8 with an event loop for non-blocking I/O; even-numbered releases get long-term support."
+  },
+  {
+   "id": "bun",
+   "name": "Bun",
+   "category": "language",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "runtime",
+   "maturity": "emerging",
+   "license": "MIT",
+   "pairsWith": [
+    "hono",
+    "elysia"
+   ],
+   "notes": "JavaScript runtime, bundler, test runner and package manager in one binary; aims at Node.js compatibility."
+  },
+  {
+   "id": "react",
+   "name": "React",
+   "category": "frontend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "vite",
+    "nextjs",
+    "tanstack-query",
+    "tailwindcss"
+   ],
+   "notes": "Component library for user interfaces; a view layer, so routing and data fetching come from other libraries or a framework."
+  },
+  {
+   "id": "vue",
+   "name": "Vue",
+   "category": "frontend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "vite",
+    "nuxt",
+    "pinia"
+   ],
+   "notes": "Progressive framework with single-file components and a reactivity system; official router and state library."
+  },
+  {
+   "id": "svelte",
+   "name": "Svelte",
+   "category": "frontend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "sveltekit",
+    "vite"
+   ],
+   "notes": "Compiles components to plain JavaScript at build time rather than shipping a runtime virtual DOM."
+  },
+  {
+   "id": "angular",
+   "name": "Angular",
+   "category": "frontend",
+   "languages": [
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "nestjs",
+    "jasmine-karma"
+   ],
+   "notes": "Full framework from Google: router, forms, HTTP client and dependency injection included; opinionated structure."
+  },
+  {
+   "id": "solid",
+   "name": "SolidJS",
+   "category": "frontend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "vite"
+   ],
+   "notes": "JSX components with fine-grained reactive signals and no virtual DOM."
+  },
+  {
+   "id": "nextjs",
+   "name": "Next.js",
+   "category": "frontend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "react",
+    "vercel",
+    "prisma",
+    "authjs"
+   ],
+   "notes": "React framework with file-based routing, server rendering, React Server Components and API routes."
+  },
+  {
+   "id": "nuxt",
+   "name": "Nuxt",
+   "category": "frontend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "vue",
+    "vite"
+   ],
+   "notes": "Vue framework with file-based routing, server rendering and a server engine (Nitro) for API routes."
+  },
+  {
+   "id": "sveltekit",
+   "name": "SvelteKit",
+   "category": "frontend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "svelte",
+    "vite"
+   ],
+   "notes": "Svelte's application framework: routing, server rendering, form actions and deployment adapters."
+  },
+  {
+   "id": "remix",
+   "name": "Remix / React Router",
+   "category": "frontend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "react",
+    "vite"
+   ],
+   "notes": "Loaders and actions over web fetch APIs; Remix's framework features merged into React Router v7."
+  },
+  {
+   "id": "astro",
+   "name": "Astro",
+   "category": "frontend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "tailwindcss",
+    "netlify",
+    "cloudflare"
+   ],
+   "notes": "Content-focused site builder that ships zero JavaScript by default and hydrates interactive 'islands' only."
+  },
+  {
+   "id": "vite",
+   "name": "Vite",
+   "category": "frontend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "react",
+    "vue",
+    "svelte",
+    "vitest"
+   ],
+   "notes": "Dev server with native ES modules and fast hot reload; production builds bundled with Rollup/Rolldown."
+  },
+  {
+   "id": "tailwindcss",
+   "name": "Tailwind CSS",
+   "category": "frontend",
+   "languages": [
+    "css"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "react",
+    "shadcn-ui"
+   ],
+   "notes": "Utility-first CSS: styles are composed from small classes and unused ones are left out of the build."
+  },
+  {
+   "id": "shadcn-ui",
+   "name": "shadcn/ui",
+   "category": "frontend",
+   "languages": [
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "react",
+    "tailwindcss"
+   ],
+   "notes": "Accessible React components copied into your own code by a CLI rather than installed as a dependency."
+  },
+  {
+   "id": "tanstack-query",
+   "name": "TanStack Query",
+   "category": "frontend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "react",
+    "vue",
+    "solid"
+   ],
+   "notes": "Server-state caching for the browser: fetching, caching, background refetch and invalidation."
+  },
+  {
+   "id": "redux-toolkit",
+   "name": "Redux Toolkit",
+   "category": "frontend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "react"
+   ],
+   "notes": "The official way to write Redux: slices, immutable updates and RTK Query for data fetching."
+  },
+  {
+   "id": "pinia",
+   "name": "Pinia",
+   "category": "frontend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "vue",
+    "nuxt"
+   ],
+   "notes": "Vue's official state store, replacing Vuex."
+  },
+  {
+   "id": "htmx",
+   "name": "htmx",
+   "category": "frontend",
+   "languages": [
+    "javascript"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "0BSD",
+   "pairsWith": [
+    "django",
+    "rails",
+    "laravel"
+   ],
+   "notes": "Adds AJAX, WebSocket and server-sent-event behaviour to HTML attributes; the server returns HTML fragments."
+  },
+  {
+   "id": "hugo",
+   "name": "Hugo",
+   "category": "frontend",
+   "languages": [
+    "go"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "netlify",
+    "cloudflare",
+    "github-pages"
+   ],
+   "notes": "Static site generator written in Go; a single binary that builds large sites quickly from Markdown."
+  },
+  {
+   "id": "electron",
+   "name": "Electron",
+   "category": "frontend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "react",
+    "vite",
+    "electron-builder"
+   ],
+   "notes": "Desktop apps from web code: Chromium and Node.js bundled together, so installers are large (tens of MB)."
+  },
+  {
+   "id": "tauri",
+   "name": "Tauri",
+   "category": "frontend",
+   "languages": [
+    "rust",
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "stable",
+   "license": "MIT OR Apache-2.0",
+   "pairsWith": [
+    "react",
+    "svelte",
+    "rust",
+    "sqlite"
+   ],
+   "notes": "Desktop and mobile apps with a web front end on the system webview and a Rust core; small installers."
+  },
+  {
+   "id": "electron-builder",
+   "name": "electron-builder",
+   "category": "frontend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "electron"
+   ],
+   "notes": "Packages Electron apps into installers (dmg, nsis, AppImage) with code signing and auto-update support."
+  },
+  {
+   "id": "storybook",
+   "name": "Storybook",
+   "category": "frontend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "react",
+    "vue",
+    "angular"
+   ],
+   "notes": "Workshop for building and documenting UI components in isolation."
+  },
+  {
+   "id": "react-native",
+   "name": "React Native",
+   "category": "mobile",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "expo",
+    "typescript",
+    "detox"
+   ],
+   "notes": "Native iOS and Android apps from React components rendered to native views."
+  },
+  {
+   "id": "expo",
+   "name": "Expo",
+   "category": "mobile",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "react-native",
+    "eas"
+   ],
+   "notes": "Toolkit and SDK around React Native: managed native modules, file-based routing, over-the-air updates."
+  },
+  {
+   "id": "eas",
+   "name": "EAS (Expo Application Services)",
+   "category": "mobile",
+   "languages": [],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "proprietary",
+   "pairsWith": [
+    "expo"
+   ],
+   "notes": "Hosted builds, app store submission and over-the-air updates for Expo apps; paid tiers above a free allowance."
+  },
+  {
+   "id": "flutter",
+   "name": "Flutter",
+   "category": "mobile",
+   "languages": [
+    "dart"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "BSD-3-Clause",
+   "pairsWith": [
+    "dart",
+    "firebase"
+   ],
+   "notes": "Google's UI toolkit that draws its own widgets; one Dart codebase for iOS, Android, web and desktop."
+  },
+  {
+   "id": "swiftui",
+   "name": "SwiftUI",
+   "category": "mobile",
+   "languages": [
+    "swift"
+   ],
+   "kind": "framework",
+   "maturity": "stable",
+   "license": "proprietary",
+   "pairsWith": [
+    "swift"
+   ],
+   "notes": "Apple's declarative UI framework for iOS, iPadOS, macOS, watchOS and visionOS; ships with Apple's SDKs."
+  },
+  {
+   "id": "jetpack-compose",
+   "name": "Jetpack Compose",
+   "category": "mobile",
+   "languages": [
+    "kotlin"
+   ],
+   "kind": "framework",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "kotlin"
+   ],
+   "notes": "Android's declarative UI toolkit in Kotlin."
+  },
+  {
+   "id": "kotlin-multiplatform",
+   "name": "Kotlin Multiplatform",
+   "category": "mobile",
+   "languages": [
+    "kotlin"
+   ],
+   "kind": "framework",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "kotlin",
+    "jetpack-compose"
+   ],
+   "notes": "Shares Kotlin business logic across Android, iOS, desktop and server while keeping native UIs where wanted."
+  },
+  {
+   "id": "capacitor",
+   "name": "Capacitor",
+   "category": "mobile",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "react",
+    "vue",
+    "angular"
+   ],
+   "notes": "Wraps a web app in a native iOS/Android shell with plugins for device APIs (from the Ionic team)."
+  },
+  {
+   "id": "fastlane",
+   "name": "fastlane",
+   "category": "mobile",
+   "languages": [
+    "ruby"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "react-native",
+    "flutter"
+   ],
+   "notes": "Automates iOS and Android builds, signing, screenshots and store releases."
+  },
+  {
+   "id": "fastapi",
+   "name": "FastAPI",
+   "category": "backend",
+   "languages": [
+    "python"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "python",
+    "pydantic",
+    "sqlalchemy",
+    "postgres"
+   ],
+   "notes": "Async Python web framework; request and response models are Pydantic types and the OpenAPI document is generated from them."
+  },
+  {
+   "id": "pydantic",
+   "name": "Pydantic",
+   "category": "backend",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "fastapi"
+   ],
+   "notes": "Data validation from Python type hints; the core is written in Rust."
+  },
+  {
+   "id": "django",
+   "name": "Django",
+   "category": "backend",
+   "languages": [
+    "python"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "BSD-3-Clause",
+   "pairsWith": [
+    "postgres",
+    "celery",
+    "django-rest-framework",
+    "htmx"
+   ],
+   "notes": "Batteries-included Python framework: ORM, migrations, admin, auth and templates."
+  },
+  {
+   "id": "django-rest-framework",
+   "name": "Django REST framework",
+   "category": "backend",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "BSD-3-Clause",
+   "pairsWith": [
+    "django"
+   ],
+   "notes": "Serializers, viewsets, authentication and a browsable API for Django."
+  },
+  {
+   "id": "flask",
+   "name": "Flask",
+   "category": "backend",
+   "languages": [
+    "python"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "BSD-3-Clause",
+   "pairsWith": [
+    "sqlalchemy"
+   ],
+   "notes": "Minimal Python web framework (WSGI); extensions add what the core leaves out."
+  },
+  {
+   "id": "sqlalchemy",
+   "name": "SQLAlchemy",
+   "category": "backend",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "fastapi",
+    "flask",
+    "alembic",
+    "postgres"
+   ],
+   "notes": "Python SQL toolkit and ORM with sync and async sessions."
+  },
+  {
+   "id": "alembic",
+   "name": "Alembic",
+   "category": "backend",
+   "languages": [
+    "python"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "sqlalchemy"
+   ],
+   "notes": "Schema migrations for SQLAlchemy, with autogenerate from models."
+  },
+  {
+   "id": "express",
+   "name": "Express",
+   "category": "backend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "nodejs"
+   ],
+   "notes": "Minimal Node.js web framework built on middleware."
+  },
+  {
+   "id": "nestjs",
+   "name": "NestJS",
+   "category": "backend",
+   "languages": [
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "nodejs",
+    "prisma",
+    "postgres"
+   ],
+   "notes": "Structured Node.js framework with modules, dependency injection and decorators; runs on Express or Fastify."
+  },
+  {
+   "id": "fastify",
+   "name": "Fastify",
+   "category": "backend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "nodejs"
+   ],
+   "notes": "Node.js web framework with JSON-schema validation and a plugin system; built for low overhead."
+  },
+  {
+   "id": "hono",
+   "name": "Hono",
+   "category": "backend",
+   "languages": [
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "cloudflare-workers",
+    "bun"
+   ],
+   "notes": "Small web framework on web-standard Request/Response; runs on Cloudflare Workers, Deno, Bun and Node.js."
+  },
+  {
+   "id": "elysia",
+   "name": "Elysia",
+   "category": "backend",
+   "languages": [
+    "typescript"
+   ],
+   "kind": "framework",
+   "maturity": "emerging",
+   "license": "MIT",
+   "pairsWith": [
+    "bun"
+   ],
+   "notes": "TypeScript web framework designed for Bun, with end-to-end type inference."
+  },
+  {
+   "id": "trpc",
+   "name": "tRPC",
+   "category": "backend",
+   "languages": [
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "nextjs",
+    "react"
+   ],
+   "notes": "Typesafe APIs between a TypeScript server and client without a schema file or code generation."
+  },
+  {
+   "id": "prisma",
+   "name": "Prisma",
+   "category": "backend",
+   "languages": [
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "nestjs",
+    "nextjs",
+    "postgres"
+   ],
+   "notes": "TypeScript ORM with a schema file, generated client and migrations."
+  },
+  {
+   "id": "drizzle",
+   "name": "Drizzle ORM",
+   "category": "backend",
+   "languages": [
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "nextjs",
+    "postgres",
+    "sqlite"
+   ],
+   "notes": "TypeScript ORM whose queries read like SQL; schema defined in TypeScript."
+  },
+  {
+   "id": "spring-boot",
+   "name": "Spring Boot",
+   "category": "backend",
+   "languages": [
+    "java",
+    "kotlin"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "java",
+    "postgres",
+    "kafka",
+    "junit"
+   ],
+   "notes": "Opinionated Spring setup: auto-configuration, embedded server, production endpoints (Actuator)."
+  },
+  {
+   "id": "quarkus",
+   "name": "Quarkus",
+   "category": "backend",
+   "languages": [
+    "java",
+    "kotlin"
+   ],
+   "kind": "framework",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "java",
+    "kubernetes"
+   ],
+   "notes": "Java framework tuned for containers: fast start and low memory, including GraalVM native images."
+  },
+  {
+   "id": "aspnet-core",
+   "name": "ASP.NET Core",
+   "category": "backend",
+   "languages": [
+    "csharp"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "csharp",
+    "entity-framework",
+    "postgres"
+   ],
+   "notes": "Cross-platform .NET web framework: minimal APIs, MVC, SignalR for realtime."
+  },
+  {
+   "id": "entity-framework",
+   "name": "Entity Framework Core",
+   "category": "backend",
+   "languages": [
+    "csharp"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "aspnet-core"
+   ],
+   "notes": ".NET ORM with LINQ queries and migrations."
+  },
+  {
+   "id": "gin",
+   "name": "Gin",
+   "category": "backend",
+   "languages": [
+    "go"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "go"
+   ],
+   "notes": "Go HTTP framework with a fast router and middleware."
+  },
+  {
+   "id": "echo",
+   "name": "Echo",
+   "category": "backend",
+   "languages": [
+    "go"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "go"
+   ],
+   "notes": "Minimal Go web framework: router, middleware, data binding."
+  },
+  {
+   "id": "chi",
+   "name": "chi",
+   "category": "backend",
+   "languages": [
+    "go"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "go"
+   ],
+   "notes": "Lightweight Go router that stays compatible with the standard library's net/http."
+  },
+  {
+   "id": "grpc",
+   "name": "gRPC",
+   "category": "backend",
+   "languages": [
+    "go",
+    "java",
+    "python",
+    "typescript",
+    "csharp",
+    "rust"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "go",
+    "envoy"
+   ],
+   "notes": "RPC over HTTP/2 with Protocol Buffers contracts; generated clients and servers in many languages."
+  },
+  {
+   "id": "axum",
+   "name": "Axum",
+   "category": "backend",
+   "languages": [
+    "rust"
+   ],
+   "kind": "framework",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "rust",
+    "tokio"
+   ],
+   "notes": "Rust web framework from the Tokio project, built on tower middleware."
+  },
+  {
+   "id": "tokio",
+   "name": "Tokio",
+   "category": "backend",
+   "languages": [
+    "rust"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "axum"
+   ],
+   "notes": "Asynchronous runtime for Rust: scheduler, I/O, timers."
+  },
+  {
+   "id": "actix-web",
+   "name": "Actix Web",
+   "category": "backend",
+   "languages": [
+    "rust"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT OR Apache-2.0",
+   "pairsWith": [
+    "rust"
+   ],
+   "notes": "Rust web framework on the actix runtime."
+  },
+  {
+   "id": "rails",
+   "name": "Ruby on Rails",
+   "category": "backend",
+   "languages": [
+    "ruby"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "ruby",
+    "postgres",
+    "sidekiq",
+    "hotwire"
+   ],
+   "notes": "Convention-over-configuration framework: ActiveRecord, migrations, Action Cable, background jobs."
+  },
+  {
+   "id": "hotwire",
+   "name": "Hotwire (Turbo + Stimulus)",
+   "category": "backend",
+   "languages": [
+    "ruby",
+    "javascript"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "rails"
+   ],
+   "notes": "Server-rendered HTML sent over the wire, with Turbo for navigation/streams and Stimulus for small behaviours."
+  },
+  {
+   "id": "laravel",
+   "name": "Laravel",
+   "category": "backend",
+   "languages": [
+    "php"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "php",
+    "mysql",
+    "redis"
+   ],
+   "notes": "PHP framework: Eloquent ORM, queues, scheduler, Blade templates."
+  },
+  {
+   "id": "phoenix",
+   "name": "Phoenix",
+   "category": "backend",
+   "languages": [
+    "elixir"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "elixir",
+    "postgres"
+   ],
+   "notes": "Elixir web framework with Channels and LiveView for realtime server-rendered UI."
+  },
+  {
+   "id": "socketio",
+   "name": "Socket.IO",
+   "category": "backend",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "nodejs",
+    "redis"
+   ],
+   "notes": "Realtime bidirectional events over WebSocket with fallback, rooms and reconnection; needs its own client."
+  },
+  {
+   "id": "typer",
+   "name": "Typer",
+   "category": "backend",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "python"
+   ],
+   "notes": "Builds command-line interfaces from Python type hints (on top of Click)."
+  },
+  {
+   "id": "click",
+   "name": "Click",
+   "category": "backend",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "BSD-3-Clause",
+   "pairsWith": [
+    "python"
+   ],
+   "notes": "Python package for composable command-line interfaces."
+  },
+  {
+   "id": "cobra",
+   "name": "Cobra",
+   "category": "backend",
+   "languages": [
+    "go"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "go",
+    "goreleaser"
+   ],
+   "notes": "Go library for CLIs with subcommands, flags and generated help and completions."
+  },
+  {
+   "id": "clap",
+   "name": "clap",
+   "category": "backend",
+   "languages": [
+    "rust"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MIT OR Apache-2.0",
+   "pairsWith": [
+    "rust"
+   ],
+   "notes": "Rust command-line argument parser with derive macros."
+  },
+  {
+   "id": "openapi",
+   "name": "OpenAPI",
+   "category": "backend",
+   "languages": [],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "fastapi",
+    "nestjs"
+   ],
+   "notes": "A machine-readable description of an HTTP API; clients, docs and tests can be generated from it."
+  },
+  {
+   "id": "postgres",
+   "name": "PostgreSQL",
+   "category": "database",
+   "languages": [
+    "sql"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "PostgreSQL",
+   "pairsWith": [
+    "pgvector",
+    "sqlalchemy",
+    "prisma"
+   ],
+   "notes": "Relational database with transactions, JSONB, full-text search and a large extension ecosystem."
+  },
+  {
+   "id": "mysql",
+   "name": "MySQL",
+   "category": "database",
+   "languages": [
+    "sql"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "GPL-2.0",
+   "pairsWith": [
+    "laravel",
+    "rails"
+   ],
+   "notes": "Relational database from Oracle; the InnoDB engine gives transactions and row locking."
+  },
+  {
+   "id": "mariadb",
+   "name": "MariaDB",
+   "category": "database",
+   "languages": [
+    "sql"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "GPL-2.0",
+   "pairsWith": [
+    "laravel"
+   ],
+   "notes": "Community fork of MySQL, largely compatible with it."
+  },
+  {
+   "id": "sqlite",
+   "name": "SQLite",
+   "category": "database",
+   "languages": [
+    "sql"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "public domain",
+   "pairsWith": [
+    "tauri",
+    "drizzle"
+   ],
+   "notes": "Embedded SQL database in a single file; no server process. One writer at a time."
+  },
+  {
+   "id": "mongodb",
+   "name": "MongoDB",
+   "category": "database",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "SSPL-1.0",
+   "pairsWith": [
+    "nodejs"
+   ],
+   "notes": "Document database storing BSON documents; multi-document transactions since 4.0."
+  },
+  {
+   "id": "cassandra",
+   "name": "Apache Cassandra",
+   "category": "database",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "spark"
+   ],
+   "notes": "Wide-column store for very large write-heavy workloads across data centres; queries are designed around partition keys."
+  },
+  {
+   "id": "clickhouse",
+   "name": "ClickHouse",
+   "category": "database",
+   "languages": [
+    "sql"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "kafka",
+    "grafana"
+   ],
+   "notes": "Column-oriented database for analytical queries over very large tables."
+  },
+  {
+   "id": "duckdb",
+   "name": "DuckDB",
+   "category": "database",
+   "languages": [
+    "sql"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "dbt",
+    "polars",
+    "python"
+   ],
+   "notes": "In-process analytical SQL database; reads Parquet, CSV and Arrow directly."
+  },
+  {
+   "id": "dynamodb",
+   "name": "Amazon DynamoDB",
+   "category": "database",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "aws-lambda",
+    "aws"
+   ],
+   "notes": "AWS's managed key-value and document database; on-demand or provisioned capacity; access patterns must be designed up front."
+  },
+  {
+   "id": "firestore",
+   "name": "Cloud Firestore",
+   "category": "database",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "firebase",
+    "flutter"
+   ],
+   "notes": "Google's managed document database with realtime listeners and offline client caches."
+  },
+  {
+   "id": "supabase",
+   "name": "Supabase",
+   "category": "database",
+   "languages": [
+    "sql"
+   ],
+   "kind": "platform",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "postgres",
+    "supabase-auth",
+    "nextjs"
+   ],
+   "notes": "Hosted Postgres with auth, storage, realtime and generated APIs; can be self-hosted."
+  },
+  {
+   "id": "neon",
+   "name": "Neon",
+   "category": "database",
+   "languages": [
+    "sql"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "postgres",
+    "vercel"
+   ],
+   "notes": "Serverless Postgres that separates storage from compute, with branching and scale to zero."
+  },
+  {
+   "id": "timescaledb",
+   "name": "TimescaleDB",
+   "category": "database",
+   "languages": [
+    "sql"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "Apache-2.0 (core) / Timescale License",
+   "pairsWith": [
+    "postgres",
+    "grafana"
+   ],
+   "notes": "Postgres extension for time-series data: hypertables, compression, continuous aggregates."
+  },
+  {
+   "id": "neo4j",
+   "name": "Neo4j",
+   "category": "database",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "GPL-3.0 (Community)",
+   "pairsWith": [],
+   "notes": "Graph database queried with Cypher."
+  },
+  {
+   "id": "pgvector",
+   "name": "pgvector",
+   "category": "database",
+   "languages": [
+    "sql"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "PostgreSQL",
+   "pairsWith": [
+    "postgres",
+    "langgraph"
+   ],
+   "notes": "Postgres extension for vector similarity search with HNSW and IVFFlat indexes."
+  },
+  {
+   "id": "qdrant",
+   "name": "Qdrant",
+   "category": "database",
+   "languages": [
+    "rust"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "langgraph",
+    "llamaindex"
+   ],
+   "notes": "Vector database with payload filtering; runs self-hosted or as a managed cloud."
+  },
+  {
+   "id": "s3",
+   "name": "Amazon S3",
+   "category": "database",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "aws",
+    "cloudfront"
+   ],
+   "notes": "Object storage; many other providers (R2, MinIO, GCS) offer an S3-compatible API."
+  },
+  {
+   "id": "minio",
+   "name": "MinIO",
+   "category": "database",
+   "languages": [
+    "go"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "AGPL-3.0",
+   "pairsWith": [
+    "docker-compose"
+   ],
+   "notes": "Self-hosted S3-compatible object storage."
+  },
+  {
+   "id": "redis",
+   "name": "Redis",
+   "category": "cache",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "AGPL-3.0 OR RSALv2 OR SSPL-1.0",
+   "pairsWith": [
+    "celery",
+    "sidekiq",
+    "bullmq"
+   ],
+   "notes": "In-memory data structure store: cache, rate limits, pub/sub and streams. Licensed AGPL/RSAL/SSPL since 8.0."
+  },
+  {
+   "id": "valkey",
+   "name": "Valkey",
+   "category": "cache",
+   "languages": [],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "BSD-3-Clause",
+   "pairsWith": [
+    "celery",
+    "bullmq"
+   ],
+   "notes": "Linux Foundation fork of Redis 7.2, wire-compatible, under the BSD licence."
+  },
+  {
+   "id": "memcached",
+   "name": "Memcached",
+   "category": "cache",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "BSD-3-Clause",
+   "pairsWith": [],
+   "notes": "Simple distributed in-memory key-value cache; no persistence."
+  },
+  {
+   "id": "kafka",
+   "name": "Apache Kafka",
+   "category": "queue",
+   "languages": [
+    "java",
+    "scala"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "debezium",
+    "flink",
+    "spring-boot"
+   ],
+   "notes": "Distributed, partitioned, replicated log; consumers keep their own offsets, so events can be replayed."
+  },
+  {
+   "id": "rabbitmq",
+   "name": "RabbitMQ",
+   "category": "queue",
+   "languages": [
+    "erlang"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "MPL-2.0",
+   "pairsWith": [
+    "celery",
+    "spring-boot"
+   ],
+   "notes": "Message broker speaking AMQP: exchanges, routing keys, acknowledgements; also has streams."
+  },
+  {
+   "id": "nats",
+   "name": "NATS",
+   "category": "queue",
+   "languages": [
+    "go"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "go"
+   ],
+   "notes": "Lightweight messaging (pub/sub, request/reply); JetStream adds persistence and at-least-once delivery."
+  },
+  {
+   "id": "sqs",
+   "name": "Amazon SQS",
+   "category": "queue",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "aws-lambda",
+    "aws"
+   ],
+   "notes": "Managed message queues from AWS: standard (at-least-once) and FIFO."
+  },
+  {
+   "id": "google-pubsub",
+   "name": "Google Cloud Pub/Sub",
+   "category": "queue",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "gcp"
+   ],
+   "notes": "Managed publish/subscribe messaging on Google Cloud."
+  },
+  {
+   "id": "celery",
+   "name": "Celery",
+   "category": "queue",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "BSD-3-Clause",
+   "pairsWith": [
+    "redis",
+    "rabbitmq",
+    "django"
+   ],
+   "notes": "Python distributed task queue; workers take jobs from a broker such as RabbitMQ or Redis."
+  },
+  {
+   "id": "sidekiq",
+   "name": "Sidekiq",
+   "category": "queue",
+   "languages": [
+    "ruby"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "LGPL-3.0",
+   "pairsWith": [
+    "rails",
+    "redis"
+   ],
+   "notes": "Background jobs for Ruby on threads, backed by Redis; paid Pro/Enterprise editions add features."
+  },
+  {
+   "id": "bullmq",
+   "name": "BullMQ",
+   "category": "queue",
+   "languages": [
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "redis",
+    "nodejs"
+   ],
+   "notes": "Node.js job queue on Redis: delays, retries, rate limits, flows."
+  },
+  {
+   "id": "temporal",
+   "name": "Temporal",
+   "category": "queue",
+   "languages": [
+    "go",
+    "java",
+    "typescript",
+    "python"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "go",
+    "postgres"
+   ],
+   "notes": "Durable workflow engine: workflow code is replayed from history so it survives crashes and retries."
+  },
+  {
+   "id": "elasticsearch",
+   "name": "Elasticsearch",
+   "category": "search",
+   "languages": [
+    "java"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "AGPL-3.0 OR SSPL-1.0 OR Elastic-2.0",
+   "pairsWith": [
+    "kibana"
+   ],
+   "notes": "Distributed search and analytics engine on Lucene."
+  },
+  {
+   "id": "opensearch",
+   "name": "OpenSearch",
+   "category": "search",
+   "languages": [
+    "java"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "opensearch-dashboards"
+   ],
+   "notes": "Apache-licensed fork of Elasticsearch 7.10, run by the Linux Foundation."
+  },
+  {
+   "id": "opensearch-dashboards",
+   "name": "OpenSearch Dashboards",
+   "category": "search",
+   "languages": [],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "opensearch"
+   ],
+   "notes": "Visualisation and query UI for OpenSearch."
+  },
+  {
+   "id": "kibana",
+   "name": "Kibana",
+   "category": "search",
+   "languages": [],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "AGPL-3.0 OR SSPL-1.0 OR Elastic-2.0",
+   "pairsWith": [
+    "elasticsearch"
+   ],
+   "notes": "Visualisation and query UI for Elasticsearch."
+  },
+  {
+   "id": "meilisearch",
+   "name": "Meilisearch",
+   "category": "search",
+   "languages": [
+    "rust"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "nextjs"
+   ],
+   "notes": "Typo-tolerant search engine for product and site search, with a simple HTTP API."
+  },
+  {
+   "id": "typesense",
+   "name": "Typesense",
+   "category": "search",
+   "languages": [
+    "cpp"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "GPL-3.0",
+   "pairsWith": [],
+   "notes": "In-memory, typo-tolerant search engine."
+  },
+  {
+   "id": "authjs",
+   "name": "Auth.js",
+   "category": "auth",
+   "languages": [
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "ISC",
+   "pairsWith": [
+    "nextjs",
+    "sveltekit"
+   ],
+   "notes": "Authentication for web frameworks (formerly NextAuth.js): OAuth providers, email and credentials, sessions in a database or JWT."
+  },
+  {
+   "id": "better-auth",
+   "name": "Better Auth",
+   "category": "auth",
+   "languages": [
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "emerging",
+   "license": "MIT",
+   "pairsWith": [
+    "nextjs",
+    "drizzle"
+   ],
+   "notes": "Framework-agnostic TypeScript auth library with plugins for 2FA and organisations."
+  },
+  {
+   "id": "keycloak",
+   "name": "Keycloak",
+   "category": "auth",
+   "languages": [
+    "java"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "spring-boot",
+    "kubernetes"
+   ],
+   "notes": "Self-hosted identity provider: OpenID Connect, SAML, users, federation (a CNCF project)."
+  },
+  {
+   "id": "clerk",
+   "name": "Clerk",
+   "category": "auth",
+   "languages": [],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "proprietary",
+   "pairsWith": [
+    "nextjs",
+    "react"
+   ],
+   "notes": "Hosted authentication and user management with prebuilt UI components; priced by active users."
+  },
+  {
+   "id": "supabase-auth",
+   "name": "Supabase Auth",
+   "category": "auth",
+   "languages": [],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "supabase",
+    "postgres"
+   ],
+   "notes": "Auth service (a GoTrue fork) issuing JWTs that Postgres row-level security can check."
+  },
+  {
+   "id": "auth0",
+   "name": "Auth0",
+   "category": "auth",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "react",
+    "express"
+   ],
+   "notes": "Hosted identity platform from Okta: OIDC, social logins, enterprise SSO."
+  },
+  {
+   "id": "cognito",
+   "name": "Amazon Cognito",
+   "category": "auth",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "aws",
+    "aws-lambda"
+   ],
+   "notes": "AWS user pools and identity federation."
+  },
+  {
+   "id": "firebase-auth",
+   "name": "Firebase Authentication",
+   "category": "auth",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "firebase",
+    "flutter"
+   ],
+   "notes": "Google's hosted auth with email, phone and social providers."
+  },
+  {
+   "id": "ory-kratos",
+   "name": "Ory Kratos",
+   "category": "auth",
+   "languages": [
+    "go"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "kubernetes"
+   ],
+   "notes": "Headless, API-first identity and user management server."
+  },
+  {
+   "id": "django-allauth",
+   "name": "django-allauth",
+   "category": "auth",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "django"
+   ],
+   "notes": "Account registration, login and social accounts for Django."
+  },
+  {
+   "id": "devise",
+   "name": "Devise",
+   "category": "auth",
+   "languages": [
+    "ruby"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "rails"
+   ],
+   "notes": "Authentication for Rails built on Warden."
+  },
+  {
+   "id": "spring-security",
+   "name": "Spring Security",
+   "category": "auth",
+   "languages": [
+    "java"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "spring-boot",
+    "keycloak"
+   ],
+   "notes": "Authentication and authorisation for Spring applications, including OAuth2 resource servers."
+  },
+  {
+   "id": "pytorch",
+   "name": "PyTorch",
+   "category": "ai-ml",
+   "languages": [
+    "python"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "BSD-3-Clause",
+   "pairsWith": [
+    "huggingface-transformers",
+    "mlflow",
+    "ray"
+   ],
+   "notes": "Deep-learning framework with eager execution and a compiler (torch.compile); now under the Linux Foundation."
+  },
+  {
+   "id": "tensorflow",
+   "name": "TensorFlow",
+   "category": "ai-ml",
+   "languages": [
+    "python"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "keras"
+   ],
+   "notes": "Google's machine-learning framework; Keras is its high-level API; TF Serving and TFLite for deployment."
+  },
+  {
+   "id": "keras",
+   "name": "Keras",
+   "category": "ai-ml",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "tensorflow",
+    "pytorch"
+   ],
+   "notes": "High-level deep-learning API; Keras 3 runs on TensorFlow, JAX or PyTorch."
+  },
+  {
+   "id": "scikit-learn",
+   "name": "scikit-learn",
+   "category": "ai-ml",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "BSD-3-Clause",
+   "pairsWith": [
+    "pandas",
+    "mlflow"
+   ],
+   "notes": "Classical machine learning in Python: regression, classification, clustering, pipelines."
+  },
+  {
+   "id": "xgboost",
+   "name": "XGBoost",
+   "category": "ai-ml",
+   "languages": [
+    "python",
+    "java"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "scikit-learn"
+   ],
+   "notes": "Gradient-boosted decision trees; strong on tabular data."
+  },
+  {
+   "id": "huggingface-transformers",
+   "name": "Hugging Face Transformers",
+   "category": "ai-ml",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "pytorch",
+    "vllm"
+   ],
+   "notes": "Pretrained transformer models with a common API for inference and fine-tuning."
+  },
+  {
+   "id": "vllm",
+   "name": "vLLM",
+   "category": "ai-ml",
+   "languages": [
+    "python"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "huggingface-transformers",
+    "kubernetes"
+   ],
+   "notes": "High-throughput LLM inference server (PagedAttention) with an OpenAI-compatible API; needs GPUs for most models."
+  },
+  {
+   "id": "ollama",
+   "name": "Ollama",
+   "category": "ai-ml",
+   "languages": [
+    "go"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "langgraph"
+   ],
+   "notes": "Runs open-weight language models locally behind an HTTP API."
+  },
+  {
+   "id": "mlflow",
+   "name": "MLflow",
+   "category": "ai-ml",
+   "languages": [
+    "python"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "pytorch",
+    "scikit-learn"
+   ],
+   "notes": "Experiment tracking, a model registry and model packaging."
+  },
+  {
+   "id": "ray",
+   "name": "Ray",
+   "category": "ai-ml",
+   "languages": [
+    "python"
+   ],
+   "kind": "framework",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "pytorch",
+    "kubernetes"
+   ],
+   "notes": "Distributed compute for Python: data processing, training (Ray Train) and serving (Ray Serve)."
+  },
+  {
+   "id": "feast",
+   "name": "Feast",
+   "category": "ai-ml",
+   "languages": [
+    "python"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "redis",
+    "bigquery"
+   ],
+   "notes": "Feature store: one definition of features for offline training and online serving."
+  },
+  {
+   "id": "bentoml",
+   "name": "BentoML",
+   "category": "ai-ml",
+   "languages": [
+    "python"
+   ],
+   "kind": "framework",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "pytorch",
+    "docker"
+   ],
+   "notes": "Packages models as HTTP services with batching and container builds."
+  },
+  {
+   "id": "triton",
+   "name": "NVIDIA Triton Inference Server",
+   "category": "ai-ml",
+   "languages": [
+    "cpp",
+    "python"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "BSD-3-Clause",
+   "pairsWith": [
+    "kubernetes"
+   ],
+   "notes": "Model server for many frameworks on GPU and CPU, with dynamic batching."
+  },
+  {
+   "id": "onnx-runtime",
+   "name": "ONNX Runtime",
+   "category": "ai-ml",
+   "languages": [
+    "cpp",
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "pytorch"
+   ],
+   "notes": "Cross-platform inference engine for models exported to ONNX."
+  },
+  {
+   "id": "langgraph",
+   "name": "LangGraph",
+   "category": "ai-ml",
+   "languages": [
+    "python",
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "langchain",
+    "pgvector"
+   ],
+   "notes": "Builds stateful, multi-step LLM agents as graphs with checkpoints and human-in-the-loop pauses."
+  },
+  {
+   "id": "langchain",
+   "name": "LangChain",
+   "category": "ai-ml",
+   "languages": [
+    "python",
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "langgraph"
+   ],
+   "notes": "Integrations and building blocks for LLM applications: model wrappers, retrievers, tools."
+  },
+  {
+   "id": "llamaindex",
+   "name": "LlamaIndex",
+   "category": "ai-ml",
+   "languages": [
+    "python",
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "qdrant",
+    "pgvector"
+   ],
+   "notes": "Data framework for retrieval-augmented generation: loaders, indexes, query engines."
+  },
+  {
+   "id": "litellm",
+   "name": "LiteLLM",
+   "category": "ai-ml",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "fastapi"
+   ],
+   "notes": "One OpenAI-style interface to many model providers, plus a proxy with budgets and fallbacks."
+  },
+  {
+   "id": "openai-api",
+   "name": "OpenAI API",
+   "category": "ai-ml",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "litellm"
+   ],
+   "notes": "Hosted GPT models, embeddings and tools; priced per token."
+  },
+  {
+   "id": "anthropic-api",
+   "name": "Anthropic API",
+   "category": "ai-ml",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "litellm"
+   ],
+   "notes": "Hosted Claude models; priced per token."
+  },
+  {
+   "id": "ragas",
+   "name": "Ragas",
+   "category": "ai-ml",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "emerging",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "langgraph",
+    "llamaindex"
+   ],
+   "notes": "Evaluation metrics for retrieval-augmented generation: faithfulness, answer relevance, context precision."
+  },
+  {
+   "id": "promptfoo",
+   "name": "promptfoo",
+   "category": "ai-ml",
+   "languages": [
+    "typescript"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "github-actions"
+   ],
+   "notes": "Test and red-team prompts and LLM apps from a config file; runs in CI."
+  },
+  {
+   "id": "guardrails-ai",
+   "name": "Guardrails AI",
+   "category": "ai-ml",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "emerging",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "fastapi"
+   ],
+   "notes": "Validates LLM inputs and outputs against validators (PII, toxicity, schemas)."
+  },
+  {
+   "id": "evidently",
+   "name": "Evidently",
+   "category": "ai-ml",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "mlflow",
+    "grafana"
+   ],
+   "notes": "Data drift, model quality and LLM evaluation reports and monitors."
+  },
+  {
+   "id": "airflow",
+   "name": "Apache Airflow",
+   "category": "data",
+   "languages": [
+    "python"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "dbt",
+    "postgres",
+    "kubernetes"
+   ],
+   "notes": "Schedules and monitors workflows written as Python DAGs."
+  },
+  {
+   "id": "dagster",
+   "name": "Dagster",
+   "category": "data",
+   "languages": [
+    "python"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "dbt",
+    "duckdb"
+   ],
+   "notes": "Data orchestrator built around software-defined assets, with lineage and type checks."
+  },
+  {
+   "id": "prefect",
+   "name": "Prefect",
+   "category": "data",
+   "languages": [
+    "python"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "python"
+   ],
+   "notes": "Workflow orchestration from decorated Python functions."
+  },
+  {
+   "id": "dbt",
+   "name": "dbt",
+   "category": "data",
+   "languages": [
+    "sql",
+    "python"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "bigquery",
+    "snowflake",
+    "duckdb",
+    "postgres"
+   ],
+   "notes": "Transforms data inside the warehouse with version-controlled SQL models, tests and docs (dbt Core)."
+  },
+  {
+   "id": "spark",
+   "name": "Apache Spark",
+   "category": "data",
+   "languages": [
+    "scala",
+    "python",
+    "java"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "delta-lake",
+    "iceberg"
+   ],
+   "notes": "Distributed data processing engine for batch, SQL and streaming."
+  },
+  {
+   "id": "flink",
+   "name": "Apache Flink",
+   "category": "data",
+   "languages": [
+    "java"
+   ],
+   "kind": "framework",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "kafka"
+   ],
+   "notes": "Stateful stream processing with event time and exactly-once state."
+  },
+  {
+   "id": "pandas",
+   "name": "pandas",
+   "category": "data",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "BSD-3-Clause",
+   "pairsWith": [
+    "scikit-learn",
+    "jupyter"
+   ],
+   "notes": "DataFrames for in-memory data analysis in Python."
+  },
+  {
+   "id": "polars",
+   "name": "Polars",
+   "category": "data",
+   "languages": [
+    "python",
+    "rust"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "duckdb"
+   ],
+   "notes": "Columnar DataFrame library in Rust with lazy queries; usually faster and lighter than pandas on large data."
+  },
+  {
+   "id": "jupyter",
+   "name": "Jupyter",
+   "category": "data",
+   "languages": [
+    "python"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "BSD-3-Clause",
+   "pairsWith": [
+    "pandas"
+   ],
+   "notes": "Notebooks that mix code, output and prose."
+  },
+  {
+   "id": "great-expectations",
+   "name": "Great Expectations",
+   "category": "data",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "airflow",
+    "dagster"
+   ],
+   "notes": "Declarative data-quality tests ('expectations') with generated reports."
+  },
+  {
+   "id": "iceberg",
+   "name": "Apache Iceberg",
+   "category": "data",
+   "languages": [],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "spark",
+    "flink"
+   ],
+   "notes": "Open table format for large analytic tables with schema evolution and time travel."
+  },
+  {
+   "id": "delta-lake",
+   "name": "Delta Lake",
+   "category": "data",
+   "languages": [],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "spark"
+   ],
+   "notes": "Open table format adding ACID transactions to Parquet files."
+  },
+  {
+   "id": "debezium",
+   "name": "Debezium",
+   "category": "data",
+   "languages": [
+    "java"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "kafka",
+    "postgres"
+   ],
+   "notes": "Change data capture: streams database row changes into Kafka."
+  },
+  {
+   "id": "bigquery",
+   "name": "Google BigQuery",
+   "category": "data",
+   "languages": [
+    "sql"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "dbt",
+    "gcp"
+   ],
+   "notes": "Serverless data warehouse; priced by data scanned or reserved slots."
+  },
+  {
+   "id": "snowflake",
+   "name": "Snowflake",
+   "category": "data",
+   "languages": [
+    "sql"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "dbt"
+   ],
+   "notes": "Cloud data warehouse separating storage from compute warehouses."
+  },
+  {
+   "id": "redshift",
+   "name": "Amazon Redshift",
+   "category": "data",
+   "languages": [
+    "sql"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "dbt",
+    "aws"
+   ],
+   "notes": "AWS columnar data warehouse, provisioned or serverless."
+  },
+  {
+   "id": "metabase",
+   "name": "Metabase",
+   "category": "data",
+   "languages": [],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "AGPL-3.0",
+   "pairsWith": [
+    "postgres",
+    "duckdb"
+   ],
+   "notes": "Self-service dashboards and questions over SQL databases."
+  },
+  {
+   "id": "superset",
+   "name": "Apache Superset",
+   "category": "data",
+   "languages": [
+    "python"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "postgres",
+    "clickhouse"
+   ],
+   "notes": "Open-source BI: SQL editor, charts, dashboards."
+  },
+  {
+   "id": "docker",
+   "name": "Docker",
+   "category": "infra",
+   "languages": [],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "docker-compose",
+    "kubernetes"
+   ],
+   "notes": "Builds and runs containers from Dockerfiles; the engine (Moby) is open source, Docker Desktop has paid tiers for larger companies."
+  },
+  {
+   "id": "docker-compose",
+   "name": "Docker Compose",
+   "category": "infra",
+   "languages": [],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "docker"
+   ],
+   "notes": "Defines multi-container apps in a YAML file for local development and single hosts."
+  },
+  {
+   "id": "kubernetes",
+   "name": "Kubernetes",
+   "category": "infra",
+   "languages": [],
+   "kind": "platform",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "helm",
+    "argo-cd",
+    "prometheus"
+   ],
+   "notes": "Container orchestration: scheduling, service discovery, rollouts, autoscaling. Operationally heavy for small teams."
+  },
+  {
+   "id": "helm",
+   "name": "Helm",
+   "category": "infra",
+   "languages": [],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "kubernetes"
+   ],
+   "notes": "Package manager for Kubernetes: templated charts with values per environment."
+  },
+  {
+   "id": "terraform",
+   "name": "Terraform",
+   "category": "infra",
+   "languages": [
+    "hcl"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "BUSL-1.1",
+   "pairsWith": [
+    "aws",
+    "gcp",
+    "azure"
+   ],
+   "notes": "Infrastructure as code in HCL with providers for every major cloud; relicensed to BUSL in 1.6."
+  },
+  {
+   "id": "opentofu",
+   "name": "OpenTofu",
+   "category": "infra",
+   "languages": [
+    "hcl"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "MPL-2.0",
+   "pairsWith": [
+    "aws",
+    "gcp",
+    "azure"
+   ],
+   "notes": "Open-source fork of Terraform 1.5 under the Linux Foundation, compatible with its providers."
+  },
+  {
+   "id": "pulumi",
+   "name": "Pulumi",
+   "category": "infra",
+   "languages": [
+    "typescript",
+    "python",
+    "go",
+    "csharp"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "aws",
+    "kubernetes"
+   ],
+   "notes": "Infrastructure as code in general-purpose languages."
+  },
+  {
+   "id": "ansible",
+   "name": "Ansible",
+   "category": "infra",
+   "languages": [
+    "python"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "GPL-3.0",
+   "pairsWith": [
+    "vm"
+   ],
+   "notes": "Agentless configuration management over SSH with YAML playbooks."
+  },
+  {
+   "id": "nginx",
+   "name": "NGINX",
+   "category": "infra",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "BSD-2-Clause",
+   "pairsWith": [
+    "docker"
+   ],
+   "notes": "Web server, reverse proxy and load balancer."
+  },
+  {
+   "id": "caddy",
+   "name": "Caddy",
+   "category": "infra",
+   "languages": [
+    "go"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "docker"
+   ],
+   "notes": "Web server and reverse proxy with automatic HTTPS certificates."
+  },
+  {
+   "id": "traefik",
+   "name": "Traefik",
+   "category": "infra",
+   "languages": [
+    "go"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "docker",
+    "kubernetes"
+   ],
+   "notes": "Reverse proxy that configures its routes from Docker labels or Kubernetes resources."
+  },
+  {
+   "id": "envoy",
+   "name": "Envoy",
+   "category": "infra",
+   "languages": [
+    "cpp"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "kubernetes",
+    "grpc"
+   ],
+   "notes": "L7 proxy used as an edge gateway and in service meshes; gRPC-aware."
+  },
+  {
+   "id": "kong",
+   "name": "Kong Gateway",
+   "category": "infra",
+   "languages": [
+    "lua"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "kubernetes",
+    "postgres"
+   ],
+   "notes": "API gateway on NGINX with plugins for auth, rate limits and logging."
+  },
+  {
+   "id": "aws-lambda",
+   "name": "AWS Lambda",
+   "category": "infra",
+   "languages": [
+    "python",
+    "typescript",
+    "java",
+    "go"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "dynamodb",
+    "sqs",
+    "aws"
+   ],
+   "notes": "Functions run on demand and billed per request and duration; 15-minute limit per invocation."
+  },
+  {
+   "id": "cloudflare-workers",
+   "name": "Cloudflare Workers",
+   "category": "infra",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "proprietary",
+   "pairsWith": [
+    "hono",
+    "cloudflare"
+   ],
+   "notes": "Functions on V8 isolates at Cloudflare's edge, with KV, D1 (SQLite), R2 and Queues beside them."
+  },
+  {
+   "id": "vault",
+   "name": "HashiCorp Vault",
+   "category": "infra",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "BUSL-1.1",
+   "pairsWith": [
+    "kubernetes"
+   ],
+   "notes": "Secrets management, dynamic credentials and encryption as a service."
+  },
+  {
+   "id": "sops",
+   "name": "SOPS",
+   "category": "infra",
+   "languages": [
+    "go"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "MPL-2.0",
+   "pairsWith": [
+    "age",
+    "kubernetes"
+   ],
+   "notes": "Encrypts values inside YAML/JSON/env files so secrets can live in git."
+  },
+  {
+   "id": "age",
+   "name": "age",
+   "category": "infra",
+   "languages": [
+    "go"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "BSD-3-Clause",
+   "pairsWith": [
+    "sops"
+   ],
+   "notes": "Simple file encryption tool with small keys."
+  },
+  {
+   "id": "vm",
+   "name": "A virtual machine",
+   "category": "infra",
+   "languages": [],
+   "kind": "platform",
+   "maturity": "mature",
+   "license": "n/a",
+   "pairsWith": [
+    "docker-compose",
+    "caddy",
+    "ansible"
+   ],
+   "notes": "One Linux server you run yourself: cheap and simple, and you own patching, backups and uptime."
+  },
+  {
+   "id": "github-actions",
+   "name": "GitHub Actions",
+   "category": "ci-cd",
+   "languages": [
+    "yaml"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "docker",
+    "vercel"
+   ],
+   "notes": "CI/CD workflows in YAML inside GitHub repositories; free minutes for public repos and a monthly allowance for private ones."
+  },
+  {
+   "id": "gitlab-ci",
+   "name": "GitLab CI/CD",
+   "category": "ci-cd",
+   "languages": [
+    "yaml"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "MIT (CE)",
+   "pairsWith": [
+    "docker",
+    "kubernetes"
+   ],
+   "notes": "Pipelines defined in .gitlab-ci.yml; runners can be self-hosted."
+  },
+  {
+   "id": "jenkins",
+   "name": "Jenkins",
+   "category": "ci-cd",
+   "languages": [
+    "groovy"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "docker"
+   ],
+   "notes": "Self-hosted automation server with a large plugin ecosystem; pipelines in a Jenkinsfile."
+  },
+  {
+   "id": "circleci",
+   "name": "CircleCI",
+   "category": "ci-cd",
+   "languages": [
+    "yaml"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "docker"
+   ],
+   "notes": "Hosted CI/CD with caching, parallelism and orbs."
+  },
+  {
+   "id": "argo-cd",
+   "name": "Argo CD",
+   "category": "ci-cd",
+   "languages": [],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "kubernetes",
+    "helm"
+   ],
+   "notes": "GitOps continuous delivery: keeps a Kubernetes cluster in sync with manifests in git."
+  },
+  {
+   "id": "flux",
+   "name": "Flux",
+   "category": "ci-cd",
+   "languages": [],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "kubernetes",
+    "helm"
+   ],
+   "notes": "GitOps toolkit for Kubernetes (a CNCF project)."
+  },
+  {
+   "id": "renovate",
+   "name": "Renovate",
+   "category": "ci-cd",
+   "languages": [],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "AGPL-3.0",
+   "pairsWith": [
+    "github-actions",
+    "gitlab-ci"
+   ],
+   "notes": "Opens pull requests that update dependencies, with grouping and schedules."
+  },
+  {
+   "id": "goreleaser",
+   "name": "GoReleaser",
+   "category": "ci-cd",
+   "languages": [
+    "go"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "go",
+    "github-actions"
+   ],
+   "notes": "Builds, packages and publishes Go binaries (archives, Homebrew, containers)."
+  },
+  {
+   "id": "opentelemetry",
+   "name": "OpenTelemetry",
+   "category": "observability",
+   "languages": [
+    "python",
+    "typescript",
+    "go",
+    "java",
+    "csharp"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "prometheus",
+    "jaeger",
+    "grafana"
+   ],
+   "notes": "Vendor-neutral APIs, SDKs and a collector for traces, metrics and logs."
+  },
+  {
+   "id": "prometheus",
+   "name": "Prometheus",
+   "category": "observability",
+   "languages": [
+    "go"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "grafana",
+    "kubernetes"
+   ],
+   "notes": "Pull-based metrics store with PromQL and alerting rules."
+  },
+  {
+   "id": "grafana",
+   "name": "Grafana",
+   "category": "observability",
+   "languages": [],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "AGPL-3.0",
+   "pairsWith": [
+    "prometheus",
+    "loki"
+   ],
+   "notes": "Dashboards and alerts over Prometheus, Loki, Tempo, SQL and more."
+  },
+  {
+   "id": "loki",
+   "name": "Grafana Loki",
+   "category": "observability",
+   "languages": [
+    "go"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "AGPL-3.0",
+   "pairsWith": [
+    "grafana"
+   ],
+   "notes": "Log aggregation that indexes labels, not full text."
+  },
+  {
+   "id": "tempo",
+   "name": "Grafana Tempo",
+   "category": "observability",
+   "languages": [
+    "go"
+   ],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "AGPL-3.0",
+   "pairsWith": [
+    "grafana",
+    "opentelemetry"
+   ],
+   "notes": "Distributed tracing backend on object storage."
+  },
+  {
+   "id": "jaeger",
+   "name": "Jaeger",
+   "category": "observability",
+   "languages": [
+    "go"
+   ],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "opentelemetry"
+   ],
+   "notes": "Distributed tracing system (a CNCF project)."
+  },
+  {
+   "id": "sentry",
+   "name": "Sentry",
+   "category": "observability",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "FSL-1.1 (self-hosted)",
+   "pairsWith": [
+    "react",
+    "django",
+    "nextjs"
+   ],
+   "notes": "Error tracking with stack traces, releases and performance traces; hosted plans or self-hosted."
+  },
+  {
+   "id": "datadog",
+   "name": "Datadog",
+   "category": "observability",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "kubernetes"
+   ],
+   "notes": "Hosted metrics, logs, traces and monitors; priced per host and per volume."
+  },
+  {
+   "id": "uptime-kuma",
+   "name": "Uptime Kuma",
+   "category": "observability",
+   "languages": [
+    "javascript"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "docker"
+   ],
+   "notes": "Self-hosted uptime monitoring with notifications."
+  },
+  {
+   "id": "playwright",
+   "name": "Playwright",
+   "category": "testing",
+   "languages": [
+    "typescript",
+    "python",
+    "java",
+    "csharp"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "react",
+    "nextjs"
+   ],
+   "notes": "Browser automation and end-to-end tests across Chromium, Firefox and WebKit, with auto-waiting."
+  },
+  {
+   "id": "cypress",
+   "name": "Cypress",
+   "category": "testing",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "react"
+   ],
+   "notes": "End-to-end and component tests running inside the browser."
+  },
+  {
+   "id": "vitest",
+   "name": "Vitest",
+   "category": "testing",
+   "languages": [
+    "typescript"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "vite",
+    "react",
+    "vue"
+   ],
+   "notes": "Unit test runner built on Vite with a Jest-compatible API."
+  },
+  {
+   "id": "jest",
+   "name": "Jest",
+   "category": "testing",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "react",
+    "nestjs"
+   ],
+   "notes": "JavaScript test runner with mocking and snapshots."
+  },
+  {
+   "id": "testing-library",
+   "name": "Testing Library",
+   "category": "testing",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "react",
+    "vitest",
+    "jest"
+   ],
+   "notes": "Tests UI the way a person uses it: queries by role, label and text."
+  },
+  {
+   "id": "pytest",
+   "name": "pytest",
+   "category": "testing",
+   "languages": [
+    "python"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "fastapi",
+    "django"
+   ],
+   "notes": "Python test framework with fixtures and plain assert statements."
+  },
+  {
+   "id": "junit",
+   "name": "JUnit 5",
+   "category": "testing",
+   "languages": [
+    "java",
+    "kotlin"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "EPL-2.0",
+   "pairsWith": [
+    "spring-boot"
+   ],
+   "notes": "The standard JVM test framework."
+  },
+  {
+   "id": "xunit",
+   "name": "xUnit.net",
+   "category": "testing",
+   "languages": [
+    "csharp"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "Apache-2.0",
+   "pairsWith": [
+    "aspnet-core"
+   ],
+   "notes": ".NET unit testing framework."
+  },
+  {
+   "id": "rspec",
+   "name": "RSpec",
+   "category": "testing",
+   "languages": [
+    "ruby"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "rails"
+   ],
+   "notes": "Behaviour-driven testing for Ruby."
+  },
+  {
+   "id": "phpunit",
+   "name": "PHPUnit",
+   "category": "testing",
+   "languages": [
+    "php"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "BSD-3-Clause",
+   "pairsWith": [
+    "laravel"
+   ],
+   "notes": "The standard PHP unit testing framework."
+  },
+  {
+   "id": "testcontainers",
+   "name": "Testcontainers",
+   "category": "testing",
+   "languages": [
+    "java",
+    "go",
+    "python",
+    "typescript",
+    "csharp"
+   ],
+   "kind": "library",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "postgres",
+    "kafka"
+   ],
+   "notes": "Starts real databases and brokers in throwaway containers for integration tests."
+  },
+  {
+   "id": "k6",
+   "name": "Grafana k6",
+   "category": "testing",
+   "languages": [
+    "javascript"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "AGPL-3.0",
+   "pairsWith": [
+    "grafana"
+   ],
+   "notes": "Load testing with scripts in JavaScript, run from a Go binary."
+  },
+  {
+   "id": "locust",
+   "name": "Locust",
+   "category": "testing",
+   "languages": [
+    "python"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "python"
+   ],
+   "notes": "Load testing with user behaviour written in Python."
+  },
+  {
+   "id": "hypothesis",
+   "name": "Hypothesis",
+   "category": "testing",
+   "languages": [
+    "python"
+   ],
+   "kind": "library",
+   "maturity": "mature",
+   "license": "MPL-2.0",
+   "pairsWith": [
+    "pytest"
+   ],
+   "notes": "Property-based testing: generates inputs and shrinks failures to the smallest example."
+  },
+  {
+   "id": "detox",
+   "name": "Detox",
+   "category": "testing",
+   "languages": [
+    "javascript",
+    "typescript"
+   ],
+   "kind": "tool",
+   "maturity": "stable",
+   "license": "MIT",
+   "pairsWith": [
+    "react-native"
+   ],
+   "notes": "Gray-box end-to-end tests for React Native apps."
+  },
+  {
+   "id": "jasmine-karma",
+   "name": "Jasmine + Karma",
+   "category": "testing",
+   "languages": [
+    "typescript"
+   ],
+   "kind": "tool",
+   "maturity": "mature",
+   "license": "MIT",
+   "pairsWith": [
+    "angular"
+   ],
+   "notes": "Angular's long-standing default unit test pair; newer Angular releases also offer other runners."
+  },
+  {
+   "id": "vercel",
+   "name": "Vercel",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "nextjs",
+    "neon"
+   ],
+   "notes": "Hosting for front ends and serverless/edge functions with preview deployments per branch; made by the Next.js team."
+  },
+  {
+   "id": "netlify",
+   "name": "Netlify",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "astro",
+    "hugo"
+   ],
+   "notes": "Static and Jamstack hosting with functions, forms and deploy previews."
+  },
+  {
+   "id": "cloudflare",
+   "name": "Cloudflare",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "cloudflare-workers",
+    "astro"
+   ],
+   "notes": "CDN, DNS and security, plus Pages, Workers, R2 storage and D1 for hosting apps."
+  },
+  {
+   "id": "fly-io",
+   "name": "Fly.io",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "proprietary",
+   "pairsWith": [
+    "docker",
+    "postgres"
+   ],
+   "notes": "Runs containers as Firecracker micro-VMs in regions close to users."
+  },
+  {
+   "id": "render",
+   "name": "Render",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "proprietary",
+   "pairsWith": [
+    "docker",
+    "postgres"
+   ],
+   "notes": "Managed hosting for web services, workers, cron jobs and Postgres, deployed from git."
+  },
+  {
+   "id": "railway",
+   "name": "Railway",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "proprietary",
+   "pairsWith": [
+    "docker",
+    "postgres"
+   ],
+   "notes": "Deploys services and databases from git or images with usage-based pricing."
+  },
+  {
+   "id": "heroku",
+   "name": "Heroku",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "rails",
+    "postgres"
+   ],
+   "notes": "Platform as a service with buildpacks, dynos and add-ons (Salesforce)."
+  },
+  {
+   "id": "aws",
+   "name": "Amazon Web Services",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "terraform",
+    "aws-lambda",
+    "s3"
+   ],
+   "notes": "The largest public cloud: compute, managed databases, queues, storage and more, billed by use."
+  },
+  {
+   "id": "gcp",
+   "name": "Google Cloud",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "bigquery",
+    "kubernetes"
+   ],
+   "notes": "Public cloud with Cloud Run, GKE, BigQuery and Vertex AI."
+  },
+  {
+   "id": "azure",
+   "name": "Microsoft Azure",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "aspnet-core",
+    "terraform"
+   ],
+   "notes": "Public cloud with App Service, AKS, Functions and Entra ID."
+  },
+  {
+   "id": "oracle-cloud",
+   "name": "Oracle Cloud",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "stable",
+   "license": "proprietary",
+   "pairsWith": [
+    "vm",
+    "docker"
+   ],
+   "notes": "Public cloud whose Always Free tier includes Arm VMs and an autonomous database."
+  },
+  {
+   "id": "digitalocean",
+   "name": "DigitalOcean",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "docker",
+    "postgres"
+   ],
+   "notes": "Droplets (VMs), App Platform, managed databases and Kubernetes."
+  },
+  {
+   "id": "hetzner",
+   "name": "Hetzner Cloud",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "vm",
+    "docker-compose"
+   ],
+   "notes": "Low-cost VMs and dedicated servers in Europe and the US."
+  },
+  {
+   "id": "github-pages",
+   "name": "GitHub Pages",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "hugo",
+    "astro"
+   ],
+   "notes": "Static sites served from a repository; no server-side code."
+  },
+  {
+   "id": "firebase",
+   "name": "Firebase",
+   "category": "hosting",
+   "languages": [],
+   "kind": "platform",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "firestore",
+    "firebase-auth",
+    "flutter"
+   ],
+   "notes": "Google's app platform: hosting, auth, Firestore, Cloud Functions, messaging."
+  },
+  {
+   "id": "cloudfront",
+   "name": "Amazon CloudFront",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "s3",
+    "aws"
+   ],
+   "notes": "AWS content delivery network."
+  },
+  {
+   "id": "app-stores",
+   "name": "App Store and Google Play",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "proprietary",
+   "pairsWith": [
+    "react-native",
+    "flutter",
+    "fastlane"
+   ],
+   "notes": "Where mobile apps are distributed; each release passes the store's review."
+  },
+  {
+   "id": "pypi-npm",
+   "name": "Package registries (PyPI, npm, crates.io)",
+   "category": "hosting",
+   "languages": [],
+   "kind": "service",
+   "maturity": "mature",
+   "license": "n/a",
+   "pairsWith": [
+    "python",
+    "typescript",
+    "rust"
+   ],
+   "notes": "Where libraries and CLIs are published; releases are immutable once published."
+  }
+ ]
+}

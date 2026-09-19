@@ -1,0 +1,403 @@
+{
+ "id": "go-microservices",
+ "name": "Go microservices with a gateway and a queue",
+ "summary": "Small Go services, each owning its data, behind an API gateway; services talk synchronously over gRPC and asynchronously over NATS JetStream. Runs on Kubernetes with GitOps. For several teams that need to deploy independently.",
+ "fitsWhen": [
+  {
+   "answer": "teamSize",
+   "is": [
+    "large"
+   ],
+   "says": "several teams need to deploy independently"
+  },
+  {
+   "answer": "team",
+   "is": [
+    "go"
+   ],
+   "says": "the team writes Go"
+  },
+  {
+   "answer": "scale",
+   "is": [
+    "large"
+   ],
+   "says": "large scale is expected"
+  },
+  {
+   "answer": "hosting",
+   "is": [
+    "kubernetes",
+    "cloud"
+   ],
+   "says": "Kubernetes or a big cloud is available"
+  },
+  {
+   "answer": "productType",
+   "is": [
+    "api",
+    "event-driven",
+    "saas"
+   ],
+   "says": "an API platform or a system of services"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "teamSize",
+   "is": [
+    "solo",
+    "small"
+   ],
+   "says": "one small team would run many services"
+  },
+  {
+   "answer": "timeline",
+   "is": [
+    "weeks"
+   ],
+   "says": "it must ship in weeks"
+  },
+  {
+   "answer": "budget",
+   "is": [
+    "minimal"
+   ],
+   "says": "the budget is tight (a cluster costs money every month)"
+  }
+ ],
+ "layers": {
+  "backend": {
+   "choice": "go",
+   "alternatives": [
+    "java",
+    "rust"
+   ],
+   "why": "Small static binaries, fast start, low memory per service; concurrency in the standard library."
+  },
+  "frontend": {
+   "choice": "react",
+   "alternatives": [
+    "vue"
+   ],
+   "why": "A separate web app talks only to the gateway."
+  },
+  "database": {
+   "choice": "postgres",
+   "alternatives": [
+    "mysql"
+   ],
+   "why": "One database (or schema) per service; no shared tables."
+  },
+  "queue": {
+   "choice": "nats",
+   "alternatives": [
+    "kafka",
+    "rabbitmq"
+   ],
+   "why": "JetStream gives durable subjects with far less to operate than Kafka."
+  },
+  "cache": {
+   "choice": "redis",
+   "alternatives": [],
+   "why": "Per-service caches and rate limits."
+  },
+  "auth": {
+   "choice": "keycloak",
+   "alternatives": [
+    "ory-kratos",
+    "auth0"
+   ],
+   "why": "The gateway validates tokens so services receive a verified identity."
+  },
+  "infra": {
+   "choice": "kubernetes",
+   "alternatives": [
+    "docker-compose"
+   ],
+   "why": "Independent deploys, autoscaling and service discovery."
+  },
+  "ci-cd": {
+   "choice": "argo-cd",
+   "alternatives": [
+    "flux",
+    "github-actions"
+   ],
+   "why": "GitOps: a service's manifest change in git is the deployment."
+  },
+  "observability": {
+   "choice": "opentelemetry",
+   "alternatives": [
+    "prometheus",
+    "grafana",
+    "tempo"
+   ],
+   "why": "A trace must cross every service hop to debug anything."
+  },
+  "testing": {
+   "choice": "testcontainers",
+   "alternatives": [
+    "k6"
+   ],
+   "why": "Contract and integration tests against real Postgres and NATS."
+  },
+  "hosting": {
+   "choice": "gcp",
+   "alternatives": [
+    "aws",
+    "azure"
+   ],
+   "why": "A managed Kubernetes (GKE, EKS, AKS)."
+  }
+ },
+ "services": [
+  {
+   "name": "gateway",
+   "kind": "gateway",
+   "tech": "envoy",
+   "responsibilities": [
+    "TLS, routing, token validation, rate limits"
+   ],
+   "talksTo": [
+    "accounts",
+    "orders",
+    "notifications"
+   ]
+  },
+  {
+   "name": "accounts",
+   "kind": "api",
+   "tech": "chi",
+   "responsibilities": [
+    "Users and organisations",
+    "Publishes account events"
+   ],
+   "talksTo": [
+    "accounts-db",
+    "bus"
+   ]
+  },
+  {
+   "name": "orders",
+   "kind": "api",
+   "tech": "chi",
+   "responsibilities": [
+    "Orders lifecycle",
+    "Calls accounts over gRPC",
+    "Publishes order events"
+   ],
+   "talksTo": [
+    "orders-db",
+    "bus",
+    "accounts"
+   ]
+  },
+  {
+   "name": "notifications",
+   "kind": "worker",
+   "tech": "go",
+   "responsibilities": [
+    "Consumes events and sends email and push"
+   ],
+   "talksTo": [
+    "bus"
+   ]
+  }
+ ],
+ "dataStores": [
+  {
+   "name": "accounts-db",
+   "tech": "postgres",
+   "purpose": "Owned by accounts only"
+  },
+  {
+   "name": "orders-db",
+   "tech": "postgres",
+   "purpose": "Owned by orders only"
+  },
+  {
+   "name": "bus",
+   "tech": "nats",
+   "purpose": "JetStream streams per domain"
+  }
+ ],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "A local cluster (kind or k3d) or docker compose with every service",
+   "hosting": "kind"
+  },
+  {
+   "name": "staging",
+   "purpose": "A namespace per release candidate",
+   "hosting": "Managed Kubernetes"
+  },
+  {
+   "name": "prod",
+   "purpose": "What people use",
+   "hosting": "Managed Kubernetes, several nodes across zones"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "lint",
+    "does": "golangci-lint per service"
+   },
+   {
+    "name": "test",
+    "does": "go test with Testcontainers"
+   },
+   {
+    "name": "contract",
+    "does": "protobuf breaking-change check (buf)"
+   },
+   {
+    "name": "image",
+    "does": "Build and push a signed image per changed service"
+   },
+   {
+    "name": "promote",
+    "does": "Update the image tag in the GitOps repository; Argo CD syncs"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "kubernetes",
+  "tools": [
+   "kubernetes",
+   "helm",
+   "argo-cd",
+   "terraform"
+  ],
+  "notes": [
+   "One Helm chart per service",
+   "Terraform for the cluster, databases and DNS"
+  ]
+ },
+ "observability": {
+  "tools": [
+   "opentelemetry",
+   "prometheus",
+   "grafana",
+   "tempo",
+   "loki"
+  ],
+  "notes": [
+   "Every service exports RED metrics",
+   "Trace context carried through NATS headers"
+  ]
+ },
+ "security": {
+  "auth": "OIDC at the gateway; services trust only the gateway's verified headers, over mTLS inside the cluster",
+  "secrets": "Kubernetes secrets from Vault or SOPS-encrypted files",
+  "notes": [
+   "Network policies deny by default",
+   "Each service has its own database credentials",
+   "Image scanning in CI"
+  ]
+ },
+ "folderLayout": "services/\n  accounts/\n    cmd/accounts/main.go\n    internal/\n    migrations/\n  orders/\n  notifications/\nproto/\ndeploy/\n  charts/\ngo.work",
+ "conventions": [
+  "A service owns its tables; nobody else reads them",
+  "Events are versioned and additive",
+  "Every RPC has a timeout and a retry budget",
+  "Idempotent consumers (store processed message ids)"
+ ],
+ "adrs": [
+  {
+   "title": "Database per service",
+   "decision": "Each service owns its schema and connection.",
+   "why": "Independent deploys are impossible while services share tables.",
+   "alternatives": [
+    "shared database"
+   ]
+  },
+  {
+   "title": "NATS JetStream for events",
+   "decision": "Asynchronous events go over JetStream.",
+   "why": "Durable delivery and replay with one small binary to operate.",
+   "alternatives": [
+    "kafka",
+    "rabbitmq"
+   ]
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "services",
+    "layout": "A Go workspace with one module per service",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "The services, how they talk, and how to run them locally."
+     },
+     {
+      "path": "go.work",
+      "template": "Workspace with services/accounts, services/orders and services/notifications."
+     },
+     {
+      "path": "services/accounts/go.mod",
+      "template": "Module for the accounts service with chi and pgx."
+     },
+     {
+      "path": "services/accounts/cmd/accounts/main.go",
+      "template": "HTTP server on chi with /health and graceful shutdown."
+     },
+     {
+      "path": "services/orders/go.mod",
+      "template": "Module for the orders service."
+     },
+     {
+      "path": "services/orders/cmd/orders/main.go",
+      "template": "HTTP server with /health."
+     },
+     {
+      "path": "services/notifications/go.mod",
+      "template": "Module for the notifications worker with the NATS client."
+     },
+     {
+      "path": "services/notifications/cmd/notifications/main.go",
+      "template": "Connects to NATS and logs received events."
+     },
+     {
+      "path": "proto/accounts/v1/accounts.proto",
+      "template": "AccountsService with GetAccount."
+     },
+     {
+      "path": "docker-compose.yml",
+      "template": "Postgres, NATS with JetStream and the three services for local runs."
+     },
+     {
+      "path": ".github/workflows/ci.yml",
+      "template": "golangci-lint and go test for each service."
+     }
+    ]
+   },
+   {
+    "label": "deploy",
+    "layout": "Helm charts and Argo CD applications (the GitOps repository)",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "How environments are laid out and how a release is promoted."
+     },
+     {
+      "path": "charts/service/Chart.yaml",
+      "template": "A shared chart used by every service."
+     },
+     {
+      "path": "charts/service/values.yaml",
+      "template": "Image, replicas, resources and probes."
+     },
+     {
+      "path": "apps/staging/accounts.yaml",
+      "template": "Argo CD Application for accounts in staging."
+     }
+    ]
+   }
+  ]
+ }
+}

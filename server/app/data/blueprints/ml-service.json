@@ -1,0 +1,328 @@
+{
+ "id": "ml-service",
+ "name": "Machine-learning service: training, registry, serving, monitoring",
+ "summary": "Models are trained from versioned data, tracked and registered in MLflow, served behind a typed HTTP API, and watched for drift. Features come from one definition for training and serving.",
+ "fitsWhen": [
+  {
+   "answer": "productType",
+   "is": [
+    "ml-service"
+   ],
+   "says": "a machine-learning service"
+  },
+  {
+   "answer": "needs",
+   "is": [
+    "ai"
+   ],
+   "says": "it needs its own models"
+  },
+  {
+   "answer": "team",
+   "is": [
+    "python"
+   ],
+   "says": "the team writes Python"
+  },
+  {
+   "answer": "data",
+   "is": [
+    "analytics",
+    "time-series"
+   ],
+   "says": "the data is historical or time-series"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "productType",
+   "is": [
+    "llm-app"
+   ],
+   "says": "a hosted language model would do the job"
+  },
+  {
+   "answer": "timeline",
+   "is": [
+    "weeks"
+   ],
+   "says": "it must ship in weeks"
+  }
+ ],
+ "layers": {
+  "ai-ml": {
+   "choice": "pytorch",
+   "alternatives": [
+    "scikit-learn",
+    "xgboost",
+    "tensorflow"
+   ],
+   "why": "Deep models in PyTorch; scikit-learn or XGBoost are often better on tabular data."
+  },
+  "data": {
+   "choice": "dagster",
+   "alternatives": [
+    "airflow"
+   ],
+   "why": "Training data, features and retraining as scheduled assets."
+  },
+  "backend": {
+   "choice": "fastapi",
+   "alternatives": [
+    "bentoml",
+    "triton"
+   ],
+   "why": "A typed prediction API that loads the model version the registry marks as production."
+  },
+  "database": {
+   "choice": "postgres",
+   "alternatives": [],
+   "why": "Prediction log and metadata."
+  },
+  "cache": {
+   "choice": "redis",
+   "alternatives": [],
+   "why": "The online feature store's backend."
+  },
+  "observability": {
+   "choice": "evidently",
+   "alternatives": [
+    "prometheus",
+    "grafana"
+   ],
+   "why": "Data and prediction drift reports on the prediction log."
+  },
+  "infra": {
+   "choice": "docker",
+   "alternatives": [
+    "kubernetes",
+    "ray"
+   ],
+   "why": "Serving as containers; training jobs on a GPU machine or Ray."
+  },
+  "ci-cd": {
+   "choice": "github-actions",
+   "alternatives": [],
+   "why": "Tests, a training smoke run and image builds."
+  },
+  "testing": {
+   "choice": "pytest",
+   "alternatives": [
+    "hypothesis"
+   ],
+   "why": "Unit tests plus a fixed evaluation set that must not regress."
+  },
+  "hosting": {
+   "choice": "gcp",
+   "alternatives": [
+    "aws",
+    "azure",
+    "vm"
+   ],
+   "why": "GPUs for training where needed; CPU for serving small models."
+  }
+ },
+ "services": [
+  {
+   "name": "training",
+   "kind": "pipeline",
+   "tech": "pytorch",
+   "responsibilities": [
+    "Builds datasets, trains, evaluates",
+    "Logs runs and registers models in MLflow"
+   ],
+   "talksTo": [
+    "registry",
+    "features",
+    "lake"
+   ]
+  },
+  {
+   "name": "registry",
+   "kind": "service",
+   "tech": "mlflow",
+   "responsibilities": [
+    "Experiment tracking and the model registry"
+   ],
+   "talksTo": [
+    "meta-db",
+    "lake"
+   ]
+  },
+  {
+   "name": "serving",
+   "kind": "api",
+   "tech": "fastapi",
+   "responsibilities": [
+    "Loads the production model",
+    "Validates inputs",
+    "Logs every prediction"
+   ],
+   "talksTo": [
+    "registry",
+    "features",
+    "meta-db"
+   ]
+  },
+  {
+   "name": "monitoring",
+   "kind": "job",
+   "tech": "evidently",
+   "responsibilities": [
+    "Compares recent predictions to the training data"
+   ],
+   "talksTo": [
+    "meta-db"
+   ]
+  }
+ ],
+ "dataStores": [
+  {
+   "name": "lake",
+   "tech": "s3",
+   "purpose": "Datasets and model artefacts"
+  },
+  {
+   "name": "meta-db",
+   "tech": "postgres",
+   "purpose": "MLflow backend and the prediction log"
+  },
+  {
+   "name": "features",
+   "tech": "feast",
+   "purpose": "Feature definitions; Redis online store"
+  }
+ ],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "Notebooks and small runs on a laptop",
+   "hosting": "Local"
+  },
+  {
+   "name": "staging",
+   "purpose": "Shadow serving: the candidate model sees real traffic, its answers are logged only",
+   "hosting": "Cloud"
+  },
+  {
+   "name": "prod",
+   "purpose": "The registered production model",
+   "hosting": "Cloud"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "test",
+    "does": "pytest"
+   },
+   {
+    "name": "smoke-train",
+    "does": "Train on a tiny sample to catch pipeline breaks"
+   },
+   {
+    "name": "evaluate",
+    "does": "Candidate must beat the current model on the fixed set"
+   },
+   {
+    "name": "image",
+    "does": "Build the serving image"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "kubernetes",
+  "tools": [
+   "docker",
+   "kubernetes",
+   "terraform"
+  ],
+  "notes": [
+   "Training and serving scale separately"
+  ]
+ },
+ "observability": {
+  "tools": [
+   "evidently",
+   "prometheus",
+   "grafana"
+  ],
+  "notes": [
+   "Latency and error rate of the prediction API",
+   "Weekly drift report"
+  ]
+ },
+ "security": {
+  "auth": "Service-to-service tokens; the prediction API is not public",
+  "secrets": "Cloud secret manager",
+  "notes": [
+   "Training data access is logged",
+   "Personal data minimised in features and prediction logs"
+  ]
+ },
+ "folderLayout": "training/\n  datasets.py\n  train.py\n  evaluate.py\nserving/\n  app/main.py\nfeatures/\n  feature_repo/\nmonitoring/\nnotebooks/",
+ "conventions": [
+  "Every model version traces back to a dataset version and a commit",
+  "Serving code never trains; training code never serves",
+  "A promotion needs an evaluation report"
+ ],
+ "adrs": [
+  {
+   "title": "A registry decides what is in production",
+   "decision": "Serving loads the model MLflow marks as Production.",
+   "why": "Rollback is a registry change, not a redeploy.",
+   "alternatives": [
+    "model files baked into images"
+   ]
+  },
+  {
+   "title": "One feature definition",
+   "decision": "Features are defined once in Feast.",
+   "why": "Training-serving skew is the most common silent failure.",
+   "alternatives": []
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "ml",
+    "layout": "Training, serving, features and monitoring in one repository",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "The lifecycle from data to a served model, and the commands for each stage."
+     },
+     {
+      "path": "pyproject.toml",
+      "template": "torch, scikit-learn, mlflow, feast, fastapi, uvicorn, evidently; dev: pytest."
+     },
+     {
+      "path": "training/train.py",
+      "template": "Loads a dataset, trains a baseline model, logs metrics and the model to MLflow."
+     },
+     {
+      "path": "training/evaluate.py",
+      "template": "Scores a model on the fixed evaluation set and writes a report."
+     },
+     {
+      "path": "serving/app/main.py",
+      "template": "FastAPI with /health and /predict loading the production model from the registry."
+     },
+     {
+      "path": "features/feature_repo/feature_store.yaml",
+      "template": "Feast project with a Redis online store."
+     },
+     {
+      "path": "docker-compose.yml",
+      "template": "MLflow server, Postgres, Redis and the serving API."
+     },
+     {
+      "path": ".github/workflows/ci.yml",
+      "template": "pytest and a smoke training run."
+     }
+    ]
+   }
+  ]
+ }
+}

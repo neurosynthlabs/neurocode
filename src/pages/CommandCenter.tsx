@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ArrowUp, Bug, ChevronRight, Cpu, GitBranchPlus, Lightbulb, Loader2, MessagesSquare, ShieldAlert, ShieldCheck, Sparkles,
-  TriangleAlert, WandSparkles, X, type LucideIcon,
+  ArrowUp, Bug, ChevronRight, Compass, Cpu, FolderGit2, GitBranchPlus, Lightbulb, Loader2, MessagesSquare, ShieldAlert, ShieldCheck,
+  Sparkles, TriangleAlert, WandSparkles, X, type LucideIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -59,7 +59,7 @@ function greeting() {
 export default function CommandCenter() {
   const nav = useNavigate();
   const loc = useLocation();
-  const { project } = useProject();
+  const { project, all } = useProject();
   const { user, can } = useAuth();
   const { tasks, approvals, activity, memory, health, runs: agentRuns, compile: compileRequirement, ask, brainstorm } = useData();
   const [models, setModels] = useState<ModelsReport | null>(null);
@@ -261,6 +261,23 @@ export default function CommandCenter() {
             {cost && <>{' '}·{' '}{cost.costComplete ? '' : 'at least '}<span className="text-ink-2">${cost.costUsd.toFixed(2)}</span> spent in 24 h</>}
           </p>
         </section>
+
+        {/* A workspace with no project yet: the two ways in. */}
+        {all.length === 0 && (
+          <section className="mx-auto mt-10 grid w-full max-w-[760px] grid-cols-1 gap-4 sm:grid-cols-2" aria-label="Get started">
+            {[
+              { icon: FolderGit2, title: 'Onboard an existing repository', text: 'Clone a repository or open a folder on this machine. It is measured and indexed, ready to plan against.', to: '/projects?new=1', perm: 'projects:onboard' },
+              { icon: Compass, title: 'Design a new system', text: 'Answer a few questions, start from the architecture that fits, shape it, and scaffold it into a new repository.', to: '/blueprints?new=1', perm: 'plans:compile' },
+            ].map(({ icon: I, title, text, to, perm }) => (
+              <button key={to} onClick={() => nav(to)} disabled={!can(perm)} title={can(perm) ? undefined : `Needs the ${perm} permission`}
+                className="flex flex-col items-start gap-2 rounded-2xl border border-line bg-surface px-5 py-4 text-left transition-colors hover:bg-surface-2/60 disabled:opacity-50">
+                <span className="grid size-9 place-items-center rounded-full bg-brand/12 text-brand"><I className="size-[18px]" /></span>
+                <span className="text-[15px] font-semibold text-ink">{title}</span>
+                <span className="text-[13px] leading-relaxed text-soft">{text}</span>
+              </button>
+            ))}
+          </section>
+        )}
 
         {/* The work, laid out calmly */}
         <section className="mx-auto mt-14 grid w-full max-w-[1120px] grid-cols-1 gap-5 lg:grid-cols-2">

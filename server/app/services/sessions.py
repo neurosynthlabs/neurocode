@@ -34,9 +34,11 @@ from ..data.base import utcnow
 from ..models import Chat, ChatFile, ChatMessage, CodeFile, CodeSymbol, MemoryFact, Plan, Task
 from ..repositories import ActivityRepository, ChatRepository, NotFound, ProjectRepository
 from .chat import CONTEXT, IMAGE_TYPES, MAX_QUESTION, PERMISSION, ChatService, active
+from .code import reference_labels, roots
 from .errors import Refused
 from .identity import Person
 from .plans import PlanService
+from .references import referenced
 
 #: What an export says it is, so an import can refuse anything else in words.
 FORMAT = "neurocode.session"
@@ -55,6 +57,8 @@ TEXT_TYPES = ("application/json", "application/xml", "application/x-yaml", "appl
               "application/x-sh", "application/x-python", "application/csv")
 #: Mentions: how many of each kind one lookup answers.
 MENTION_EACH = 8
+#: Files offered from each referenced project, after the project's own.
+MENTION_REFERENCED = 4
 ROLES = ("you", "assistant", "tool", "note", "summary")
 #: Tool turns that are not a tool the model called: they are left out of the tool-call count of a copy.
 NOT_CALLS = ("command", CONTEXT, PERMISSION, "grounding")
@@ -242,19 +246,34 @@ class SessionShapes:
     # ── the composer: mentions and uploads ───────────────────────
     async def mentions(self, project_id: str, q: str) -> list[dict[str, Any]]:
         """What `@` offers: files and symbols from the code index, memory facts for this project or the
-        whole workspace, and this project's plans — the closest names first (pg_trgm), a few of each."""
-        if await ProjectRepository(self.session).get(project_id) is None:
+        whole workspace, and this project's plans — the closest names first (pg_trgm), a few of each.
+
+        Files of a reference source say "reference"; files of a project this one references come after
+        the project's own, named `<project id>:<path>` — the prefix the session's tools read them with —
+        and say whose they are. Both are read only."""
+        project = await ProjectRepository(self.session).get(project_id)
+        if project is None:
             raise NotFound(f"project {project_id}")
         words = q.strip()[:120]
         like = f"%{words}%"
         out: list[dict[str, Any]] = []
+        labels = reference_labels(await roots(self.session, project))
 
-        files = select(CodeFile.path, CodeFile.lines).where(CodeFile.project_id == project_id)
-        files = (files.where(CodeFile.path.ilike(like)).order_by(func.similarity(CodeFile.path, words).desc(),
-                                                                 CodeFile.path)
-                 if words else files.order_by(CodeFile.churn.desc(), CodeFile.path))
-        for path, lines in (await self.session.execute(files.limit(MENTION_EACH))).all():
-            out.append({"kind": "file", "ref": path, "name": path, "detail": f"{lines} lines"})
+        def found_files(owner: str, limit: int) -> Any:
+            files = select(CodeFile.path, CodeFile.lines).where(CodeFile.project_id == owner)
+            files = (files.where(CodeFile.path.ilike(like)).order_by(func.similarity(CodeFile.path, words).desc(),
+                                                                     CodeFile.path)
+                     if words else files.order_by(CodeFile.churn.desc(), CodeFile.path))
+            return files.limit(limit)
+
+        for path, lines in (await self.session.execute(found_files(project_id, MENTION_EACH))).all():
+            head, cut, _ = path.partition("/")
+            read_only = " · reference, read only" if cut and head in labels else ""
+            out.append({"kind": "file", "ref": path, "name": path, "detail": f"{lines} lines{read_only}"})
+        for other, name in await referenced(self.session, project_id):
+            for path, lines in (await self.session.execute(found_files(other, MENTION_REFERENCED))).all():
+                out.append({"kind": "file", "ref": f"{other}:{path}", "name": f"{other}:{path}",
+                            "detail": f"{name} · reference, read only · {lines} lines"})
 
         if words:
             symbols = (select(CodeSymbol.id, CodeSymbol.name, CodeSymbol.kind, CodeSymbol.line, CodeFile.path)

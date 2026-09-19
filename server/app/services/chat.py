@@ -45,6 +45,7 @@ from .instructions import Resolved
 from .instructions import resolve as resolve_instructions
 from .knowledge import MemoryService
 from .retrieval import RetrievalService
+from .retrieval import label as retrieval_label
 from .tool_rules import decide
 
 MAX_STEPS = 6                 # tool calls in one answer, then it must answer with what it has
@@ -118,6 +119,8 @@ class Tools:
         self.memory = MemoryRepository(session)
         #: The facts this tool call put in front of the model, recorded as recalls once it has run.
         self.recalled: list[str] = []
+        #: The projects this one references, read once per tool call when a path or query names one.
+        self._referenced: dict[str, Project] | None = None
 
     def root(self) -> Path:
         """The project's first source on this machine. A file is found with `locate`, which knows the rest."""
@@ -126,15 +129,43 @@ class Tools:
             raise Refused("This project's code is not on this machine, so its files cannot be read.")
         return found
 
-    async def locate(self, path: str) -> Path:
+    async def locate(self, path: str, project: Project | None = None) -> Path:
         """A path the model named, as a file in whichever of the project's sources holds it — `api/x.py`
         in the API's checkout, `src/y.ts` in the first one. Refused when it leaves its checkout, through
-        `..`, `.git`, an absolute path or a link; refused in words when that checkout is not here."""
+        `..`, `.git`, an absolute path or a link; refused in words when that checkout is not here.
+        `project` is a referenced project, when the path was named with its prefix."""
         _safe(Path("."), path)
-        found = await code_service.locate(self.session, self.project, path)
+        found = await code_service.locate(self.session, project or self.project, path)
         if found is None:
             raise Refused(f"{path} is in code that is not on this machine, so it cannot be read.")
         return found
+
+    async def referenced(self) -> dict[str, Project]:
+        """The projects this one reads from, by id — every one a person added, not only the few retrieval
+        searches: a model that names one's file by its prefix may read it."""
+        if self._referenced is None:
+            from ..repositories.references import ProjectReferenceRepository
+            rows = await ProjectReferenceRepository(self.session).of(self.project.id)
+            self._referenced = {other.id: other for _, other in rows}
+        return self._referenced
+
+    async def elsewhere(self, named: str) -> tuple[Project, str] | None:
+        """A path or query that starts `<project id>:` — a project this one references — as that project
+        and the rest. None when it names no project. Refused when it names a project that is not
+        referenced: its files are that project's, and are not read from here.
+
+        Read only, always: nothing in this catalogue writes, and agents never write outside their own
+        project's worktrees (`code.writable_at` says so for every prefixed path)."""
+        head, colon, rest = named.strip().partition(":")
+        if not colon or not head or "/" in head or " " in head:
+            return None
+        found = (await self.referenced()).get(head)
+        if found is not None:
+            return found, rest.strip()
+        if await ProjectRepository(self.session).get(head) is not None:
+            raise Refused(f"{head} is not a project {self.project.name} references, so its files are not "
+                          "read from here. A person can add it in Project Overview → References.", status=403)
+        return None
 
     async def find(self, args: dict[str, Any]) -> tuple[str, str]:
         q = _text(args, "query", "q", "question")
@@ -145,7 +176,7 @@ class Tools:
             return (f"Retrieval holds nothing about {q!r}. The project may not be indexed yet.",
                     f"{q} · nothing found")
         self.recalled += [x["ref"] for x in found if x["kind"] == "memory"]
-        body = "\n\n".join(f"[{x['kind']} · {x['ref']}]\n{x['text'][:700]}" for x in found)
+        body = "\n\n".join(f"[{retrieval_label(x)}]\n{x['text'][:700]}" for x in found)
         ways = ", ".join(sorted({x["how"] for x in found}))
         return f"{len(found)} pieces about {q!r}:\n\n{body}", f"{q} · {len(found)} pieces ({ways})"
 
@@ -153,13 +184,27 @@ class Tools:
         q = _text(args, "query", "q", "name", "symbol")
         if not q:
             raise Refused("search_code needs a query.", status=422)
+        # `payments:Charge` searches one referenced project; a plain name searches this project first,
+        # then the projects it references, each of their paths named with its prefix.
+        named = await self.elsewhere(q)
+        if named is not None:
+            places = [(named[0].id, f"{named[0].id}:")]
+            q = named[1]
+            if not q:
+                raise Refused("search_code needs a name after the project's prefix.", status=422)
+        else:
+            places = [(self.project.id, ""), *((pid, f"{pid}:") for pid in await self.referenced())]
         words = func.plainto_tsquery("simple", q)
-        stmt = (select(CodeSymbol.name, CodeSymbol.kind, CodeSymbol.line, CodeFile.path)
-                .join(CodeFile, CodeFile.id == CodeSymbol.file_id)
-                .where(CodeSymbol.project_id == self.project.id,
-                       CodeSymbol.search.op("@@")(words) | CodeSymbol.name.ilike(f"%{q}%"))
-                .order_by(CodeSymbol.name).limit(25))
-        rows = (await self.session.execute(stmt)).all()
+        rows: list[tuple[str, str, int, str]] = []
+        for pid, prefix in places:
+            if len(rows) >= 25:
+                break
+            stmt = (select(CodeSymbol.name, CodeSymbol.kind, CodeSymbol.line, CodeFile.path)
+                    .join(CodeFile, CodeFile.id == CodeSymbol.file_id)
+                    .where(CodeSymbol.project_id == pid,
+                           CodeSymbol.search.op("@@")(words) | CodeSymbol.name.ilike(f"%{q}%"))
+                    .order_by(CodeSymbol.name).limit(25 - len(rows)))
+            rows += [(name, kind, line, prefix + path) for name, kind, line, path in (await self.session.execute(stmt)).all()]
         if not rows:
             return f"Nothing in the index matches {q!r}.", f"{q} · nothing found"
         body = "\n".join(f"{kind:<10} {name:<28} {path}:{line}" for name, kind, line, path in rows)
@@ -171,7 +216,8 @@ class Tools:
             raise Refused("read_file needs a path.", status=422)
         start = max(1, int(args.get("start") or 1))
         want = min(MAX_FILE_LINES, max(1, int(args.get("lines") or 200)))
-        target = await self.locate(path)
+        named = await self.elsewhere(path)
+        target = await self.locate(named[1], named[0]) if named is not None else await self.locate(path)
 
         def read() -> list[str]:
             if not target.is_file():
@@ -186,9 +232,13 @@ class Tools:
 
     async def list_files(self, args: dict[str, Any]) -> tuple[str, str]:
         where = _text(args, "directory", "dir", "path")
-        prefix = f"{where.strip('/')}/" if where.strip("/") else ""
-        stmt = (select(CodeFile.path, CodeFile.lines).where(CodeFile.project_id == self.project.id,
-                                                            CodeFile.path.startswith(prefix))
+        # `payments:` or `payments:app` lists a referenced project's index, read only.
+        named = await self.elsewhere(where)
+        owner = named[0].id if named is not None else self.project.id
+        folder = named[1] if named is not None else where
+        prefix = f"{folder.strip('/')}/" if folder.strip("/") else ""
+        stmt = (select(CodeFile.path, CodeFile.lines).where(CodeFile.project_id == owner,
+                                                            CodeFile.path.startswith(prefix, autoescape=True))
                 .order_by(CodeFile.path).limit(200))
         rows = (await self.session.execute(stmt)).all()
         if not rows:
@@ -261,8 +311,10 @@ CATALOGUE: tuple[Tool, ...] = (
     Tool("search_code", '{"query": "TaxService"}',
          "find where a name is defined in this project's code", Tools.search_code),
     Tool("read_file", '{"path": "pkg/tax.py", "start": 1, "lines": 200}',
-         "read part of a file, with line numbers", Tools.read_file),
-    Tool("list_files", '{"directory": "pkg"}', "list what is indexed under a folder", Tools.list_files),
+         "read part of a file, with line numbers; a project this one references is read with its id "
+         "and a colon before the path (payments:app/charge.py), read only", Tools.read_file),
+    Tool("list_files", '{"directory": "pkg"}',
+         "list what is indexed under a folder (payments:app for a referenced project's)", Tools.list_files),
     Tool("impact", '{"path": "pkg/tax.py"}',
          "what depends on a file, directly and through others", Tools.impact),
     Tool("search_memory", '{"query": "gst"}',

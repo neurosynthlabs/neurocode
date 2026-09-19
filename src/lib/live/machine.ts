@@ -1,4 +1,5 @@
-import { request } from '@/lib/api';
+import { API_BASE, ApiError, SIGNED_OUT, request } from '@/lib/api';
+import type { Project } from '@/types';
 
 /* The Workbench's calls: folders, files and git on the machine the API runs on (GET/PUT/POST /machine/*).
    A project's folders come from its sources (src/lib/live/sources.ts). Every path goes out and comes back
@@ -74,14 +75,129 @@ export interface MachineFiles {
   source: 'git' | 'walk';
 }
 
+/** macOS guards Desktop, Documents, Downloads, iCloud Drive and external volumes per app; the API says which
+    app was refused, and the switch that lets it in. `app` is null when the API could not tell. */
+export interface OsPermission { code: 'needs_os_permission'; folder: string; place: string; app: string | null; settings: string }
+
+/** An ApiError that may carry the macOS privacy answer, for a screen that shows what to do about it. */
+export class MachineError extends ApiError {
+  permission: OsPermission | null;
+  constructor(message: string, status: number, permission: OsPermission | null) {
+    super(message, status);
+    this.name = 'MachineError';
+    this.permission = permission;
+  }
+}
+
+/** The macOS privacy answer an error carries, when it carries one. */
+export const osPermission = (e: unknown): OsPermission | null => (e instanceof MachineError ? e.permission : null);
+
+/* The machine's own calls read the error body whole: a folder macOS guards answers 403 with a stable code, the
+   folder and the app, which the plain request() keeps only as words. Same cookie, CSRF header and timeout. */
+async function call<T>(path: string, { method = 'GET', json, signal }: { method?: string; json?: unknown; signal?: AbortSignal } = {}): Promise<T> {
+  const res = await fetch(API_BASE + path, {
+    method,
+    credentials: 'include',
+    headers: { 'X-NC-Client': 'web', ...(json === undefined ? {} : { 'Content-Type': 'application/json' }) },
+    body: json === undefined ? undefined : JSON.stringify(json),
+    signal: signal ?? AbortSignal.timeout(5000),
+  });
+  if (res.ok) return res.json() as Promise<T>;
+  throw await failure(res.status, () => res.json());
+}
+
+async function failure(status: number, body: () => Promise<unknown>): Promise<MachineError> {
+  let detail = `HTTP ${status}`;
+  let permission: OsPermission | null = null;
+  try {
+    const got = await body();
+    if (got && typeof got === 'object' && 'detail' in got) {
+      const d = (got as { detail: unknown }).detail;
+      if (typeof d === 'string') detail = d;
+      else if (Array.isArray(d) && d[0] && typeof d[0] === 'object' && 'msg' in d[0]) detail = String(d[0].msg);
+      if ((got as { code?: unknown }).code === 'needs_os_permission') permission = got as unknown as OsPermission;
+    }
+  } catch { /* the body was not JSON — keep the status line */ }
+  if (status === 401) window.dispatchEvent(new Event(SIGNED_OUT));
+  return new MachineError(detail, status, permission);
+}
+
+/** What an archive would become, read from its headers with every entry checked — nothing is written yet. */
+export interface ArchiveSurvey {
+  path: string;
+  name: string;
+  /** The folder name to offer: the archive's single top folder, or its own name without the suffix. */
+  suggestedName: string;
+  kind: 'zip' | 'tar';
+  /** The archive's own size, and what it unpacks to. */
+  bytes: number;
+  total: number;
+  entries: number;
+  files: number;
+  folders: number;
+  /** The single folder at the top that is dropped, so the files sit at the project's root; null when there is none. */
+  top: string | null;
+  /** The first few paths as they will be in the project. */
+  sample: string[];
+}
+
+/** What starting an import answers: the new project (onboarding), its new folder, and what will be unpacked there. */
+export interface Imported extends Omit<ArchiveSurvey, 'path' | 'name' | 'suggestedName'> {
+  project: Project;
+  target: string;
+}
+
+export interface NewProjectOptions {
+  excluded: string[];
+  rules: { id: string; label: string; note: string }[];
+}
+
+/** The archives the importer unpacks, as a file picker's accept list. */
+export const ARCHIVES = ['.zip', '.tar.gz', '.tgz'];
+
 const q = encodeURIComponent;
 /** git and a folder walk can take longer than the 5 s an ordinary call gets. */
 const slow = () => AbortSignal.timeout(30000);
 
+/** Upload an archive with the browser's progress: resolves with the import, or rejects with a MachineError. */
+function upload(file: File, into: string, name: string, options: NewProjectOptions, onProgress?: (share: number) => void): Promise<Imported> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}/machine/import/upload?into=${q(into)}&name=${q(name)}`);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('X-NC-Client', 'web');
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText) as Imported); } catch { reject(new MachineError('The API answered with something that is not JSON.', xhr.status, null)); }
+        return;
+      }
+      void failure(xhr.status, async () => JSON.parse(xhr.responseText) as unknown).then(reject);
+    };
+    xhr.onerror = () => reject(new TypeError('The upload did not reach the API.'));
+    const form = new FormData();
+    form.append('options', JSON.stringify(options));
+    form.append('archive', file, file.name);
+    xhr.send(form);
+  });
+}
+
 export const machineApi = {
   roots: () => request<MachineRoot[]>('/machine/roots'),
-  list: (path: string, hidden = false) => request<MachineListing>(`/machine/list?path=${q(path)}&hidden=${hidden}`),
-  file: (path: string) => request<MachineFile>(`/machine/file?path=${q(path)}`, { signal: AbortSignal.timeout(20000) }),
+  /** Desktop, Downloads and Documents, when each is here and inside the roots. */
+  places: () => request<MachineRoot[]>('/machine/places'),
+  list: (path: string, hidden = false) => call<MachineListing>(`/machine/list?path=${q(path)}&hidden=${hidden}`),
+  file: (path: string) => call<MachineFile>(`/machine/file?path=${q(path)}`, { signal: AbortSignal.timeout(20000) }),
+  /** A tarball has no index: its headers are read by walking it, which takes a moment on a large one. */
+  archive: (path: string) => call<ArchiveSurvey>(`/machine/archive?path=${q(path)}`, { signal: AbortSignal.timeout(120000) }),
+  /** A new project from an archive on this machine: a new folder `name` in `into`, unpacked and onboarded in the background. */
+  importArchive: (archive: string, into: string, name: string, options: NewProjectOptions) =>
+    call<Imported>('/machine/import', { method: 'POST', json: { archive, into, name, ...options }, signal: AbortSignal.timeout(120000) }),
+  /** The same, from a file the browser uploads — for a server this browser is not running on. */
+  uploadArchive: upload,
+  /** A new folder with a git repository and a README, committed once, then onboarded. */
+  emptyProject: (into: string, name: string, options: NewProjectOptions) =>
+    call<{ project: Project; target: string }>('/machine/empty-project', { method: 'POST', json: { into, name, ...options }, signal: AbortSignal.timeout(30000) }),
   save: (path: string, text: string, expectSha1: string) =>
     request<MachineSaved>('/machine/file', { method: 'PUT', json: { path, text, expectSha1 }, signal: AbortSignal.timeout(20000) }),
   mkdir: (path: string) => request<MachineEntry>('/machine/mkdir', { method: 'POST', json: { path } }),

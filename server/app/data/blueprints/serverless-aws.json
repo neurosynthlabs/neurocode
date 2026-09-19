@@ -1,0 +1,313 @@
+{
+ "id": "serverless-aws",
+ "name": "Serverless: functions and a managed database",
+ "summary": "Functions behind an HTTP endpoint, DynamoDB for data, SQS for background work and a static front end on a CDN, all defined as code. Pay per request, nothing idle, nothing to patch.",
+ "fitsWhen": [
+  {
+   "answer": "hosting",
+   "is": [
+    "serverless",
+    "cloud"
+   ],
+   "says": "serverless or a big cloud is the plan"
+  },
+  {
+   "answer": "traffic",
+   "is": [
+    "spiky",
+    "batch"
+   ],
+   "says": "traffic is spiky or comes in bursts"
+  },
+  {
+   "answer": "budget",
+   "is": [
+    "minimal"
+   ],
+   "says": "idle cost should be near zero"
+  },
+  {
+   "answer": "teamSize",
+   "is": [
+    "solo",
+    "small"
+   ],
+   "says": "a small team that does not want servers"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "needs",
+   "is": [
+    "realtime"
+   ],
+   "says": "long-lived connections are central"
+  },
+  {
+   "answer": "data",
+   "is": [
+    "analytics"
+   ],
+   "says": "heavy ad-hoc querying is central"
+  },
+  {
+   "answer": "productType",
+   "is": [
+    "ml-service"
+   ],
+   "says": "it serves large models"
+  }
+ ],
+ "layers": {
+  "frontend": {
+   "choice": "react",
+   "alternatives": [
+    "svelte",
+    "astro"
+   ],
+   "why": "A static bundle on S3 behind CloudFront."
+  },
+  "backend": {
+   "choice": "aws-lambda",
+   "alternatives": [
+    "cloudflare-workers"
+   ],
+   "why": "One function per route group; scales to zero and bills per request."
+  },
+  "database": {
+   "choice": "dynamodb",
+   "alternatives": [
+    "neon"
+   ],
+   "why": "No connection pool to exhaust from many functions; access patterns designed up front."
+  },
+  "queue": {
+   "choice": "sqs",
+   "alternatives": [],
+   "why": "Background work and retries with a dead-letter queue."
+  },
+  "auth": {
+   "choice": "cognito",
+   "alternatives": [
+    "clerk",
+    "auth0"
+   ],
+   "why": "Managed user pools; the HTTP API validates tokens before a function runs."
+  },
+  "infra": {
+   "choice": "terraform",
+   "alternatives": [
+    "pulumi",
+    "opentofu"
+   ],
+   "why": "Every function, table, queue and permission in code."
+  },
+  "ci-cd": {
+   "choice": "github-actions",
+   "alternatives": [],
+   "why": "OIDC to AWS, so no long-lived keys in CI."
+  },
+  "observability": {
+   "choice": "opentelemetry",
+   "alternatives": [
+    "sentry"
+   ],
+   "why": "Traces across the API, functions and queue."
+  },
+  "testing": {
+   "choice": "vitest",
+   "alternatives": [
+    "playwright"
+   ],
+   "why": "Handlers are plain functions tested without AWS."
+  },
+  "hosting": {
+   "choice": "aws",
+   "alternatives": [
+    "cloudflare"
+   ],
+   "why": "Lambda, DynamoDB, SQS, S3 and CloudFront."
+  }
+ },
+ "services": [
+  {
+   "name": "site",
+   "kind": "static",
+   "tech": "react",
+   "responsibilities": [
+    "Static front end served from the CDN"
+   ],
+   "talksTo": [
+    "http-api"
+   ]
+  },
+  {
+   "name": "http-api",
+   "kind": "function",
+   "tech": "aws-lambda",
+   "responsibilities": [
+    "Handlers per route",
+    "Validates input, writes DynamoDB"
+   ],
+   "talksTo": [
+    "table",
+    "jobs"
+   ]
+  },
+  {
+   "name": "job-runner",
+   "kind": "function",
+   "tech": "aws-lambda",
+   "responsibilities": [
+    "Processes SQS messages with retries"
+   ],
+   "talksTo": [
+    "table"
+   ]
+  }
+ ],
+ "dataStores": [
+  {
+   "name": "table",
+   "tech": "dynamodb",
+   "purpose": "Single-table design keyed by access pattern"
+  },
+  {
+   "name": "jobs",
+   "tech": "sqs",
+   "purpose": "Background work with a dead-letter queue"
+  },
+  {
+   "name": "assets",
+   "tech": "s3",
+   "purpose": "Uploads and the built front end"
+  }
+ ],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "Handlers run locally in tests; a personal stage in AWS for integration",
+   "hosting": "AWS (per-developer stage)"
+  },
+  {
+   "name": "staging",
+   "purpose": "A separate AWS account",
+   "hosting": "AWS"
+  },
+  {
+   "name": "prod",
+   "purpose": "A separate AWS account",
+   "hosting": "AWS"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "test",
+    "does": "Unit tests of handlers"
+   },
+   {
+    "name": "plan",
+    "does": "terraform plan posted on the pull request"
+   },
+   {
+    "name": "apply",
+    "does": "terraform apply to staging on main, to prod on tags"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "serverless",
+  "tools": [
+   "terraform",
+   "aws-lambda"
+  ],
+  "notes": [
+   "One AWS account per environment",
+   "Least-privilege IAM role per function"
+  ]
+ },
+ "observability": {
+  "tools": [
+   "opentelemetry"
+  ],
+  "notes": [
+   "CloudWatch alarms on errors, throttles and DLQ depth"
+  ]
+ },
+ "security": {
+  "auth": "Cognito JWTs checked by the HTTP API's authorizer",
+  "secrets": "SSM Parameter Store or Secrets Manager, read at cold start",
+  "notes": [
+   "IAM roles scoped per function",
+   "Validate every event, including queue messages"
+  ]
+ },
+ "folderLayout": "web/\nfunctions/\n  api/\n  jobs/\ninfra/\n  main.tf\n  modules/",
+ "conventions": [
+  "Handlers stay thin and call pure functions",
+  "Every table access pattern is documented beside the key design",
+  "Functions are idempotent: SQS delivers at least once"
+ ],
+ "adrs": [
+  {
+   "title": "DynamoDB over a relational database",
+   "decision": "Data lives in DynamoDB with a single-table design.",
+   "why": "Functions scale out without exhausting database connections, and there is nothing to patch.",
+   "alternatives": [
+    "neon postgres"
+   ]
+  },
+  {
+   "title": "Terraform for everything",
+   "decision": "No console-created resources.",
+   "why": "Reproducible environments and reviewable changes.",
+   "alternatives": [
+    "pulumi"
+   ]
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "app",
+    "layout": "Front end, functions and Terraform in one repository",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "How the pieces fit, how to test handlers locally, and how to deploy a stage."
+     },
+     {
+      "path": "functions/api/handler.ts",
+      "template": "An HTTP handler with a /health route and input validation with zod."
+     },
+     {
+      "path": "functions/jobs/handler.ts",
+      "template": "An SQS handler that processes a batch and reports partial failures."
+     },
+     {
+      "path": "functions/package.json",
+      "template": "TypeScript, zod, the AWS SDK v3 DynamoDB client; vitest for tests."
+     },
+     {
+      "path": "infra/main.tf",
+      "template": "Provider, an HTTP API, two Lambda functions, a DynamoDB table and an SQS queue with a DLQ."
+     },
+     {
+      "path": "infra/variables.tf",
+      "template": "Stage name and region."
+     },
+     {
+      "path": "web/package.json",
+      "template": "Vite + React app built to static files."
+     },
+     {
+      "path": ".github/workflows/ci.yml",
+      "template": "Tests, terraform fmt and validate on pull requests."
+     }
+    ]
+   }
+  ]
+ }
+}

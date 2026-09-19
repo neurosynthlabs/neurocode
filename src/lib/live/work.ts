@@ -77,9 +77,9 @@ export const RULE_TOOLS: {
   example: string;
   consultedBy: string | null;
 }[] = [
-  { id: "edit", label: "Edit files", subject: "path", example: "src/billing/**", consultedBy: null },
-  { id: "command", label: "Run commands", subject: "command line", example: "npm test*", consultedBy: null },
-  { id: "read", label: "Read files", subject: "path", example: ".env*", consultedBy: null },
+  { id: "edit", label: "Edit files", subject: "path", example: "src/billing/**", consultedBy: "every file an agent writes in a run — Live Runs" },
+  { id: "command", label: "Run commands", subject: "command line", example: "npm test*", consultedBy: "every test and check a run executes — Live Runs" },
+  { id: "read", label: "Read files", subject: "path", example: ".env*", consultedBy: "every file a session reads — Sessions" },
   {
     id: "web_fetch",
     label: "Fetch web pages",

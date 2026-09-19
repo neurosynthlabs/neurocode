@@ -30,6 +30,7 @@ from .git import (
     fingerprint,
     free_branch,
     git,
+    head,
     label_patch,
     merge_branch,
     merge_into_checkout,
@@ -37,6 +38,7 @@ from .git import (
     push,
     remotes,
     repo_of,
+    reset_worktree,
     run_tests,
     safe_path,
     stats,
@@ -45,6 +47,7 @@ from .git import (
 
 __all__ = [
     "CHECK_NAMES", "DIRTY", "TEST_RECIPES", "Refused", "apply_files", "branch_diff", "cleanup", "commit", "compare_url",
-    "detect_checks", "detect_tests", "diff", "dirty", "fingerprint", "free_branch", "git", "label_patch", "merge_branch",
-    "merge_into_checkout", "open_worktree", "push", "remotes", "repo_of", "run_tests", "safe_path", "stats", "undo_merge",
+    "detect_checks", "detect_tests", "diff", "dirty", "fingerprint", "free_branch", "git", "head", "label_patch",
+    "merge_branch", "merge_into_checkout", "open_worktree", "push", "remotes", "repo_of", "reset_worktree", "run_tests",
+    "safe_path", "stats", "undo_merge",
 ]

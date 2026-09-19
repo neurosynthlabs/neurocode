@@ -203,6 +203,12 @@ class SourceSpec:
     kind: str
     repo: str
     branch: str = "main"
+    #: `code` is worked on; `reference` is read for search and grounding and never written to.
+    role: str = "code"
+
+
+#: What a source's role is called on screen and in the activity log.
+ROLE_WORDS = {"code": "code, worked on", "reference": "a reference, read only"}
 
 
 def _same_or_inside(a: Path, b: Path) -> bool:
@@ -265,6 +271,8 @@ class SourceService:
         problem = onboarding.problem(spec.kind, spec.repo, spec.branch)
         if problem:
             raise Refused(problem, status=422)
+        if spec.role not in ROLE_WORDS:
+            raise Refused("A source is either code, worked on, or a reference, read only.", status=422)
         where = onboarding.redact(spec.repo.strip())
         if spec.kind == "local":
             folder = Path(os.path.expanduser(spec.repo.strip()))
@@ -277,16 +285,21 @@ class SourceService:
         source = await self.sources.add(ProjectSource(
             project_id=project_id, label=label, kind=spec.kind, repo=where,
             branch=spec.branch.strip() if spec.kind == "git" else "", status="onboarding",
-            position=await self.sources.next_position(project_id)))
+            position=await self.sources.next_position(project_id), role=spec.role))
         project.last_active_at = utcnow()
+        kind = " · a reference, read only" if spec.role == "reference" else ""
         await self.activity.record(actor=by, actor_kind="human", action="Source added",
-                                   detail=f"{project.name} · {label} · {where}", project_id=project_id)
+                                   detail=f"{project.name} · {label} · {where}{kind}", project_id=project_id)
         return source
 
     async def update(self, project_id: str, source_id: int, by: str, *, label: str | None = None,
-                     position: int | None = None) -> tuple[ProjectSource, bool]:
-        """Rename or move a source. Returns it, and whether its files must be indexed again under the
-        new label — the index names every file by the label it had when it was read."""
+                     position: int | None = None, role: str | None = None) -> tuple[ProjectSource, bool]:
+        """Rename, move or change the role of a source. Returns it, and whether its files must be indexed
+        again under the new label — the index names every file by the label it had when it was read.
+
+        A role changes nothing on disk and nothing in the index: a reference is indexed exactly as code
+        is. It changes what agents may do there — the runtime opens no worktree on a reference, and the
+        compiler reports a target inside one as not writable — from the next plan on."""
         project = await self.project(project_id)
         source = await self.source(project_id, source_id)
         renamed = False
@@ -298,6 +311,11 @@ class SourceService:
             said.append(f"renamed {source.label} → {new}")
             await self._forget(project_id, source.label)
             source.label, renamed = new, True
+        if role is not None and role != source.role:
+            if role not in ROLE_WORDS:
+                raise Refused("A source is either code, worked on, or a reference, read only.", status=422)
+            said.append(f"{source.label} is now {ROLE_WORDS[role]}")
+            source.role = role
         if position is not None:
             ordered = [x for x in await self.sources.of(project_id) if x.id != source.id]
             at = max(0, min(position, len(ordered)))

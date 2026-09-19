@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi import Path as PathParam
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,6 +50,14 @@ class DoneIn(BaseModel):
 class AnswerIn(BaseModel):
     answer: str | None = Field(default=None, max_length=1000)
     defer: bool = False
+
+
+class GateAnswerIn(BaseModel):
+    """How a gate is answered beyond yes or no. `scope`, for a tool rule's ask: "once", "run" (the rest of
+    this run) or "project" (always, written as a project tool rule — needs rules:manage). `answer`, for an
+    agent's question: the words the step goes on with."""
+    scope: Literal["once", "run", "project"] | None = None
+    answer: str | None = Field(default=None, max_length=4000)
 
 
 class DecisionIn(BaseModel):
@@ -116,7 +124,8 @@ async def approvals(status: str | None = None, limit: int | None = None, offset:
 
 
 @router.post("/approvals/{ref}/{decision}")
-async def decide(ref: str, decision: Literal["approve", "deny"], jobs: BackgroundTasks,
+async def decide(ref: str, decision: Literal["approve", "deny"], jobs: BackgroundTasks, request: Request,
+                 body: GateAnswerIn | None = None,
                  who: Person = Depends(require("approvals:decide")),
                  open_session: AsyncSession = Depends(session), db: Database = Depends(database),
                  gw: Gateway = Depends(gateway)) -> dict[str, Any]:
@@ -126,7 +135,9 @@ async def decide(ref: str, decision: Literal["approve", "deny"], jobs: Backgroun
     the run sat at "waiting" for ever. Every run stopped at its first gate — the first test run in a
     project, or your signature on the diff — and never went further.
     """
-    answered = await ApprovalService(open_session).decide(ref, decision, by_id=who.id, by_name=who.name)
+    answered = await ApprovalService(open_session).decide(
+        ref, decision, by_id=who.id, by_name=who.name, scope=body.scope if body else None,
+        answer=body.answer if body else None, who=who, ip=request.client.host if request.client else "")
     if answered.run_ref:
         await hand_off(open_session, jobs, resume_run, db, gw, answered.run_ref, answered.step or 0,
                        decision == "approve")

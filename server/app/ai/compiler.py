@@ -1,8 +1,8 @@
 """The requirement compiler: a requirement in a person's own words in, an implementation plan out.
 
-The compiler is given the project's own instructions (its AGENTS.md and CLAUDE.md), the memory facts
-that match the requirement and the pieces of code and documents retrieval finds for it — and the caller
-records which, so a reader can check what the plan was based on. The gateway picks the model. There is no plan without one: a
+The compiler is given the project's own instructions (its AGENTS.md and CLAUDE.md), the taste rules a
+person adopted, the memory facts that match the requirement and the pieces of code and documents retrieval
+finds for it — and the caller records which, so a reader can check what the plan was based on. The gateway picks the model. There is no plan without one: a
 planner made of keywords used to stand in, and its plans read like a model's — steps, risk, a
 confidence it had invented — while understanding nothing of the requirement. With no lane able to
 answer, compiling now says so and writes nothing.
@@ -58,6 +58,11 @@ class Context:
     instructions: str = ""
     #: Retrieval's pieces for the requirement: `{kind, ref, path, text}`, code and documents only.
     pieces: list[dict[str, Any]] = field(default_factory=list)
+    #: The taste rules a person adopted, one `- [TASTE-n] sentence` per line (`services/taste.py`).
+    taste: str = ""
+    #: Where the plan must not change anything: a source kept as reference, a project this one reads from.
+    #: One line each, `label/ — why`.
+    readonly: list[str] = field(default_factory=list)
 
 
 SYSTEM = """You are the requirement compiler inside NeuroCode, an AI engineering OS. The operator writes
@@ -112,6 +117,12 @@ def messages(requirement: str, ctx: Context) -> list[dict[str, str]]:
     if ctx.instructions:
         lines.append("\nThe project's instructions, from files in its repository (follow them where they "
                      f"bear on the plan):\n{ctx.instructions}")
+    if ctx.taste:
+        lines.append("\nHow this team likes the work done — rules a person adopted from their own decisions "
+                     f"(follow them unless the requirement says otherwise):\n{ctx.taste}")
+    if ctx.readonly:
+        lines.append("\nRead only — read these for context, and never plan a change inside them:")
+        lines += [f"- {x}" for x in ctx.readonly]
     if ctx.facts:
         lines.append("\nMemory facts (cite the ref when you rely on one):")
         lines += [f"- {f['ref']} · {f['title']}: {f['body'][:400]} (evidence: {', '.join(f.get('evidence', [])[:4])})"
@@ -180,6 +191,111 @@ def parse(raw: str) -> PlanOut:
     if isinstance(data.get("confidence"), (str, float)):
         data["confidence"] = int(float(data["confidence"]))
     return PlanOut.model_validate(data)
+
+
+# ── revising a plan from a person's comments ──────────────────────
+class Reply(BaseModel):
+    comment: int
+    reply: str
+
+
+class RevisionOut(BaseModel):
+    """What a revision may change: the steps, the questions, the files, what done means — and it says what
+    it changed and answers each comment. The requirement and its reading stay the person's."""
+
+    steps: list[Step] = Field(min_length=1)
+    openQuestions: list[str] = Field(default_factory=list)
+    affectedFiles: list[str] = Field(default_factory=list)
+    acceptanceCriteria: list[str] = Field(default_factory=list)
+    summary: str = ""
+    replies: list[Reply] = Field(default_factory=list)
+
+
+REVISE_SYSTEM = """You are the requirement compiler inside NeuroCode, revising a plan you wrote before a person
+dispatches it. The person left comments on the plan and on its steps. Rewrite the plan so every comment is
+dealt with, and change nothing a comment does not ask for.
+
+What each comment kind asks:
+- comment: take it into account.
+- split: the step it is on is too big — split it into smaller steps.
+- remove: the step it is on should not be done — drop it, unless the plan cannot work without it; then keep
+  it and say why in the reply.
+- why: the person asks why — answer in the reply, and change the step only if the answer shows it is wrong.
+- risky: the person thinks the step is risky — make it safer (smaller, reversible, tested first) or say in
+  the reply why it is not.
+
+Rules:
+- Steps are small and ordered. Each step has exactly one owner from: {agents}.
+- Keep a test step owned by {tester} and a review step owned by {reviewer} at the end.
+- Follow the project's instructions and the team's taste rules where they bear on the plan.
+- affectedFiles: the full list after the revision; leave it empty to keep the plan's files as they are.
+- acceptanceCriteria: the full list after the revision; leave it empty to keep them as they are.
+- summary: two or three sentences on what changed and why.
+- replies: one per comment, by its id, in a sentence or two.
+
+Reply with one JSON object and nothing else, shaped like this:
+{schema}"""
+
+REVISE_HINT = {
+    "steps": [{"label": "short step", "agent": "one owner", "detail": "one sentence"}],
+    "openQuestions": ["business decisions the plan must not guess"],
+    "affectedFiles": ["paths, or empty to keep the plan's"],
+    "acceptanceCriteria": ["one checkable sentence per item, or empty to keep the plan's"],
+    "summary": "what changed and why",
+    "replies": [{"comment": 12, "reply": "one or two sentences"}],
+}
+
+
+def revise_messages(requirement: str, ctx: Context, plan: dict[str, Any],
+                    comments: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """The revise prompt: the same stable opening as a compile — project, instructions, taste, facts, pieces
+    — then the plan as it stands and the comments on it."""
+    import json
+
+    opening = messages(requirement, ctx)[1]["content"]
+    lines = [opening, "\nThe plan as it stands:"]
+    lines += [f"{s['n']}. {s['label']} ({s['agent']}) — {s['detail']}" for s in plan["steps"]]
+    if plan.get("openQuestions"):
+        lines.append("Open questions: " + " · ".join(plan["openQuestions"]))
+    if plan.get("affectedFiles"):
+        lines.append("Files: " + ", ".join(plan["affectedFiles"]))
+    if plan.get("acceptanceCriteria"):
+        lines.append("Acceptance criteria: " + " · ".join(plan["acceptanceCriteria"]))
+    lines.append("\nThe person's comments (id · kind · where · text):")
+    for c in comments:
+        where = f"on step {c['step']['n']} \"{c['step']['label']}\"" if c.get("step") else "on the whole plan"
+        lines.append(f"[{c['id']}] {c['kind']} · {where} · {c['body']}")
+    system = REVISE_SYSTEM.format(agents=", ".join(roster.NAMES), tester=roster.TESTER, reviewer=roster.REVIEWER,
+                                  schema=json.dumps(REVISE_HINT, indent=1))
+    return [{"role": "system", "content": system}, {"role": "user", "content": "\n".join(lines)}]
+
+
+def parse_revision(ids: set[int]):
+    """A revision safe to store: owners from the roster, criteria trimmed, and replies only to comments it
+    was shown."""
+    def parse(raw: str) -> RevisionOut:
+        data = extract_json(raw)
+        data["steps"] = [{**s, "agent": agent_name(str(s.get("agent", "")))}
+                         for s in data.get("steps", []) if isinstance(s, dict) and s.get("label")]
+        data["acceptanceCriteria"] = criteria(data.get("acceptanceCriteria"))
+        data["openQuestions"] = [q for q in data.get("openQuestions") or [] if isinstance(q, str) and q.strip()]
+        data["affectedFiles"] = [f for f in data.get("affectedFiles") or [] if isinstance(f, str) and f.strip()]
+        data["replies"] = [r for r in data.get("replies") or []
+                           if isinstance(r, dict) and isinstance(r.get("comment"), int) and r["comment"] in ids
+                           and isinstance(r.get("reply"), str)]
+        out = RevisionOut.model_validate(data)
+        out.summary = " ".join(out.summary.split())[:1_000]
+        return out
+    return parse
+
+
+def revise_plan(gw: Gateway, requirement: str, ctx: Context, plan: dict[str, Any], comments: list[dict[str, Any]], *,
+                actor: str | None = None, project: str | None = None) -> Result[RevisionOut]:
+    """The plan rewritten to deal with the comments. A revise is a compile, so it is ledgered as one and
+    routed like one. Raises `NoModel` / `ProviderError` as compiling does."""
+    ids = {int(c["id"]) for c in comments}
+    return gw.ask(revise_messages(requirement, ctx, plan, comments), parse_revision(ids), feature="compile",
+                  actor=actor, project=project)
 
 
 def compile_plan(gw: Gateway, requirement: str, ctx: Context, *, actor: str | None = None,

@@ -1,0 +1,298 @@
+{
+ "id": "data-pipeline",
+ "name": "Data pipeline: orchestration, dbt and a warehouse",
+ "summary": "Sources are loaded on a schedule, transformed with dbt into tested models inside a warehouse, and served to dashboards. Dagster orchestrates (Airflow is the swap); DuckDB for small data, BigQuery or Snowflake as it grows.",
+ "fitsWhen": [
+  {
+   "answer": "productType",
+   "is": [
+    "data-platform"
+   ],
+   "says": "a data pipeline or warehouse"
+  },
+  {
+   "answer": "data",
+   "is": [
+    "analytics"
+   ],
+   "says": "the work is analytics"
+  },
+  {
+   "answer": "team",
+   "is": [
+    "python"
+   ],
+   "says": "the team writes Python and SQL"
+  },
+  {
+   "answer": "traffic",
+   "is": [
+    "batch"
+   ],
+   "says": "work runs in batches"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "needs",
+   "is": [
+    "realtime"
+   ],
+   "says": "results must be live to the second"
+  },
+  {
+   "answer": "productType",
+   "is": [
+    "mobile-app",
+    "desktop-app"
+   ],
+   "says": "the product is an app"
+  }
+ ],
+ "layers": {
+  "data": {
+   "choice": "dagster",
+   "alternatives": [
+    "airflow",
+    "prefect"
+   ],
+   "why": "Assets with lineage: each table knows what it was built from and when."
+  },
+  "database": {
+   "choice": "duckdb",
+   "alternatives": [
+    "bigquery",
+    "snowflake",
+    "postgres"
+   ],
+   "why": "Start in-process on Parquet; move to a hosted warehouse when data or users outgrow one machine."
+  },
+  "backend": {
+   "choice": "dbt",
+   "alternatives": [],
+   "why": "SQL models with tests and documentation, versioned in git."
+  },
+  "observability": {
+   "choice": "great-expectations",
+   "alternatives": [
+    "evidently"
+   ],
+   "why": "Data quality checks fail the run before bad data reaches a dashboard."
+  },
+  "frontend": {
+   "choice": "metabase",
+   "alternatives": [
+    "superset"
+   ],
+   "why": "Dashboards and questions for people who do not write SQL."
+  },
+  "infra": {
+   "choice": "docker",
+   "alternatives": [
+    "kubernetes"
+   ],
+   "why": "The orchestrator and its code location as containers."
+  },
+  "ci-cd": {
+   "choice": "github-actions",
+   "alternatives": [],
+   "why": "dbt build on a slim sample for every pull request."
+  },
+  "testing": {
+   "choice": "pytest",
+   "alternatives": [],
+   "why": "Python assets tested with small fixtures."
+  },
+  "hosting": {
+   "choice": "vm",
+   "alternatives": [
+    "gcp",
+    "aws"
+   ],
+   "why": "One machine runs the orchestrator; the warehouse may be hosted."
+  }
+ },
+ "services": [
+  {
+   "name": "orchestrator",
+   "kind": "pipeline",
+   "tech": "dagster",
+   "responsibilities": [
+    "Schedules loads and dbt builds",
+    "Tracks lineage and freshness"
+   ],
+   "talksTo": [
+    "warehouse",
+    "raw"
+   ]
+  },
+  {
+   "name": "transform",
+   "kind": "pipeline",
+   "tech": "dbt",
+   "responsibilities": [
+    "Staging, intermediate and mart models",
+    "Tests on keys and relationships"
+   ],
+   "talksTo": [
+    "warehouse"
+   ]
+  },
+  {
+   "name": "dashboards",
+   "kind": "web",
+   "tech": "metabase",
+   "responsibilities": [
+    "Dashboards over the marts"
+   ],
+   "talksTo": [
+    "warehouse"
+   ]
+  }
+ ],
+ "dataStores": [
+  {
+   "name": "raw",
+   "tech": "s3",
+   "purpose": "Landed source files as Parquet, never edited"
+  },
+  {
+   "name": "warehouse",
+   "tech": "duckdb",
+   "purpose": "Staging and mart tables built by dbt"
+  }
+ ],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "Runs on a sample on a laptop",
+   "hosting": "Local"
+  },
+  {
+   "name": "staging",
+   "purpose": "Full build into a staging schema",
+   "hosting": "VM"
+  },
+  {
+   "name": "prod",
+   "purpose": "Scheduled builds into the prod schema",
+   "hosting": "VM + hosted warehouse"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "lint",
+    "does": "sqlfluff and ruff"
+   },
+   {
+    "name": "build",
+    "does": "dbt build --select state:modified+ on a sample"
+   },
+   {
+    "name": "test",
+    "does": "pytest for Python assets"
+   },
+   {
+    "name": "deploy",
+    "does": "Ship the code location image"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "vm",
+  "tools": [
+   "docker",
+   "docker-compose"
+  ],
+  "notes": [
+   "Raw data is immutable; everything else can be rebuilt from it"
+  ]
+ },
+ "observability": {
+  "tools": [
+   "great-expectations"
+  ],
+  "notes": [
+   "Freshness checks on every source",
+   "Alerts on failed runs"
+  ]
+ },
+ "security": {
+  "auth": "Warehouse roles: loaders write raw, dbt writes marts, analysts read marts",
+  "secrets": "Environment variables for warehouse credentials",
+  "notes": [
+   "Personal data masked or excluded in marts",
+   "Document the lawful basis for each personal field (GDPR)"
+  ]
+ },
+ "folderLayout": "orchestration/\n  assets/\n  definitions.py\ntransform/  (dbt project)\n  models/staging/\n  models/marts/\n  tests/\ndocker-compose.yml",
+ "conventions": [
+  "staging models rename and cast only; marts hold business logic",
+  "Python transformations dbt cannot express use Polars inside Dagster assets",
+  "Every model has a unique-key test",
+  "Sources declared with freshness rules"
+ ],
+ "adrs": [
+  {
+   "title": "Transform in the warehouse with dbt",
+   "decision": "Transformations are dbt SQL models.",
+   "why": "SQL is reviewable and testable, and analysts can contribute.",
+   "alternatives": [
+    "python etl"
+   ]
+  },
+  {
+   "title": "Start on DuckDB",
+   "decision": "Build on DuckDB and Parquet first.",
+   "why": "No warehouse bill until data or concurrency needs one; dbt makes the move a profile change.",
+   "alternatives": [
+    "bigquery",
+    "snowflake"
+   ]
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "data",
+    "layout": "A Dagster code location and a dbt project",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "How data flows from raw to marts, and how to run a build locally."
+     },
+     {
+      "path": "pyproject.toml",
+      "template": "dagster, dagster-dbt, dbt-duckdb, polars; dev: pytest, sqlfluff."
+     },
+     {
+      "path": "orchestration/definitions.py",
+      "template": "Dagster Definitions loading the dbt project's assets and a daily schedule."
+     },
+     {
+      "path": "transform/dbt_project.yml",
+      "template": "dbt project named after the system, with staging and marts folders."
+     },
+     {
+      "path": "transform/profiles.yml",
+      "template": "A DuckDB profile writing to a local file."
+     },
+     {
+      "path": "transform/models/staging/_sources.yml",
+      "template": "One example source with a freshness rule."
+     },
+     {
+      "path": "transform/models/staging/stg_example.sql",
+      "template": "A staging model that renames and casts the example source."
+     },
+     {
+      "path": ".github/workflows/ci.yml",
+      "template": "sqlfluff lint and dbt build on a sample."
+     }
+    ]
+   }
+  ]
+ }
+}

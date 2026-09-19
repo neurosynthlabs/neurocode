@@ -221,6 +221,36 @@ def commit(work: Path, message: str) -> bool:
     return True
 
 
+def head(tree: Path) -> str:
+    """The commit a worktree stands on, or '' when git cannot say."""
+    out = git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], tree)
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def reset_worktree(tree: Path, branch: str, sha: str) -> None:
+    """Take a run's worktree back to one of its own commits: `git reset --hard`, then `git clean -fd`.
+
+    Only ever a worktree the runtime made, standing on the run's own branch — never a checkout. A tree
+    whose git directory is the repository's own (the main checkout), or that stands on another branch,
+    is refused, because a reset there would throw away a person's work. Files git ignores are left
+    alone: they are build output, not the agent's."""
+    if not re.fullmatch(r"[0-9a-f]{7,64}", sha):
+        raise Refused(f"{sha!r} is not a commit this runtime would reset to.")
+    own = git(["rev-parse", "--path-format=absolute", "--git-dir"], tree).stdout.strip()
+    common = git(["rev-parse", "--path-format=absolute", "--git-common-dir"], tree).stdout.strip()
+    if not own or own == common:
+        raise Refused(f"{tree} is not a worktree NeuroCode made, so it is not reset.")
+    on = git(["rev-parse", "--abbrev-ref", "HEAD"], tree).stdout.strip()
+    if on != branch:
+        raise Refused(f"{tree} stands on {on or 'no branch'}, not on the run's {branch}, so it is not reset.")
+    if git(["merge-base", "--is-ancestor", sha, "HEAD"], tree).returncode != 0:
+        raise Refused(f"{sha[:7]} is not a commit of {branch}, so the worktree was not moved there.")
+    out = git(["reset", "--hard", "--quiet", sha], tree, timeout=120)
+    if out.returncode != 0:
+        raise RuntimeError(f"git reset: {out.stderr.strip()[:200]}")
+    git(["clean", "-fdq"], tree, timeout=120)
+
+
 def merge_branch(work: Path, branch: str, base: str, into: str) -> tuple[bool, list[str]]:
     """Bring one branch into this worktree. On a collision the merge is undone, never half-applied."""
     if git(["rev-list", "--count", f"{base}..{branch}"], work).stdout.strip() in ("", "0"):

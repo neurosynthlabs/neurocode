@@ -19,12 +19,17 @@ only needed for the part that writes the audit log.
 """
 from __future__ import annotations
 
+import errno
+import functools
 import hashlib
 import logging
 import os
+import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +39,9 @@ from ..schemas.machine import Change, Entry, FileList, GitState, Listing, Opened
 from ..settings import settings
 from .errors import Refused
 from .identity import Person
+
+if TYPE_CHECKING:
+    from .archive import Survey
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +57,16 @@ SNIFF = 8192
 GIT_TIMEOUT = 20
 
 OFF = "Machine access is off on this server."
+
+#: The platform, as a name the macOS privacy rules below are keyed on (a test may stand in for a Mac).
+PLATFORM = sys.platform
+#: Folders macOS guards per app (Transparency, Consent and Control): an app that was never allowed in
+#: gets "Operation not permitted" however open the folder's own permissions are.
+PRIVATE = ("Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music", "Library/Mobile Documents")
+#: Where macOS says a person turns that access on.
+PRIVACY_SETTINGS = "System Settings → Privacy & Security → Files and Folders (or Full Disk Access)"
+#: Bundles on the parent chain that are not the app a person would recognise: the interpreter itself.
+NOT_THE_APP = {"Python", "python"}
 
 #: A hint for the status bar when the editor has no grammar of its own for a name. The editor picks
 #: its highlighting from the file name itself (CodeMirror's language data), so this is only a label.
@@ -98,6 +116,97 @@ def roots() -> list[Root]:
 
 def _within(real: Path, bounds: list[Path]) -> bool:
     return any(real == b or real.is_relative_to(b) for b in bounds)
+
+
+def places() -> list[Root]:
+    """The Desktop, Downloads and Documents of the account the API runs as — the quick places a file
+    picker offers — when each exists and is inside the roots. Whether the API may *read* one is another
+    matter on a Mac; listing it says so when it may not."""
+    home = Path(os.path.realpath(Path.home()))
+    bounds = _real_roots()
+    out: list[Root] = []
+    for name in ("Desktop", "Downloads", "Documents"):
+        where = home / name
+        if where.is_dir() and _within(Path(os.path.realpath(where)), bounds):
+            out.append(Root(path=str(where), label=name))
+    return out
+
+
+# ── macOS privacy: a folder the app that started the API was never allowed into ──
+class NeedsOsPermission(Refused):
+    """macOS refused this process a folder it guards per app. The fix is a switch in System Settings for
+    the app that started the API — never anything this server can do — so the answer names the folder,
+    the app and the switch, and carries a stable `code` a screen can recognise."""
+
+    code = "needs_os_permission"
+
+    def __init__(self, folder: Path, app: str | None) -> None:
+        self.folder, self.app = str(folder), app
+        self.place = _private_place(folder) or folder.name or str(folder)
+        who = app or "the app that started NeuroCode"
+        super().__init__(f"macOS has not given {who} access to {self.place}. Open {PRIVACY_SETTINGS}, turn it on "
+                         f"for {who}, then try again.", status=403)
+
+    def as_json(self) -> dict[str, object]:
+        return {"detail": str(self), "code": self.code, "folder": self.folder, "place": self.place,
+                "app": self.app, "settings": PRIVACY_SETTINGS}
+
+
+def _private_place(folder: Path) -> str | None:
+    """Which guarded place a folder is in — "Desktop", "iCloud Drive", "an external volume" — or None."""
+    real = Path(os.path.realpath(folder))
+    home = Path(os.path.realpath(Path.home()))
+    for name in PRIVATE:
+        if real == home / name or real.is_relative_to(home / name):
+            return "iCloud Drive" if name == "Library/Mobile Documents" else name
+    if real.parts[:2] == ("/", "Volumes") and len(real.parts) > 2:
+        return "an external volume"
+    return None
+
+
+def _bundle(command: str) -> str | None:
+    """The outermost `.app` on an executable's path: `Visual Studio Code` for its helpers, `Terminal`."""
+    for part in command.split("/"):
+        if part.endswith(".app") and part[:-4] not in NOT_THE_APP:
+            return part[:-4]
+    return None
+
+
+@functools.lru_cache(maxsize=1)
+def host_app() -> str | None:
+    """The app macOS holds responsible for this process — the terminal, editor or NeuroCode window it
+    was started from — found by walking the parent chain to the first process inside an `.app` bundle.
+    None when there is none to find (a service started by launchd, another platform): the screen then
+    says "the app that started NeuroCode" rather than guess."""
+    if PLATFORM != "darwin":
+        return None
+    pid = os.getppid()
+    for _ in range(24):
+        if pid <= 1:
+            return None
+        try:
+            done = subprocess.run(["ps", "-o", "ppid=", "-o", "comm=", "-p", str(pid)], capture_output=True,
+                                  text=True, timeout=3, check=False)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        fields = done.stdout.strip().split(None, 1)
+        if len(fields) != 2 or not fields[0].isdigit():
+            return None
+        found = _bundle(fields[1])
+        if found:
+            return found
+        pid = int(fields[0])
+    return None
+
+
+def unreadable(folder: Path, error: OSError) -> Refused:
+    """What to say when the process may not read a folder. On a Mac, "Operation not permitted" — and a
+    refusal inside a folder macOS guards — is its privacy rule, answered with the switch that fixes it;
+    anything else is the folder's own permissions."""
+    if PLATFORM == "darwin" and (error.errno == errno.EPERM or
+                                 (error.errno == errno.EACCES and _private_place(folder) is not None)):
+        return NeedsOsPermission(folder, host_app())
+    return Refused(f"This server's account may not read {folder}.", status=403)
 
 
 def inside(path: str) -> Path:
@@ -198,7 +307,7 @@ def listing(path: str, *, hidden: bool = False) -> Listing:
         with os.scandir(folder) as found:
             names = [(not e.is_dir(follow_symlinks=True), e.name.casefold(), e.name) for e in found]
     except PermissionError as denied:
-        raise Refused(f"This server's account may not read {folder}.", status=403) from denied
+        raise unreadable(folder, denied) from denied
     except OSError as failed:
         raise Refused(f"{folder} could not be read: {failed.strerror or failed}.", status=409) from failed
     shown = [n for n in names if hidden or not n[2].startswith(".")]
@@ -217,7 +326,7 @@ def _regular(path: str) -> tuple[Path, os.stat_result]:
     except FileNotFoundError as gone:
         raise Refused(f"{path} does not exist.", status=404) from gone
     except PermissionError as denied:
-        raise Refused(f"This server's account may not read {file}.", status=403) from denied
+        raise unreadable(file.parent, denied) from denied
     if not stat.S_ISREG(st.st_mode):
         raise Refused(f"{file} is not a file the editor can open.", status=409)
     return file, st
@@ -227,7 +336,7 @@ def _read(file: Path) -> bytes:
     try:
         return file.read_bytes()
     except PermissionError as denied:
-        raise Refused(f"This server's account may not read {file}.", status=403) from denied
+        raise unreadable(file.parent, denied) from denied
 
 
 def read(path: str) -> Opened:
@@ -422,6 +531,83 @@ def files(path: str) -> FileList:
     return FileList(root=str(folder), files=tuple(found), capped=capped, source="walk")
 
 
+# ── new projects from this machine: an archive, or an empty folder ──
+def archive_at(path: str) -> tuple[Path, str]:
+    """An archive a person picked: a regular file inside the roots, named as a kind this server unpacks.
+    Its real path and its kind ("zip" or "tar")."""
+    from .archive import SUFFIXES, kind_of
+    file = inside(path)
+    try:
+        st = os.stat(file)
+    except FileNotFoundError as gone:
+        raise Refused(f"{path} does not exist.", status=404) from gone
+    except PermissionError as denied:
+        raise unreadable(file.parent, denied) from denied
+    if not stat.S_ISREG(st.st_mode):
+        raise Refused(f"{file.name} is not a file.", status=409)
+    kind = kind_of(file.name)
+    if kind is None:
+        raise Refused(f"{file.name} is not an archive this server unpacks ({', '.join(SUFFIXES)}).", status=422)
+    if not os.access(file, os.R_OK):
+        raise unreadable(file.parent, PermissionError(errno.EACCES, "Permission denied"))
+    return file, kind
+
+
+def survey_archive(path: str) -> tuple[Path, "Survey"]:
+    """The archive's entries, every one checked — what the wizard shows before anything is written."""
+    from .archive import survey
+    file, kind = archive_at(path)
+    try:
+        return file, survey(file, kind)
+    except PermissionError as denied:
+        raise unreadable(file.parent, denied) from denied
+
+
+def new_folder(into: str, name: str) -> Path:
+    """Where a new project's folder goes — `name` inside `into` — checked, and not yet made. A folder that
+    already exists is refused: an import or a new project never merges into what is there."""
+    clean = (name or "").strip()
+    if not clean or clean in (".", "..") or "/" in clean or "\\" in clean or "\0" in clean:
+        raise Refused("Name the new project's folder with one plain name.", status=422)
+    if clean.startswith("."):
+        raise Refused("A project's folder name should not start with a dot; it would be hidden.", status=422)
+    parent = inside(into)
+    if not parent.is_dir():
+        raise Refused(f"{into} is not a folder.", status=404)
+    return _fresh(str(parent / clean))
+
+
+def make_project_folder(target: Path) -> None:
+    """Make the folder an import writes into. `mkdir` fails if something appeared there meanwhile."""
+    try:
+        os.mkdir(target)
+    except FileExistsError as there:
+        raise Refused(f"{target} already exists.", status=409) from there
+    except PermissionError as denied:
+        raise unreadable(target.parent, denied) from denied
+
+
+def empty_project(target: Path, title: str, name: str, email: str) -> None:
+    """A new folder with a repository and a README, committed once so the project has a branch to work
+    from — agents branch their worktrees from HEAD. The commit is the person's own: their git identity
+    when git has one, else the name and address of their NeuroCode account."""
+    make_project_folder(target)
+    try:
+        (target / "README.md").write_text(f"# {title}\n", encoding="utf-8")
+        done = git(["init", "-b", "main"], target, timeout=GIT_TIMEOUT)
+        if done.returncode != 0:
+            raise Refused(f"git init failed: {(done.stderr or done.stdout).strip()[:200]}", status=500)
+        known = git(["config", "user.email"], target, timeout=GIT_TIMEOUT).stdout.strip()
+        who = [] if known else ["-c", f"user.name={name}", "-c", f"user.email={email}"]
+        for step, args in (("add", ["add", "README.md"]), ("commit", [*who, "commit", "-m", f"Start {title}"])):
+            done = git(args, target, timeout=GIT_TIMEOUT)
+            if done.returncode != 0:
+                raise Refused(f"git {step} failed: {(done.stderr or done.stdout).strip()[:200]}", status=500)
+    except BaseException:
+        shutil.rmtree(target, ignore_errors=True)       # the folder was made here, a moment ago
+        raise
+
+
 # ── what is audited ───────────────────────────────────────────────
 class MachineService:
     """The writes, each in the audit log: who, what, where. Reads leave no trace beyond the access log."""
@@ -432,6 +618,16 @@ class MachineService:
     async def saved(self, who: Person, saved: Saved, before: str, *, ip: str = "") -> None:
         await self.audit.record(action="machine.file.save", user_id=who.id, target=saved.path,
                                 detail={"bytes": saved.size, "sha1": saved.sha1, "was": before}, ip=ip)
+
+    async def imported(self, who: Person, archive: str, target: Path, project_id: str, entries: int,
+                       total: int, *, uploaded: bool, ip: str = "") -> None:
+        await self.audit.record(action="machine.import", user_id=who.id, target=str(target),
+                                detail={"archive": archive, "project": project_id, "entries": entries,
+                                        "bytes": total, "uploaded": uploaded}, ip=ip)
+
+    async def started(self, who: Person, target: Path, project_id: str, *, ip: str = "") -> None:
+        await self.audit.record(action="machine.project.create", user_id=who.id, target=str(target),
+                                detail={"project": project_id}, ip=ip)
 
     async def made(self, who: Person, entry: Entry, *, ip: str = "") -> None:
         await self.audit.record(action=f"machine.{'folder' if entry.kind == 'dir' else 'file'}.create",

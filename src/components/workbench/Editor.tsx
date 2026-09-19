@@ -41,6 +41,8 @@ export interface EditorProps {
   onSave: (path: string, text: string) => void;
   onCursor: (line: number, col: number) => void;
   onLanguage: (name: string | null) => void;
+  /** The file shown is only read: a reference source or a referenced project. Typing and ⌘S do nothing. */
+  readOnly?: boolean;
   ref?: Ref<EditorHandle>;
 }
 
@@ -50,6 +52,10 @@ const languageSlot = new Compartment();
 const themeSlot = new Compartment();
 const breakpointSlot = new Compartment();
 const pausedSlot = new Compartment();
+const readOnlySlot = new Compartment();
+
+/** Read only: the text cannot change, but it can still be selected, searched and copied. */
+const locked = (on: boolean): Extension => (on ? [EditorState.readOnly.of(true)] : []);
 
 const mix = (v: string, pct: number) => `color-mix(in oklab, var(${v}) ${pct}%, transparent)`;
 
@@ -133,7 +139,7 @@ function pausedAt(line: number | null): Extension {
 }
 
 export default function Editor(props: EditorProps) {
-  const { doc, open, dark, breakpoints, pausedLine, reveal, ref } = props;
+  const { doc, open, dark, breakpoints, pausedLine, reveal, readOnly = false, ref } = props;
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const held = useRef(new Map<string, Held>());
@@ -172,13 +178,14 @@ export default function Editor(props: EditorProps) {
       text.includes('\r\n') ? EditorState.lineSeparator.of('\r\n') : [],
       Prec.highest(keymap.of([{
         key: 'Mod-s', preventDefault: true,
-        run: (v) => { latest.current.onSave(path, v.state.sliceDoc()); return true; },
+        run: (v) => { if (!latest.current.readOnly) latest.current.onSave(path, v.state.sliceDoc()); return true; },
       }])),
       keymap.of([indentWithTab]),
       syntaxHighlighting(colours),
       languageSlot.of([]),
       themeSlot.of(chrome(latest.current.dark)),
       pausedSlot.of(pausedAt(null)),
+      readOnlySlot.of(locked(!!latest.current.readOnly)),
       EditorView.updateListener.of((update) => {
         const mine = held.current.get(path);
         if (!mine) return;
@@ -249,6 +256,9 @@ export default function Editor(props: EditorProps) {
   }, [open]);
 
   useEffect(() => { view.current?.dispatch({ effects: themeSlot.reconfigure(chrome(dark)) }); }, [dark]);
+
+  // Each file's state is made with the slot as it was then; the file shown now is locked or not as it is now.
+  useEffect(() => { view.current?.dispatch({ effects: readOnlySlot.reconfigure(locked(readOnly)) }); }, [readOnly, doc.path, doc.version]);
 
   useEffect(() => {
     view.current?.dispatch({ effects: breakpointSlot.reconfigure(gutterOf(breakpoints)) });

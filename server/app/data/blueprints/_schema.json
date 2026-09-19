@@ -1,0 +1,647 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "neurocode/blueprint-template",
+ "title": "A NeuroCode architecture template",
+ "description": "One file per template in this folder. `$defs.spec` is also the shape of a blueprint's architecture, so a template and a blueprint are read and checked by the same rules.",
+ "type": "object",
+ "required": [
+  "id",
+  "name",
+  "summary",
+  "fitsWhen",
+  "avoidWhen",
+  "layers",
+  "services",
+  "dataStores",
+  "environments",
+  "ci",
+  "infra",
+  "observability",
+  "security",
+  "folderLayout",
+  "conventions",
+  "adrs",
+  "scaffold"
+ ],
+ "additionalProperties": false,
+ "properties": {
+  "id": {
+   "type": "string",
+   "pattern": "^[a-z0-9][a-z0-9-]{1,60}$"
+  },
+  "name": {
+   "type": "string",
+   "minLength": 3,
+   "maxLength": 120
+  },
+  "summary": {
+   "type": "string",
+   "minLength": 20,
+   "maxLength": 600
+  },
+  "fitsWhen": {
+   "type": "array",
+   "items": {
+    "$ref": "#/$defs/condition"
+   },
+   "minItems": 1,
+   "maxItems": 12
+  },
+  "avoidWhen": {
+   "type": "array",
+   "items": {
+    "$ref": "#/$defs/condition"
+   },
+   "maxItems": 12
+  },
+  "layers": {
+   "$ref": "#/$defs/layers",
+   "minProperties": 3
+  },
+  "services": {
+   "$ref": "#/$defs/services",
+   "minItems": 1
+  },
+  "dataStores": {
+   "$ref": "#/$defs/dataStores"
+  },
+  "environments": {
+   "$ref": "#/$defs/environments",
+   "minItems": 1
+  },
+  "ci": {
+   "$ref": "#/$defs/ci"
+  },
+  "infra": {
+   "$ref": "#/$defs/infra"
+  },
+  "observability": {
+   "$ref": "#/$defs/observability"
+  },
+  "security": {
+   "$ref": "#/$defs/security"
+  },
+  "folderLayout": {
+   "type": "string",
+   "minLength": 3,
+   "maxLength": 4000
+  },
+  "conventions": {
+   "type": "array",
+   "items": {
+    "type": "string",
+    "minLength": 3,
+    "maxLength": 400
+   },
+   "minItems": 1,
+   "maxItems": 40
+  },
+  "adrs": {
+   "$ref": "#/$defs/adrs",
+   "minItems": 1
+  },
+  "scaffold": {
+   "$ref": "#/$defs/scaffold"
+  }
+ },
+ "$defs": {
+  "condition": {
+   "type": "object",
+   "required": [
+    "answer",
+    "is",
+    "says"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "answer": {
+     "enum": [
+      "productType",
+      "audience",
+      "scale",
+      "traffic",
+      "data",
+      "compliance",
+      "needs",
+      "team",
+      "teamSize",
+      "hosting",
+      "budget",
+      "timeline"
+     ]
+    },
+    "is": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40
+     },
+     "minItems": 1,
+     "maxItems": 16
+    },
+    "says": {
+     "type": "string",
+     "minLength": 3,
+     "maxLength": 200
+    }
+   }
+  },
+  "layer": {
+   "type": "object",
+   "required": [
+    "choice",
+    "alternatives",
+    "why"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "choice": {
+     "type": [
+      "string",
+      "null"
+     ],
+     "maxLength": 80
+    },
+    "alternatives": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+     },
+     "maxItems": 12,
+     "uniqueItems": true
+    },
+    "why": {
+     "type": "string",
+     "maxLength": 1000
+    }
+   }
+  },
+  "layers": {
+   "type": "object",
+   "propertyNames": {
+    "enum": [
+     "frontend",
+     "mobile",
+     "desktop",
+     "backend",
+     "database",
+     "cache",
+     "queue",
+     "search",
+     "auth",
+     "ai-ml",
+     "data",
+     "infra",
+     "ci-cd",
+     "observability",
+     "testing",
+     "hosting"
+    ]
+   },
+   "additionalProperties": {
+    "$ref": "#/$defs/layer"
+   }
+  },
+  "service": {
+   "type": "object",
+   "required": [
+    "name",
+    "kind",
+    "tech",
+    "responsibilities",
+    "talksTo"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "name": {
+     "type": "string",
+     "pattern": "^[a-z0-9][a-z0-9-]{0,39}$"
+    },
+    "kind": {
+     "enum": [
+      "web",
+      "api",
+      "worker",
+      "gateway",
+      "function",
+      "job",
+      "cli",
+      "library",
+      "service",
+      "pipeline",
+      "desktop",
+      "mobile",
+      "static",
+      "realtime"
+     ]
+    },
+    "tech": {
+     "type": "string",
+     "minLength": 1,
+     "maxLength": 80
+    },
+    "responsibilities": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+     },
+     "maxItems": 20
+    },
+    "talksTo": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40
+     },
+     "maxItems": 20,
+     "uniqueItems": true
+    }
+   }
+  },
+  "services": {
+   "type": "array",
+   "items": {
+    "$ref": "#/$defs/service"
+   },
+   "maxItems": 40
+  },
+  "dataStore": {
+   "type": "object",
+   "required": [
+    "name",
+    "tech",
+    "purpose"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "name": {
+     "type": "string",
+     "pattern": "^[a-z0-9][a-z0-9-]{0,39}$"
+    },
+    "tech": {
+     "type": "string",
+     "minLength": 1,
+     "maxLength": 80
+    },
+    "purpose": {
+     "type": "string",
+     "maxLength": 400
+    }
+   }
+  },
+  "dataStores": {
+   "type": "array",
+   "items": {
+    "$ref": "#/$defs/dataStore"
+   },
+   "maxItems": 20
+  },
+  "environment": {
+   "type": "object",
+   "required": [
+    "name",
+    "purpose",
+    "hosting"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "name": {
+     "type": "string",
+     "pattern": "^[a-z0-9][a-z0-9-]{0,29}$"
+    },
+    "purpose": {
+     "type": "string",
+     "maxLength": 300
+    },
+    "hosting": {
+     "type": "string",
+     "maxLength": 300
+    }
+   }
+  },
+  "environments": {
+   "type": "array",
+   "items": {
+    "$ref": "#/$defs/environment"
+   },
+   "maxItems": 8
+  },
+  "stage": {
+   "type": "object",
+   "required": [
+    "name",
+    "does"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "name": {
+     "type": "string",
+     "minLength": 1,
+     "maxLength": 40
+    },
+    "does": {
+     "type": "string",
+     "maxLength": 300
+    }
+   }
+  },
+  "ci": {
+   "type": "object",
+   "required": [
+    "tool",
+    "stages"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "tool": {
+     "type": "string",
+     "maxLength": 80
+    },
+    "stages": {
+     "type": "array",
+     "items": {
+      "$ref": "#/$defs/stage"
+     },
+     "maxItems": 16
+    }
+   }
+  },
+  "infra": {
+   "type": "object",
+   "required": [
+    "kind",
+    "tools",
+    "notes"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "kind": {
+     "enum": [
+      "compose",
+      "kubernetes",
+      "serverless",
+      "paas",
+      "static",
+      "vm",
+      "desktop",
+      "package",
+      "none"
+     ]
+    },
+    "tools": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+     },
+     "maxItems": 12,
+     "uniqueItems": true
+    },
+    "notes": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "maxLength": 400
+     },
+     "maxItems": 12
+    }
+   }
+  },
+  "observability": {
+   "type": "object",
+   "required": [
+    "tools",
+    "notes"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "tools": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+     },
+     "maxItems": 12,
+     "uniqueItems": true
+    },
+    "notes": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "maxLength": 400
+     },
+     "maxItems": 12
+    }
+   }
+  },
+  "security": {
+   "type": "object",
+   "required": [
+    "auth",
+    "secrets",
+    "notes"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "auth": {
+     "type": "string",
+     "maxLength": 600
+    },
+    "secrets": {
+     "type": "string",
+     "maxLength": 600
+    },
+    "notes": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "maxLength": 400
+     },
+     "maxItems": 16
+    }
+   }
+  },
+  "adr": {
+   "type": "object",
+   "required": [
+    "title",
+    "decision",
+    "why",
+    "alternatives"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "title": {
+     "type": "string",
+     "minLength": 3,
+     "maxLength": 160
+    },
+    "decision": {
+     "type": "string",
+     "minLength": 3,
+     "maxLength": 1000
+    },
+    "why": {
+     "type": "string",
+     "minLength": 3,
+     "maxLength": 1500
+    },
+    "alternatives": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+     },
+     "maxItems": 8
+    }
+   }
+  },
+  "adrs": {
+   "type": "array",
+   "items": {
+    "$ref": "#/$defs/adr"
+   },
+   "maxItems": 30
+  },
+  "file": {
+   "type": "object",
+   "required": [
+    "path",
+    "template"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "path": {
+     "type": "string",
+     "pattern": "^(?!/)(?!.*\\.\\.)(?!\\.git/)[A-Za-z0-9._@()\\[\\]/ -]{1,200}$"
+    },
+    "template": {
+     "type": "string",
+     "minLength": 3,
+     "maxLength": 1000
+    }
+   }
+  },
+  "repo": {
+   "type": "object",
+   "required": [
+    "label",
+    "layout",
+    "files"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "label": {
+     "type": "string",
+     "pattern": "^[a-z0-9][a-z0-9._-]{0,59}$"
+    },
+    "layout": {
+     "type": "string",
+     "maxLength": 400
+    },
+    "files": {
+     "type": "array",
+     "items": {
+      "$ref": "#/$defs/file"
+     },
+     "minItems": 1,
+     "maxItems": 40
+    }
+   }
+  },
+  "scaffold": {
+   "type": "object",
+   "required": [
+    "repos"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "repos": {
+     "type": "array",
+     "items": {
+      "$ref": "#/$defs/repo"
+     },
+     "maxItems": 6
+    }
+   }
+  },
+  "spec": {
+   "description": "A blueprint's architecture: a template without its catalogue fields. Lists may be empty \u2014 a blank blueprint starts that way.",
+   "type": "object",
+   "required": [
+    "summary",
+    "layers",
+    "services",
+    "dataStores",
+    "environments",
+    "ci",
+    "infra",
+    "observability",
+    "security",
+    "folderLayout",
+    "conventions",
+    "adrs",
+    "scaffold"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "summary": {
+     "type": "string",
+     "maxLength": 1200
+    },
+    "layers": {
+     "$ref": "#/$defs/layers"
+    },
+    "services": {
+     "$ref": "#/$defs/services"
+    },
+    "dataStores": {
+     "$ref": "#/$defs/dataStores"
+    },
+    "environments": {
+     "$ref": "#/$defs/environments"
+    },
+    "ci": {
+     "$ref": "#/$defs/ci"
+    },
+    "infra": {
+     "$ref": "#/$defs/infra"
+    },
+    "observability": {
+     "$ref": "#/$defs/observability"
+    },
+    "security": {
+     "$ref": "#/$defs/security"
+    },
+    "folderLayout": {
+     "type": "string",
+     "maxLength": 4000
+    },
+    "conventions": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 400
+     },
+     "maxItems": 40
+    },
+    "adrs": {
+     "$ref": "#/$defs/adrs"
+    },
+    "scaffold": {
+     "$ref": "#/$defs/scaffold"
+    }
+   }
+  }
+ }
+}

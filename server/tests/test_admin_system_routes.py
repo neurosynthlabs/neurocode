@@ -267,7 +267,7 @@ async def test_a_reset_needs_the_header_and_empties_the_work_but_keeps_the_peopl
 
     for model in (m.Project, m.Task, m.Plan, m.Approval, m.MemoryFact, m.MemoryConflict, m.Chunk,
                   m.ActivityEvent, m.McpServer, m.McpTool, m.Brainstorm, m.Decision,
-                  m.Pref, m.WorkflowDefinition, m.EvalSuite):
+                  m.Pref, m.WorkflowDefinition, m.EvalSuite, m.Blueprint):
         assert await left(model) == 0, model.__tablename__
     assert await left(m.User) == people and people > 0                # accounts are kept
     assert await left(m.Role) == len(catalogue.ROLES)                 # and the roles

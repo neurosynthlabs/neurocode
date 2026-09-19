@@ -1,0 +1,267 @@
+{
+ "id": "desktop-app",
+ "name": "Desktop app: Tauri or Electron",
+ "summary": "A desktop app with a web front end and a native core: Tauri (Rust, the system webview, small installers) or Electron (Node.js and bundled Chromium, the widest API surface). Local data in SQLite, signed builds and auto-updates.",
+ "fitsWhen": [
+  {
+   "answer": "productType",
+   "is": [
+    "desktop-app"
+   ],
+   "says": "a desktop app"
+  },
+  {
+   "answer": "hosting",
+   "is": [
+    "on-device"
+   ],
+   "says": "it runs on the user's machine"
+  },
+  {
+   "answer": "needs",
+   "is": [
+    "offline"
+   ],
+   "says": "it must work offline"
+  },
+  {
+   "answer": "team",
+   "is": [
+    "typescript",
+    "rust"
+   ],
+   "says": "the team writes TypeScript (and Rust for Tauri)"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "needs",
+   "is": [
+    "seo"
+   ],
+   "says": "it must be found through search"
+  },
+  {
+   "answer": "productType",
+   "is": [
+    "api",
+    "data-platform"
+   ],
+   "says": "it is a backend system"
+  }
+ ],
+ "layers": {
+  "desktop": {
+   "choice": "tauri",
+   "alternatives": [
+    "electron"
+   ],
+   "why": "Small installers and memory use; the Rust core does file and system work. Electron when Node.js APIs or identical rendering on every OS matter more."
+  },
+  "frontend": {
+   "choice": "react",
+   "alternatives": [
+    "svelte",
+    "solid"
+   ],
+   "why": "The same component skills as the web."
+  },
+  "database": {
+   "choice": "sqlite",
+   "alternatives": [],
+   "why": "Local data in one file with transactions."
+  },
+  "backend": {
+   "choice": "rust",
+   "alternatives": [
+    "nodejs"
+   ],
+   "why": "Commands the UI calls through IPC; the only code that touches the filesystem."
+  },
+  "ci-cd": {
+   "choice": "github-actions",
+   "alternatives": [
+    "electron-builder"
+   ],
+   "why": "Builds per OS with signing and notarisation."
+  },
+  "testing": {
+   "choice": "vitest",
+   "alternatives": [
+    "playwright"
+   ],
+   "why": "UI unit tests; WebDriver/Playwright for the packaged app."
+  },
+  "observability": {
+   "choice": "sentry",
+   "alternatives": [],
+   "why": "Crash reports, opt-in."
+  },
+  "hosting": {
+   "choice": "github-pages",
+   "alternatives": [],
+   "why": "Releases and the update manifest on GitHub; or the platform stores."
+  }
+ },
+ "services": [
+  {
+   "name": "ui",
+   "kind": "desktop",
+   "tech": "react",
+   "responsibilities": [
+    "Every screen",
+    "Calls core commands through IPC only"
+   ],
+   "talksTo": [
+    "core"
+   ]
+  },
+  {
+   "name": "core",
+   "kind": "desktop",
+   "tech": "tauri",
+   "responsibilities": [
+    "File system, OS integration, updates",
+    "Owns the SQLite database"
+   ],
+   "talksTo": [
+    "local-db"
+   ]
+  }
+ ],
+ "dataStores": [
+  {
+   "name": "local-db",
+   "tech": "sqlite",
+   "purpose": "The user's data in the app's data directory"
+  }
+ ],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "tauri dev with hot reload",
+   "hosting": "Local"
+  },
+  {
+   "name": "staging",
+   "purpose": "A beta update channel",
+   "hosting": "GitHub Releases"
+  },
+  {
+   "name": "prod",
+   "purpose": "The stable update channel",
+   "hosting": "GitHub Releases / stores"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "lint",
+    "does": "eslint and clippy"
+   },
+   {
+    "name": "test",
+    "does": "vitest and cargo test"
+   },
+   {
+    "name": "build",
+    "does": "Matrix build for macOS, Windows and Linux"
+   },
+   {
+    "name": "sign",
+    "does": "Code signing and macOS notarisation"
+   },
+   {
+    "name": "release",
+    "does": "Publish installers and the update manifest"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "desktop",
+  "tools": [],
+  "notes": [
+   "No servers unless the app syncs"
+  ]
+ },
+ "observability": {
+  "tools": [
+   "sentry"
+  ],
+  "notes": [
+   "Crash reporting is opt-in and says so"
+  ]
+ },
+ "security": {
+  "auth": "Local app: the OS account is the boundary; any sync service needs its own auth",
+  "secrets": "OS keychain for tokens",
+  "notes": [
+   "Tauri: allow only the commands and paths the UI needs (capabilities)",
+   "Electron: contextIsolation on, nodeIntegration off, a strict CSP",
+   "Signed updates only"
+  ]
+ },
+ "folderLayout": "src/  (React UI)\nsrc-tauri/\n  src/main.rs\n  src/commands.rs\n  tauri.conf.json\n  capabilities/\npackage.json",
+ "conventions": [
+  "The UI never touches the filesystem directly",
+  "Every IPC command validates its arguments",
+  "Database migrations run at startup, in order"
+ ],
+ "adrs": [
+  {
+   "title": "Tauri over Electron",
+   "decision": "The app is built with Tauri.",
+   "why": "Installers of a few MB and lower memory use; the Rust core is a clear security boundary.",
+   "alternatives": [
+    "electron"
+   ]
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "desktop",
+    "layout": "A Tauri app with a React front end",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "Prerequisites per OS, how to run in development and how to build installers."
+     },
+     {
+      "path": "package.json",
+      "template": "react, react-dom, @tauri-apps/api; dev: @tauri-apps/cli, vite, typescript, vitest."
+     },
+     {
+      "path": "src/main.tsx",
+      "template": "React entry."
+     },
+     {
+      "path": "src/App.tsx",
+      "template": "First screen calling a core command and showing its answer."
+     },
+     {
+      "path": "src-tauri/Cargo.toml",
+      "template": "tauri and serde dependencies."
+     },
+     {
+      "path": "src-tauri/src/main.rs",
+      "template": "Tauri builder registering the commands."
+     },
+     {
+      "path": "src-tauri/src/commands.rs",
+      "template": "A first command returning the app version."
+     },
+     {
+      "path": "src-tauri/tauri.conf.json",
+      "template": "App identifier, window settings and bundle targets."
+     },
+     {
+      "path": ".github/workflows/ci.yml",
+      "template": "Lint and test on pull requests; a build matrix on tags."
+     }
+    ]
+   }
+  ]
+ }
+}

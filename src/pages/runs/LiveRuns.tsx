@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowDownToLine, ExternalLink, FileDiff, FolderGit2, GitMerge, Loader2, RefreshCw, Square, Trash2, TriangleAlert, Upload } from 'lucide-react';
+import { ArrowDownToLine, ChevronRight, ExternalLink, FileDiff, FolderGit2, GitMerge, Loader2, RefreshCw, Square, Trash2, TriangleAlert, Undo2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Ascii, Dot, Empty, KV, ListRow, Mono, Page, PageBody, PageHeader, Panel, Stat, StatGrid, Tag } from '@/components/os';
@@ -11,7 +11,8 @@ import { useRemote } from '@/lib/remote';
 import { cn } from '@/lib/utils';
 import { ago } from '@/pages/code/format';
 import { SEVERITY_TONE, clock } from '@/lib/live/work';
-import { asRuntime, runtimeApi, shortReceipt, type RunCheck, type RunGoal, type RuntimeRun } from '@/lib/live/runtime';
+import { asRuntime, gateKind, runtimeApi, shortReceipt, type RunCheck, type RunGoal, type RuntimeRun, type RuntimeStep } from '@/lib/live/runtime';
+import { GateActions } from '@/components/runs/GateActions';
 import { plural } from '@/lib/words';
 
 /* Live Runs, for real: every run is a git worktree on a branch of its own, and this is what it did. */
@@ -35,7 +36,7 @@ const failed = (e: unknown) => (e instanceof ApiError ? e.message : 'The local A
 const progress = (r: RunDoc) => Math.round((100 * r.steps.filter(done).length) / Math.max(1, r.steps.length));
 
 export function LiveRuns() {
-  const { runs, onRunLog, cancelRun, discardRun, mergeRun } = useData();
+  const { runs, approvals, onRunLog, cancelRun, discardRun, mergeRun } = useData();
   const { can } = useAuth();
   const linked = useSearchParams()[0].get('ref');
   const [picked, setPicked] = useState<{ link: string | null; ref: string } | null>(null);
@@ -48,6 +49,9 @@ export function LiveRuns() {
   const [showDiff, setShowDiff] = useState(false);
   const [follow, setFollow] = useState(true);
   const [busy, setBusy] = useState(false);
+  // Which steps are unfolded, and which one is asking whether to be reverted — both kept with the run's ref.
+  const [openSteps, setOpenSteps] = useState<{ ref: string; open: number[] }>({ ref: '', open: [] });
+  const [reverting, setReverting] = useState<{ ref: string; n: number } | null>(null);
   // Merging writes to your real repository, so it takes two clicks. The first click and the merge's
   // answer each belong to one run: kept with its ref, so picking another run shows neither.
   const [armedRef, setArmedRef] = useState<string | null>(null);
@@ -101,6 +105,22 @@ export function LiveRuns() {
       setBusy(false);
     }
   };
+  const revert = async (n: number, redo: boolean) => {
+    if (!run) return;
+    setBusy(true);
+    try {
+      await runtimeApi.revert(run.ref, n, redo);
+      setReverting(null);
+      toast.success(`Reverted to step ${n}`, {
+        description: redo ? 'The worktree is back where that step left it, and the later steps run again.'
+          : 'The worktree is back where that step left it. The later steps are marked taken back.',
+      });
+    } catch (e) {
+      toast.error('Not reverted', { description: failed(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
   const discard = async () => {
     if (!run) return;
     setBusy(true);
@@ -149,6 +169,15 @@ export function LiveRuns() {
     && !run.removed && !run.merged && (run.status === 'done' || (run.status === 'waiting' && gateStep?.kind === 'handoff'));
   const canPush = can('runs:merge') && accepted(run) && !run.removed && run.diff.files > 0 && !run.parent;
   const receipt = run.review.receipt;
+  const gate = run.waitingOn ? approvals.find((a) => a.ref === run.waitingOn && a.status === 'pending') ?? null : null;
+  const unfolded = openSteps.ref === run.ref ? openSteps.open : [];
+  const toggleStep = (n: number) => setOpenSteps({ ref: run.ref, open: unfolded.includes(n) ? unfolded.filter((x) => x !== n) : [...unfolded, n] });
+  const lastStep = run.steps.at(-1)?.n ?? 0;
+  // A run is taken back step by step only when one agent wrote it, it has stopped, and its worktree is still there.
+  const canRevert = can('runs:run') && run.role === 'solo' && !working && !run.removed && !run.merged;
+  const asking = reverting?.ref === run.ref ? reverting.n : null;
+  const runGrants = run.grants.filter((g) => g.scope === 'run');
+  const lastRevert = run.reverts.at(-1);
 
   return (
     <Page>
@@ -236,8 +265,14 @@ export function LiveRuns() {
             </StatGrid>
 
             {run.status === 'waiting' && (
-              <Panel className="border-warn/40" eyebrow="Nothing moves until you answer" title={<span className="flex items-center gap-2"><TriangleAlert className="size-4 text-warn" />Waiting for you · {run.waitingOn}</span>}>
+              <Panel className="border-warn/40" eyebrow={gate && gateKind(gate) === 'question' ? 'The agent asks rather than guesses' : 'Nothing moves until you answer'}
+                title={<span className="flex items-center gap-2"><TriangleAlert className="size-4 text-warn" />{gate?.title ?? `Waiting for you · ${run.waitingOn ?? ''}`}</span>}>
                 <p className="text-[13.5px] text-ink-2">{run.steps.find((s) => s.status === 'waiting')?.label}</p>
+                {gate && gate.payload && gateKind(gate) !== 'signature' && (
+                  <p className="mt-2 text-[13.5px] leading-relaxed break-words whitespace-pre-wrap text-ink">{gate.payload}</p>
+                )}
+                {gate && <p className="mt-2 text-[12.5px] leading-relaxed text-dim">{gate.reason}</p>}
+                {gate ? <GateActions approval={gate} /> : null}
                 <Link to="/permissions" className="mt-2 inline-block text-[13px] text-brand hover:underline">Open the approvals inbox →</Link>
               </Panel>
             )}
@@ -306,16 +341,32 @@ export function LiveRuns() {
 
             <Panel flush title="Steps" eyebrow={`${run.steps.filter(done).length} of ${run.steps.length} finished`}>
               <div className="divide-y divide-line/60">
-                {run.steps.map((s) => (
-                  <div key={s.n} className="flex items-start gap-3 px-5 py-2.5">
-                    <Dot state={s.status === 'running' ? 'running' : s.status} pulse={s.status === 'running'} className="mt-1.5" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13.5px] text-ink">{s.label}</span>
-                      <span className="mt-0.5 block truncate text-[12px] text-dim">{s.agent} · {stepKind(run, s)}{s.detail ? ` · ${s.detail}` : ''}</span>
-                    </span>
-                    <span className="tnum shrink-0 text-[11.5px] text-dim">{s.ms ? `${(s.ms / 1000).toFixed(1)}s` : ''}</span>
-                  </div>
-                ))}
+                {run.steps.map((s) => {
+                  const more = hasMore(s) || (canRevert && s.n < lastStep);
+                  const open = unfolded.includes(s.n);
+                  return (
+                    <div key={s.n} className="px-5 py-2.5">
+                      <button type="button" onClick={() => more && toggleStep(s.n)} aria-expanded={more ? open : undefined}
+                        className={cn('flex w-full items-start gap-3 text-left', more && 'cursor-pointer')}>
+                        <Dot state={s.status === 'running' ? 'running' : s.status} pulse={s.status === 'running'} className="mt-1.5" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13.5px] text-ink">{s.label}</span>
+                          <span className="mt-0.5 block truncate text-[12px] text-dim">
+                            {s.agent} · {stepKind(run, s)}{s.takenBack ? ` · taken back to step ${s.takenBack.to}` : s.detail ? ` · ${s.detail}` : ''}
+                          </span>
+                        </span>
+                        {s.question && <Tag tone={s.answer ? 'neutral' : 'warn'}>{s.answer ? 'asked' : 'asks you'}</Tag>}
+                        <span className="tnum shrink-0 text-[11.5px] text-dim">{s.ms ? `${(s.ms / 1000).toFixed(1)}s` : ''}</span>
+                        {more && <ChevronRight className={cn('mt-0.5 size-3.5 shrink-0 text-dim transition-transform', open && 'rotate-90')} />}
+                      </button>
+                      {open && (
+                        <StepDetail step={s} projectId={run.projectId} last={lastStep} canRevert={canRevert && s.n < lastStep} asking={asking === s.n} busy={busy}
+                          onAsk={() => setReverting({ ref: run.ref, n: s.n })} onCancel={() => setReverting(null)}
+                          onRevert={(redo) => void revert(s.n, redo)} />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </Panel>
 
@@ -372,6 +423,17 @@ export function LiveRuns() {
               <KV k="Worktree" v={run.removed ? 'removed' : run.worktree} mono />
               <KV k="Branched from" v={run.shortBase} mono />
               <KV k="Started" v={`${ago(run.startedAt)} by ${run.requestedBy}`} />
+              {run.references.length > 0 && <KV k="Read only" v={`${run.references.join(', ')} — ${run.references.length === 1 ? 'a reference source' : 'reference sources'}: read for grounding, never written`} />}
+              {run.review.instructions && run.review.instructions.length > 0 && (
+                <KV k="Reviewer was given" v={<span className="break-words">{run.review.instructions.map((f) => f.path).join(', ')}</span>} />
+              )}
+              {run.review.taste && run.review.taste.length > 0 && <KV k="Taste applied" v={run.review.taste.join(', ')} mono />}
+              {runGrants.length > 0 && (
+                <KV k="Allowed for this run" v={<span className="break-words">{runGrants.map((g) => `${g.tool} ${g.subject}`).join(' · ')} — by {runGrants[0].by}</span>} />
+              )}
+              {lastRevert && (
+                <KV k="Reverted" v={`to step ${lastRevert.to} by ${lastRevert.by}, ${ago(lastRevert.at)}${lastRevert.redo ? ' · later steps ran again' : ''}`} />
+              )}
               {receipt && (
                 <KV k="Reviewed diff" v={<span><Mono>{shortReceipt(receipt.sha256)}</Mono> at <Mono>{receipt.head.slice(0, 7) || '—'}</Mono>{receipt.by ? ` · ${receipt.by}` : ''}</span>} />
               )}
@@ -396,6 +458,95 @@ export function LiveRuns() {
         </div>
       </PageBody>
     </Page>
+  );
+}
+
+/** Whether a step has more to show than its row: what it was handed, a question, a commit, a revert. */
+const hasMore = (s: RuntimeStep) => !!(s.grounding || s.question || s.commitSha || s.takenBack);
+const VIA: Record<'plan' | 'retrieval' | 'index', string> = { plan: 'the plan named it', retrieval: 'retrieval found it', index: 'the index matched its words' };
+
+/** One step unfolded: the question and its answer, what it was handed, the commit it left — and the revert to here. */
+function StepDetail({ step: s, projectId, last, canRevert, asking, busy, onAsk, onCancel, onRevert }: {
+  step: RuntimeStep; projectId: string; last: number; canRevert: boolean; asking: boolean; busy: boolean;
+  onAsk: () => void; onCancel: () => void; onRevert: (redo: boolean) => void;
+}) {
+  const g = s.grounding;
+  return (
+    <div className="mt-2 ml-5 space-y-2.5 text-[12.5px] text-ink-2">
+      {s.question && (
+        <div>
+          <p><span className="text-dim">Asked · </span>{s.question}</p>
+          <p className="mt-0.5">{s.answer ? <><span className="text-dim">Answered · </span>{s.answer}</> : <span className="text-warn">Waiting for your answer.</span>}</p>
+        </div>
+      )}
+      {g && (
+        <details>
+          <summary className="cursor-pointer text-brand">Instructions given to this step · {plural(g.instructions.length, 'file')}{g.capped ? ' · cut to fit' : ''}</summary>
+          {g.instructions.length === 0 ? (
+            <p className="mt-1 text-dim">None: the project has no AGENTS.md, CLAUDE.md or rule file that applies to these files.</p>
+          ) : (
+            <ul className="mt-1 space-y-0.5">
+              {g.instructions.map((f) => (
+                <li key={f.path} className="flex flex-wrap items-center gap-x-2">
+                  <Mono>{f.path}</Mono><span className="text-dim">{f.bytes.toLocaleString()} bytes · {f.scope === 'rules' ? 'rule' : 'project file'}</span>
+                  {f.matched && <span className="text-dim">· applies to <Mono>{f.matched}</Mono></span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </details>
+      )}
+      {g && (
+        <details>
+          <summary className="cursor-pointer text-brand">Read from retrieval · {plural(g.pieces.length, 'piece')}</summary>
+          {g.pieces.length === 0 ? (
+            <p className="mt-1 text-dim">Nothing: retrieval found no code or document for this step’s words, or the project is not indexed yet.</p>
+          ) : (
+            <ul className="mt-1 space-y-0.5">
+              {g.pieces.map((p) => (
+                <li key={p.ref} className="flex flex-wrap items-center gap-x-2">
+                  <Tag tone="neutral">{p.kind}</Tag><Mono>{p.path}{p.line ? `:${p.line}` : ''}</Mono><span className="text-dim">found by {p.how === 'both' ? 'words and meaning' : p.how === 'semantic' ? 'meaning' : 'words'}</span>
+                  {p.project && p.project !== projectId && <Tag tone="info">{p.project} · reference</Tag>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </details>
+      )}
+      {g && g.files.length > 0 && (
+        <details>
+          <summary className="cursor-pointer text-brand">Files it was handed · {g.files.length}</summary>
+          <ul className="mt-1 space-y-0.5">
+            {g.files.map((f) => (
+              <li key={f.path} className="flex flex-wrap items-center gap-x-2">
+                <Mono>{f.path}</Mono><span className="text-dim">{VIA[f.via]}</span>{f.readonly && <Tag tone="info">read only</Tag>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {g?.taste && g.taste.length > 0 && (
+        <p className="flex flex-wrap items-center gap-x-2"><span className="text-dim">Taste applied</span>{g.taste.map((t) => <Mono key={t}>{t}</Mono>)}</p>
+      )}
+      {s.commitSha && <p><span className="text-dim">Left commit </span><Mono>{s.commitSha.slice(0, 7)}</Mono></p>}
+      {s.takenBack && <p className="text-dim">Taken back when the run was reverted to step {s.takenBack.to} by {s.takenBack.by}, {ago(s.takenBack.at)}.</p>}
+      {canRevert && !asking && (
+        <Button size="xs" variant="outline" onClick={onAsk} disabled={busy} title="Take the run's worktree back to how it stood after this step">
+          <Undo2 className="size-3" />Revert to here
+        </Button>
+      )}
+      {canRevert && asking && (
+        <div className="rounded-lg bg-surface-2/70 px-3 py-2.5">
+          <p className="text-ink">Take the worktree back to how it stood after step {s.n}?</p>
+          <p className="mt-0.5 text-dim">Steps {s.n + 1}–{last} are taken back. Only the run’s own worktree moves; your checkout is untouched.</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button size="xs" onClick={() => onRevert(true)} disabled={busy}>{busy ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}Revert and redo steps {s.n + 1}–{last}</Button>
+            <Button size="xs" variant="outline" onClick={() => onRevert(false)} disabled={busy}><Undo2 className="size-3" />Revert and stop</Button>
+            <Button size="xs" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

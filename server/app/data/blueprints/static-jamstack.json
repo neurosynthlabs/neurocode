@@ -1,0 +1,241 @@
+{
+ "id": "static-jamstack",
+ "name": "Static site (JAMstack)",
+ "summary": "Pages built ahead of time from Markdown or a headless CMS and served from a CDN; any interaction is a small island of JavaScript or a serverless function. Fast, cheap and hard to break.",
+ "fitsWhen": [
+  {
+   "answer": "productType",
+   "is": [
+    "content-site"
+   ],
+   "says": "a content or marketing site"
+  },
+  {
+   "answer": "needs",
+   "is": [
+    "seo"
+   ],
+   "says": "search ranking matters"
+  },
+  {
+   "answer": "budget",
+   "is": [
+    "minimal"
+   ],
+   "says": "the budget is tight"
+  },
+  {
+   "answer": "timeline",
+   "is": [
+    "weeks"
+   ],
+   "says": "it must ship in weeks"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "needs",
+   "is": [
+    "realtime",
+    "multi-tenant"
+   ],
+   "says": "it needs live data or accounts"
+  },
+  {
+   "answer": "data",
+   "is": [
+    "relational"
+   ],
+   "says": "it manages records"
+  }
+ ],
+ "layers": {
+  "frontend": {
+   "choice": "astro",
+   "alternatives": [
+    "hugo",
+    "nextjs",
+    "sveltekit"
+   ],
+   "why": "Ships HTML with no JavaScript by default; islands where interaction is needed."
+  },
+  "backend": {
+   "choice": "cloudflare-workers",
+   "alternatives": [
+    "aws-lambda"
+   ],
+   "why": "A function for the contact form or search, only if needed."
+  },
+  "search": {
+   "choice": "meilisearch",
+   "alternatives": [],
+   "why": "Site search when the content grows past a few dozen pages."
+  },
+  "ci-cd": {
+   "choice": "github-actions",
+   "alternatives": [],
+   "why": "Build, link check and deploy."
+  },
+  "testing": {
+   "choice": "playwright",
+   "alternatives": [],
+   "why": "Smoke tests of key pages and links."
+  },
+  "observability": {
+   "choice": "sentry",
+   "alternatives": [],
+   "why": "Only if there are functions or islands to watch."
+  },
+  "hosting": {
+   "choice": "cloudflare",
+   "alternatives": [
+    "netlify",
+    "vercel",
+    "github-pages"
+   ],
+   "why": "Global CDN with preview deployments."
+  }
+ },
+ "services": [
+  {
+   "name": "site",
+   "kind": "static",
+   "tech": "astro",
+   "responsibilities": [
+    "Pages built from Markdown content",
+    "Images optimised at build time"
+   ],
+   "talksTo": []
+  },
+  {
+   "name": "forms",
+   "kind": "function",
+   "tech": "cloudflare-workers",
+   "responsibilities": [
+    "Handles the contact form",
+    "Verifies a captcha"
+   ],
+   "talksTo": []
+  }
+ ],
+ "dataStores": [
+  {
+   "name": "content",
+   "tech": "astro",
+   "purpose": "Markdown files in the repository (content collections)"
+  }
+ ],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "astro dev",
+   "hosting": "Local"
+  },
+  {
+   "name": "staging",
+   "purpose": "A preview deployment per pull request",
+   "hosting": "Cloudflare Pages"
+  },
+  {
+   "name": "prod",
+   "purpose": "The main branch",
+   "hosting": "Cloudflare Pages"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "build",
+    "does": "astro build"
+   },
+   {
+    "name": "check",
+    "does": "astro check and a link checker"
+   },
+   {
+    "name": "deploy",
+    "does": "Pages deploys main; previews for pull requests"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "static",
+  "tools": [],
+  "notes": [
+   "No server; the CDN is the host"
+  ]
+ },
+ "observability": {
+  "tools": [],
+  "notes": [
+   "Privacy-friendly analytics if any"
+  ]
+ },
+ "security": {
+  "auth": "None for readers; the CMS or git host controls who publishes",
+  "secrets": "Only in the function's environment",
+  "notes": [
+   "Content Security Policy headers",
+   "Captcha and rate limits on forms"
+  ]
+ },
+ "folderLayout": "src/\n  content/\n  layouts/\n  pages/\n  components/\npublic/\nastro.config.mjs",
+ "conventions": [
+  "Content is Markdown with typed front matter",
+  "No client JavaScript unless a component needs it",
+  "Every page has a title, description and social image"
+ ],
+ "adrs": [
+  {
+   "title": "Static first",
+   "decision": "Every page is built ahead of time.",
+   "why": "Fast everywhere, nothing to patch, nearly free to host.",
+   "alternatives": [
+    "server-rendered site"
+   ]
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "site",
+    "layout": "An Astro site",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "How to add a page or post, preview it and publish it."
+     },
+     {
+      "path": "package.json",
+      "template": "astro and @astrojs/check; scripts dev, build, preview."
+     },
+     {
+      "path": "astro.config.mjs",
+      "template": "Astro config with the site URL and the sitemap integration."
+     },
+     {
+      "path": "src/content.config.ts",
+      "template": "A posts collection with typed front matter."
+     },
+     {
+      "path": "src/layouts/Base.astro",
+      "template": "HTML shell with title, description and social tags."
+     },
+     {
+      "path": "src/pages/index.astro",
+      "template": "Home page listing the latest posts."
+     },
+     {
+      "path": "src/content/posts/hello.md",
+      "template": "A first post explaining how posts are written."
+     },
+     {
+      "path": ".github/workflows/ci.yml",
+      "template": "astro check and build on pull requests."
+     }
+    ]
+   }
+  ]
+ }
+}

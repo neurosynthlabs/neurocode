@@ -1,0 +1,335 @@
+{
+ "id": "saas-multitenant",
+ "name": "Multi-tenant SaaS on Postgres",
+ "summary": "One application serving many customer organisations, isolated with row-level security in Postgres, with billing, organisation roles and an audit log from the start. Built on a Next.js front end and a NestJS API.",
+ "fitsWhen": [
+  {
+   "answer": "productType",
+   "is": [
+    "saas"
+   ],
+   "says": "a multi-tenant SaaS product"
+  },
+  {
+   "answer": "needs",
+   "is": [
+    "multi-tenant"
+   ],
+   "says": "many customer organisations share it"
+  },
+  {
+   "answer": "audience",
+   "is": [
+    "businesses"
+   ],
+   "says": "businesses buy it"
+  },
+  {
+   "answer": "compliance",
+   "is": [
+    "soc2",
+    "gdpr"
+   ],
+   "says": "customers will ask for SOC 2 or GDPR evidence"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "audience",
+   "is": [
+    "internal"
+   ],
+   "says": "only one organisation uses it"
+  },
+  {
+   "answer": "timeline",
+   "is": [
+    "weeks"
+   ],
+   "says": "it must ship in weeks"
+  }
+ ],
+ "layers": {
+  "frontend": {
+   "choice": "nextjs",
+   "alternatives": [
+    "react",
+    "vue"
+   ],
+   "why": "Marketing pages rendered on the server and the app behind sign-in in one project."
+  },
+  "backend": {
+   "choice": "nestjs",
+   "alternatives": [
+    "fastapi",
+    "aspnet-core",
+    "rails"
+   ],
+   "why": "Guards and modules make the tenant check a rule every route passes through."
+  },
+  "database": {
+   "choice": "postgres",
+   "alternatives": [],
+   "why": "Row-level security enforces the tenant boundary in the database itself."
+  },
+  "cache": {
+   "choice": "redis",
+   "alternatives": [
+    "valkey"
+   ],
+   "why": "Per-tenant rate limits and queues."
+  },
+  "queue": {
+   "choice": "bullmq",
+   "alternatives": [
+    "temporal"
+   ],
+   "why": "Emails, webhooks to customers, billing sync."
+  },
+  "auth": {
+   "choice": "clerk",
+   "alternatives": [
+    "keycloak",
+    "auth0",
+    "better-auth"
+   ],
+   "why": "Organisations, invitations and enterprise SSO without building them."
+  },
+  "infra": {
+   "choice": "docker",
+   "alternatives": [
+    "kubernetes"
+   ],
+   "why": "Containers on a managed platform."
+  },
+  "ci-cd": {
+   "choice": "github-actions",
+   "alternatives": [],
+   "why": "Checks, migrations dry run, deploy."
+  },
+  "observability": {
+   "choice": "opentelemetry",
+   "alternatives": [
+    "sentry",
+    "grafana"
+   ],
+   "why": "Every trace tagged with the tenant id."
+  },
+  "testing": {
+   "choice": "playwright",
+   "alternatives": [
+    "vitest",
+    "testcontainers"
+   ],
+   "why": "Tests that prove one tenant cannot see another's data."
+  },
+  "hosting": {
+   "choice": "aws",
+   "alternatives": [
+    "render",
+    "fly-io",
+    "gcp"
+   ],
+   "why": "Room to add per-region data residency later."
+  }
+ },
+ "services": [
+  {
+   "name": "web",
+   "kind": "web",
+   "tech": "nextjs",
+   "responsibilities": [
+    "Marketing site and the app",
+    "Organisation switcher"
+   ],
+   "talksTo": [
+    "api",
+    "auth"
+   ]
+  },
+  {
+   "name": "api",
+   "kind": "api",
+   "tech": "nestjs",
+   "responsibilities": [
+    "Sets the tenant for each transaction",
+    "Domain modules",
+    "Audit log writes"
+   ],
+   "talksTo": [
+    "db",
+    "cache"
+   ]
+  },
+  {
+   "name": "worker",
+   "kind": "worker",
+   "tech": "bullmq",
+   "responsibilities": [
+    "Emails, customer webhooks, billing sync"
+   ],
+   "talksTo": [
+    "db",
+    "cache"
+   ]
+  },
+  {
+   "name": "auth",
+   "kind": "service",
+   "tech": "clerk",
+   "responsibilities": [
+    "Sign-in, organisations, SSO"
+   ],
+   "talksTo": []
+  }
+ ],
+ "dataStores": [
+  {
+   "name": "db",
+   "tech": "postgres",
+   "purpose": "Every tenant table has tenant_id and a row-level security policy"
+  },
+  {
+   "name": "cache",
+   "tech": "redis",
+   "purpose": "Queues and rate limits"
+  }
+ ],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "Each developer's machine",
+   "hosting": "docker compose with Postgres and Redis"
+  },
+  {
+   "name": "staging",
+   "purpose": "A copy of production for checking a release",
+   "hosting": "A staging environment with seeded test tenants"
+  },
+  {
+   "name": "prod",
+   "purpose": "What people use",
+   "hosting": "Production with point-in-time recovery for Postgres"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "lint",
+    "does": "eslint"
+   },
+   {
+    "name": "test",
+    "does": "Unit and tenant-isolation tests"
+   },
+   {
+    "name": "migrations",
+    "does": "Apply migrations to a copy of the schema"
+   },
+   {
+    "name": "deploy",
+    "does": "Staging on main, prod on tags"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "paas",
+  "tools": [
+   "docker",
+   "terraform"
+  ],
+  "notes": [
+   "Backups and restore tested every quarter"
+  ]
+ },
+ "observability": {
+  "tools": [
+   "opentelemetry",
+   "sentry"
+  ],
+  "notes": [
+   "Per-tenant usage metrics",
+   "Audit log searchable by tenant"
+  ]
+ },
+ "security": {
+  "auth": "Organisation-scoped sessions; the API sets the tenant in the database session for RLS",
+  "secrets": "Cloud secret manager; per-tenant webhook secrets encrypted",
+  "notes": [
+   "Validate every input at the API boundary and return typed errors, never stack traces.",
+   "Parameterised queries only (the ORM), so no SQL is built from strings.",
+   "Set secure, HttpOnly, SameSite cookies or short-lived tokens; rate-limit sign-in.",
+   "Check authorisation on every endpoint on the server, not only in the UI (OWASP A01 Broken Access Control).",
+   "Row-level security as the second lock behind the application check",
+   "An audit log of who changed what, per tenant"
+  ]
+ },
+ "folderLayout": "apps/web/\napps/api/\n  src/tenancy/\n  src/audit/\n  prisma/\npackages/shared/",
+ "conventions": [
+  "Every table has tenant_id; every query runs with the tenant set",
+  "Isolation tests are part of every feature's tests",
+  "Nothing is shared across tenants except the catalogue"
+ ],
+ "adrs": [
+  {
+   "title": "Shared database with row-level security",
+   "decision": "All tenants share one database; Postgres RLS enforces the boundary.",
+   "why": "Cheaper and simpler than a database per tenant, and a missed WHERE clause cannot leak data.",
+   "alternatives": [
+    "database per tenant",
+    "schema per tenant"
+   ]
+  },
+  {
+   "title": "Bought identity",
+   "decision": "Organisations, invitations and SSO come from Clerk.",
+   "why": "Enterprise SSO is expected by business buyers and costly to build.",
+   "alternatives": [
+    "keycloak"
+   ]
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "app",
+    "layout": "An npm workspace with apps/web and apps/api",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "How tenancy works, how to run it, and how to add a tenant-scoped table."
+     },
+     {
+      "path": "package.json",
+      "template": "npm workspaces apps/* and packages/*."
+     },
+     {
+      "path": "apps/api/src/tenancy/tenant.middleware.ts",
+      "template": "Reads the organisation from the verified session and sets it for the request."
+     },
+     {
+      "path": "apps/api/prisma/schema.prisma",
+      "template": "An Organization model and one tenant-scoped example model with tenantId."
+     },
+     {
+      "path": "apps/api/prisma/rls.sql",
+      "template": "Enables row-level security on the example table with a policy on current_setting('app.tenant_id')."
+     },
+     {
+      "path": "apps/web/app/page.tsx",
+      "template": "Landing page."
+     },
+     {
+      "path": "docker-compose.yml",
+      "template": "Postgres 16 and Redis 7."
+     },
+     {
+      "path": ".github/workflows/ci.yml",
+      "template": "Lint, test and a migration dry run."
+     }
+    ]
+   }
+  ]
+ }
+}

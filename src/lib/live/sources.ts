@@ -7,12 +7,18 @@ import type { Project } from '@/types';
 
 export type SourceStatus = 'onboarding' | 'active' | 'failed';
 
+/** `code` is worked on; `reference` is indexed and read for grounding, and never written to — documents, a
+    design system, another team's repository. The first source is always code. */
+export type SourceRole = 'code' | 'reference';
+
 /** What a project document carries of each source, the first one first (its `id` is null). */
 export interface SourceSummary {
   id: number | null;
   label: string;
   kind: 'git' | 'local';
   status: SourceStatus;
+  /** Absent on a document from before sources had roles: code. */
+  role?: SourceRole;
 }
 
 /** One source as GET /projects/{pid}/sources lists it. */
@@ -36,10 +42,17 @@ export interface SourceInput {
   kind: 'git' | 'local';
   repo: string;
   branch: string;
+  role?: SourceRole;
 }
 
-/** A project as the API sends it since projects hold sources. Absent on a document streamed before. */
-export type ProjectWithSources = Project & { sources?: SourceSummary[] };
+/** A project as the API sends it since projects hold sources and reference other projects. Absent on a document streamed before. */
+export type ProjectWithSources = Project & { sources?: SourceSummary[]; references?: string[] };
+
+/** The ids of the projects a project reads from, in the order they were added. */
+export const referencesOf = (p: Project): string[] => (p as ProjectWithSources).references ?? [];
+
+/** Whether a source is only read: a reference is never written by an agent. */
+export const readOnly = (s: { role?: SourceRole }) => s.role === 'reference';
 
 /** The sources a project document names, or just its first one when it names none. */
 export function sourcesOf(p: Project): SourceSummary[] {
@@ -67,8 +80,8 @@ export const sourcesApi = {
   /** Onboards it after answering: cloned or read, then the whole project measured and indexed again (projects:onboard). */
   add: (projectId: string, input: SourceInput) =>
     request<ProjectSource>(`/projects/${seg(projectId)}/sources`, { method: 'POST', json: input }),
-  /** A rename indexes the project again under the new label; a move only reorders. */
-  edit: (projectId: string, id: number, change: { label?: string; position?: number }) =>
+  /** A rename indexes the project again under the new label; a move only reorders; a role changes what agents may do there. */
+  edit: (projectId: string, id: number, change: { label?: string; position?: number; role?: SourceRole }) =>
     request<ProjectSource>(`/projects/${seg(projectId)}/sources/${id}`, { method: 'PATCH', json: change }),
   /** Takes its files out of the project's index. Its folder, and a clone of it, stay on disk. */
   remove: (projectId: string, id: number) =>
@@ -76,4 +89,38 @@ export const sourcesApi = {
   /** Reads it again; a source that failed is onboarded again from the start. */
   reindex: (projectId: string, id: number) =>
     request<{ ok: boolean; onboarding: boolean }>(`/projects/${seg(projectId)}/sources/${id}/reindex`, { method: 'POST' }),
+};
+
+/* Another project this one reads from: the service it calls, the library it uses, the system it replaces. Its
+   code, documents and memory are searched and handed to models beside this project's own, labelled as a
+   reference, and nothing there is ever written from here. */
+
+/** One reference, in either direction: the other project, and why, in a person's words. */
+export interface ProjectReference {
+  id: number;
+  project: { id: string; name: string; status: Project['status']; understoodPct: number | null };
+  note: string;
+  createdAt: string | null;
+}
+
+export interface References {
+  /** The projects this one reads from, the first added first. */
+  references: ProjectReference[];
+  /** The projects that read from this one. */
+  referencedBy: ProjectReference[];
+  /** Retrieval and grounding search the first this many beside the project's own pieces. */
+  readAtMost: number;
+  /** The most one project may reference. */
+  max: number;
+}
+
+export const referencesApi = {
+  list: (projectId: string) => request<References>(`/projects/${seg(projectId)}/references`),
+  /** Needs projects:onboard. Refused for the project itself, one already referenced, and a project that does not exist. */
+  add: (projectId: string, referencedId: string, note: string) =>
+    request<ProjectReference>(`/projects/${seg(projectId)}/references`, { method: 'POST', json: { referencedId, note } }),
+  note: (projectId: string, id: number, note: string) =>
+    request<ProjectReference>(`/projects/${seg(projectId)}/references/${id}`, { method: 'PATCH', json: { note } }),
+  remove: (projectId: string, id: number) =>
+    request<{ ok: boolean; id: number; referencedId: string }>(`/projects/${seg(projectId)}/references/${id}`, { method: 'DELETE' }),
 };

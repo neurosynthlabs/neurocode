@@ -196,7 +196,7 @@ THINKING_DEFAULTS: dict[str, str] = {"compile": "high", "review": "high", "agent
                                      "compact": "off"}
 #: The features whose thinking a person may set — every call site that asks the gateway for a model.
 THINKING_FEATURES = ("compile", "agent", "review", "chat", "compact", "ask", "brainstorm", "extract",
-                     "research", "eval")
+                     "research", "eval", "blueprint")
 #: What a model may write, in tokens, beyond the answer itself when it thinks: reasoning is paid for
 #: and counted against `max_tokens`, so an answer asked to think hard with the old flat 3,000 spent
 #: all of it thinking and came back empty. Gemini 2.5 Flash's output limit (65,536) bounds the top.

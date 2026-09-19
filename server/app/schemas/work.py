@@ -7,16 +7,18 @@ the database holds — so they cannot disagree with reality.
 """
 from __future__ import annotations
 
+import difflib
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
-from ..models import ActivityEvent, Approval, Decision, Plan, Pref, Project, ProjectSource, Setting, Task
+from ..models import ActivityEvent, Approval, Decision, Plan, PlanComment, Pref, Project, ProjectSource, Setting, Task
 
 SIZES = ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K"))
 #: Which task statuses the project card counts as "running", "in review" and "blocked".
 RUNNING = ("in_progress",)
 #: What the plan service keeps beside the lane in `plans.compiler`, sent as fields of their own.
-PLAN_CHECKS = ("criteria", "fileCheck")
+PLAN_CHECKS = ("criteria", "fileCheck", "revisions")
 
 
 def fmt_lines(n: int) -> str:
@@ -49,9 +51,17 @@ def plan_json(plan: Plan, *, task_ref: str | None = None, run_ref: str | None = 
     """Questions are rows now, so the three lists the screens read are rebuilt from their state.
 
     `fileCheck` is what checking the named files against the code index found — `{checked, newFiles,
-    ambiguous}` — or null for a plan nobody checked (a workflow's, or one compiled before the check).
-    `criteriaEdited` is true once the acceptance criteria are no longer the ones the compiler proposed."""
+    ambiguous, readOnly?}` — or null for a plan nobody checked (a workflow's, or one compiled before the
+    check). `criteriaEdited` is true once the acceptance criteria are no longer the ones the compiler
+    proposed. `revision` counts the revisions written from comments; `revisions` keeps each earlier one's
+    steps, the comments it answered with the compiler's replies, and what changed into the next
+    (`step_changes`). `updatedAt` is to the microsecond, so a screen can tell which of two copies is newer."""
     compiled = plan.compiler or {}
+    current = [{"n": s.n, "label": s.label, "agent": s.agent, "detail": s.detail} for s in plan.steps]
+    kept = list(compiled.get("revisions") or [])
+    revisions = [{**r, "changes": step_changes(r.get("steps") or [],
+                                               kept[i + 1].get("steps") or [] if i + 1 < len(kept) else current)}
+                 for i, r in enumerate(kept)]
     criteria = list(plan.acceptance_criteria or [])
     answered = [{"q": q.question, "a": q.answer} for q in plan.questions if q.answer]
     deferred = [q.question for q in plan.questions if q.deferred]
@@ -72,8 +82,24 @@ def plan_json(plan: Plan, *, task_ref: str | None = None, run_ref: str | None = 
         "compiler": {k: v for k, v in compiled.items() if k not in PLAN_CHECKS} or None, "requestedBy": plan.requested_by, "workflowId": plan.workflow_id,
         "acceptanceCriteria": criteria, "criteriaEdited": criteria != list(compiled.get("criteria") or []),
         "fileCheck": compiled.get("fileCheck"),
+        "revision": plan.revision or 1, "stepGate": bool(plan.step_gate), "revisions": revisions,
+        "updatedAt": plan.updated_at.isoformat() if plan.updated_at else None,
         **({"runRef": run_ref} if run_ref else {}),
     }
+
+
+def comment_json(comment: PlanComment, plan: Plan, *, by: str | None = None) -> dict[str, Any]:
+    """A comment on a plan. `step` is the step it is on as the plan stands — null for one on the whole
+    plan, or once a revision replaced its step. `reply` is what the compiler answered when a revision took
+    it up, from the revision it was handed to."""
+    step = next((s for s in plan.steps if s.id == comment.step_id), None) if comment.step_id else None
+    handed = next((c for r in (plan.compiler or {}).get("revisions") or [] for c in r.get("comments") or []
+                   if c.get("id") == comment.id), None)
+    return {"id": comment.id, "planRef": plan.ref, "stepId": step.id if step else None,
+            "step": {"n": step.n, "label": step.label} if step else (handed or {}).get("step"),
+            "kind": comment.kind, "body": comment.body, "revision": comment.revision,
+            "resolved": comment.resolved, "by": by, "createdAt": when(comment.created_at),
+            "reply": (handed or {}).get("reply") or None}
 
 
 def first_source_status(project: Project) -> str:
@@ -85,9 +111,10 @@ def first_source_status(project: Project) -> str:
 
 def source_summary(project: Project, sources: list[ProjectSource]) -> list[dict[str, Any]]:
     """What the project picker shows of each source, first source first: `id` null is the first."""
-    first = ([{"id": None, "label": project.id, "kind": project.source_kind, "status": first_source_status(project)}]
-             if project.source_kind else [])
-    return first + [{"id": x.id, "label": x.label, "kind": x.kind, "status": x.status} for x in sources]
+    first = ([{"id": None, "label": project.id, "kind": project.source_kind, "status": first_source_status(project),
+               "role": "code"}] if project.source_kind else [])
+    return first + [{"id": x.id, "label": x.label, "kind": x.kind, "status": x.status, "role": x.role}
+                    for x in sources]
 
 
 def source_json(project: Project, source: ProjectSource | None, *, root: str | None = None,
@@ -99,11 +126,11 @@ def source_json(project: Project, source: ProjectSource | None, *, root: str | N
         doc: dict[str, Any] = {
             "id": None, "label": project.id, "kind": project.source_kind, "repo": project.source_repo,
             "branch": project.source_branch, "position": 0, "status": first_source_status(project),
-            "note": "", "primary": True, "createdAt": when(project.created_at)}
+            "note": "", "primary": True, "createdAt": when(project.created_at), "role": "code"}
     else:
         doc = {"id": source.id, "label": source.label, "kind": source.kind, "repo": source.repo,
                "branch": source.branch, "position": source.position, "status": source.status,
-               "note": source.note, "primary": False, "createdAt": when(source.created_at)}
+               "note": source.note, "primary": False, "createdAt": when(source.created_at), "role": source.role}
     if show_root:
         doc["root"] = root
     return doc
@@ -111,10 +138,12 @@ def source_json(project: Project, source: ProjectSource | None, *, root: str | N
 
 def project_json(project: Project, *, tasks: dict[str, int] | None = None,
                  index: dict[str, Any] | None = None,
-                 sources: list[ProjectSource] | None = None) -> dict[str, Any]:
+                 sources: list[ProjectSource] | None = None,
+                 references: list[str] | None = None) -> dict[str, Any]:
     """`work` and `lines` are computed, not stored: a count that is kept is a count that drifts.
     `sources` is the project's further sources; given, the document carries every source in order
-    (`sources: [{id, label, kind, status}]`, the first with id null)."""
+    (`sources: [{id, label, kind, status, role}]`, the first with id null). `references` is the ids of
+    the projects it reads from, in the order they were added."""
     counts = tasks or {}
     return {
         "id": project.id, "name": project.name, "codename": project.codename,
@@ -133,15 +162,39 @@ def project_json(project: Project, *, tasks: dict[str, int] | None = None,
         "files": project.files_count, "excluded": project.excluded or [],
         **({"codeIndex": index} if index else {}),
         **({"sources": source_summary(project, sources)} if sources is not None else {}),
+        **({"references": references} if references is not None else {}),
     }
 
 
+#: What a gate is, read from the tool it names. The runtime writes the tool — `Bash(npm test)` for a
+#: project's first test run, `Command(npm test)` when a tool rule asks about a command, `Edit(3 files)` when
+#: one asks about files an agent wants to write, `Ask(Backend Engineer)` when an agent stops to ask a
+#: question, `Step(4)` when a plan pauses before each step, and `Merge(branch)` for the signature — and
+#: the inbox and the decision read the kind back from it, so the three can never disagree.
+GATE_KINDS = {"Bash": "tests", "Command": "command", "Edit": "edit", "Ask": "question", "Step": "step",
+              "Merge": "signature"}
+#: The answers each kind of gate takes. `once`, `run` and `project` are "Allow once", "Allow for this
+#: run" and "Always allow in this project" (the last needs rules:manage, which the decision checks);
+#: `answer` is an agent's question answered in words.
+GATE_OPTIONS: dict[str, tuple[str, ...]] = {
+    "tests": ("approve", "deny"), "signature": ("approve", "deny"), "step": ("approve", "deny"),
+    "command": ("once", "run", "project", "deny"), "edit": ("once", "run", "project", "deny"),
+    "question": ("answer", "deny"), "other": ("approve", "deny"),
+}
+
+
+def gate_kind(tool: str) -> str:
+    """`Command(npm test)` → "command". A tool no runtime gate writes is "other": approve or deny."""
+    return GATE_KINDS.get(tool.split("(", 1)[0].strip(), "other")
+
+
 def approval_json(approval: Approval) -> dict[str, Any]:
+    kind = gate_kind(approval.tool)
     return {
         "id": approval.id, "ref": approval.ref, "title": approval.title, "agent": approval.agent,
         "tool": approval.tool, "risk": approval.risk, "requestedAt": when(approval.created_at),
         "projectId": approval.project_id, "payload": approval.payload, "reason": approval.reason,
-        "status": approval.status,
+        "status": approval.status, "kind": kind, "options": list(GATE_OPTIONS[kind]),
         **({"decidedAt": when(approval.decided_at)} if approval.decided_at else {}),
         **({"decidedBy": approval.decided_by} if approval.decided_by else {}),
         **({"runRef": approval.run_ref, "step": approval.step} if approval.run_ref else {}),
@@ -175,3 +228,50 @@ def decision_json(decision: Decision, *, by: str | None = None) -> dict[str, Any
 
 def pref_json(pref: Pref) -> dict[str, Any]:
     return {"id": pref.id, "value": pref.value}
+
+
+def step_changes(before: Sequence[dict[str, Any]], after: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """What changed between two revisions' steps, in the new order, with the steps that went last.
+
+    Steps are matched by their label, as a reader would: the same label is the same step — `same`, or
+    `changed` when its owner or detail moved, or `moved` when only its place did. A label that differs
+    inside a run of replaced steps is the same step `changed`, paired in order; what is left over is
+    `added` or `removed`. Each item: `{op, n, was, label, agent, detail, before?}` — `n` its number now
+    (null when removed), `was` its number before (null when added)."""
+    keys_a = [" ".join(x["label"].casefold().split()) for x in before]
+    keys_b = [" ".join(x["label"].casefold().split()) for x in after]
+    out: list[dict[str, Any]] = []
+    gone: list[dict[str, Any]] = []
+
+    def item(op: str, new: dict[str, Any] | None, old: dict[str, Any] | None) -> dict[str, Any]:
+        shown = new or old or {}
+        doc = {"op": op, "n": new["n"] if new else None, "was": old["n"] if old else None,
+               "label": shown.get("label", ""), "agent": shown.get("agent", ""), "detail": shown.get("detail", "")}
+        if op == "changed" and old is not None:
+            doc["before"] = {k: old.get(k) for k in ("label", "agent", "detail")}
+        return doc
+
+    matcher = difflib.SequenceMatcher(a=keys_a, b=keys_b, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for old, new in zip(before[i1:i2], after[j1:j2], strict=True):
+                same = old["agent"] == new["agent"] and old["detail"] == new["detail"]
+                op = ("same" if old["n"] == new["n"] else "moved") if same else "changed"
+                out.append(item(op, new, old))
+            continue
+        olds, news = list(before[i1:i2]), list(after[j1:j2])
+        paired = min(len(olds), len(news)) if tag == "replace" else 0
+        for old, new in zip(olds[:paired], news[:paired], strict=True):
+            out.append(item("changed", new, old))
+        out += [item("added", new, None) for new in news[paired:]]
+        gone += [item("removed", None, old) for old in olds[paired:]]
+    # A step that went and came back further down under the same label is one step that moved.
+    for removed in list(gone):
+        twin = next((x for x in out if x["op"] == "added" and x["label"].casefold() == removed["label"].casefold()), None)
+        if twin is not None:
+            gone.remove(removed)
+            same = twin["agent"] == removed["agent"] and twin["detail"] == removed["detail"]
+            twin.update({"op": "moved" if same else "changed", "was": removed["was"]})
+            if not same:
+                twin["before"] = {k: removed[k] for k in ("label", "agent", "detail")}
+    return out + gone

@@ -287,6 +287,15 @@ async def test_the_debug_socket_streams_a_stop_its_output_and_the_end(live: Fast
         paused = await until(lambda e: e["type"] == "state" and e["session"]["status"] == "paused")
         assert paused["session"]["frames"][0]["line"] == 4
         assert (await owner.post(f"/debug/{debug}/continue", json={})).json() == {"ok": True}
-        await until(lambda e: e["type"] == "output" and "counted 6" in e["text"])
-        ended = await until(lambda e: e["type"] == "state" and e["session"]["status"] == "ended")
-        assert ended["session"]["exitCode"] == 0
+        # The program prints and ends within a moment, and a debug adapter may report its end before the output
+        # it flushed on the way out: read to the end, then look for the output among everything that came.
+        # A program's output arrives in the pieces it was written in ("counted", then " 6"): what matters is
+        # what they say together, so they are joined before looking.
+        def printed(_: Any = None) -> bool:
+            return "counted 6" in "".join(e.get("text", "") for e in seen if e["type"] == "output")
+
+        def ended() -> dict[str, Any] | None:
+            return next((e for e in seen if e["type"] == "state" and e["session"]["status"] == "ended"), None)
+
+        await until(lambda _: printed() and ended() is not None)      # in whichever order they come
+        assert ended()["session"]["exitCode"] == 0

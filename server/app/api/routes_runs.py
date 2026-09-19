@@ -1,5 +1,5 @@
 """Agent runs over HTTP: what they did, their output, the real diff, and stopping, merging, pushing,
-discarding, reviewing again or sending one back for changes.
+discarding, reviewing again, sending one back for changes or taking it back to one of its steps.
 
 Same paths and same JSON as before. What changed underneath: a run's steps, logs, children and
 collisions are rows now, so this file reads them in a fixed number of queries however many runs are
@@ -29,6 +29,11 @@ router = APIRouter(prefix="/runs")
 
 class ReworkIn(BaseModel):
     notes: str = Field(min_length=1, max_length=4000)
+
+
+class RevertIn(BaseModel):
+    #: False: the run ends at that step, cancelled, its branch as it stood then. True: the later steps run again.
+    redo: bool = False
 
 
 class PushIn(BaseModel):
@@ -159,4 +164,24 @@ async def rework(ref: str, body: ReworkIn, jobs: BackgroundTasks, who: Person = 
     answer = _one(lead, await _context(open_session, [lead]))
     starter = runtime.execute_batch if len(made) > 1 else runtime.execute
     await hand_off(open_session, jobs, starter, db, gw, lead.ref)
+    return answer
+
+
+@router.post("/{ref}/steps/{n}/revert")
+async def revert(ref: str, n: int, request: Request, jobs: BackgroundTasks, body: RevertIn | None = None,
+                 who: Person = Depends(require("runs:run")), open_session: AsyncSession = Depends(session),
+                 db: Database = Depends(database), gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """Take the run's worktree back to how it stood after step `n` — its own worktree, never your checkout —
+    and mark the later steps taken back. With `redo`, they run again from step n + 1, after the response.
+    Refused while the run is working. Audited: it rewrites a branch."""
+    redo = bool(body and body.redo)
+    run = await RunService(open_session, gw).revert(ref, n, who.name, redo=redo)
+    last = (run.review or {}).get("reverts", [{}])[-1]
+    await AuditRepository(open_session).record(
+        action="run.revert", user_id=who.id, target=f"{run.ref} → step {n}",
+        detail={"branch": run.branch, "steps": last.get("steps", []), "sha": last.get("sha", {}), "redo": redo},
+        ip=request.client.host if request.client else "")
+    answer = _one(run, await _context(open_session, [run]))
+    if redo:
+        await hand_off(open_session, jobs, runtime.execute, db, gw, ref, n + 1)
     return answer

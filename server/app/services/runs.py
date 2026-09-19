@@ -11,15 +11,24 @@ runs is the project's own — the first time in a project, behind your approval.
 Every step commits in a transaction of its own. A crash mid-run therefore loses the step in flight,
 never the run: what was already done is already saved, and the screen shows exactly how far it got.
 
+Every run is grounded and governed. Each agent step is handed the project's own instructions for the
+files it may change and retrieval's pieces for its words, and the run keeps what it was handed. Every file
+an agent writes and every command a run executes goes through the tool rules first: a deny ends the step
+naming the rule, an ask stops the run at a gate a person answers (once, for the run, or always in the
+project), and no rule leaves things as they were before rules existed. An agent may ask a question
+instead of guessing; a plan may be walked step by step; and a run can be taken back to any of its steps.
+
 A project with several sources is worked on as one. A run opens a worktree and a branch in every source
 its plan's files fall in; each file an agent writes goes to the worktree its label names; each source's
 own tests and checks run in its own worktree, behind approvals of their own; the review reads one
 patch of every source with the paths under their labels; and a merge or a push acts on each source,
-all of them or none. A project with one source runs exactly as it did before sources existed.
+all of them or none. A project with one source runs exactly as it did before sources existed. A source
+whose role is 'reference' is read for grounding from its own checkout and never gets a worktree.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -54,9 +63,15 @@ from ..repositories import (
     TaskRepository,
 )
 from ..repositories.runtime import ResultsRepository
+from ..schemas.work import gate_kind
 from ..settings import settings
-from .code import roots
+from . import instructions
+from .taste import Applied, TasteService, applied_for
+from .code import roots, writable
 from .errors import Denied, Refused
+from .retrieval import RetrievalService
+from .tool_rules import decide as rule_for
+from .tool_rules import normalise
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +94,15 @@ CHECK_TAIL = 40
 #: A person asking for the review again while one is being read: after this long it is taken as lost.
 REVIEWING_FOR = 900
 TEST_FILE = re.compile(r"(^|/)(tests?|spec)s?/|\.(test|spec)\.[jt]sx?$|_test\.py$|test_.*\.py$")
+#: What one agent step is handed by retrieval: pieces asked for with room to spare, because the search
+#: also returns remembered facts, which reach a model through memory instead; the ones kept; and how much
+#: of each piece is shown. Code pieces also name files the step may read beyond the plan's list.
+STEP_PIECES_ASKED, STEP_PIECES, PIECE_CHARS = 12, 5, 1_200
+#: Files one step is handed to change, at most.
+STEP_FILES = 8
+#: How the runtime names its gates in `approvals.tool`; `schemas.work.gate_kind` reads the kind back. The
+#: pause before a step is `Step(n)`, named by `plans.step_gate_for`, which says when a plan asks for one.
+COMMAND_GATE, EDIT_GATE, QUESTION_GATE = "Command", "Edit", "Ask"
 
 #: Runs a person stopped, in this process. A stop is a request, not a promise across a restart.
 _STOPPED: dict[str, threading.Event] = {}
@@ -93,6 +117,8 @@ class EditOut(BaseModel):
     summary: str = ""
     files: list[FileOut] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+    #: Asked instead of writing, when the step needs a decision only the person can make.
+    question: str = ""
 
 
 class Finding(BaseModel):
@@ -111,6 +137,9 @@ plan, and the current contents of the files you may change. Return the complete 
 change — never a patch, never a fragment, never "// unchanged". Change as little as the step needs, keep the
 file's existing style and imports, and never invent an API you cannot see in the files you were given. You may
 add a new file beside the ones you are shown. You do not run commands and you never touch anything else.
+A file marked read only belongs to a reference source: read it, never write it. When the step cannot be done
+well without a decision only the person can make — a choice between behaviours, a value nobody wrote down — do
+not guess: reply {"question": "one short question"} with no files, and you will be asked again with the answer.
 Reply with one JSON object: {"summary": "what you changed and why", "files": [{"path": "...", "content": "..."}],
 "notes": ["anything the operator must know"]}"""
 
@@ -200,9 +229,15 @@ def _parts(run: Run) -> list[Part]:
 
 
 def _elsewhere(run: Run) -> frozenset[str]:
-    """The labels of the project's sources this run did not open: a path under one is refused, never
-    taken for a folder of the first source."""
-    return frozenset((run.review or {}).get("elsewhere") or [])
+    """The labels of the project's sources this run did not open — references among them: a path under
+    one is refused, never taken for a folder of the first source."""
+    return frozenset([*((run.review or {}).get("elsewhere") or []), *_references(run)])
+
+
+def _references(run: Run) -> dict[str, Path]:
+    """The project's reference sources as the run was made — label to checkout. A reference is read for
+    grounding and never written: the run opens no worktree there, and an edit routed to one is refused."""
+    return {x["label"]: Path(x["root"]) for x in (run.review or {}).get("references") or []}
 
 
 def _route(parts: list[Part], path: str, elsewhere: frozenset[str] = frozenset()) -> tuple[Part, str] | None:
@@ -231,7 +266,8 @@ def _touched(labels: list[str], targets: list[str]) -> list[str]:
 def _setup_parts(project: Project, sources: list[Any], targets: list[str]) -> list[dict[str, Any]]:
     """Blocking. `_setup` for every source the plan's files fall in — each must be a git repository with
     a commit to branch from — the first one first. For a project with one source, exactly `_setup`."""
-    extras = {x.label: x for x in sources if not x.primary}
+    # A reference source is never worked in, so it is never a source the run opens a worktree in.
+    extras = {x.label: x for x in sources if not x.primary and writable(x)}
     if not extras:
         return [{**_setup(project), "label": ""}]
     wanted = _touched(list(extras), targets)
@@ -308,9 +344,12 @@ def _stats(parts: list[Part]) -> dict[str, int]:
 
 
 def _cleanup(run: Run) -> None:
-    """Blocking. Remove every worktree and branch the run made, in every repository it touched."""
+    """Blocking. Remove every worktree and branch the run made, in every repository it touched — and any
+    proposal kept beside the worktree while a person was asked about it."""
     for part in _parts(run):
         agent.cleanup(part.repo, part.worktree, part.branch)
+    for kept in Path(run.worktree).parent.glob(f"{run.ref}.step-*.proposal.json"):
+        kept.unlink(missing_ok=True)
 
 
 def _by_agent(plan_steps: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -350,7 +389,8 @@ class RunService:
         sources = await roots(self.session, project)
         setups = await asyncio.to_thread(_setup_parts, project, sources, list(plan.affected_files or []))
         opened = {x["label"] for x in setups}
-        elsewhere = [x.label for x in sources if not x.primary and x.label not in opened]
+        elsewhere = [x.label for x in sources if not x.primary and writable(x) and x.label not in opened]
+        references = [{"label": x.label, "root": str(x.root)} for x in sources if not x.primary and not writable(x)]
         steps = [{"label": s.label, "agent": s.agent, "detail": s.detail} for s in plan.steps]
         groups = _by_agent(steps)
         lead = setups[0]
@@ -360,7 +400,7 @@ class RunService:
         tests = None if lead["label"] else lead["tests"]
         checks = [*([] if lead["label"] else lead["checks"]), *_extra_checks(setups)]
         goal = goal_budget is not None
-        setup = {"setups": setups, "elsewhere": elsewhere}
+        setup = {"setups": setups, "elsewhere": elsewhere, "references": references}
 
         if len(groups) <= 1:
             work = [s for items in groups.values() for s in items]
@@ -481,6 +521,9 @@ class RunService:
             # A path under a source the run did not open is refused — never written as a folder of the
             # first source that happens to share its name.
             review["elsewhere"] = list(layout["elsewhere"])
+        if layout.get("references"):
+            # Read for grounding, from their own checkouts; never a worktree, never a write.
+            review["references"] = list(layout["references"])
         tests = {} if setup["label"] else setup["tests"] or {}
         return await self.runs.add(Run(
             id=f"r{ref.split('-')[-1]}-{int(time.time())}", ref=ref, project_id=project.id,
@@ -524,6 +567,12 @@ class RunService:
                 target.note = target.note or "Stopped by you."
                 if target.role == "check":
                     await self._end_check(target)
+                elif target.waiting_on:
+                    # The gate it stopped at goes with it, or the inbox keeps asking about a run that ended.
+                    gate = await self.approvals.waiting_on_person(target.ref)
+                    if gate is not None:
+                        gate.status, gate.decided_at = "denied", utcnow()
+                    target.waiting_on = None
         await self.session.flush()
         # A check run leaves nothing behind — its worktree and branch go with it — so saying that the
         # worktree stays would send someone looking for a folder that is already gone.
@@ -609,7 +658,7 @@ class RunService:
             gate = await self.approvals.waiting_on_person(ref)
             gated = next((x for x in run.steps if gate is not None and x.n == gate.step), None)
             if gate is None or gated is None or gated.kind != "handoff":
-                raise Refused(f"{ref} is waiting for your answer about running its tests. Answer that first.")
+                raise Refused(_waiting(ref, gate, gated, "about running its tests"))
             if not may_decide:
                 raise Denied("approvals:decide", f"refuse the signature {ref} is waiting for")
 
@@ -647,6 +696,9 @@ class RunService:
             task.status = "in_progress"
         await self.session.flush()
 
+        if actor_kind == "human":
+            await _signal(self.session, lambda: TasteService(self.session).on_rework(
+                run, notes, by=by, by_user_id=by_id or None, again=lead.ref))
         settled = f" · {gate.ref} refused" if gate is not None else ""
         await self.activity.record(actor=by, actor_kind=actor_kind, action="Sent back for changes",
                                    detail=f"{ref} → {lead.ref}{settled} · {run.branch} removed · {notes[:120]}",
@@ -694,6 +746,8 @@ class RunService:
             await self.activity.record(actor=by, actor_kind="human", action="Merged",
                                        detail=f"{ref} · {run.branch} → {result['into']} as {result['commit']} · "
                                               f"undo: {result['undo']}", level="ok", project_id=run.project_id)
+            # The person's own commits on the branch, after the agent's last one, are what they changed.
+            await _signal(self.session, lambda: TasteService(self.session).on_merged(run))
         else:
             await self.activity.record(actor=by, actor_kind="human", action="Merge collided",
                                        detail=f"{ref} · {len(result['conflicts'])} files collide with "
@@ -768,7 +822,7 @@ class RunService:
             gate = await self.approvals.waiting_on_person(ref)
             gated = next((x for x in run.steps if gate is not None and x.n == gate.step), None)
             if gated is None or gated.kind != "handoff":
-                raise Refused(f"{ref} is waiting for your answer about running a command. Answer that first.")
+                raise Refused(_waiting(ref, gate, gated, "about running a command"))
         elif run.status != "done":
             raise Refused(f"{ref} {run.status}, so there is nothing to sign. Send it back for changes instead.")
         if run.removed:
@@ -786,6 +840,124 @@ class RunService:
                                    detail=f"{ref} · {run.branch}", project_id=run.project_id)
         await self.session.flush()
         return run, step.n
+
+    async def revert(self, ref: str, n: int, by: str, *, redo: bool = False) -> Run:
+        """Take a run's worktree back to how it stood after step `n` — never the checkout, only the run's
+        own worktree on its own branch — and mark every later step undone.
+
+        Each edit step keeps the commit it left in each source it wrote to (`review.commits`), so "after
+        step n" is exact: for every part, the last commit a step up to `n` made, or the commit the run
+        branched from. With `redo`, the later steps are set to run again and the run is ready to start
+        from step n + 1 (the caller starts it); otherwise the run ends here, cancelled, with its branch —
+        a signature it was waiting for is closed, because what it asked about is gone."""
+        run = await self.runs.by_ref(ref)
+        if run is None:
+            raise NotFound(f"run {ref}")
+        if run.role == "check":
+            raise Refused(f"{ref} only ran the project's tests; there is no step to go back to.")
+        if run.parent_id:
+            parent = await self.runs.get(run.parent_id)
+            raise Refused(f"{ref} is one agent's part of {parent.ref if parent else 'a larger run'}; its branch "
+                          "was merged there. Send that run back for changes instead.")
+        if run.role == "integration":
+            raise Refused(f"{ref} merges several agents' branches; it is not taken back step by step. "
+                          "Send it back for changes instead.")
+        if run.status in ("queued", "running"):
+            raise Refused(f"{ref} is still working. Stop it first, then revert it.")
+        if run.removed:
+            raise Refused(f"{ref}'s worktree was removed, so there is nothing to revert.")
+        if run.merged:
+            raise Refused(f"{ref} is already merged into {run.merged['into']}. Undo that merge with "
+                          f"{run.merged.get('undo') or 'git'} first; a run's worktree is not the place to take "
+                          "it back.")
+        target = next((x for x in run.steps if x.n == n), None)
+        if target is None:
+            raise NotFound(f"step {n} of {ref}")
+        later = [x for x in run.steps if x.n > n]
+        if not later:
+            raise Refused(f"Step {n} is {ref}'s last step; there is nothing after it to take back.", status=422)
+        commits: dict[str, dict[str, str]] = (run.review or {}).get("commits") or {}
+        old = [x.n for x in run.steps
+               if x.kind == "edit" and x.n <= n and x.status == "done" and str(x.n) not in commits]
+        if old:
+            raise Refused(f"Step {old[0]} of {ref} finished before steps kept their commits, so there is no commit "
+                          "to go back to. Send it back for changes instead.")
+        parts = _parts(run)
+        wanted: dict[str, str] = {}
+        for part in parts:
+            sha = part.base
+            for x in run.steps:
+                if x.kind == "edit" and x.n <= n and part.label in (commits.get(str(x.n)) or {}):
+                    sha = commits[str(x.n)][part.label]
+            wanted[part.label] = sha
+
+        def reset() -> dict[str, str]:
+            before = {part.label: agent.head(part.worktree) for part in parts}
+            if not redo and all(before[p.label] == wanted[p.label] for p in parts):
+                raise agent.Refused(f"Nothing to take back: no step after step {n} changed {ref}'s worktree.")
+            for part in parts:
+                if before[part.label] != wanted[part.label]:
+                    agent.reset_worktree(part.worktree, part.branch, wanted[part.label])
+            return before
+
+        try:
+            before = await asyncio.to_thread(reset)
+        except agent.Refused as refused:
+            raise Refused(str(refused)) from refused
+        stat = await asyncio.to_thread(_stats, parts)
+
+        now = utcnow()
+        gate = await self.approvals.waiting_on_person(ref) if run.status == "waiting" else None
+        if gate is not None:
+            gate.status, gate.decided_at = "denied", now
+        undone = [x.n for x in later]
+        review = {k: v for k, v in (run.review or {}).items() if k != "reviewing"}
+        for key in ("commits", "grounding", "asks"):
+            if key in review:
+                review[key] = {k: v for k, v in review[key].items() if int(k) <= n}
+        review["reverts"] = [*(review.get("reverts") or []),
+                             {"to": n, "by": by, "at": now.isoformat(), "steps": undone, "redo": redo,
+                              "from": before, "sha": wanted}]
+        for x in later:
+            if redo:
+                x.status, x.detail, x.ms = "todo", "", None
+                x.commit_sha, x.question, x.answer = "", "", ""
+            else:
+                x.status, x.detail = "skipped", f"Taken back: {ref} was reverted to step {n} by {by}."
+        if redo:
+            # What the later steps found described code that is gone, so it goes with them.
+            review.update({"findings": [], "verdict": "", "by": ""})
+            review.pop("receipt", None)
+            review.pop("instructions", None)
+            review["checks"] = [{**c, "status": "not run", "exit": None, "summary": "", "output": []}
+                                if c.get("step", 0) > n else c for c in review.get("checks") or []]
+            if review.get("goal") and review["goal"].get("step", 0) > n:
+                review["goal"] = {"step": review["goal"]["step"], "verdict": "not run", "why": "", "criteria": [],
+                                  "by": "", "at": None}
+            if any(x.kind == "test" and not _check_at(run, x.n) for x in later):
+                run.tests_status, run.tests_summary = "not run", ""
+            run.status, run.finished_at, run.waiting_on = "queued", None, None
+            run.note = f"Reverted to step {n} by {by}; steps {undone[0]}–{undone[-1]} run again."
+            stopped(ref).clear()
+        else:
+            run.status, run.finished_at, run.waiting_on = "cancelled", now, None
+            run.note = (f"Reverted to step {n} by {by}: steps {undone[0]}–{undone[-1]} were taken back. The branch "
+                        "stands as it did then — revert again and redo the later steps, send it back for changes, "
+                        "or discard it.")
+        run.review = review
+        run.diff_files, run.diff_insertions = stat["files"], stat["insertions"]
+        run.diff_deletions, run.diff_commits = stat["deletions"], stat["commits"]
+        where = ", ".join(f"{(p.label or 'worktree')} at {wanted[p.label][:7]}" for p in parts)
+        await self.logs.write(run.id, level="warn", step=n,
+                              line=f"reverted to step {n} by {by} · {where}"
+                                   + (" · the later steps run again" if redo else ""))
+        await self.activity.record(actor=by, actor_kind="human", action="Run reverted",
+                                   detail=f"{ref} · to step {n} ({target.label[:60]}) · {len(undone)} later "
+                                          f"step{'s' if len(undone) != 1 else ''} {'to redo' if redo else 'taken back'}"
+                                          + (f" · {gate.ref} closed" if gate is not None else ""),
+                                   level="warn", project_id=run.project_id)
+        await self.session.flush()
+        return run
 
     async def diff(self, ref: str) -> dict[str, Any]:
         run = await self.runs.by_ref(ref)
@@ -806,6 +978,13 @@ class RunService:
 
         patch = await asyncio.to_thread(read)
         return {"patch": patch[:MAX_DIFF], "truncated": len(patch) > MAX_DIFF, "stat": stat, "gone": False}
+
+
+def _waiting(ref: str, gate: Approval | None, gated: RunStep | None, tests: str) -> str:
+    """Why a run cannot be sent back or read again yet: it is stopped at a gate that is not its signature."""
+    if gate is None or gated is None or gated.kind == "test":
+        return f"{ref} is waiting for your answer {tests}. Answer that first."
+    return f"{ref} is waiting for your answer at step {gated.n} ({gate.title}). Answer that first."
 
 
 def _review_step(run: Run) -> RunStep | None:
@@ -1000,46 +1179,77 @@ async def _finish(db: Database, ref: str, status: str, note: str) -> None:
     _STOPPED.pop(ref, None)
 
 
-async def _context(session: AsyncSession, run: Run, step: RunStep) -> list[tuple[str, str]]:
-    """The files this step may change: what the plan named, plus what the index finds for its words —
-    each read from the worktree of the source its label names."""
-    wanted: list[str] = list(run.targets or [])
+@dataclass(slots=True)
+class Handed:
+    """One file a step is handed: its project path, its text, whether it is only to be read (a reference
+    source's), and why it was chosen — the plan named it, retrieval found it, or the index matched it."""
+
+    path: str
+    text: str
+    readonly: bool
+    via: str
+
+
+async def _context(session: AsyncSession, run: Run, step: RunStep,
+                   retrieved: list[str] = ()) -> tuple[list[Handed], list[tuple[str, str]]]:
+    """The files this step may change: what the plan named, then the code retrieval found for the step,
+    then what the index finds for its words — each read from the worktree of the source its label names,
+    or, for a reference source, from its own checkout and marked read only. Returns the files and the
+    lines the caller writes to the run's log (a read session writes nothing)."""
+    wanted: list[tuple[str, str]] = [(x, "plan") for x in run.targets or []]
+    wanted += [(x, "retrieval") for x in retrieved]
     words = func.plainto_tsquery("simple", step.label)
     rows = (await session.execute(
         select(CodeFile.path).join(CodeSymbol, CodeSymbol.file_id == CodeFile.id)
         .where(CodeSymbol.project_id == run.project_id, CodeSymbol.search.op("@@")(words))
         .distinct().limit(6))).scalars()
-    wanted += list(rows)
+    wanted += [(x, "index") for x in rows]
 
     refused: list[str] = []
     closed: list[str] = []
-    parts, elsewhere = _parts(run), _elsewhere(run)
+    parts, elsewhere, references = _parts(run), _elsewhere(run), _references(run)
 
-    def read() -> list[tuple[str, str]]:
-        files: list[tuple[str, str]] = []
+    def read() -> list[Handed]:
+        files: list[Handed] = []
         seen: set[str] = set()
         total = 0
-        for rel in wanted:
-            if rel in seen or len(files) >= 8:
+        for rel, via in wanted:
+            if rel in seen or len(files) >= STEP_FILES:
                 continue
             seen.add(rel)
-            # These paths come from the compiler — a model wrote them — so they are checked exactly
-            # the way a write is. Reading is not the harmless half: whatever is read here is sent to
-            # a provider, so "../../../.ssh/id_rsa" would be an exfiltration, not a bad diff.
+            # These paths come from the compiler and from retrieval — a model wrote the first, an index the
+            # second — so they are checked exactly the way a write is. Reading is not the harmless half:
+            # whatever is read here is sent to a provider, so "../../../.ssh/id_rsa" would be an
+            # exfiltration, not a bad diff.
             try:
                 agent.safe_path(rel)
             except agent.Refused:
                 refused.append(rel)
                 continue
-            hit = _route(parts, rel, elsewhere)
-            if hit is None:
-                closed.append(rel)
-                continue
-            try:
-                f = hit[0].work / agent.safe_path(hit[1])
-            except agent.Refused:
-                refused.append(rel)
-                continue
+            head, _, rest = rel.strip().replace("\\", "/").partition("/")
+            readonly = head in references
+            if readonly:
+                # A reference is read where it is — it has no worktree — and only inside its own checkout.
+                root = references[head]
+                try:
+                    f = root / agent.safe_path(rest)
+                except agent.Refused:
+                    refused.append(rel)
+                    continue
+                real, home = os.path.realpath(f), os.path.realpath(root)
+                if not real.startswith(home + os.sep):
+                    refused.append(rel)
+                    continue
+            else:
+                hit = _route(parts, rel, elsewhere)
+                if hit is None:
+                    closed.append(rel)
+                    continue
+                try:
+                    f = hit[0].work / agent.safe_path(hit[1])
+                except agent.Refused:
+                    refused.append(rel)
+                    continue
             if not f.is_file():
                 continue
             try:
@@ -1049,26 +1259,180 @@ async def _context(session: AsyncSession, run: Run, step: RunStep) -> list[tuple
             if total + len(text) > MAX_CONTEXT:
                 continue
             total += len(text)
-            files.append((rel, text))
+            files.append(Handed(rel, text, readonly, via))
         return files
 
     found = await asyncio.to_thread(read)
+    notes: list[tuple[str, str]] = []
     if refused:
         # Said out loud rather than dropped: a plan that names a path outside the worktree is worth
         # seeing in the run's log, whether it was a hallucination or something worse.
-        await RunLogRepository(session).write(
-            run.id, level="warn", step=step.n,
-            line=f"ignored {len(refused)} path(s) outside the worktree: {', '.join(refused[:5])}")
+        notes.append(("warn", f"ignored {len(refused)} path(s) outside the worktree: {', '.join(refused[:5])}"))
     if closed:
-        await RunLogRepository(session).write(
-            run.id, level="info", step=step.n,
-            line=f"not read: {len(closed)} path(s) in sources this run did not open: {', '.join(closed[:5])}")
-    return found
+        notes.append(("info", f"not read: {len(closed)} path(s) in sources this run did not open: "
+                              f"{', '.join(closed[:5])}"))
+    return found, notes
+
+
+async def _pieces(session: AsyncSession, gateway: Gateway, run: Run, step: RunStep) -> list[dict[str, Any]]:
+    """Retrieval's code and document pieces for this step — its words, then the requirement's. A search
+    that fails leaves the agent with less to read, never without its step: the step records what it had."""
+    query = "\n".join(x for x in (step.label, step.detail, run.requirement) if x)[:600]
+    try:
+        found = await RetrievalService(session, gateway).search(run.project_id, query, limit=STEP_PIECES_ASKED)
+    except Exception as failed:                      # a lane or the index misbehaving must not stop a step
+        log.warning("retrieval for %s step %s did not answer: %s", run.ref, step.n, failed)
+        return []
+    return [x for x in found if x.get("kind") in ("code", "doc")][:STEP_PIECES]
+
+
+async def _told(session: AsyncSession, project_id: str, targets: list[str]) -> instructions.Resolved:
+    """The project's instruction files for these targets — a rule with `paths:` applies only when one of
+    them falls under it. None on disk is an empty answer, not a failure."""
+    project = await ProjectRepository(session).get(project_id)
+    try:
+        return await instructions.for_project(project, targets, session=session)
+    except Exception as failed:                      # a checkout that went away reads as no instructions
+        log.warning("instructions for %s could not be read: %s", project_id, failed)
+        return instructions.Resolved()
+
+
+async def _taste(session: AsyncSession, project_id: str) -> Applied:
+    """The taste rules a person adopted for this project (`services.taste`). None adopted, or a read that
+    failed, is no block at all — never a reason to stop the step."""
+    try:
+        return await applied_for(session, project_id)
+    except Exception as failed:                      # noqa: BLE001 — taste is advice; the step goes on without it
+        log.warning("taste for %s could not be read: %s", project_id, failed)
+        return Applied()
+
+
+def _instructed(system: str, told: instructions.Resolved, taste: Applied | None = None) -> str:
+    """The system text with the project's instructions after it, then the taste rules a person adopted —
+    the stable part of the prompt first, so a provider's prompt cache can hit across one project's steps."""
+    out = system
+    if told.text:
+        out += (f"\n\nThe project's own instructions, from files in its repository — follow them where they "
+                f"bear on the work:\n{told.text}")
+    if taste is not None and taste.text:
+        out += ("\n\nHow the people on this project like the work done — rules they adopted from their own "
+                f"decisions; follow them unless the step says otherwise:\n{taste.text}")
+    return out
+
+
+async def _signal(session: AsyncSession, capture: Any) -> None:
+    """A taste signal kept where the moment happens (`services.taste`), in a savepoint of its own: a signal
+    that cannot be kept is logged and left for the taste harvest, never a reason to fail the run."""
+    try:
+        async with session.begin_nested():
+            await capture()
+    except Exception as failed:                      # noqa: BLE001 — see the docstring
+        log.warning("a taste signal was not kept: %s", failed)
+
+
+def _grounding_doc(told: instructions.Resolved, pieces: list[dict[str, Any]], files: list[Handed],
+                   taste: Applied | None = None) -> dict[str, Any]:
+    """What a step was handed, as the run keeps it: small enough to travel with the run on every change."""
+    return {"taste": list(taste.refs) if taste is not None else [],"instructions": [{"path": f["path"], "bytes": f["bytes"], "sha1": f["sha1"][:12], "scope": f["scope"],
+                              "matched": f.get("matched")} for f in told.files if f["applied"]],
+            "capped": told.capped,
+            "pieces": [{"kind": x["kind"], "ref": x["ref"], "path": x["path"], "line": x.get("line"),
+                        "how": x.get("how", ""), **({"project": x["project"]} if x.get("project") else {})}
+                       for x in pieces],
+            "files": [{"path": h.path, "via": h.via, **({"readonly": True} if h.readonly else {})} for h in files]}
+
+
+def _put(run: Run, key: str, n: int, value: Any) -> None:
+    """One step's entry in a per-step map on the run's review document, replaced whole so it is written."""
+    review = run.review or {}
+    run.review = {**review, key: {**(review.get(key) or {}), str(n): value}}
+
+
+# ── what a person allowed beyond the rules ───────────────────────
+def granted(grants: list[dict[str, Any]], tool: str, subject: str, n: int) -> dict[str, Any] | None:
+    """The grant that covers doing `tool` to `subject` at step `n`: one for this run, or one for this
+    step that has not been used yet. None when a person has not allowed it."""
+    for grant in grants or []:
+        if grant.get("tool") != tool or grant.get("subject") != subject:
+            continue
+        if grant.get("scope") == "run" or (grant.get("scope") == "once" and grant.get("step") == n
+                                           and not grant.get("used")):
+            return grant
+    return None
+
+
+def _spend(run: Run, tool: str, subjects: list[str], n: int) -> None:
+    """A once-only grant is used up by the write or the command it allowed."""
+    run.grants = [{**g, "used": True} if g.get("tool") == tool and g.get("subject") in subjects
+                  and g.get("scope") == "once" and g.get("step") == n else g for g in run.grants or []]
+
+
+@dataclass(slots=True)
+class Verdict:
+    """What the tool rules said about one thing a run wants to do."""
+
+    subject: str
+    action: str          # allow | ask | deny | none (no rule: the runtime's own behaviour)
+    why: str
+    rule_id: int | None
+    grant: dict[str, Any] | None = None
+
+
+async def _weigh(s: AsyncSession, run: Run, tool: str, subjects: list[str], n: int) -> list[Verdict]:
+    """Each subject through `tool_rules.decide`, with the run's grants applied to an 'ask'. No rule is its
+    own answer here — `none` — because a run did things before tool rules existed: it wrote in its
+    worktree unasked, and ran a project's command after the project's one-time answer. Only a rule a person
+    wrote changes that."""
+    out: list[Verdict] = []
+    for subject in (normalise(tool, x) for x in subjects):
+        said = await rule_for(s, tool, subject, run.project_id)
+        if said.rule_id is None:
+            out.append(Verdict(subject, "none", "", None))
+            continue
+        grant = granted(run.grants or [], tool, subject, n) if said.action == "ask" else None
+        out.append(Verdict(subject, "allow" if grant else said.action, said.why, said.rule_id, grant))
+    return out
+
+
+def _grant_words(grant: dict[str, Any]) -> str:
+    return f"{grant.get('by') or 'a person'} allowed it " + ("for this run" if grant.get("scope") == "run" else "once")
+
+
+# ── a step's proposal, kept while a person is asked about it ────
+def _proposal_file(worktree: str, ref: str, n: int) -> Path:
+    """Beside the worktree, never in it: what the model proposed for a step a rule asked about, so the
+    answer applies exactly those files rather than asking the model again for different ones."""
+    return Path(worktree).parent / f"{ref}.step-{n}.proposal.json"
+
+
+def _save_proposal(path: Path, proposal: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(proposal))
+    path.chmod(0o600)
+
+
+def _load_proposal(path: Path) -> dict[str, Any] | None:
+    try:
+        loaded = json.loads(path.read_text()) if path.is_file() and not path.is_symlink() else None
+    except (OSError, ValueError) as e:
+        log.warning("could not read the kept proposal %s: %s", path, e)
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def _drop_proposal(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as e:
+        log.warning("could not remove the kept proposal %s: %s", path, e)
 
 
 async def _pause(db: Database, ref: str, step_n: int, *, title: str, tool: str, risk: str, payload: str,
-                 reason: str) -> None:
-    """Stop and wait for a person. The run is not failed — it is waiting, and it says what for."""
+                 reason: str, asks: dict[str, Any] | None = None, question: str = "") -> None:
+    """Stop and wait for a person. The run is not failed — it is waiting, and it says what for.
+
+    `asks` is what a tool rule asked about — the tool and its subjects — kept on the run so the answer
+    ("Allow for this run") grants exactly those; `question` is an agent's own question, kept on its step."""
     async with db.session() as s:
         runs, approvals = RunRepository(s), ApprovalRepository(s)
         run = await runs.by_ref(ref)
@@ -1076,32 +1440,42 @@ async def _pause(db: Database, ref: str, step_n: int, *, title: str, tool: str, 
             return
         step = next((x for x in run.steps if x.n == step_n), None)
         approval_ref = await approvals.next_ref()
-        s.add(Approval(id=f"ap-{run.ref.lower()}-{step_n}", ref=approval_ref, title=title,
-                       agent=step.agent if step else "", tool=tool, risk=risk, status="pending",
+        # One step may stop more than once — a question, then a rule asking about what the answer led to —
+        # so the gate's own ref is part of its id.
+        s.add(Approval(id=f"ap-{run.ref.lower()}-{step_n}-{approval_ref.split('-')[-1]}", ref=approval_ref,
+                       title=title, agent=step.agent if step else "", tool=tool, risk=risk, status="pending",
                        project_id=run.project_id, payload=payload, reason=reason,
                        run_ref=run.ref, step=step_n))
         if step is not None:
             step.status, step.detail = "waiting", f"Waiting for you · {approval_ref}"
+            if question:
+                step.question = question
+        if asks is not None:
+            _put(run, "asks", step_n, asks)
         run.status, run.waiting_on = "waiting", approval_ref
         await RunLogRepository(s).write(run.id, level="warn", step=step_n,
                                         line=f"waiting for your decision · {approval_ref} · {title}")
         await ActivityRepository(s).record(actor=step.agent if step else roster.ORCHESTRATOR, actor_kind="agent",
-                                           action="Approval needed", detail=f"{approval_ref} · {title}",
+                                           action="Agent asks" if question else "Approval needed",
+                                           detail=f"{approval_ref} · {title}",
                                            level="warn", project_id=run.project_id)
 
 
-def _apply(parts: list[Part], elsewhere: frozenset[str],
-           files: list[tuple[str, str]]) -> tuple[list[str], list[Part]]:
+def _apply(parts: list[Part], elsewhere: frozenset[str], files: list[tuple[str, str]],
+           references: frozenset[str] = frozenset()) -> tuple[list[str], list[Part]]:
     """Blocking. Write what the model proposed, each file in the worktree of the source its path names.
     Every path is checked before any is written, so a refused one leaves nothing half-applied; a path in a
-    source this run did not open is refused the same way as one that leaves the worktree. Returns the
-    written paths as the project names them, and the parts that were written to."""
+    source this run did not open — a reference above all — is refused the same way as one that leaves the
+    worktree. Returns the written paths as the project names them, and the parts that were written to."""
     routed: dict[int, list[tuple[str, str]]] = {}
     for path, content in files:
         agent.safe_path(path)
         hit = _route(parts, path, elsewhere)
         if hit is None:
             head = path.strip().split("/", 1)[0]
+            if head in references:
+                raise agent.Refused(f"refused to write {path}: {head} is a reference source — agents read it "
+                                    "for grounding and never write there")
             raise agent.Refused(f"refused to write {path}: {head} is a source this run did not open")
         routed.setdefault(parts.index(hit[0]), []).append((hit[1], content))
     written: list[str] = []
@@ -1110,73 +1484,207 @@ def _apply(parts: list[Part], elsewhere: frozenset[str],
     return written, [parts[n] for n in routed]
 
 
+def _commit_parts(touched: list[Part], message: str) -> dict[str, str]:
+    """Blocking. Commit what a step wrote in every part it wrote to, and the commit each part now stands
+    on — kept on the step, so the run can be taken back to exactly here."""
+    out: dict[str, str] = {}
+    for part in touched:
+        if agent.commit(part.work, message):
+            out[part.label] = agent.head(part.worktree)
+    return out
+
+
 async def _edit(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool:
+    """One agent step. The agent is grounded — handed the project's instructions for the files it may
+    change and retrieval's pieces for the step — and governed: every file it would write goes through the
+    tool rules first. A deny ends the step naming the rule; an ask stops the run at a gate and keeps the
+    proposal beside the worktree, so the answer applies exactly what was asked about. An agent may ask a
+    question instead of writing; the run then waits for the person's answer and does the step again with it."""
     async with db.read() as s:
         run = await RunRepository(s).by_ref(ref)
         step = next(x for x in run.steps if x.n == step_n)
-        parts, elsewhere = _parts(run), _elsewhere(run)
-        files = await _context(s, run, step)
-        prompt = [
-            {"role": "system", "content": EDIT_SYSTEM},
-            {"role": "user", "content": f"You are the {step.agent}.\nProject: {run.project_id}\n"
-                                        f"Requirement: {run.requirement}\nStep {step.n}: {step.label}\n"
-                                        f"{step.detail}\n\nFiles you may change:\n"
-                                        + ("\n\n".join(f"--- {rel}\n{text}" for rel, text in files)
-                                           or "(no file matched; create what the step needs)")},
-        ]
-        lane, run_id = run.lane, run.id
-        project_id, label = run.project_id, step.label
-        who = step.agent or run.agent or ""
+        parts, elsewhere, references = _parts(run), _elsewhere(run), frozenset(_references(run))
+        kept = _proposal_file(run.worktree, ref, step_n)
+        lane, run_id, project_id = run.lane, run.id, run.project_id
+        label, who = step.label, step.agent or run.agent or ""
+        answered = bool(step.question and step.answer)
+        proposal = await asyncio.to_thread(_load_proposal, kept)
+        if proposal is None:
+            pieces = await _pieces(s, gateway, run, step)
+            # A piece from a project this one references is read as a piece, never taken for a file here.
+            files, notes = await _context(s, run, step, [x["path"] for x in pieces if x["kind"] == "code"
+                                                         and x.get("project", project_id) == project_id])
+            told = await _told(s, project_id, [*(run.targets or []), *(h.path for h in files)])
+            taste = await _taste(s, project_id)
+            asked = (f"\n\nYou asked: {step.question}\nThe person answered: {step.answer}" if answered else "")
+            read = ("\n\nRead from retrieval for this step — quote a ref when you rely on it:\n\n"
+                    + "\n\n".join(f"[{x['kind']} · {x['ref']}]\n{x['text'][:PIECE_CHARS]}" for x in pieces)
+                    if pieces else "")
+            prompt = [
+                {"role": "system", "content": _instructed(EDIT_SYSTEM, told, taste)},
+                {"role": "user", "content": f"You are the {step.agent}.\nProject: {run.project_id}\n"
+                                            f"Requirement: {run.requirement}\nStep {step.n}: {step.label}\n"
+                                            f"{step.detail}\n\nFiles you may change:\n"
+                                            + ("\n\n".join(f"--- {h.path}"
+                                                           + (" (read only: a reference source)" if h.readonly else "")
+                                                           + f"\n{h.text}" for h in files)
+                                               or "(no file matched; create what the step needs)")
+                                            + read + asked},
+            ]
+            grounding = _grounding_doc(told, pieces, files, taste)
 
-    try:
-        result = await asyncio.to_thread(
-            gateway.ask, prompt, lambda raw: EditOut.model_validate(extract_json(raw, trim=False)),
-            feature="agent", project=project_id, role=WRITE, lane=lane, agent=who, run_id=run_id)
-    except NoModel as e:
+    if proposal is None:
         async with db.session() as s:
             run = await RunRepository(s).by_ref(ref)
-            step = next(x for x in run.steps if x.n == step_n)
-            step.status = "skipped"
-            step.detail = "Needs a model. NeuroCode will not pretend to write code it cannot write."
-            await RunLogRepository(s).write(run_id, level="warn", step=step_n, line=str(e))
-        return False
+            _put(run, "grounding", step_n, grounding)
+            logs = RunLogRepository(s)
+            for level, line in notes:
+                await logs.write(run_id, level=level, step=step_n, line=line)
+            given = grounding["instructions"]
+            if given:
+                await logs.write(run_id, level="info", step=step_n,
+                                 line=f"given {len(given)} instruction file{'s' if len(given) != 1 else ''}: "
+                                      + ", ".join(x["path"] for x in given[:6])
+                                      + (" (cut to fit)" if grounding["capped"] else ""))
+            if grounding["taste"]:
+                await logs.write(run_id, level="info", step=step_n,
+                                 line="taste applied: " + ", ".join(grounding["taste"][:8]))
+            if grounding["pieces"]:
+                await logs.write(run_id, level="info", step=step_n,
+                                 line="read from retrieval: " + ", ".join(
+                                     f"{x['path']}" + (f":{x['line']}" if x.get("line") else "")
+                                     for x in grounding["pieces"]))
+        try:
+            result = await asyncio.to_thread(
+                gateway.ask, prompt, lambda raw: EditOut.model_validate(extract_json(raw, trim=False)),
+                feature="agent", project=project_id, role=WRITE, lane=lane, agent=who, run_id=run_id)
+        except NoModel as e:
+            async with db.session() as s:
+                run = await RunRepository(s).by_ref(ref)
+                step = next(x for x in run.steps if x.n == step_n)
+                step.status = "skipped"
+                step.detail = "Needs a model. NeuroCode will not pretend to write code it cannot write."
+                await RunLogRepository(s).write(run_id, level="warn", step=step_n, line=str(e))
+            return False
 
+        question = result.data.question.strip()
+        if question and not result.data.files and not answered:
+            await _log(db, run_id, "tool", f"{result.provider.model} asks: {question[:300]}", step_n)
+            await _pause(db, ref, step_n, title=f"{who or 'The agent'} asks: {question[:160]}",
+                         tool=f"{QUESTION_GATE}({who or 'agent'})", risk="LOW", payload=question[:2000],
+                         reason="The agent stopped to ask rather than guess. Your answer is kept on the step, "
+                                "remembered as a decision in this project's memory, and the step is done again "
+                                "with it. Declining skips the step.", question=question[:2000])
+            return True
+        if question and answered:
+            await _log(db, run_id, "warn", "asked again after your answer; one question per step, so it goes on "
+                                           "with what it wrote", step_n)
+        proposal = {"summary": result.data.summary, "notes": result.data.notes[:5],
+                    "files": [{"path": f.path, "content": f.content} for f in result.data.files],
+                    "model": result.provider.model, "ms": result.ms, "read": len(files)}
+
+    paths = [f["path"] for f in proposal["files"]]
     try:
-        written, touched = await asyncio.to_thread(_apply, parts, elsewhere,
-                                                   [(f.path, f.content) for f in result.data.files])
+        # The worktree's own rule comes first: a path that escapes is refused before any rule is weighed.
+        for path in paths:
+            agent.safe_path(path)
     except agent.Refused as refused:
         async with db.session() as s:
             run = await RunRepository(s).by_ref(ref)
             step = next(x for x in run.steps if x.n == step_n)
             step.status, step.detail = "failed", str(refused)
             await RunLogRepository(s).write(run_id, level="err", step=step_n, line=str(refused))
+        await asyncio.to_thread(_drop_proposal, kept)
         return False
 
-    committed = False
+    async with db.read() as s:
+        run = await RunRepository(s).by_ref(ref)
+        verdicts = await _weigh(s, run, "edit", paths, step_n)
+    denied = [v for v in verdicts if v.action == "deny"]
+    asking = [v for v in verdicts if v.action == "ask"]
+    if denied:
+        said = f"Not written: a tool rule refuses {denied[0].subject} — {denied[0].why}" + (
+            f" (and {len(denied) - 1} more)" if len(denied) > 1 else "")
+        async with db.session() as s:
+            run = await RunRepository(s).by_ref(ref)
+            step = next(x for x in run.steps if x.n == step_n)
+            step.status, step.detail = "failed", said[:300]
+            logs = RunLogRepository(s)
+            for v in denied:
+                await logs.write(run_id, level="err", step=step_n, line=f"refused to write {v.subject} · {v.why}")
+        await asyncio.to_thread(_drop_proposal, kept)
+        return False
+    if asking:
+        await asyncio.to_thread(_save_proposal, kept, proposal)
+        n = len(asking)
+        await _pause(db, ref, step_n, title=f"Write {n} file{'s' if n != 1 else ''} a tool rule asks about",
+                     tool=f"{EDIT_GATE}({n} file{'s' if n != 1 else ''})", risk="MEDIUM",
+                     payload="\n".join(f"{v.subject}  · {v.why}" for v in asking),
+                     reason="A tool rule asks before an agent writes these files, even in its own worktree. Allow "
+                            "once, for the rest of this run, or always in this project; refuse, and none of this "
+                            "step's files are written.",
+                     asks={"tool": "edit", "subjects": [v.subject for v in asking],
+                           "rules": sorted({v.rule_id for v in asking if v.rule_id is not None})})
+        return True
+
+    try:
+        written, touched = await asyncio.to_thread(_apply, parts, elsewhere,
+                                                   [(f["path"], f["content"]) for f in proposal["files"]], references)
+    except agent.Refused as refused:
+        async with db.session() as s:
+            run = await RunRepository(s).by_ref(ref)
+            step = next(x for x in run.steps if x.n == step_n)
+            step.status, step.detail = "failed", str(refused)
+            await RunLogRepository(s).write(run_id, level="err", step=step_n, line=str(refused))
+        await asyncio.to_thread(_drop_proposal, kept)
+        return False
+
+    commits: dict[str, str] = {}
     if written:
-        message = f"{label}\n\n{result.data.summary.strip()[:500]}\n\nNeuroCode {ref}"
-        for part in touched:
-            committed = await asyncio.to_thread(agent.commit, part.work, message) or committed
-    stat = await asyncio.to_thread(_stats, parts) if committed else None
+        message = f"{label}\n\n{str(proposal['summary']).strip()[:500]}\n\nNeuroCode {ref}"
+        commits = await asyncio.to_thread(_commit_parts, touched, message)
+    stat = await asyncio.to_thread(_stats, parts) if commits else None
+    await asyncio.to_thread(_drop_proposal, kept)
 
     async with db.session() as s:
         run = await RunRepository(s).by_ref(ref)
         step = next(x for x in run.steps if x.n == step_n)
-        run.model = result.provider.model
+        run.model = proposal["model"]
         logs = RunLogRepository(s)
         await logs.write(run.id, level="tool", step=step_n,
-                         line=f"{result.provider.model} read {len(files)} files and answered in "
-                              f"{result.ms / 1000:.1f}s")
-        for note in result.data.notes[:5]:
+                         line=f"{proposal['model']} read {proposal.get('read', 0)} files and answered in "
+                              f"{proposal['ms'] / 1000:.1f}s")
+        for note in proposal["notes"]:
             await logs.write(run.id, level="info", step=step_n, line=str(note)[:300])
         for path in written:
             await logs.write(run.id, level="tool", step=step_n, line=f"wrote {path}")
+        allowed = [v for v in verdicts if v.action == "allow"]
+        by_rule: dict[int | None, list[Verdict]] = {}
+        for v in allowed:
+            by_rule.setdefault(None if v.grant else v.rule_id, []).append(v)
+        for rule_id, items in by_rule.items():
+            why = _grant_words(items[0].grant) if rule_id is None and items[0].grant else items[0].why
+            await logs.write(run.id, level="info", step=step_n,
+                             line=f"allowed to write {', '.join(v.subject for v in items[:4])} · {why}")
+            if rule_id is not None:
+                # A rule decided in the person's place, so the team's feed says which rule and what it let through.
+                await ActivityRepository(s).record(
+                    actor=who or roster.ORCHESTRATOR, actor_kind="agent", action="Allowed by a tool rule",
+                    detail=f"{ref} · wrote {len(items)} file{'s' if len(items) != 1 else ''} · {why}"[:300],
+                    level="info", project_id=run.project_id)
+        _spend(run, "edit", [v.subject for v in allowed if v.grant], step_n)
+        # Every edit step keeps what it committed — an empty map when it wrote nothing — so a revert can
+        # tell "no commit here" from "made before steps kept their commits".
+        _put(run, "commits", step_n, commits)
+        first = next(iter(commits.values()), "")
+        step.commit_sha = first
         if stat:
             run.diff_files, run.diff_insertions = stat["files"], stat["insertions"]
             run.diff_deletions, run.diff_commits = stat["deletions"], stat["commits"]
             await logs.write(run.id, level="ok", step=step_n,
-                             line=f"committed · {stat['files']} files +{stat['insertions']} −{stat['deletions']}")
-        step.detail = (result.data.summary or "The model proposed no change for this step.")[:300]
+                             line=f"committed · {stat['files']} files +{stat['insertions']} −{stat['deletions']}"
+                                  + (f" · {first[:7]}" if first else ""))
+        step.detail = (str(proposal["summary"]) or "The model proposed no change for this step.")[:300]
         if not written:
             await logs.write(run.id, level="warn", step=step_n, line="no file changed")
     return False
@@ -1241,6 +1749,47 @@ async def _merge_step(db: Database, ref: str, step_n: int) -> bool:
     return False
 
 
+async def _command_gate(db: Database, ref: str, step_n: int, command: str, work: Path,
+                        check: str = "") -> str:
+    """What the tool rules say about running one of the project's own commands at this step: 'run',
+    'paused' (a rule asks, and the run now waits), 'skipped' (a rule refuses) — or 'setting' when no rule
+    covers it, and the project's one-time answer decides exactly as it did before rules existed."""
+    async with db.read() as s:
+        run = await RunRepository(s).by_ref(ref)
+        [verdict] = await _weigh(s, run, "command", [command], step_n)
+        who = next((x.agent for x in run.steps if x.n == step_n), "") or roster.TESTER
+    if verdict.action == "none":
+        return "setting"
+    if verdict.action == "ask":
+        await _pause(db, ref, step_n, title=f"Run `{command}` — a tool rule asks first",
+                     tool=f"{COMMAND_GATE}({command})", risk="MEDIUM",
+                     payload=f"cwd {work}\ncommand {command}\n{verdict.why}",
+                     reason="A tool rule asks before this command runs in the run's worktree. Allow it once, for "
+                            "the rest of this run, or always in this project; refuse, and this step is skipped.",
+                     asks={"tool": "command", "subjects": [command], "rules": [verdict.rule_id]})
+        return "paused"
+    async with db.session() as s:
+        run = await RunRepository(s).by_ref(ref)
+        step = next(x for x in run.steps if x.n == step_n)
+        logs = RunLogRepository(s)
+        if verdict.action == "deny":
+            step.status = "skipped"
+            step.detail = f"Not run: a tool rule refuses `{command}` — {verdict.why}"[:300]
+            if check:
+                _put_check(run, step_n, status="skipped", summary=step.detail)
+            await logs.write(run.id, level="warn", step=step_n, line=f"refused to run {command} · {verdict.why}")
+            return "skipped"
+        why = _grant_words(verdict.grant) if verdict.grant else verdict.why
+        await logs.write(run.id, level="info", step=step_n, line=f"allowed to run {command} · {why}")
+        if verdict.grant:
+            _spend(run, "command", [command], step_n)
+        else:
+            await ActivityRepository(s).record(actor=who, actor_kind="agent", action="Allowed by a tool rule",
+                                               detail=f"{ref} · ran `{command}` · {why}"[:300], level="info",
+                                               project_id=run.project_id)
+    return "run"
+
+
 async def _test(db: Database, ref: str, step_n: int) -> bool:
     async with db.read() as s:
         run = await RunRepository(s).by_ref(ref)
@@ -1257,17 +1806,24 @@ async def _test(db: Database, ref: str, step_n: int) -> bool:
             step.status, step.detail = "skipped", "No test command was found in this project."
         return False
 
-    if allowed is None:
-        await _pause(db, ref, step_n, title=f"Run `{command}` in {project_name}", tool=f"Bash({command})",
-                     risk="MEDIUM", payload=f"cwd {work}\ncommand {command}",
-                     reason="The agent wants to run this project's own tests inside its worktree. Nothing "
-                            "else is run, and your answer is remembered for this project.")
-        return True
-    if allowed != "allowed":
-        async with db.session() as s:
-            step = next(x for x in (await RunRepository(s).by_ref(ref)).steps if x.n == step_n)
-            step.status, step.detail = "skipped", "You chose not to run tests in this project."
-        return False
+    ruled = await _command_gate(db, ref, step_n, command, work)
+    if ruled != "run":
+        if ruled == "paused":
+            return True
+        if ruled == "skipped":
+            return False
+        # No rule covers it: the project's one-time answer, as it always was.
+        if allowed is None:
+            await _pause(db, ref, step_n, title=f"Run `{command}` in {project_name}", tool=f"Bash({command})",
+                         risk="MEDIUM", payload=f"cwd {work}\ncommand {command}",
+                         reason="The agent wants to run this project's own tests inside its worktree. Nothing "
+                                "else is run, and your answer is remembered for this project.")
+            return True
+        if allowed != "allowed":
+            async with db.session() as s:
+                step = next(x for x in (await RunRepository(s).by_ref(ref)).steps if x.n == step_n)
+                step.status, step.detail = "skipped", "You chose not to run tests in this project."
+            return False
 
     argv = command.split()
     await _log(db, run_id, "tool", f"$ {command}", step_n)
@@ -1389,7 +1945,14 @@ async def _review(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool
             run.review = {**(run.review or {}), "receipt": {**receipt, "by": ""}}
         return False
 
-    prompt = [{"role": "system", "content": REVIEW_SYSTEM},
+    # The reviewer is held to the same instructions the agents were: the project's files, for the paths
+    # this diff touches.
+    touched = sorted(set(re.findall(r"^\+\+\+ b/(.+)$", whole, re.M)) | set(re.findall(r"^--- a/(.+)$", whole, re.M)))
+    async with db.read() as s:
+        told = await _told(s, project_id, touched)
+        taste = await _taste(s, project_id)
+    given = [{"path": f["path"], "bytes": f["bytes"]} for f in told.files if f["applied"]]
+    prompt = [{"role": "system", "content": _instructed(REVIEW_SYSTEM, told, taste)},
               # What the project's own commands said comes after the diff, so the preamble the Models
               # screen shows (requirement, then the diff) stays exactly what is sent first.
               {"role": "user", "content": f"Requirement: {requirement}\n\nDiff:\n{diff}" + f"\n\n{evidence}"}]
@@ -1410,9 +1973,13 @@ async def _review(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool
         run = await RunRepository(s).by_ref(ref)
         step = next(x for x in run.steps if x.n == step_n)
         kept = {k: v for k, v in (run.review or {}).items() if k != "reviewing"}
-        run.review = {**kept, "findings": findings, "verdict": verdict, "by": by, "receipt": {**receipt, "by": by}}
+        run.review = {**kept, "findings": findings, "verdict": verdict, "by": by, "receipt": {**receipt, "by": by},
+                      "instructions": given, "taste": list(taste.refs)}
         step.detail = verdict or f"{len(findings)} findings"
         high = sum(1 for f in findings if f["severity"] == "HIGH")
+        if given:
+            await RunLogRepository(s).write(run.id, level="info", step=step_n,
+                                            line="the reviewer was given " + ", ".join(x["path"] for x in given[:6]))
         await RunLogRepository(s).write(run.id, level="warn" if high else "ok", step=step_n,
                                         line=f"{len(findings)} findings ({high} high) · reviewed by {by} · "
                                              f"receipt {_short(receipt['sha256'])}")
@@ -1442,19 +2009,25 @@ async def _check(db: Database, ref: str, step_n: int) -> bool:
             step = next(x for x in (await RunRepository(s).by_ref(ref)).steps if x.n == step_n)
             step.status, step.detail = "skipped", "This check has no command recorded."
         return False
-    if allowed is None:
-        await _pause(db, ref, step_n, title=f"Run `{command}` in {project_name}", tool=f"Bash({command})",
-                     risk="MEDIUM", payload=f"cwd {work}\ncommand {command}",
-                     reason=f"The agent wants to run this project's own {name} check inside its worktree. Nothing "
-                            "else is run, and your answer is remembered for this project.")
-        return True
-    if allowed != "allowed":
-        async with db.session() as s:
-            run = await RunRepository(s).by_ref(ref)
-            step = next(x for x in run.steps if x.n == step_n)
-            step.status, step.detail = "skipped", f"You chose not to run the {name} check in this project."
-            _put_check(run, step_n, status="skipped", summary=step.detail)
-        return False
+    ruled = await _command_gate(db, ref, step_n, command, work, check=name)
+    if ruled != "run":
+        if ruled == "paused":
+            return True
+        if ruled == "skipped":
+            return False
+        if allowed is None:
+            await _pause(db, ref, step_n, title=f"Run `{command}` in {project_name}", tool=f"Bash({command})",
+                         risk="MEDIUM", payload=f"cwd {work}\ncommand {command}",
+                         reason=f"The agent wants to run this project's own {name} check inside its worktree. "
+                                "Nothing else is run, and your answer is remembered for this project.")
+            return True
+        if allowed != "allowed":
+            async with db.session() as s:
+                run = await RunRepository(s).by_ref(ref)
+                step = next(x for x in run.steps if x.n == step_n)
+                step.status, step.detail = "skipped", f"You chose not to run the {name} check in this project."
+                _put_check(run, step_n, status="skipped", summary=step.detail)
+            return False
 
     await _log(db, run_id, "tool", f"$ {command}", step_n)
     lines: list[str] = []
@@ -1816,6 +2389,7 @@ async def execute(db: Database, gateway: Gateway, ref: str, resume_from: int | N
         checks = {c.get("step") for c in (run.review or {}).get("checks") or []}
         goal_step = ((run.review or {}).get("goal") or {}).get("step")
 
+    from .plans import step_gate_for                  # plans imports this module
     for n, kind in plan:
         if resume_from is not None and n < resume_from:
             continue
@@ -1824,8 +2398,16 @@ async def execute(db: Database, gateway: Gateway, ref: str, resume_from: int | N
             step = next((x for x in run.steps if x.n == n), None)
             if step is None or step.status in ("done", "skipped", "failed"):
                 continue
+            # "Dispatch, pause before each step" (`plans.step_gate`): the plan says whether this step waits
+            # for a person first, and what the gate asks; the runtime pauses and resumes.
+            # One agent of several is never walked step by step: its merge run would go on without it.
+            walk = await step_gate_for(s, run, step) if run.role != "agent" else None
         if stopped(ref).is_set():
             await _finish(db, ref, "cancelled", "Stopped by you.")
+            return
+        if walk is not None:
+            await _pause(db, ref, n, title=walk.title, tool=walk.tool, risk=walk.risk, payload=walk.payload,
+                         reason=walk.reason)
             return
 
         async with db.session() as s:
@@ -1872,7 +2454,10 @@ async def execute(db: Database, gateway: Gateway, ref: str, resume_from: int | N
             # the tests were refused, and its step says which.
             verdict = "cancelled"
             note = note or next((x.detail for x in run.steps if x.detail), "The tests did not run.")
+        child = bool(run.parent_id)
     await _finish(db, ref, verdict, note)
+    if child:
+        await _wake_merge(db, gateway, ref)
 
 
 async def execute_batch(db: Database, gateway: Gateway, ref: str) -> None:
@@ -1894,11 +2479,67 @@ async def execute_batch(db: Database, gateway: Gateway, ref: str) -> None:
             detail=f"{run.ref} · {len(children)} agents, a worktree each", project_id=run.project_id)
 
     await asyncio.gather(*(execute(db, gateway, child) for child in refs), return_exceptions=True)
+    if await _hold_for_agents(db, ref):
+        return
     await execute(db, gateway, ref)
 
 
+async def _hold_for_agents(db: Database, ref: str) -> bool:
+    """True when an agent of this merge run stopped at a gate — a tool rule asking, or a question — so the
+    merge run waits too, pointing at that gate, instead of going on and merging an agent that has not
+    finished. The agent finishing wakes it (`_wake_merge`)."""
+    async with db.session() as s:
+        runs = RunRepository(s)
+        run = await runs.by_ref(ref)
+        if run is None:
+            return False
+        children = (await runs.children_of([run.id])).get(run.id, [])
+        held = [c for c in children if c.status == "waiting"]
+        if not held:
+            return False
+        run.status, run.waiting_on = "waiting", held[0].waiting_on
+        run.review = {**(run.review or {}), "awaiting": [c.ref for c in held]}
+        await RunLogRepository(s).write(run.id, level="warn", line="waiting for " + ", ".join(
+            f"{c.agent or c.ref} ({c.ref}, at {c.waiting_on})" for c in held) + " before merging")
+        return True
+
+
+async def _wake_merge(db: Database, gateway: Gateway, ref: str) -> None:
+    """An agent of a merge run finished: when it was the last one the merge run waited for, the merge run
+    starts. While another agent still waits for a person, the merge run points at that one's gate."""
+    async with db.session() as s:
+        runs = RunRepository(s)
+        run = await runs.by_ref(ref)
+        if run is None or not run.parent_id:
+            return
+        parent = await runs.get(run.parent_id)
+        if parent is None or parent.status != "waiting" or not (parent.review or {}).get("awaiting"):
+            return
+        siblings = (await runs.children_of([parent.id])).get(parent.id, [])
+        if any(c.status in ("queued", "running", "waiting") for c in siblings):
+            held = next((c for c in siblings if c.status == "waiting"), None)
+            parent.waiting_on = held.waiting_on if held is not None else parent.waiting_on
+            return
+        parent.status, parent.waiting_on = "queued", None
+        parent.review = {k: v for k, v in (parent.review or {}).items() if k != "awaiting"}
+        lead = parent.ref
+    await execute(db, gateway, lead)
+
+
+async def _decided(s: AsyncSession, ref: str, step_n: int) -> Approval | None:
+    """The gate a person just answered for this step of this run: the newest one, whatever it asked."""
+    return (await s.execute(select(Approval).where(Approval.run_ref == ref, Approval.step == step_n)
+                            .order_by(*ApprovalRepository.ORDER).limit(1))).scalars().first()
+
+
 async def resume(db: Database, gateway: Gateway, ref: str, step_n: int, approved: bool) -> None:
-    """Called when a person decides on an approval a run was waiting for."""
+    """Called when a person decides on an approval a run was waiting for.
+
+    What the answer does depends on what the gate asked (`schemas.work.gate_kind`): a project's first
+    test run or check is remembered as its standing answer; a tool rule's ask on a command or on files is
+    answered by the grants the decision wrote (`services.gates`) and the step is done again; an agent's
+    question has its answer on the step and the step is done again with it; a pause before a step lets it
+    run or ends the run; and the signature accepts the branch or removes it."""
     async with db.session() as s:
         runs = RunRepository(s)
         run = await runs.by_ref(ref)
@@ -1907,12 +2548,15 @@ async def resume(db: Database, gateway: Gateway, ref: str, step_n: int, approved
         step = next((x for x in run.steps if x.n == step_n), None)
         if step is None:
             return
-        kind, branch, project_id, run_id = step.kind, run.branch, run.project_id, run.id
+        gate = await _decided(s, ref, step_n)
+        kind = gate_kind(gate.tool) if gate is not None else ("tests" if step.kind == "test" else "signature")
+        branch, project_id, run_id = run.branch, run.project_id, run.id
         run.waiting_on = None
+        logs = RunLogRepository(s)
+        check = _check_at(run, step_n)
 
-        if kind == "test":
+        if kind == "tests":
             # The same gate answers a check: its answer is kept under the check's own name.
-            check = _check_at(run, step_n)
             key = check_key(project_id, check["name"]) if check else f"runtime.tests.{project_id}"
             what = f"{check['name']} check" if check else "tests"
             setting = await s.get(Setting, key)
@@ -1927,12 +2571,42 @@ async def resume(db: Database, gateway: Gateway, ref: str, step_n: int, approved
                                else "You chose not to run tests in this project.")
                 if check:
                     _put_check(run, step_n, status="skipped", summary=step.detail)
-            await RunLogRepository(s).write(run_id, level="ok" if approved else "warn", step=step_n,
-                                            line=f"you allowed this project's {what} to run" if approved
-                                            else f"{what} refused")
+            await logs.write(run_id, level="ok" if approved else "warn", step=step_n,
+                             line=f"you allowed this project's {what} to run" if approved else f"{what} refused")
+        elif kind in ("command", "edit", "question", "step"):
+            step.status = "todo"
+            if not approved:
+                step.status = "failed" if kind == "edit" else "skipped"
+                step.detail = {
+                    "command": "You refused this command, so it did not run.",
+                    "edit": "You refused the files a tool rule asked about; none of this step's files were written.",
+                    "question": "You chose not to answer, so the step was skipped.",
+                    "step": "Stopped here by you, before this step ran.",
+                }[kind]
+                if check:
+                    _put_check(run, step_n, status="skipped", summary=step.detail)
+            said = {"command": ("you allowed the command", "you refused the command"),
+                    "edit": ("you allowed the files", "you refused the files"),
+                    "question": ("answered — the step goes again with your answer", "you chose not to answer"),
+                    "step": ("you let this step run", "you stopped the run here")}[kind][0 if approved else 1]
+            await logs.write(run_id, level="ok" if approved else "warn", step=step_n,
+                             line=f"{gate.ref if gate else 'the gate'}: {said}")
+            worktree = run.worktree
 
-    if kind == "test":
+    if kind == "tests":
         await execute(db, gateway, ref, resume_from=step_n if approved else step_n + 1)
+        return
+    if kind in ("command", "edit", "question"):
+        if kind == "edit" and not approved:
+            await asyncio.to_thread(_drop_proposal, _proposal_file(worktree, ref, step_n))
+        await execute(db, gateway, ref, resume_from=step_n if approved else step_n + 1)
+        return
+    if kind == "step":
+        if approved:
+            await execute(db, gateway, ref, resume_from=step_n)
+        else:
+            await _finish(db, ref, "cancelled", f"You stopped the run before step {step_n}. Its branch stays "
+                                                "for you to look at, or discard it.")
         return
 
     if approved:
@@ -1942,6 +2616,10 @@ async def resume(db: Database, gateway: Gateway, ref: str, step_n: int, approved
             step.status, step.detail = "done", "Accepted by you."
             await RunLogRepository(s).write(run.id, level="ok", step=step_n,
                                             line=f"accepted · merge it with: git merge {branch}")
+            signed = await _decided(s, ref, step_n)
+            if signed is not None:
+                await _signal(s, lambda: TasteService(s).on_verdict(run, signed, approved=True,
+                                                                     by_user_id=signed.decided_by))
             if run.task_id:
                 task = await TaskRepository(s).get(run.task_id)
                 if task is not None and task.status != "review":
@@ -1958,9 +2636,13 @@ async def resume(db: Database, gateway: Gateway, ref: str, step_n: int, approved
         step.status, step.detail = "failed", "You refused the changes."
         await RunLogRepository(s).write(run.id, level="warn", step=step_n,
                                         line="refused — removing the branch and its worktree")
-        parts = _parts(run)
-    for part in parts:
-        await asyncio.to_thread(agent.cleanup, part.repo, part.worktree, part.branch)
+        signed = await _decided(s, ref, step_n)
+        if signed is not None:
+            await _signal(s, lambda: TasteService(s).on_verdict(run, signed, approved=False,
+                                                                 by_user_id=signed.decided_by))
+    async with db.read() as s:
+        refused = await RunRepository(s).by_ref(ref)
+    await asyncio.to_thread(_cleanup, refused)
     async with db.session() as s:
         run = await RunRepository(s).by_ref(ref)
         run.removed = True

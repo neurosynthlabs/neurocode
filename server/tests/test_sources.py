@@ -126,7 +126,7 @@ async def test_a_project_lists_its_first_source_and_adds_another(client: AsyncCl
     first = (await client.get("/projects/shop/sources")).json()
     assert first == [{"id": None, "label": "shop", "kind": "local", "repo": str(shop["web"]), "branch": "",
                       "position": 0, "status": "active", "note": "", "primary": True,
-                      "createdAt": first[0]["createdAt"], "root": str(shop["web"])}]
+                      "createdAt": first[0]["createdAt"], "role": "code", "root": str(shop["web"])}]
 
     made = await client.post("/projects/shop/sources", json={"label": "api", "kind": "local",
                                                             "repo": str(shop["api"])})
@@ -139,8 +139,9 @@ async def test_a_project_lists_its_first_source_and_adds_another(client: AsyncCl
     listed = (await client.get("/projects/shop/sources")).json()
     assert [x["label"] for x in listed] == ["shop", "api"]
     card = (await client.get("/projects/shop")).json()
-    assert card["sources"] == [{"id": None, "label": "shop", "kind": "local", "status": "active"},
-                               {"id": body["id"], "label": "api", "kind": "local", "status": "onboarding"}]
+    assert card["sources"] == [{"id": None, "label": "shop", "kind": "local", "status": "active", "role": "code"},
+                               {"id": body["id"], "label": "api", "kind": "local", "status": "onboarding",
+                                "role": "code"}]
     assert next(p for p in (await client.get("/projects")).json() if p["id"] == "shop")["sources"] == card["sources"]
     feed = (await client.get("/activity", params={"project": "shop"})).json()
     assert any(e["action"] == "Source added" and "api" in e["detail"] for e in feed)

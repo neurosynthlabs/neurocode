@@ -60,6 +60,15 @@ MAX_TOKENS = 400
 #: guessed, and a build longer than it showed the old count as if it were the new one.
 BUILDING: set[str] = set()
 
+#: A referenced project's pieces take at most 1/REFERENCE_SHARE of a search's slots.
+REFERENCE_SHARE = 3
+
+
+def label(piece: dict[str, Any]) -> str:
+    """How a piece is named to a model: its kind and ref, and "reference" when it is one."""
+    return " · ".join(x for x in (piece["kind"], piece["ref"], piece.get("reference")) if x)
+
+
 NO_LANE = ("No lane makes embeddings, so search here is by words only. Add a Gemini or Mistral key, "
            "or pull nomic-embed-text in Ollama.")
 
@@ -291,11 +300,48 @@ class RetrievalService:
             return None
         return _pad(vectors[0]) if vectors else None
 
-    async def search(self, project_id: str, q: str, limit: int = 8) -> list[dict[str, Any]]:
+    async def search(self, project_id: str, q: str, limit: int = 8, *,
+                     references: bool = True) -> list[dict[str, Any]]:
+        """The pieces that bear on a question: the project's own first, then — when it references other
+        projects — the best of theirs in the slots kept for them.
+
+        Everything read from somewhere agents may not write is labelled so, in `reference`: a piece of a
+        reference source ("design · reference"), and a piece of a referenced project ("Payments ·
+        reference"), whose `ref` and `path` also carry that project's id (`payments:app/charge.py`) —
+        the prefix a session's tools read it back with. `references=False` is the project alone.
+        """
         if not q.strip():
             return []
-        return await self.chunks.search(project_id, q, vector=await self._embed_query(q, project_id),
-                                        limit=limit)
+        vector = await self._embed_query(q, project_id)
+        own = await self.chunks.search(project_id, q, vector=vector, limit=limit)
+        if not references:
+            return own
+        return await self._with_references(project_id, q, vector, own, limit)
+
+    async def _with_references(self, project_id: str, q: str, vector: list[float] | None,
+                               own: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+        from .code import reference_labels, roots
+        from .references import referenced
+        project = await self.projects.get(project_id)
+        if project is None:
+            return own
+        labels = reference_labels(await roots(self.session, project))
+        for piece in own:
+            head, cut, _ = piece["path"].partition("/")
+            if cut and head in labels and piece["kind"] in ("code", "doc"):
+                piece["reference"] = f"{head} · reference"
+        others = dict(await referenced(self.session, project_id))
+        if not others:
+            return own
+        # A share of the slots, never all of them: the project's own pieces lead, and a referenced
+        # project fills at most a third of what the caller asked for.
+        share = max(1, limit // REFERENCE_SHARE)
+        found = await self.chunks.search(project_id, q, vector=vector, limit=share, among=list(others))
+        for piece in found:
+            pid = piece["project"]
+            piece["ref"], piece["path"] = f"{pid}:{piece['ref']}", f"{pid}:{piece['path']}"
+            piece["reference"] = f"{others.get(pid, pid)} · reference"
+        return own[:max(0, limit - len(found))] + found
 
     async def search_counted(self, project_id: str, q: str, limit: int) -> tuple[list[dict[str, Any]], dict[str, int]]:
         """The search, and what each half had to work with: the chunks the words matched (to a cap), the
@@ -316,9 +362,13 @@ class RetrievalService:
         found = await self.search(project_id, question, limit)
         if not found:
             return "", []
-        pieces = [f"[{x['kind']} · {x['ref']}]\n{x['text'][:900]}" for x in found]
+        pieces = [f"[{label(x)}]\n{x['text'][:900]}" for x in found]
+        read_only = ("\n\nA piece marked \"reference\" is read only: it comes from a reference source or from "
+                     "another project this one reads from (its refs start with that project's id and a colon — "
+                     "read its files with that prefix). Nothing there is changed from here."
+                     if any(x.get("reference") for x in found) else "")
         return ("What this repository already holds about the question — quote these refs when you use "
-                "them, and read the files if you need more:\n\n" + "\n\n".join(pieces)), found
+                "them, and read the files if you need more:\n\n" + "\n\n".join(pieces) + read_only), found
 
     # ── building ─────────────────────────────────────────────────
     async def _code_chunks(self, project: Project, sources: list[Any]) -> list[dict[str, Any]]:

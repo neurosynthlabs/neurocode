@@ -8,13 +8,30 @@ import { FolderPicker } from '@/components/workbench/FolderPicker';
 import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import {
-  LABEL, SOURCE_DOT, labelFrom, sourcesApi, sourcesOf, type ProjectSource, type SourceInput,
+  LABEL, SOURCE_DOT, labelFrom, readOnly, sourcesApi, sourcesOf, type ProjectSource, type SourceInput, type SourceRole,
 } from '@/lib/live/sources';
+import { cn } from '@/lib/utils';
 import { useRemote } from '@/lib/remote';
 import type { Project } from '@/types';
 
 const reason = (e: unknown) => (e instanceof ApiError ? e.message : 'The local API did not answer. Is it still running?');
-const NEW: SourceInput = { label: '', kind: 'git', repo: '', branch: 'main' };
+const NEW: SourceInput = { label: '', kind: 'git', repo: '', branch: 'main', role: 'code' };
+
+/** Code is worked on; a reference is read for search and grounding and never written — two plain buttons, so a
+    choice inside a form never submits it. */
+export function RolePick({ value, onChange, label, disabled }: { value: SourceRole; onChange: (r: SourceRole) => void; label: string; disabled?: boolean }) {
+  return (
+    <span role="radiogroup" aria-label={label} className="inline-flex rounded-lg bg-surface-2 p-[3px] ring-1 ring-line/60 ring-inset">
+      {(['code', 'reference'] as const).map((r) => (
+        <button key={r} type="button" role="radio" aria-checked={value === r} disabled={disabled} onClick={() => onChange(r)}
+          className={cn('rounded-md px-2.5 py-1 text-[12px] transition-colors disabled:opacity-60',
+            value === r ? 'seg-thumb font-medium text-ink' : 'text-soft hover:text-ink-2')}>
+          {r === 'code' ? 'Code' : 'Reference'}
+        </button>
+      ))}
+    </span>
+  );
+}
 const STATUS_WORD = { active: 'ready', onboarding: 'onboarding', failed: 'failed' } as const;
 
 /**
@@ -99,6 +116,14 @@ export function SourcesPanel({ p }: { p: Project }) {
     if (ok) setRenaming(null);
   };
 
+  const setRole = (s: ProjectSource, role: SourceRole) => {
+    if ((s.role ?? 'code') === role) return;
+    void act(() => sourcesApi.edit(p.id, s.id as number, { role }),
+      role === 'reference' ? `${s.label} is now a reference` : `${s.label} is code again`,
+      `${s.label} was not changed`,
+      role === 'reference' ? 'It stays indexed and read for grounding; agents no longer write there.' : 'Agents may change it again in their worktrees.');
+  };
+
   const reindex = async (s: ProjectSource) => {
     setBusy(s.id ?? 'first');
     await act(() => (s.primary ? api.code.reindex(p.id) : sourcesApi.reindex(p.id, s.id as number)),
@@ -149,6 +174,7 @@ export function SourcesPanel({ p }: { p: Project }) {
                         <span className="font-mono text-[13px] font-medium text-ink">{s.primary ? s.label : `${s.label}/`}</span>
                         {s.primary && <Tag tone="brand">first source</Tag>}
                         <Tag>{s.kind === 'git' ? 'git' : 'folder'}</Tag>
+                        {readOnly(s) && <Tag tone="violet">reference · read only</Tag>}
                         <span className="text-[12px] text-dim">{STATUS_WORD[s.status]}</span>
                       </span>
                     )}
@@ -162,6 +188,10 @@ export function SourcesPanel({ p }: { p: Project }) {
                   </div>
                   {mayChange && (
                     <span className="flex shrink-0 items-center gap-0.5">
+                      {!s.primary && (
+                        <RolePick value={s.role ?? 'code'} onChange={(r) => setRole(s, r)} label={`What ${s.label} is`}
+                          disabled={s.status === 'onboarding'} />
+                      )}
                       {!s.primary && (
                         <>
                           <Button size="icon-sm" variant="ghost" aria-label={`Move ${s.label} up`} disabled={place <= 0} onClick={() => move(s, -1)}><ArrowUp className="size-3.5" /></Button>
@@ -217,6 +247,13 @@ export function SourcesPanel({ p }: { p: Project }) {
                   <FolderOpen className="size-3.5" />Browse…
                 </Button>
               )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <RolePick value={draft.role ?? 'code'} onChange={(role) => setDraft((d) => ({ ...d, role }))} label="What this source is" />
+              <span className="text-[12px] text-dim">
+                {draft.role === 'reference' ? 'Read only: indexed and read for grounding — documents, a design system, another team’s repository. Agents never write there.'
+                  : 'Worked on: agents may change it in their own worktrees.'}
+              </span>
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Field label="Label" mono value={draft.label} placeholder="api" hint="The folder its files appear under"

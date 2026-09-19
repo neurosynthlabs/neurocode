@@ -10,6 +10,7 @@ statement, and every answer says `lexical` rather than pretending to be more tha
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy import CTE, ColumnElement, Float, Text, case, cast, func, literal, or_, select, union
@@ -131,30 +132,37 @@ class ChunkRepository(Repository[Chunk]):
                      select(Plan.ref).where(Plan.ref.in_(refs), Plan.project_id == project_id)).limit(MAX_LINKS)
         return set((await self.session.execute(stmt)).scalars())
 
-    def _lexical(self, project_id: str, q: str, mode: Mode) -> CTE:
+    def _lexical(self, scope: ColumnElement[bool], q: str, mode: Mode) -> CTE:
         query = tsquery(q, mode)
         return (select(Chunk.id.label("id"),
                        func.row_number().over(order_by=func.ts_rank(Chunk.search, query).desc()).label("rank"))
-                .where(self._scope(project_id), Chunk.search.op("@@")(query))
+                .where(scope, Chunk.search.op("@@")(query))
                 .limit(CANDIDATES).cte("lexical"))
 
-    def _semantic(self, project_id: str, vector: list[float]) -> CTE:
+    def _semantic(self, scope: ColumnElement[bool], vector: list[float]) -> CTE:
         return (select(Chunk.id.label("id"),
                        func.row_number().over(order_by=Chunk.embedding.cosine_distance(vector)).label("rank"))
-                .where(self._scope(project_id), Chunk.embedding.is_not(None))
+                .where(scope, Chunk.embedding.is_not(None))
                 .limit(CANDIDATES).cte("semantic"))
 
     async def search(self, project_id: str, q: str, *, vector: list[float] | None = None,
-                     limit: int = 8, mode: Mode = "any") -> list[dict[str, Any]]:
+                     limit: int = 8, mode: Mode = "any",
+                     among: Sequence[str] | None = None) -> list[dict[str, Any]]:
         """The pieces that bear on a question, best first, each saying how it was found.
 
         "any" by default because nearly everything that calls this asks a question; the search box,
         where a person narrows on purpose, asks for "all".
+
+        `among` searches other projects' own pieces instead — the projects this one references — and
+        leaves the workspace's memory out, which the project's own search already brought.
         """
         if not q.strip():
             return []
+        if among is not None and not among:
+            return []
+        scope = Chunk.project_id.in_(list(among)) if among is not None else self._scope(project_id)
 
-        lexical = self._lexical(project_id, q.strip(), mode)
+        lexical = self._lexical(scope, q.strip(), mode)
         score: ColumnElement[float] = _rrf(lexical.c.rank)
         by_words: ColumnElement[bool] = lexical.c.id.is_not(None)
         by_meaning: ColumnElement[bool] = literal(False)
@@ -162,7 +170,7 @@ class ChunkRepository(Repository[Chunk]):
         halves = [(lexical, lexical.c.id == Chunk.id)]
 
         if vector is not None:
-            semantic = self._semantic(project_id, vector)
+            semantic = self._semantic(scope, vector)
             score = score + _rrf(semantic.c.rank)
             by_meaning = semantic.c.id.is_not(None)
             found.append(semantic.c.id.is_not(None))
@@ -179,5 +187,5 @@ class ChunkRepository(Repository[Chunk]):
             how = "both" if words and meaning else ("lexical" if words else "semantic")
             out.append({"ref": chunk.ref, "kind": chunk.kind, "path": chunk.path, "title": chunk.title,
                         "line": chunk.line, "text": chunk.body, "score": round(float(points), 5),
-                        "how": how})
+                        "how": how, **({"project": chunk.project_id} if among is not None else {})})
         return out

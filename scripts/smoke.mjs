@@ -177,7 +177,8 @@ try {
     await open('/permissions');
     const count = async () => Number((await page.getByTitle(/approvals waiting on you/).getAttribute('title')).match(/\d+/)[0]);
     const before = await count();
-    await page.getByRole('button', { name: 'Approve', exact: true }).first().click();
+    // Whichever kind of gate the fixture's first approval is, its yes is the first button under it.
+    await page.getByRole('button', { name: /^(Approve|Allow — remembered for this project|Allow once|Continue)$/ }).first().click();
     await page.waitForFunction((n) => {
       const el = document.querySelector('[title*="approvals waiting on you"]');
       return el && Number(el.getAttribute('title').match(/\d+/)[0]) === n;

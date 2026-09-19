@@ -31,6 +31,7 @@ from ..models import McpServer
 from ..repositories import ActivityRepository, NotFound, ProjectRepository
 from ..repositories.code import CodeIndexRepository
 from ..repositories.platform import McpRepository
+from ..repositories.references import ProjectReferenceRepository
 from ..repositories.sources import MAX_SOURCES, ProjectSourceRepository
 from ..schemas import project_json
 from ..schemas.platform import mcp_json
@@ -41,6 +42,7 @@ from ..services import instructions
 from ..services.identity import Person
 from ..services.mcp import MAX_ARGUMENTS, McpService
 from ..services.web import MAX_QUERY, MAX_URL, WebService
+from ..services.references import MAX_NOTE, ReferenceService, reference_json
 from ..services.onboarding import OnboardingService, SourceService, SourceSpec, Spec, onboard, onboard_source, reread
 from ..settings import settings
 from .deps import current_person, database, gateway, hand_off, require, session
@@ -72,12 +74,25 @@ class SourceIn(BaseModel):
     kind: Literal["git", "local"]
     repo: str = Field(min_length=1, max_length=500)
     branch: str = Field(default="main", max_length=100)
+    #: `reference`: indexed and read for grounding, never written to — documents, a design system,
+    #: another team's repository.
+    role: Literal["code", "reference"] = "code"
 
 
 class SourceEdit(BaseModel):
     label: str | None = Field(default=None, min_length=1, max_length=60)
     #: Its place among the further sources, from 0. The first source always stays first.
     position: int | None = Field(default=None, ge=0, le=MAX_SOURCES)
+    role: Literal["code", "reference"] | None = None
+
+
+class ReferenceIn(BaseModel):
+    referencedId: str = Field(min_length=1, max_length=80)
+    note: str = Field(default="", max_length=MAX_NOTE)
+
+
+class ReferenceEdit(BaseModel):
+    note: str = Field(max_length=MAX_NOTE)
 
 
 class McpIn(BaseModel):
@@ -131,7 +146,9 @@ async def projects(open_session: AsyncSession = Depends(session)) -> list[dict[s
     ids = [p.id for p in found]
     indexes = await CodeIndexRepository(open_session).for_projects(ids)
     sources = await ProjectSourceRepository(open_session).for_projects(ids)
-    return [project_json(p, tasks=counts.get(p.id), index=indexes.get(p.id), sources=sources.get(p.id, []))
+    references = await ProjectReferenceRepository(open_session).for_projects(ids)
+    return [project_json(p, tasks=counts.get(p.id), index=indexes.get(p.id), sources=sources.get(p.id, []),
+                         references=references.get(p.id, []))
             for p in found]
 
 
@@ -144,7 +161,8 @@ async def project(pid: str, open_session: AsyncSession = Depends(session)) -> di
     counts = await repo.task_counts()
     return project_json(found, tasks=counts.get(pid),
                         index=await CodeIndexRepository(open_session).summary(pid),
-                        sources=await ProjectSourceRepository(open_session).of(pid))
+                        sources=await ProjectSourceRepository(open_session).of(pid),
+                        references=(await ProjectReferenceRepository(open_session).for_projects([pid])).get(pid, []))
 
 
 def _may_see_the_machine(who: Person) -> bool:
@@ -178,7 +196,7 @@ async def add_source(pid: str, body: SourceIn, jobs: BackgroundTasks,
     indexing the whole project with it run after, and land in Activity as they finish."""
     service = SourceService(open_session)
     made = await service.add(pid, SourceSpec(label=body.label, kind=body.kind, repo=body.repo,
-                                             branch=body.branch), who.name)
+                                             branch=body.branch, role=body.role), who.name)
     project = await service.project(pid)
     where = source_root(made)
     doc = source_json(project, made, root=str(where) if where else None, show_root=_may_see_the_machine(who))
@@ -191,12 +209,13 @@ async def edit_source(pid: str, source_id: int, body: SourceEdit, jobs: Backgrou
                       who: Person = Depends(require("projects:onboard")),
                       open_session: AsyncSession = Depends(session), db: Database = Depends(database),
                       gw: Gateway = Depends(gateway)) -> dict[str, Any]:
-    """Rename or move a source. A rename indexes the project again, because every file of the source
-    is named under its label."""
-    if body.label is None and body.position is None:
-        raise Refused("Say what to change: a label or a position.", status=422)
+    """Rename, move or change the role of a source. A rename indexes the project again, because every
+    file of the source is named under its label; a role change reads nothing again."""
+    if body.label is None and body.position is None and body.role is None:
+        raise Refused("Say what to change: a label, a position or a role.", status=422)
     service = SourceService(open_session)
-    changed, renamed = await service.update(pid, source_id, who.name, label=body.label, position=body.position)
+    changed, renamed = await service.update(pid, source_id, who.name, label=body.label, position=body.position,
+                                            role=body.role)
     project = await service.project(pid)
     where = source_root(changed)
     doc = source_json(project, changed, root=str(where) if where else None, show_root=_may_see_the_machine(who))
@@ -226,6 +245,42 @@ async def reindex_source(pid: str, source_id: int, jobs: BackgroundTasks,
     source, again = await SourceService(open_session).reindex(pid, source_id, who.name)
     await hand_off(open_session, jobs, *((onboard_source, db, gw, pid, source.id) if again else (reread, db, gw, pid)))
     return {"ok": True, "onboarding": again}
+
+
+# ── projects a project reads from ────────────────────────────────
+@router.get("/projects/{pid}/references", dependencies=[Depends(current_person)])
+async def project_references(pid: str, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    """`{references, referencedBy, readAtMost, max}`: the projects this one reads from, and those that
+    read from it — each `{id, project: {id, name, status, understoodPct}, note, createdAt}`. Retrieval
+    and grounding search the first `readAtMost` of `references` beside the project's own pieces."""
+    return await ReferenceService(open_session).listing(pid)
+
+
+@router.post("/projects/{pid}/references", status_code=201)
+async def add_reference(pid: str, body: ReferenceIn, request: Request,
+                        who: Person = Depends(require("projects:onboard")),
+                        open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    """Read another project from this one: refused for the project itself (422), one it already
+    references (409) and a project that does not exist (404). Audited."""
+    made, other = await ReferenceService(open_session).add(pid, body.referencedId, body.note, who, ip=_ip(request))
+    return reference_json(made, other)
+
+
+@router.patch("/projects/{pid}/references/{reference_id}")
+async def edit_reference(pid: str, reference_id: int, body: ReferenceEdit, request: Request,
+                         who: Person = Depends(require("projects:onboard")),
+                         open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    """Change the note — why it is referenced, which a model reads beside what it reads there."""
+    changed, other = await ReferenceService(open_session).update(pid, reference_id, body.note, who, ip=_ip(request))
+    return reference_json(changed, other)
+
+
+@router.delete("/projects/{pid}/references/{reference_id}")
+async def remove_reference(pid: str, reference_id: int, request: Request,
+                           who: Person = Depends(require("projects:onboard")),
+                           open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    other = await ReferenceService(open_session).remove(pid, reference_id, who, ip=_ip(request))
+    return {"ok": True, "id": reference_id, "referencedId": other.id}
 
 
 @router.get("/projects/{pid}/instructions", dependencies=[Depends(current_person)])

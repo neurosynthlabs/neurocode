@@ -33,6 +33,7 @@ const Architecture = lazy(() => import('@/pages/Architecture'));
 const Agents = lazy(() => import('@/pages/Agents'));
 const Tasks = lazy(() => import('@/pages/Tasks'));
 const Plans = lazy(() => import('@/pages/Plans'));
+const Blueprints = lazy(() => import('@/pages/Blueprints'));
 const Runs = lazy(() => import('@/pages/Runs'));
 const Workflows = lazy(() => import('@/pages/Workflows'));
 const Testing = lazy(() => import('@/pages/Testing'));
@@ -142,6 +143,8 @@ function Shell() {
                   <Route path="/architecture" element={<Architecture />} />
                   <Route path="/agents" element={<Agents />} />
                   <Route path="/tasks" element={<Tasks />} />
+                  <Route path="/blueprints" element={<Blueprints />} />
+                  <Route path="/blueprints/:blueprintId" element={<Blueprints />} />
                   <Route path="/plans" element={<Plans />} />
                   <Route path="/runs" element={<Runs />} />
                   <Route path="/workflows" element={<Workflows />} />

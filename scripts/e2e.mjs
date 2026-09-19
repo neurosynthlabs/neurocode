@@ -133,8 +133,8 @@ try {
     await open('/projects');
     await page.getByRole('button', { name: /New project/ }).first().click();
     const dlg = page.locator('[data-slot="dialog-content"]');
-    await dlg.getByRole('button', { name: 'Local path', exact: true }).click();
-    await dlg.locator('input').first().fill(repo);
+    await dlg.getByRole('button', { name: /Open a folder on this machine/ }).click();
+    await dlg.getByLabel('Absolute path').fill(repo);
     // Through however many steps the wizard has, to the one that starts it.
     for (let n = 0; n < 8 && !(await dlg.getByRole('button', { name: /Start onboarding/ }).count()); n++) {
       await dlg.getByRole('button', { name: /^Next/ }).click();
@@ -214,7 +214,8 @@ try {
 
   await step('approving in the inbox is written to the database, and the run streams on in an open tab', async () => {
     await open('/permissions');
-    await page.getByRole('button', { name: 'Approve', exact: true }).first().click();
+    // A test gate's yes says what it does: the answer is kept for the project.
+    await page.getByRole('button', { name: /^Allow — remembered for this project/ }).first().click();
     await until(async () => (await call('/approvals')).find((a) => a.ref === run.waitingOn)?.status === 'approved', 'the approval reaching the database', 5000);
     await open(`/runs?ref=${run.ref}`);
     await page.getByText('passed').first().waitFor({ timeout: 30000 });

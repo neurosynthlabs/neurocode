@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  Code2, Eye, EyeOff, File, FileWarning, FolderOpen, FolderTree, Loader2, PanelBottom, RefreshCw, Search, ShieldAlert, X,
+  Code2, Eye, EyeOff, File, FileWarning, FolderOpen, FolderTree, Loader2, Lock, PanelBottom, RefreshCw, Search, ShieldAlert, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -19,7 +19,7 @@ import { useAuth } from '@/lib/auth';
 import {
   baseName, bytes, dirName, joinPath, machineApi, within, type MachineEntry, type MachineGit,
 } from '@/lib/live/machine';
-import { sourcesApi, type ProjectSource } from '@/lib/live/sources';
+import { readOnly, referencesApi, sourcesApi, type ProjectReference, type ProjectSource } from '@/lib/live/sources';
 import { useProject } from '@/lib/project-context';
 import { useRemote } from '@/lib/remote';
 import { useTheme } from '@/lib/theme';
@@ -85,17 +85,30 @@ export default function Workbench() {
   return <Bench />;
 }
 
-/** A project's sources as tree roots. A source whose folder is not here says why instead of listing. */
+/** A project's sources as tree roots. A source whose folder is not here says why instead of listing. A reference
+    source is read only. */
 function sourceRoots(sources: ProjectSource[]): TreeRoot[] {
   return [...sources].sort((a, b) => (a.primary ? -1 : b.primary ? 1 : a.position - b.position)).map((s) => ({
     key: s.primary ? 'primary' : `source-${s.id}`,
     label: s.label,
     path: s.root ?? null,
     git: null,
+    readOnly: readOnly(s),
     note: s.status === 'onboarding' ? 'Still onboarding. Its folder appears here once it is on this machine.'
       : s.status === 'failed' ? `Onboarding failed${s.note ? `: ${s.note}` : '.'}`
         : `Not on this machine${s.kind === 'git' ? ` — ${s.repo} has no checkout here` : ''}.`,
   }));
+}
+
+/** The projects this one references, each source a read-only root under a "References" heading. */
+function referenceRoots(refs: { ref: ProjectReference; sources: ProjectSource[] }[]): TreeRoot[] {
+  return refs.flatMap(({ ref, sources }) => sourceRoots(sources).map((r) => ({
+    ...r,
+    key: `ref:${ref.project.id}:${r.key}`,
+    label: sources.length > 1 ? `${ref.project.name} · ${r.label}` : ref.project.name,
+    readOnly: true,
+    group: 'References',
+  })));
 }
 
 /** The primary folder of a project whose server does not list sources yet: a local project's own path. */
@@ -110,6 +123,12 @@ function fallbackSources(project: Project): ProjectSource[] {
 /** A project path as a session cites it — label-prefixed for an additional source, plain for the primary — made absolute. */
 function locate(path: string, roots: TreeRoot[]): string | null {
   if (path.startsWith('/') || path.startsWith('~')) return path;
+  // `payments:app/charge.py` — a referenced project's file, as a session names it.
+  const prefixed = /^([a-z0-9][a-z0-9-]*):(.+)$/.exec(path);
+  if (prefixed) {
+    const theirs = roots.filter((r) => r.key.startsWith(`ref:${prefixed[1]}:`));
+    return theirs.length ? locate(prefixed[2], theirs.map((r) => ({ ...r, key: r.key.endsWith(':primary') ? 'primary' : r.key }))) : null;
+  }
   const clean = path.replace(/^\.\//, '');
   const extra = roots.find((r) => r.key !== 'primary' && r.path && clean.startsWith(`${r.label}/`));
   if (extra?.path) return joinPath(extra.path, clean.slice(extra.label.length + 1));
@@ -178,10 +197,31 @@ function Bench() {
     }
   });
 
+  // The projects it references, opened read only beside its own sources. Their failure never hides the project's own tree.
+  const refs = useRemote(place.kind === 'project' && project ? `wb-refs:${project.id}:${treeNonce}` : null, async () => {
+    if (!project) return [];
+    try {
+      const listed = await referencesApi.list(project.id);
+      return await Promise.all(listed.references.map(async (ref) => ({
+        ref, sources: await sourcesApi.list(ref.project.id).catch((e: unknown) => {
+          console.warn(`[NeuroCode] the folders of ${ref.project.name} were not read:`, e);
+          return [] as ProjectSource[];
+        }),
+      })));
+    } catch (e) {
+      console.warn('[NeuroCode] the referenced projects were not read:', e);
+      return [];
+    }
+  });
+
   const baseRoots: TreeRoot[] = useMemo(() => {
     if (place.kind === 'folder') return [{ key: 'folder', label: baseName(place.path), path: place.path, git: null }];
-    return sourceRoots(sources.data ?? []);
-  }, [place, sources.data]);
+    return [...sourceRoots(sources.data ?? []), ...referenceRoots(refs.data ?? [])];
+  }, [place, sources.data, refs.data]);
+  const lockedRoots = baseRoots.filter((r) => r.readOnly && r.path);
+  const isLocked = useCallback((path: string) => lockedRoots.some((r) => r.path && within(path, r.path)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lockedRoots.map((r) => r.path).join('\n')]);
 
   const rootPaths = baseRoots.map((r) => r.path).filter((p): p is string => !!p);
   const gits = useRemote(rootPaths.length ? `wb-git:${rootPaths.join('\n')}:${gitNonce}` : null, async () => {
@@ -283,6 +323,10 @@ function Bench() {
   const save = useCallback(async (path: string, text: string, expect?: string): Promise<boolean> => {
     const tab = tabsRef.current.find((t) => t.path === path);
     if (!tab || tab.text === null) return false;
+    if (isLocked(path)) {
+      toast(`${baseName(path)} is read only`, { description: 'It is in a reference: read for search and grounding, never written from here.' });
+      return false;
+    }
     try {
       const saved = await machineApi.save(path, text, expect ?? tab.sha1);
       setTabs((was) => was.map((t) => (t.path === path ? { ...t, sha1: saved.sha1, size: saved.size } : t)));
@@ -294,7 +338,7 @@ function Bench() {
       else toast.error(`${baseName(path)} was not saved`, { description: reason(e) });
       return false;
     }
-  }, []);
+  }, [isLocked]);
 
   const reload = async (path: string) => {
     try {
@@ -497,6 +541,7 @@ function Bench() {
                   className={cn('group flex max-w-[220px] shrink-0 items-center gap-1.5 border-r border-line/60 pr-1.5 pl-3 text-[12.5px]',
                     on ? 'bg-bg text-ink shadow-[inset_0_-2px_0_var(--os-brand)]' : 'text-soft hover:bg-surface-2/60 hover:text-ink')}
                   onAuxClick={(e) => { if (e.button === 1) closeTab(t.path); }}>
+                  {isLocked(t.path) && <Lock className="size-3 shrink-0 text-dim" aria-label="read only" />}
                   <button type="button" className="min-w-0 truncate py-2 text-left" onClick={() => setActive(t.path)}>{baseName(t.path)}</button>
                   <button type="button" aria-label={t.dirty ? `Close ${baseName(t.path)}, not saved` : `Close ${baseName(t.path)}`}
                     onClick={() => closeTab(t.path)}
@@ -545,6 +590,7 @@ function Bench() {
                     onSave={(path, text) => void save(path, text)}
                     onCursor={(line, col) => setCursor({ line, col })}
                     onLanguage={setLanguage}
+                    readOnly={isLocked(textTab.path)}
                   />
                 </Suspense>
               </div>

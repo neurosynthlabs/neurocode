@@ -527,3 +527,56 @@ class ProjectReference(Base, Mixin):
     note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
+
+class CustomAgent(Base, Mixin):
+    """An agent a person defined — a name, a role, its own instructions, the lane it prefers, the tools it may
+    use (capped by the tool rules: it cannot grant itself more) — for the workspace or one project. Agents
+    defined as files in a repository (.neurocode/agents, .claude/agents) are read from disk, not stored here."""
+
+    __tablename__ = "custom_agents"
+    __table_args__ = (
+        CheckConstraint("mode IN ('primary', 'subagent')", name="mode"),
+        UniqueConstraint("project_id", "name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    role: Mapped[str] = mapped_column(String(160), nullable=False, server_default="")
+    prompt: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    lane: Mapped[str | None] = mapped_column(String(40))
+    tools: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    max_steps: Mapped[int] = mapped_column(Integer, nullable=False, server_default="8")
+    mode: Mapped[str] = mapped_column(String(10), nullable=False, server_default="subagent")
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+
+class CodeReview(Base, Mixin):
+    """A review a person asked for, of any diff — a branch against its base, the working tree, a pushed branch —
+    read by a model lane other than the writer's, with the repository's REVIEW.md as the reviewer's brief."""
+
+    __tablename__ = "code_reviews"
+    __table_args__ = (
+        CheckConstraint("status IN ('running', 'done', 'failed')", name="status"),
+        CheckConstraint("target IN ('branch', 'working-tree', 'commit-range')", name="target"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    ref: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    #: Which source of the project (its label); the first source when empty.
+    source: Mapped[str] = mapped_column(String(60), nullable=False, server_default="")
+    target: Mapped[str] = mapped_column(String(16), nullable=False)
+    base: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    head: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    #: The fingerprint of the patch the reviewer read, so the review is tied to exactly that diff.
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, server_default="")
+    stats: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    findings: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    verdict: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    status: Mapped[str] = mapped_column(String(10), nullable=False, server_default="running")
+    lane: Mapped[str | None] = mapped_column(String(40))
+    model: Mapped[str | None] = mapped_column(String(120))
+    requested_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+

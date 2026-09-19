@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  Bot, Brain, ChevronLeft, ChevronRight, Code2, Download, FileInput, FoldVertical, GitFork, ListChecks, Loader2,
+  BookOpen, Bot, Brain, ChevronLeft, ChevronRight, Code2, Download, FileInput, FoldVertical, GitFork, ListChecks, Loader2,
   MessageSquarePlus, MoreHorizontal, Paperclip, Pencil, RefreshCw, Wrench,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -18,6 +18,7 @@ import { useAuth } from '@/lib/auth';
 import { useData } from '@/lib/data';
 import { fetchModels, type FleetLane } from '@/lib/live/models';
 import { download, sessionsApi, workbenchLink, type PermitDecision } from '@/lib/live/sessions';
+import { referencesOf } from '@/lib/live/sources';
 import { useRemote } from '@/lib/remote';
 import { cn } from '@/lib/utils';
 import { ago } from '@/pages/code/format';
@@ -148,6 +149,9 @@ export default function Sessions() {
   const sessions = list ?? remote.data ?? [];      // what we know locally wins: it is never older
   const ref = picked ?? linked ?? sessions[0]?.ref ?? null;
   const session = sessions.find((s) => s.ref === ref) ?? null;
+  // The projects the session's project reads from: their pieces reach the model labelled as references.
+  const home = session ? projects.find((p) => p.id === session.projectId) : undefined;
+  const readsFrom = home ? referencesOf(home).map((id) => projects.find((p) => p.id === id)?.name ?? id) : [];
   const thinking = ref !== null && waiting.has(ref);
   const wait = (sessionRef: string, on: boolean) => setWaiting((all) => toggled(all, sessionRef, on));
   const refreshList = () => api.sessions().then(setList, (e: unknown) => console.error('[NeuroCode] GET /sessions failed:', e));
@@ -579,8 +583,14 @@ export default function Sessions() {
                     </DropdownMenuContent>
                   </DropdownMenu>
                 )} />
-              {(detail.data?.parentRef || session.grants.length > 0) && (
+              {(detail.data?.parentRef || session.grants.length > 0 || readsFrom.length > 0) && (
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[12px] text-dim">
+                  {readsFrom.length > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-line px-2 py-px text-ink-2"
+                      title={`Read only, labelled as references: ${readsFrom.join(', ')}. Their files are read as <project id>:<path>.`}>
+                      <BookOpen className="size-3" />Reads {readsFrom.length} referenced {readsFrom.length === 1 ? 'project' : 'projects'}
+                    </span>
+                  )}
                   {detail.data?.parentRef && (
                     <button type="button" onClick={() => setPicked(detail.data?.parentRef ?? null)} className="inline-flex items-center gap-1 hover:text-ink">
                       <GitFork className="size-3" />Forked from <Mono>{detail.data.parentRef}</Mono>

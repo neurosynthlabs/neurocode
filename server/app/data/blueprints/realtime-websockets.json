@@ -1,0 +1,311 @@
+{
+ "id": "realtime-websockets",
+ "name": "Realtime app over WebSockets",
+ "summary": "A web app whose screens update live: a WebSocket server fans out changes through Redis pub/sub to every connected client, with Postgres as the record. Chat, collaboration, dashboards and live tracking.",
+ "fitsWhen": [
+  {
+   "answer": "needs",
+   "is": [
+    "realtime"
+   ],
+   "says": "screens must update live"
+  },
+  {
+   "answer": "productType",
+   "is": [
+    "realtime",
+    "web-app",
+    "saas"
+   ],
+   "says": "a live, collaborative web app"
+  },
+  {
+   "answer": "team",
+   "is": [
+    "typescript",
+    "elixir"
+   ],
+   "says": "the team writes TypeScript or Elixir"
+  }
+ ],
+ "avoidWhen": [
+  {
+   "answer": "hosting",
+   "is": [
+    "serverless"
+   ],
+   "says": "only short-lived functions are allowed (sockets need long-lived processes)"
+  },
+  {
+   "answer": "productType",
+   "is": [
+    "content-site",
+    "cli-library"
+   ],
+   "says": "nothing needs to be live"
+  }
+ ],
+ "layers": {
+  "frontend": {
+   "choice": "react",
+   "alternatives": [
+    "svelte",
+    "vue"
+   ],
+   "why": "Components re-render from socket events through a store."
+  },
+  "backend": {
+   "choice": "fastify",
+   "alternatives": [
+    "phoenix",
+    "socketio",
+    "aspnet-core"
+   ],
+   "why": "Node's event loop holds many idle sockets cheaply; Phoenix Channels (Elixir) or SignalR (.NET) are the swaps."
+  },
+  "cache": {
+   "choice": "redis",
+   "alternatives": [
+    "valkey",
+    "nats"
+   ],
+   "why": "Pub/sub fans a message out to every socket server; also presence and rate limits."
+  },
+  "database": {
+   "choice": "postgres",
+   "alternatives": [],
+   "why": "The durable record; sockets carry changes, the database keeps them."
+  },
+  "auth": {
+   "choice": "authjs",
+   "alternatives": [
+    "clerk",
+    "keycloak"
+   ],
+   "why": "The socket handshake carries the session; authorise every channel join."
+  },
+  "infra": {
+   "choice": "docker-compose",
+   "alternatives": [
+    "kubernetes"
+   ],
+   "why": "Several socket servers behind a load balancer that supports WebSockets."
+  },
+  "ci-cd": {
+   "choice": "github-actions",
+   "alternatives": [],
+   "why": "Tests and images on pull requests."
+  },
+  "observability": {
+   "choice": "prometheus",
+   "alternatives": [
+    "grafana",
+    "opentelemetry"
+   ],
+   "why": "Connected sockets, message rates and fan-out latency."
+  },
+  "testing": {
+   "choice": "vitest",
+   "alternatives": [
+    "playwright",
+    "k6"
+   ],
+   "why": "Unit tests, two-browser Playwright tests, k6 for connection load."
+  },
+  "hosting": {
+   "choice": "fly-io",
+   "alternatives": [
+    "render",
+    "vm"
+   ],
+   "why": "Long-lived processes close to users."
+  }
+ },
+ "services": [
+  {
+   "name": "web",
+   "kind": "web",
+   "tech": "react",
+   "responsibilities": [
+    "Live screens",
+    "Reconnects and resyncs after a drop"
+   ],
+   "talksTo": [
+    "realtime",
+    "api"
+   ]
+  },
+  {
+   "name": "api",
+   "kind": "api",
+   "tech": "fastify",
+   "responsibilities": [
+    "HTTP reads and writes",
+    "Publishes a change after each commit"
+   ],
+   "talksTo": [
+    "db",
+    "bus"
+   ]
+  },
+  {
+   "name": "realtime",
+   "kind": "realtime",
+   "tech": "fastify",
+   "responsibilities": [
+    "Holds WebSocket connections",
+    "Subscribes to the bus and forwards to the right rooms"
+   ],
+   "talksTo": [
+    "bus"
+   ]
+  }
+ ],
+ "dataStores": [
+  {
+   "name": "db",
+   "tech": "postgres",
+   "purpose": "The record of every change"
+  },
+  {
+   "name": "bus",
+   "tech": "redis",
+   "purpose": "Pub/sub between API and socket servers; presence"
+  }
+ ],
+ "environments": [
+  {
+   "name": "dev",
+   "purpose": "Each developer's machine",
+   "hosting": "docker compose: web, api, realtime, Postgres, Redis"
+  },
+  {
+   "name": "staging",
+   "purpose": "A copy of production for checking a release",
+   "hosting": "Two realtime instances to prove fan-out works"
+  },
+  {
+   "name": "prod",
+   "purpose": "What people use",
+   "hosting": "Several realtime instances behind a WebSocket-aware load balancer"
+  }
+ ],
+ "ci": {
+  "tool": "github-actions",
+  "stages": [
+   {
+    "name": "lint",
+    "does": "eslint"
+   },
+   {
+    "name": "test",
+    "does": "vitest; API tests with Postgres and Redis"
+   },
+   {
+    "name": "e2e",
+    "does": "Two Playwright browsers see each other's changes"
+   },
+   {
+    "name": "deploy",
+    "does": "Rolling deploy that drains sockets gracefully"
+   }
+  ]
+ },
+ "infra": {
+  "kind": "compose",
+  "tools": [
+   "docker",
+   "docker-compose",
+   "caddy"
+  ],
+  "notes": [
+   "Sticky sessions are not needed once fan-out goes through Redis"
+  ]
+ },
+ "observability": {
+  "tools": [
+   "prometheus",
+   "grafana"
+  ],
+  "notes": [
+   "Gauge of open sockets per instance",
+   "Histogram of publish-to-deliver latency"
+  ]
+ },
+ "security": {
+  "auth": "Session checked at the WebSocket handshake; every room join authorised on the server",
+  "secrets": "Host secret store",
+  "notes": [
+   "Check the Origin header on the handshake",
+   "Rate-limit messages per connection",
+   "Never trust a client's claim of which room it is in"
+  ]
+ },
+ "folderLayout": "web/\napi/\nrealtime/\n  src/rooms/\nshared/\n  events.ts\ndocker-compose.yml",
+ "conventions": [
+  "The database is the truth; a socket message is a hint to re-read or a patch with a version",
+  "Clients resync from the API after reconnecting",
+  "Event names and payloads live in shared/events.ts"
+ ],
+ "adrs": [
+  {
+   "title": "Fan-out through Redis pub/sub",
+   "decision": "Socket servers subscribe to Redis channels.",
+   "why": "Any number of socket servers stay in step without sticky sessions.",
+   "alternatives": [
+    "nats",
+    "postgres listen/notify"
+   ]
+  },
+  {
+   "title": "Write over HTTP, read live over sockets",
+   "decision": "Writes go to the API; sockets only push.",
+   "why": "Validation, auth and transactions stay in one place.",
+   "alternatives": [
+    "writes over the socket"
+   ]
+  }
+ ],
+ "scaffold": {
+  "repos": [
+   {
+    "label": "app",
+    "layout": "web, api and realtime in one repository",
+    "files": [
+     {
+      "path": "README.md",
+      "template": "The three processes, how they talk, and how to see a live update locally."
+     },
+     {
+      "path": "package.json",
+      "template": "npm workspaces web, api, realtime, shared."
+     },
+     {
+      "path": "shared/events.ts",
+      "template": "The event names and payload types sent over sockets."
+     },
+     {
+      "path": "api/src/server.ts",
+      "template": "Fastify with /health and a POST that writes Postgres then publishes to Redis."
+     },
+     {
+      "path": "realtime/src/server.ts",
+      "template": "Fastify with @fastify/websocket: authenticates the handshake, subscribes to Redis, forwards to rooms."
+     },
+     {
+      "path": "web/src/App.tsx",
+      "template": "A list that updates when an event arrives and resyncs on reconnect."
+     },
+     {
+      "path": "docker-compose.yml",
+      "template": "Postgres, Redis, api, realtime and web."
+     },
+     {
+      "path": ".github/workflows/ci.yml",
+      "template": "Lint and test all workspaces."
+     }
+    ]
+   }
+  ]
+ }
+}

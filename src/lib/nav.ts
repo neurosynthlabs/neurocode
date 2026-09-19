@@ -18,6 +18,7 @@ export const NAV: NavItem[] = [
   { section: 'Home', to: '/activity',    label: 'Activity',          icon: 'ScrollText',      keywords: 'brain log timeline events' },
   { section: 'Home', to: '/projects',    label: 'Projects',          icon: 'FolderKanban',    keywords: 'repos repository switch onboard clone measure' },
 
+  { section: 'Build', sub: 'Planning',   to: '/blueprints', label: 'Blueprints',   icon: 'Compass',       keywords: 'design new system architecture wizard template stack framework scaffold greenfield devops' },
   { section: 'Build', sub: 'Planning',   to: '/plans',     label: 'Plans',           icon: 'GitBranchPlus', keywords: 'requirement compiler plan steps decomposition' },
   { section: 'Build', sub: 'Planning',   to: '/tasks',     label: 'Tasks',           icon: 'ListChecks',    keywords: 'kanban backlog epic breakdown board' },
   { section: 'Build', sub: 'Execution',  to: '/workbench', label: 'Workbench',       icon: 'Code2',         perm: ['machine:access'], keywords: 'editor files folders open code terminal run debug breakpoints machine ide' },
