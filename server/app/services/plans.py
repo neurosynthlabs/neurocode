@@ -72,6 +72,7 @@ from ..schemas.work import step_changes
 from ..repositories.sources import ProjectSourceRepository
 from . import instructions
 from .code import Source, checkout, writable
+from .custom_agents import CustomAgentService
 from .errors import Refused, needs_a_model
 from .instructions import Resolved
 from .knowledge import MemoryService
@@ -191,7 +192,8 @@ class PlanService:
         closed = await self._read_only(project.id)
         context = Context(project=_project_doc(project), facts=facts, answers=answers,
                           instructions=told.text, pieces=pieces, taste=taste.text,
-                          readonly=[f"{head}/ — {why}" for head, why in closed.items()])
+                          readonly=[f"{head}/ — {why}" for head, why in closed.items()],
+                          agents=await CustomAgentService(self.session).for_compiler(project))
         grounding = [*told.grounding(), *taste.grounding(),
                      *({"kind": x["kind"], "ref": x["ref"], "path": x["path"]} for x in pieces)]
         return context, grounding
@@ -498,12 +500,18 @@ class PlanService:
             raise NotFound(f"step {step_id} of {plan.ref}")
         return found
 
-    @staticmethod
-    def _owner(agent: str) -> str:
-        """A step's owner as a person picks it: a roster name exactly, never a guess from a word."""
-        name = next((n for n in roster.NAMES if n.casefold() == agent.strip().casefold()), None)
+    async def _owner(self, agent: str, project_id: str) -> str:
+        """A step's owner as a person picks it: a roster name exactly, or by its exact name one of the custom
+        agents the compiler is offered — a subagent of this project or the workspace that may write files, so a
+        step is never handed to one that would fail it for want of the edit tool. Never a guess from a word."""
+        wanted = agent.strip().casefold()
+        name = next((n for n in roster.NAMES if n.casefold() == wanted), None)
         if name is None:
-            raise Refused(f"{agent!r} is not an agent here. Pick one of: {', '.join(roster.NAMES)}.", status=422)
+            writers = await CustomAgentService(self.session).for_compiler(await self.projects.get(project_id))
+            name = next((a["name"] for a in writers if a["name"].casefold() == wanted), None)
+        if name is None:
+            raise Refused(f"{agent!r} is not an agent here. Pick one of: {', '.join(roster.NAMES)}, or a custom "
+                          "agent of this project that may write files.", status=422)
         return name
 
     @staticmethod
@@ -562,7 +570,7 @@ class PlanService:
         if label is not None:
             step.label = self._text(label, "label", MAX_LABEL, required=True)
         if agent is not None:
-            step.agent = self._owner(agent)
+            step.agent = await self._owner(agent, plan.project_id)
         if detail is not None:
             step.detail = self._text(detail, "detail", MAX_DETAIL, required=False)
         after = _step_doc(step)
@@ -582,7 +590,8 @@ class PlanService:
         plan = await self._draft(ref)
         if len(plan.steps) >= MAX_STEPS:
             raise Refused(f"{ref} already has {MAX_STEPS} steps. A plan that long is several plans.", status=422)
-        doc = {"label": self._text(label, "label", MAX_LABEL, required=True), "agent": self._owner(agent),
+        doc = {"label": self._text(label, "label", MAX_LABEL, required=True),
+               "agent": await self._owner(agent, plan.project_id),
                "detail": self._text(detail, "detail", MAX_DETAIL, required=False)}
         order = sorted(plan.steps, key=lambda x: x.n)
         place = len(order) if at is None else max(0, min(at - 1, len(order)))

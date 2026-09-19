@@ -47,6 +47,7 @@ from ..agent import coverage as coverage_reports
 from ..agent import testparse
 from ..agent.testparse import all_expected
 from ..agent.git import LEFTOVERS, SECRETS, TODO
+from ..agent.review import brief as review_brief
 from ..ai.gateway import REVIEW, WRITE, Gateway, NoModel, extract_json
 from ..data import roster
 from ..data.base import utcnow
@@ -68,6 +69,7 @@ from ..settings import settings
 from . import instructions
 from .taste import Applied, TasteService, applied_for
 from .code import roots, writable
+from .custom_agents import CustomAgentService
 from .errors import Denied, Refused
 from .retrieval import RetrievalService
 from .tool_rules import decide as rule_for
@@ -124,6 +126,8 @@ class EditOut(BaseModel):
 class Finding(BaseModel):
     severity: str = "LOW"
     file: str = ""
+    #: Where in the file, as the model wrote it — "42", "42-47" or 42 — made a number by `clean_findings`.
+    line: int | str | None = None
     note: str
 
 
@@ -145,9 +149,26 @@ Reply with one JSON object: {"summary": "what you changed and why", "files": [{"
 
 REVIEW_SYSTEM = """You are the reviewer inside NeuroCode. You are given a real diff. Report only what a careful
 engineer would stop at: correctness, a missing test for the behaviour that changed, a security or data risk, a
-convention the surrounding code follows and this diff breaks. No style nits, no praise.
-Reply with one JSON object: {"findings": [{"severity": "HIGH|MEDIUM|LOW", "file": "...", "note": "..."}],
-"verdict": "one sentence"}"""
+convention the surrounding code follows and this diff breaks. No style nits, no praise. Name the file as the diff
+names it and the line in the new version of the file, when the finding is about one place.
+Reply with one JSON object: {"findings": [{"severity": "HIGH|MEDIUM|LOW", "file": "...", "line": 42,
+"note": "..."}], "verdict": "one sentence"}"""
+
+
+#: The severities a finding may carry; anything else a model writes is read as LOW rather than dropped.
+SEVERITIES = ("HIGH", "MEDIUM", "LOW")
+
+
+def clean_findings(found: list[Finding]) -> list[dict[str, Any]]:
+    """A model's findings as they are kept: at most twenty, a known severity, the line a number or nothing."""
+    out: list[dict[str, Any]] = []
+    for f in found[:20]:
+        severity = f.severity.strip().upper()
+        match = re.match(r"\s*(\d{1,7})", str(f.line)) if f.line is not None else None
+        line = int(match.group(1)) if match and int(match.group(1)) > 0 else None
+        out.append({"severity": severity if severity in SEVERITIES else "LOW", "file": f.file.strip()[:300],
+                    **({"line": line} if line else {}), "note": f.note.strip()[:2000]})
+    return out
 
 
 def stopped(ref: str) -> threading.Event:
@@ -402,15 +423,20 @@ class RunService:
         goal = goal_budget is not None
         setup = {"setups": setups, "elsewhere": elsewhere, "references": references}
 
+        # A custom agent that prefers a lane works on it; the rest are spread across the open lanes as before.
+        # The run keeps the lane, so its review is asked of another one.
+        preferred = await self._preferred_lanes(project, list(groups))
         if len(groups) <= 1:
             work = [s for items in groups.values() for s in items]
+            owner = next(iter(groups), "")
             solo = await self._new_run(plan, task, project, by, setup, role="solo",
-                                       lane=self.gateway.spread(1, WRITE)[0], brief=brief,
+                                       lane=preferred.get(owner) or self.gateway.spread(1, WRITE)[0], brief=brief,
                                        goal_budget=goal_budget, attempt=attempt)
             await self._add_steps(solo, [*self._edit_steps(work), *self._tail(len(work), tests, checks, goal)])
             return [solo]
 
-        lanes = self.gateway.spread(len(groups), WRITE)
+        lanes = [preferred.get(name) or lane
+                 for name, lane in zip(groups, self.gateway.spread(len(groups), WRITE), strict=True)]
         children: list[Run] = []
         for (name, items), lane in zip(groups.items(), lanes, strict=True):
             child = await self._new_run(plan, task, project, by, setup, role="agent", agent=name,
@@ -427,6 +453,16 @@ class RunService:
             child.parent_id = integration.id
         await self.session.flush()
         return [*children, integration]
+
+    async def _preferred_lanes(self, project: Project, owners: list[str]) -> dict[str, str]:
+        """owner name → the lane a custom agent of that name prefers, for the owners that are custom agents."""
+        agents = CustomAgentService(self.session)
+        out: dict[str, str] = {}
+        for name in owners:
+            spec = await agents.by_name(project, name)
+            if spec is not None and spec.lane:
+                out[name] = spec.lane
+        return out
 
     def _edit_steps(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [{"n": i + 1, "kind": "edit", "label": s["label"], "agent": s["agent"],
@@ -1509,7 +1545,17 @@ async def _edit(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool:
         label, who = step.label, step.agent or run.agent or ""
         answered = bool(step.question and step.answer)
         proposal = await asyncio.to_thread(_load_proposal, kept)
-        if proposal is None:
+        # A step owned by a custom agent is written with its instructions and on the lane it prefers; one
+        # the plan named that is not on the roster and that nobody defined is written as the roster writes.
+        spec = await CustomAgentService(s).by_name(await ProjectRepository(s).get(project_id), who) \
+            if who and who not in roster.NAMES else None
+        if proposal is None and spec is not None and not spec.may("edit"):
+            said = (f"{spec.name} may not write files: its tools are {', '.join(spec.tools)}. Give it edit on "
+                    "Agents, or give the step to another agent.")
+            spec_refused = said
+        else:
+            spec_refused = ""
+        if proposal is None and not spec_refused:
             pieces = await _pieces(s, gateway, run, step)
             # A piece from a project this one references is read as a piece, never taken for a file here.
             files, notes = await _context(s, run, step, [x["path"] for x in pieces if x["kind"] == "code"
@@ -1520,8 +1566,13 @@ async def _edit(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool:
             read = ("\n\nRead from retrieval for this step — quote a ref when you rely on it:\n\n"
                     + "\n\n".join(f"[{x['kind']} · {x['ref']}]\n{x['text'][:PIECE_CHARS]}" for x in pieces)
                     if pieces else "")
+            system = _instructed(EDIT_SYSTEM, told, taste)
+            if spec is not None:
+                # The agent's own instructions come first; the runtime's rules follow and win where they differ.
+                system = (f"{spec.as_prompt()}\n\nWhatever the instructions above say, these rules of the runtime "
+                          f"hold and win:\n\n{system}")
             prompt = [
-                {"role": "system", "content": _instructed(EDIT_SYSTEM, told, taste)},
+                {"role": "system", "content": system},
                 {"role": "user", "content": f"You are the {step.agent}.\nProject: {run.project_id}\n"
                                             f"Requirement: {run.requirement}\nStep {step.n}: {step.label}\n"
                                             f"{step.detail}\n\nFiles you may change:\n"
@@ -1533,10 +1584,23 @@ async def _edit(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool:
             ]
             grounding = _grounding_doc(told, pieces, files, taste)
 
+    if spec_refused:
+        async with db.session() as s:
+            run = await RunRepository(s).by_ref(ref)
+            step = next(x for x in run.steps if x.n == step_n)
+            step.status, step.detail = "failed", spec_refused[:300]
+            await RunLogRepository(s).write(run_id, level="err", step=step_n, line=spec_refused)
+        return False
+
     if proposal is None:
         async with db.session() as s:
             run = await RunRepository(s).by_ref(ref)
             _put(run, "grounding", step_n, grounding)
+            if spec is not None:
+                await RunLogRepository(s).write(
+                    run_id, level="info", step=step_n,
+                    line=f"working as {spec.name} ({spec.source}{' · ' + spec.path if spec.path else ''})"
+                         + (f" · prefers {spec.lane}" if spec.lane else ""))
             logs = RunLogRepository(s)
             for level, line in notes:
                 await logs.write(run_id, level=level, step=step_n, line=line)
@@ -1557,7 +1621,8 @@ async def _edit(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool:
         try:
             result = await asyncio.to_thread(
                 gateway.ask, prompt, lambda raw: EditOut.model_validate(extract_json(raw, trim=False)),
-                feature="agent", project=project_id, role=WRITE, lane=lane, agent=who, run_id=run_id)
+                feature="agent", project=project_id, role=WRITE, lane=(spec.lane if spec else None) or lane,
+                agent=who, run_id=run_id)
         except NoModel as e:
             async with db.session() as s:
                 run = await RunRepository(s).by_ref(ref)
@@ -1910,6 +1975,13 @@ def _rule_review(diff: str, checks: list[dict[str, Any]] = ()) -> tuple[list[dic
     return findings, "Checked by rules only — a model would read the diff properly.", "offline rules"
 
 
+def _briefed(brief: tuple[str, str]) -> str:
+    """The repository's REVIEW.md, as the reviewer's system text carries it — after the project's own
+    instructions, the same place for a run's review and one asked for on demand."""
+    return (f"\n\nThe repository's brief for reviewers ({brief[1]}) — it says what matters here, what to leave "
+            f"alone and how severe things are; follow it:\n{brief[0]}")
+
+
 def _evidence(run: Run) -> str:
     """What the project's own commands said about this branch, for whoever reads its diff next."""
     lines = [f"Tests: {run.tests_status}" + (f" · {run.tests_summary}" if run.tests_summary else "")
@@ -1952,7 +2024,12 @@ async def _review(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool
         told = await _told(s, project_id, touched)
         taste = await _taste(s, project_id)
     given = [{"path": f["path"], "bytes": f["bytes"]} for f in told.files if f["applied"]]
-    prompt = [{"role": "system", "content": _instructed(REVIEW_SYSTEM, told, taste)},
+    # The repository's own brief for reviewers, read from the checkout the run branched from — never from
+    # the branch under review, so a change cannot rewrite the rules it is read by.
+    first = parts[0]
+    brief = await asyncio.to_thread(review_brief, first.repo / first.prefix if first.prefix else first.repo)
+    system = _instructed(REVIEW_SYSTEM, told, taste) + (_briefed(brief) if brief else "")
+    prompt = [{"role": "system", "content": system},
               # What the project's own commands said comes after the diff, so the preamble the Models
               # screen shows (requirement, then the diff) stays exactly what is sent first.
               {"role": "user", "content": f"Requirement: {requirement}\n\nDiff:\n{diff}" + f"\n\n{evidence}"}]
@@ -1961,7 +2038,7 @@ async def _review(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool
         result = await asyncio.to_thread(
             gateway.ask, prompt, lambda raw: ReviewOut.model_validate(extract_json(raw, trim=False)),
             feature="review", project=project_id, role=REVIEW, avoid=lane, agent=reviewer, run_id=run_id)
-        findings = [f.model_dump() for f in result.data.findings][:20]
+        findings = clean_findings(result.data.findings)
         verdict, by = result.data.verdict[:300], result.provider.model
     except NoModel:
         findings, verdict, by = _rule_review(diff, checks)
@@ -1974,12 +2051,14 @@ async def _review(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool
         step = next(x for x in run.steps if x.n == step_n)
         kept = {k: v for k, v in (run.review or {}).items() if k != "reviewing"}
         run.review = {**kept, "findings": findings, "verdict": verdict, "by": by, "receipt": {**receipt, "by": by},
-                      "instructions": given, "taste": list(taste.refs)}
+                      "instructions": given, "taste": list(taste.refs),
+                      **({"brief": {"path": brief[1], "bytes": len(brief[0].encode())}} if brief else {})}
         step.detail = verdict or f"{len(findings)} findings"
         high = sum(1 for f in findings if f["severity"] == "HIGH")
-        if given:
+        if given or brief:
             await RunLogRepository(s).write(run.id, level="info", step=step_n,
-                                            line="the reviewer was given " + ", ".join(x["path"] for x in given[:6]))
+                                            line="the reviewer was given " + ", ".join(
+                                                [*(x["path"] for x in given[:6]), *([brief[1]] if brief else [])]))
         await RunLogRepository(s).write(run.id, level="warn" if high else "ok", step=step_n,
                                         line=f"{len(findings)} findings ({high} high) · reviewed by {by} · "
                                              f"receipt {_short(receipt['sha256'])}")

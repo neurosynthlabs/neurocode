@@ -1,0 +1,20 @@
+{
+  // The desktop shell's own program: Node and Electron, never the browser. `npm run desktop:dev` and
+  // `desktop:build` compile it into app/out, which is what Electron runs and electron-builder packs.
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "rootDir": "src",
+    "outDir": "app/out",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "sourceMap": false
+  },
+  "include": ["src"]
+}

@@ -32,6 +32,7 @@ from ..repositories.workflows import Spend, WorkflowRepository
 from ..schemas.work import when
 from ..schemas.workflows import steps_json, workflow_json
 from .code import checkout
+from .custom_agents import CustomAgentService
 from .errors import Refused
 from .plans import PlanService
 from .runs import GATE_WORDS
@@ -255,7 +256,8 @@ class WorkflowService:
                       "costToday": _cost(today)},
             "live": await self._live(live) if live else None,
             "history": await self._history(history),
-            "writers": [name for name in await self.workflows.roster() if name not in roster.NOT_WRITERS],
+            "writers": [name for name in await self.workflows.roster() if name not in roster.NOT_WRITERS]
+                       + [a["name"] for a in await CustomAgentService(self.session).for_compiler(None)],
         }
 
     async def _live(self, lead: Run) -> dict[str, Any]:
@@ -332,7 +334,13 @@ class WorkflowService:
                           "would ask for the same thing.", status=422)
         if not 1 <= len(draft.steps) <= MAX_STEPS:
             raise Refused(f"A workflow has between 1 and {MAX_STEPS} steps.", status=422)
+        project = await self.projects.get(draft.project_id) if draft.project_id else None
+        if draft.project_id and project is None:
+            raise NotFound(f"project {draft.project_id}")
         on_roster = set(await self.workflows.roster())
+        # Beyond the roster, the custom agents that may write — the project's and the workspace's, or the
+        # workspace's alone for a workflow that belongs to no project — exactly as the compiler is offered them.
+        custom = {a["name"] for a in await CustomAgentService(self.session).for_compiler(project)}
         for i, step in enumerate(draft.steps, 1):
             if not step.label.strip():
                 raise Refused(f"Step {i} needs a label.", status=422)
@@ -341,13 +349,12 @@ class WorkflowService:
             if step.agent in roster.NOT_WRITERS:
                 raise Refused(f"Step {i} is given to {step.agent}, and the runtime never gives a writing step "
                               "to them — it would be saved and never run.", status=422)
-            if step.agent not in on_roster:
-                raise Refused(f"Step {i}: {step.agent} is not on the roster.", status=422)
+            if step.agent not in on_roster and step.agent not in custom:
+                raise Refused(f"Step {i}: {step.agent} is neither on the roster nor a custom agent that may write "
+                              "files here.", status=422)
             if any(word in step.label.lower() for word in GATE_WORDS):
                 raise Refused(f"Step {i} asks for an approval. Every run already ends at your signature, and "
                               "the runtime skips a step that asks for one — so it would never run.", status=422)
-        if draft.project_id and await self.projects.get(draft.project_id) is None:
-            raise NotFound(f"project {draft.project_id}")
 
     def _steps(self, draft: WorkflowDraft) -> list[WorkflowStep]:
         return [WorkflowStep(n=i, label=s.label.strip(), agent=s.agent, detail=s.detail.strip())

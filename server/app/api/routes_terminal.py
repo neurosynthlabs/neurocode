@@ -32,6 +32,7 @@ from ..services import terminal as terminals_service
 from ..services.errors import Refused
 from ..services.identity import IdentityService, Person
 from ..services.terminal import MACHINE, RunConfigService, Terminals, open_shell, suggestions
+from ..services.tokens import PREFIX as TOKEN_PREFIX, TokenService
 from ..settings import Settings
 from .deps import COOKIE, current_person, session, token_from
 
@@ -128,6 +129,14 @@ async def socket_person(websocket: WebSocket) -> Person | None:
     token = token_from(websocket)  # type: ignore[arg-type]  # a WebSocket carries headers and cookies alike
     if not token:
         return None
+    if token.startswith(TOKEN_PREFIX):
+        # A personal access token opens a terminal only when it names `machine:access` itself; the
+        # permission check in `admit` sees the token's cut. `session()`, not `read()`: its use is recorded.
+        try:
+            async with websocket.app.state.db.session() as open_session:
+                return await TokenService(open_session).person(token)
+        except Refused:
+            return None
     async with websocket.app.state.db.read() as open_session:
         return await IdentityService(open_session).whoami(token)
 

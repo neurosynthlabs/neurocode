@@ -23,6 +23,8 @@ from pathlib import Path
 _SCRATCH = tempfile.mkdtemp(prefix="neurocode-tests-")
 os.environ.setdefault("NEUROCODE_WORKTREES_DIR", os.path.join(_SCRATCH, "worktrees"))
 os.environ.setdefault("NEUROCODE_REPOS_DIR", os.path.join(_SCRATCH, "repos"))
+# Routines fire only when a test fires them: an app whose lifespan runs must not start the scheduler.
+os.environ.setdefault("NEUROCODE_SCHEDULER", "false")
 atexit.register(shutil.rmtree, _SCRATCH, ignore_errors=True)
 
 import pytest  # noqa: E402 — the environment above must be in place first

@@ -254,6 +254,10 @@ class Chat(Base, Mixin):
     forked_at: Mapped[int | None] = mapped_column(BigInteger)
     #: "Allow for this session" answers to a tool rule's 'ask' — `[{tool, subject, by, at}]`.
     grants: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    #: The agent a session is asked through ("Ask <agent>"): `custom:<id>` for one stored in custom_agents,
+    #: `file:<name>` for one a repository declares in .neurocode/agents or .claude/agents, or a built-in
+    #: agent's id. Null is the ordinary session. Its prompt, lane and tool cap are resolved at each turn.
+    agent: Mapped[str | None] = mapped_column(String(120))
 
     messages: Mapped[list[ChatMessage]] = relationship(back_populates="chat", cascade="all, delete-orphan",
                                                        order_by="ChatMessage.id")

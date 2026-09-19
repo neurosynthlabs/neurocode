@@ -17,7 +17,7 @@ import json
 import time
 import urllib.parse
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -38,6 +38,7 @@ from . import code as code_service
 from . import extensions
 from . import mcp as mcp_service
 from . import web as web_service
+from .custom_agents import AgentSpec, CustomAgentService
 from .errors import Refused
 from .extensions import SkillFile, Snapshot
 from .identity import Person
@@ -358,10 +359,20 @@ class Acting:
     search: bool
     secrets: Any = None
     who: Person | None = None
+    #: Whether reading a web page is offered — always, unless the agent a session is asked through leaves it out.
+    fetch: bool = True
 
     def names(self) -> tuple[str, ...]:
-        return (("web_fetch",) + (("web_search",) if self.search else ())
+        return ((("web_fetch",) if self.fetch else ()) + (("web_search",) if self.search else ())
                 + (("mcp",) if self.servers else ()))
+
+    def narrowed(self, agent: AgentSpec | None) -> Acting:
+        """Only the acting tools this agent lists. It can take tools away, never add one: a tool a person
+        has not connected or configured is still not offered, and every call is still weighed by the rules."""
+        if agent is None or not agent.tools:
+            return self
+        return replace(self, fetch=agent.may("web_fetch"), search=self.search and agent.may("web_search"),
+                       servers=self.servers if agent.may("mcp") else {})
 
 
 async def reach(session: AsyncSession, gateway: Gateway, who: Person | None) -> Acting:
@@ -380,9 +391,9 @@ async def reach(session: AsyncSession, gateway: Gateway, who: Person | None) -> 
 
 def _acting_section(acting: Acting | None) -> str:
     """The acting tools, in the catalogue's own shape, and the MCP servers grouped with their tools."""
-    if acting is None:
+    if acting is None or not acting.names():
         return ""
-    lines = ['- web_fetch {"url": "https://…"} — read one public web page, as text']
+    lines = ['- web_fetch {"url": "https://…"} — read one public web page, as text'] if acting.fetch else []
     if acting.search:
         lines.append('- web_search {"query": "…"} — search the web; answers titles, links and snippets')
     listed, shown = [], 0
@@ -403,33 +414,41 @@ def _acting_section(acting: Acting | None) -> str:
 
 
 def system_prompt(project_name: str, skills: Sequence[SkillFile] = (), instructions: str = "",
-                  acting: Acting | None = None) -> str:
+                  acting: Acting | None = None, agent: AgentSpec | None = None, steps: int = MAX_STEPS) -> str:
     """The standing instructions. Each enabled skill costs one line here; its body is loaded only on ask.
 
     `instructions` is the project's own AGENTS.md / CLAUDE.md text, already read and capped by
     `services/instructions.resolve` — the caller reads it once per answer. It sits after the tools and
     before the answer format, so the unchanging opening of the prompt stays the same for every project.
-    `acting` adds the tools that reach outside the project — the web, and the MCP servers offered."""
-    offered = [t for t in CATALOGUE if t.name != "load_skill" or skills]
+    `acting` adds the tools that reach outside the project — the web, and the MCP servers offered.
+
+    `agent` is the agent a session is asked through: its instructions open the prompt, only the tools it
+    lists are offered, and the rules that follow hold whatever it says. `steps` is its tool calls per answer."""
+    offered = [t for t in CATALOGUE if (t.name != "load_skill" or skills) and (agent is None or agent.may(t.name))]
     catalogue = "\n".join(f"- {t.name} {t.takes} — {t.what}" for t in offered)
     listed = "".join(f"\n- {s.slug} — {s.description[:200]}" for s in skills[:MAX_SKILLS_LISTED])
     skill_section = f"Skills (load one with load_skill when it fits):{listed}\n\n" if skills else ""
     project_section = (f"The project's instructions, from files in its repository — follow them where they "
                        f"apply to your answer:\n{instructions.strip()}\n\n" if instructions.strip() else "")
+    opening = ("You are NeuroCode, working inside an engineering workspace. You answer questions about one "
+               f"project: {project_name}.\n\n")
+    if agent is not None:
+        opening = (f"{agent.as_prompt()}\n\nYou work inside NeuroCode, an engineering workspace, answering questions "
+                   f"about one project: {project_name}. Whatever the instructions above say, the rules below hold "
+                   "and win.\n\n")
     return (
-        "You are NeuroCode, working inside an engineering workspace. You answer questions about one "
-        f"project: {project_name}.\n\n"
+        opening +
         "You cannot see the code until you read it. Use the tools, one at a time, until you know "
         "enough, then answer from what they returned. Never invent a file, a symbol, a line number or "
         "a fact — if the tools do not show it, say so plainly.\n\n"
-        f"Tools:\n{catalogue}\n\n"
+        f"Tools:\n{catalogue or '(none: answer from what you already know, and say what you would need to read)'}\n\n"
         f"{_acting_section(acting)}"
         f"{skill_section}"
         f"{project_section}"
         "Answer with one JSON object and nothing else.\n"
         'To use a tool: {"tool": "<name>", "arguments": {…}, "why": "<a short line for the person watching>"}\n'
         'To answer: {"answer": "<your answer, in the language the person used>"}\n'
-        f"You may call at most {MAX_STEPS} tools before you must answer with what you have."
+        f"You may call at most {steps} tools before you must answer with what you have."
     )
 
 
@@ -480,14 +499,23 @@ class ChatService:
         self.chats = ChatRepository(session)
         self.projects = ProjectRepository(session)
 
-    async def start(self, project_id: str, by: str, title: str = "") -> Chat:
+    async def start(self, project_id: str, by: str, title: str = "", agent: str | None = None) -> Chat:
+        """A new session on a project — an ordinary one, or one answered by an agent (`agent` is its key:
+        `custom:<id>`, `file:<name>` or a roster agent's id), whose instructions, lane and tools every answer
+        in it then uses."""
         project = await self.projects.get(project_id)
         if project is None:
             raise NotFound(f"project {project_id}")
+        spec = None
+        if agent:
+            spec = await CustomAgentService(self.session).resolve(project, agent)
+            if spec is None:
+                raise Refused(f"There is no agent {agent} for {project.name}. Pick one from Agents.", status=422)
         ref = await self.chats.next_ref()
         return await self.chats.add(Chat(
             id=f"s{ref.split('-')[-1]}", ref=ref, project_id=project_id,
-            title=title.strip()[:80] or "New session", started_by=by))
+            title=title.strip()[:80] or (f"Ask {spec.name}" if spec else "New session"), started_by=by,
+            agent=spec.key if spec else None))
 
     async def _open(self, ref: str, doing: str) -> Chat:
         """The session, idle and not waiting on a person — the state every change to its turns needs."""
@@ -522,12 +550,15 @@ class ChatService:
             raise Refused(f"Attach at most {MAX_ATTACHED} things to one question.", status=422)
         if lane is not None:
             self._lane_open(lane)
-        command = await self._command(chat, text)
         project = await self.projects.get(chat.project_id)
+        if chat.agent and await CustomAgentService(self.session).resolve(project, chat.agent) is None:
+            raise Refused(f"{chat.ref} is answered by an agent that is no longer there ({chat.agent}). Start a new "
+                          "session, or fork this one into an ordinary session.", status=409)
+        command = await self._command(chat, text)
         items, context, facts = await self._attached(chat, project, attachments)
         if any(i.get("image") for i in items):
             self._sees(lane)
-        if chat.turns == 0 and chat.title == "New session":
+        if chat.turns == 0 and (chat.title == "New session" or (chat.agent and chat.title.startswith("Ask "))):
             chat.title = text.splitlines()[0][:80]
         arguments = {**(extra or {}), **({"lane": lane} if lane else {})}
         message = await self.chats.say(chat.id, role="you", body=text, by=by, attachments=items,
@@ -915,7 +946,8 @@ async def _picture_parts(session: AsyncSession, chat: Chat, images: Sequence[dic
 
 async def _wire(session: AsyncSession, chat: Chat, project_name: str,
                 skills: Sequence[SkillFile] = (), project_instructions: str = "",
-                acting: Acting | None = None, sees: bool = False) -> list[dict[str, Any]]:
+                acting: Acting | None = None, sees: bool = False, agent: AgentSpec | None = None,
+                steps: int = MAX_STEPS) -> list[dict[str, Any]]:
     """The conversation as the model sees it: the system prompt, the summary of what was folded, then
     the turns since, newest last. A folded turn stays in the table for the person to read and is never
     sent again; reasoning is never sent back at all — it is the model's working, not the conversation.
@@ -924,7 +956,8 @@ async def _wire(session: AsyncSession, chat: Chat, project_name: str,
     `sees` says the lane asked reads images: the question being answered then carries its pictures.
     Anywhere else a picture is named in words, so the model is never told less than the person sees."""
     out: list[dict[str, Any]] = [{"role": "system",
-                                  "content": system_prompt(project_name, skills, project_instructions, acting)}]
+                                  "content": system_prompt(project_name, skills, project_instructions, acting,
+                                                           agent, steps)}]
     turns = [m for m in active(await ChatRepository(session).messages(chat.id)) if not m.compacted]
     summary = next((m for m in reversed(turns) if m.role == "summary"), None)
     if summary is not None:
@@ -1107,7 +1140,7 @@ async def _act(session: AsyncSession, chat: Chat, tool: str, args: dict[str, Any
 async def _tool_turn(session: AsyncSession, gateway: Gateway, chat: Chat, project: Project,
                      turn: Turn, skills: Sequence[SkillFile] = (), recalled: set[str] | None = None,
                      reasoning: str = "", *, acting: Acting | None = None, allowed: bool = False,
-                     by: str = "") -> bool:
+                     by: str = "", agent: AgentSpec | None = None) -> bool:
     """Run one tool and write what it found — a refusal is reported into the conversation, not raised.
 
     `recalled` is the facts this answer has already been handed, so a fact two tools both return is
@@ -1121,11 +1154,21 @@ async def _tool_turn(session: AsyncSession, gateway: Gateway, chat: Chat, projec
     args = turn.arguments or {}
     offered = acting.names() if acting is not None else ()
     tool = BY_NAME.get(name)
+    mine = [t for t in BY_NAME if agent is None or agent.may(t)]
     if tool is None and name not in offered:
         await repo.say(
             chat.id, role="tool", body=f"There is no tool called {turn.tool!r}. The tools are: "
-                                       f"{', '.join([*BY_NAME, *offered])}.",
+                                       f"{', '.join([*mine, *offered])}.",
             tool=name[:40] or "?", arguments=args, detail="refused", ok=False, reasoning=reasoning)
+        return False
+    if agent is not None and tool is not None and not agent.may(name):
+        # The agent's own list decides what it may reach for — a tool it left out is refused like one that
+        # does not exist, and the model is told which it has.
+        chat.tool_calls += 1
+        await repo.say(chat.id, role="tool", body=f"{agent.name} does not use {name}. Its tools are: "
+                                                  f"{', '.join([*mine, *offered]) or 'none'}.",
+                       tool=name, arguments=args, why=turn.why[:160], detail="not this agent's", ok=False,
+                       reasoning=reasoning)
         return False
     try:
         gate = await _gate(session, chat, name, args, acting)
@@ -1318,7 +1361,16 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str, who: Person |
             return                                   # still the person's to decide: nothing to resume
         question = next((m for m in reversed(line) if m.role == "you"), None)
         asked = "" if waiting is not None else _grounding_question(line)
-        acting = await reach(s, gateway, who)
+        # The agent the session is asked through, read again at every answer: an edit to it applies from
+        # the next answer on, and one that is gone ends the answer in words rather than as another agent.
+        agent = await CustomAgentService(s).resolve(project, chat.agent) if chat.agent else None
+        if chat.agent and agent is None:
+            await ChatRepository(s).say(chat.id, role="note", detail="agent gone",
+                                        body=f"This session is answered by an agent that is no longer there "
+                                             f"({chat.agent}), so nothing was asked. Start a new session.")
+            chat.status, chat.last_at = "idle", utcnow()
+            return
+        acting = (await reach(s, gateway, who)).narrowed(agent)
         chat.status = "thinking"
 
     # The lane: the one a person asked for when they regenerated, and for a question with a picture, one
@@ -1340,10 +1392,17 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str, who: Person |
     elif pictures and (seeing := _seeing_lane(gateway, wanted)) is not None:
         wanted, sees = seeing, True                  # resuming: the picture goes where it went before
 
+    # A lane the agent prefers is asked first, unless a person picked one or a picture needs one that sees.
+    if agent is not None and agent.lane and wanted is None and not sees:
+        wanted = agent.lane
+    steps = agent.max_steps if agent is not None else MAX_STEPS
+
     # Skills are discovered once per answer, in a thread, with the switches read once: every step's
     # prompt and every load_skill call works from this snapshot instead of reading the disk again.
     async with db.read() as s:
         found: Snapshot = await extensions.snapshot(s, project)
+    if agent is not None and not agent.may("load_skill"):
+        found = replace(found, skills=())
     try:
         standing = await asyncio.to_thread(_instructions, project)
     except Exception:                                # unreadable instructions must not end the session
@@ -1371,7 +1430,7 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str, who: Person |
                 await _tool_turn(s, gateway, fresh, project, Turn(tool=str(asked_call.get("tool") or ""),
                                                                    arguments=asked_call.get("input") or {},
                                                                    why=waiting.why),
-                                 found.skills, recalled, acting=acting, allowed=True, by=by)
+                                 found.skills, recalled, acting=acting, allowed=True, by=by, agent=agent)
     if asked:
         async with db.session() as s:
             try:
@@ -1385,15 +1444,15 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str, who: Person |
                 await MemoryService(s).recall(recalled, via="retrieval", context=chat.ref)
 
     try:
-        for step in range(MAX_STEPS + 1):
+        for step in range(steps + 1):
             if ref in _STOPPED:
                 async with db.session() as s:
                     await ChatRepository(s).say(chat.id, role="note", body="You stopped this answer.")
                 break
-            last = step == MAX_STEPS
+            last = step == steps
 
             async with db.read() as s:
-                messages = await _wire(s, chat, project_name, found.skills, standing, acting, sees)
+                messages = await _wire(s, chat, project_name, found.skills, standing, acting, sees, agent, steps)
             if last:
                 messages.append({"role": "user", "content":
                                  "You have used every tool call. Answer now with what you already "
@@ -1405,7 +1464,7 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str, who: Person |
                     gateway.ask, messages,
                     lambda raw: Turn.model_validate(extract_json(raw, trim=False)),
                     feature="chat", actor=by, project=chat.project_id, role=CHAT, lane=wanted,
-                    on_delta=tap, stop=lambda: ref in _STOPPED)
+                    agent=agent.name if agent is not None else "", on_delta=tap, stop=lambda: ref in _STOPPED)
             except Stopped as stopped:
                 # What had been written stays, marked as stopped: it is the person's to read, not an answer.
                 words = _Answer()
@@ -1439,7 +1498,7 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str, who: Person |
                     fresh = await ChatRepository(s).by_ref(ref)
                     await ChatRepository(s).say(
                         chat.id, role="assistant",
-                        body=turn.answer or f"I read what I could in {MAX_STEPS} tool calls without "
+                        body=turn.answer or f"I read what I could in {steps} tool calls without "
                                             "reaching an answer.",
                         model=result.provider.model, lane=result.provider.id, ms=result.ms,
                         reasoning=result.reasoning, arguments=_thought(result))
@@ -1465,7 +1524,7 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str, who: Person |
                     fresh.context_tokens = prompt_tokens
                     fresh.model, fresh.lane = result.provider.model, result.provider.id
                 paused = await _tool_turn(s, gateway, fresh, project, turn, found.skills, recalled,
-                                          result.reasoning, acting=acting, by=by)
+                                          result.reasoning, acting=acting, by=by, agent=agent)
             if paused:
                 break                                # the permission card is the last turn until a person decides
     finally:

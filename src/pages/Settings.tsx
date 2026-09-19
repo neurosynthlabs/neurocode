@@ -1,24 +1,30 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type SyntheticEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Check, Globe, Loader2, Search } from 'lucide-react';
+import { Check, Copy, Globe, KeyRound, Loader2, Plus, Search, Terminal } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   Page, PageHeader, PageBody, Panel, Mono, Ascii, SelectField, SectionTitle, KV, Field, Tag,
 } from '@/components/os';
-import { ApiError } from '@/lib/api';
+import { API_BASE, ApiError } from '@/lib/api';
 import { useRemote } from '@/lib/remote';
 import { webApi, WEB_KEY_PERMISSION, type WebPage, type WebSearch, type WebStatus } from '@/lib/live/web';
+import {
+  tokensApi, MACHINE_PERMISSION, type AccessToken, type MadeToken, type TokenPage,
+} from '@/lib/live/tokens';
 import { useTheme, THEMES } from '@/lib/theme';
-import { useAccess } from '@/lib/access';
+import { permissionLabel, useAccess } from '@/lib/access';
 import { useData } from '@/lib/data';
 import { useAuth } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { plural } from '@/lib/words';
+import { ago, at } from '@/lib/time';
 
 /* Only what something reads. Appearance is this browser's; the routing policy, the lanes and their keys,
    roles and gates each have a screen of their own, which is where they are changed. The web is here:
-   the search key, and a place to try a search or read one page. */
+   the search key, and a place to try a search or read one page. So are your access tokens, for the `nc`
+   terminal client and your scripts. */
 
 
 export default function Settings() {
@@ -122,6 +128,8 @@ export default function Settings() {
             </Panel>
 
             <WebPanel />
+
+            <TokensPanel />
 
             <Panel eyebrow="Changed on their own screens" title="Set elsewhere">
               <div className="divide-y divide-line/60">
@@ -332,5 +340,291 @@ function WebPanel() {
         </>
       )}
     </Panel>
+  );
+}
+
+/* ── Access tokens ─────────────────────────────────────────────── */
+
+/** How long a new token lasts, as offered. The API takes 1–366 days, or none: until revoked. */
+const LIFETIMES: { value: string; label: string }[] = [
+  { value: '30', label: '30 days' },
+  { value: '90', label: '90 days' },
+  { value: '7', label: '7 days' },
+  { value: '365', label: 'A year' },
+  { value: 'never', label: 'Until I revoke it' },
+];
+
+/** Where `nc login` should point: this web app, whose API is under /api — or the API itself when it lives elsewhere. */
+function loginLine(): string {
+  const origin = window.location.origin;
+  return /^https?:\/\//.test(API_BASE) ? `nc login ${API_BASE} --web ${origin}` : `nc login ${origin}`;
+}
+
+const STATE_TONE = { active: 'ok', expired: 'neutral', revoked: 'danger' } as const;
+
+/** Your personal access tokens: made here (shown once), listed with when each was last used, revoked in two clicks. */
+function TokensPanel() {
+  const { catalogue } = useAccess();
+  const [version, setVersion] = useState(0);
+  const [extra, setExtra] = useState<AccessToken[]>([]);
+  const [next, setNext] = useState<number | null>(null);
+  const [more, setMore] = useState(false);
+  const [making, setMaking] = useState(false);
+  const [armed, setArmed] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState<string | null>(null);
+  const page = useRemote<TokenPage>(`tokens:${version}`, () => tokensApi.list());
+  useEffect(() => {
+    if (!armed) return;
+    const id = window.setTimeout(() => setArmed(null), 4000);
+    return () => window.clearTimeout(id);
+  }, [armed]);
+
+  const reload = () => { setExtra([]); setNext(null); setVersion((v) => v + 1); };
+  const items = [...(page.data?.items ?? []), ...extra];
+  const nextOffset = next ?? page.data?.nextOffset ?? null;
+  const live = items.filter((t) => t.state === 'active').length;
+
+  const loadMore = async () => {
+    if (nextOffset === null) return;
+    setMore(true);
+    try {
+      const found = await tokensApi.list(nextOffset);
+      setExtra((e) => [...e, ...found.items]);
+      setNext(found.nextOffset ?? -1);
+    } catch (e) {
+      toast.error('More tokens did not load', { description: reason(e) });
+    } finally {
+      setMore(false);
+    }
+  };
+  const revoke = async (t: AccessToken) => {
+    if (armed !== t.id) { setArmed(t.id); return; }
+    setArmed(null);
+    setRevoking(t.id);
+    try {
+      await tokensApi.revoke(t.id);
+      toast.success(`${t.name} revoked`, { description: 'Anything still using it is refused from now on.' });
+      reload();
+    } catch (e) {
+      toast.error('Not revoked', { description: reason(e) });
+    } finally {
+      setRevoking(null);
+    }
+  };
+
+  return (
+    <Panel eyebrow="Yours alone · for the nc terminal client and your scripts"
+      title={<span className="flex items-center gap-1.5"><KeyRound className="size-3.5 text-brand" />Access tokens</span>}
+      actions={<Button size="sm" variant="outline" onClick={() => setMaking(true)}><Plus className="size-3.5" />New token</Button>}>
+      <p className="text-[12.5px] text-ink-2">
+        A token signs in as you, limited to the permissions it names and never more than you hold. With none named it
+        carries everything you hold except <Mono>{MACHINE_PERMISSION}</Mono> — a terminal on this machine is only ever
+        opened by a token that names it. Making and revoking tokens is written to the audit log.
+      </p>
+      <div className="mt-2.5 flex min-w-0 flex-wrap items-center gap-2 text-[12.5px] text-soft">
+        <Terminal className="size-3.5 shrink-0 text-dim" />
+        <span>In a terminal,</span>
+        <Mono className="min-w-0 [overflow-wrap:anywhere]">{loginLine()}</Mono>
+        <span>makes one for that machine and keeps it in its keychain.</span>
+      </div>
+
+      <div className="mt-4 border-t border-line pt-1">
+        {page.loading ? (
+          <p className="py-3 text-[13px] text-dim"><Loader2 className="mr-2 inline size-3.5 animate-spin" />asking the API…</p>
+        ) : page.error ? (
+          <div className="flex flex-wrap items-center gap-2 py-3">
+            <p className="text-[13px] text-danger">{page.error}</p>
+            <Button size="xs" variant="outline" onClick={reload}>Try again</Button>
+          </div>
+        ) : items.length === 0 ? (
+          <p className="py-3 text-[13px] text-dim">
+            No tokens yet. Make one here for a script, or run <Mono>nc login</Mono> in a terminal.
+          </p>
+        ) : (
+          <>
+            <div className="divide-y divide-line/60">
+              {items.map((t) => (
+                <div key={t.id} className={cn('flex flex-wrap items-center gap-x-4 gap-y-1.5 py-2.5', t.state !== 'active' && 'opacity-70')}>
+                  <div className="min-w-0 flex-1 basis-56">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <span className="truncate text-[13.5px] font-medium text-ink">{t.name}</span>
+                      <Mono>{t.prefix}…</Mono>
+                      {t.state !== 'active' && <Tag tone={STATE_TONE[t.state]}>{t.state}</Tag>}
+                    </div>
+                    <p className="mt-0.5 text-[12px] text-dim [overflow-wrap:anywhere]">
+                      {t.allScopes
+                        ? 'Everything you hold, except machine access'
+                        : t.scopes.map((s) => permissionLabel(catalogue, s)).join(' · ')}
+                    </p>
+                  </div>
+                  <div className="text-[12px] text-soft">
+                    <div>Last used {t.lastUsedAt ? ago(t.lastUsedAt) : 'never'}</div>
+                    <div className="text-dim">
+                      Made {ago(t.createdAt)} ·{' '}
+                      {t.revokedAt ? `revoked ${ago(t.revokedAt)}` : t.expiresAt
+                        ? `${t.state === 'expired' ? 'expired' : 'expires'} ${at(t.expiresAt)}` : 'no expiry'}
+                    </div>
+                  </div>
+                  {t.state === 'active' && (
+                    <Button size="xs" variant={armed === t.id ? 'destructive' : 'outline'} disabled={revoking === t.id}
+                      onClick={() => void revoke(t)}>
+                      {revoking === t.id && <Loader2 className="size-3.5 animate-spin" />}
+                      {armed === t.id ? 'Click again to revoke' : 'Revoke'}
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[12px] text-dim">
+              <span>{plural(live, 'live token')} of {page.data?.total ?? items.length}</span>
+              {nextOffset !== null && nextOffset >= 0 && (
+                <Button size="xs" variant="outline" disabled={more} onClick={() => void loadMore()}>
+                  {more && <Loader2 className="size-3.5 animate-spin" />}Show more
+                </Button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      <MakeToken open={making} onOpenChange={setMaking} onMade={reload} />
+    </Panel>
+  );
+}
+
+/** The new-token dialog: a name, how long it lasts, what it may do — then the token, once. */
+function MakeToken({ open, onOpenChange, onMade }: {
+  open: boolean; onOpenChange: (open: boolean) => void; onMade: () => void;
+}) {
+  const { user } = useAuth();
+  const { catalogue } = useAccess();
+  const [name, setName] = useState('');
+  const [lifetime, setLifetime] = useState('90');
+  const [limited, setLimited] = useState(false);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [made, setMade] = useState<MadeToken | null>(null);
+
+  // Only what you hold can be given to a token, in the catalogue's order, grouped as the access screen groups them.
+  const held = useMemo(() => {
+    const mine = new Set(user?.permissions ?? []);
+    const known = catalogue?.permissions ?? [];
+    const listed = known.filter((p) => mine.has(p.id));
+    const unknown = [...mine].filter((id) => !known.some((p) => p.id === id))
+      .map((id) => ({ id, label: id, group: 'Other', description: '' }));
+    return [...listed, ...unknown];
+  }, [user, catalogue]);
+
+  const ready = !!name.trim() && (!limited || picked.length > 0);
+  const close = () => {
+    onOpenChange(false);
+    setName(''); setLifetime('90'); setLimited(false); setPicked([]); setMade(null);
+  };
+  const submit = async (e: SyntheticEvent) => {
+    e.preventDefault();
+    if (!ready || busy) return;
+    setBusy(true);
+    try {
+      const token = await tokensApi.create({
+        name: name.trim(), scopes: limited ? picked : [], expiresInDays: lifetime === 'never' ? null : Number(lifetime),
+      });
+      setMade(token);
+      onMade();
+    } catch (err) {
+      toast.error('Token not made', { description: reason(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const copy = () => {
+    if (!made) return;
+    navigator.clipboard.writeText(made.token)
+      .then(() => toast.success('Token copied'), () => toast.error('Copying is blocked here. Select the text instead.'));
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) close(); }}>
+      <DialogContent className="sm:max-w-[560px]">
+        {made ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>{made.name} is ready</DialogTitle>
+              <DialogDescription>
+                Copy it now: this is the only time it is shown. Only its first characters are kept to tell it apart.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="min-w-0 rounded-xl border border-line bg-surface-2/50 px-4 py-3">
+              <code className="block font-mono text-[12.5px] break-all text-ink select-all">{made.token}</code>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[12px] text-dim">
+                  {made.expiresAt ? `Works until ${at(made.expiresAt)}.` : 'Works until you revoke it.'}
+                </span>
+                <Button type="button" size="sm" variant="outline" onClick={copy}><Copy className="size-3.5" />Copy</Button>
+              </div>
+            </div>
+            <div className="min-w-0 text-[12.5px] text-soft">
+              <p>Use it as <Mono>Authorization: Bearer …</Mono>, or hand it to the terminal client:</p>
+              <Mono className="mt-1.5 inline-block [overflow-wrap:anywhere]">{`${loginLine()} --token -`}</Mono>
+            </div>
+            <DialogFooter><Button onClick={close}>Done</Button></DialogFooter>
+          </>
+        ) : (
+          <form onSubmit={submit} className="grid min-w-0 gap-4">
+            <DialogHeader>
+              <DialogTitle>New access token</DialogTitle>
+              <DialogDescription>It signs in as you, within what you choose here, until it expires or you revoke it.</DialogDescription>
+            </DialogHeader>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="Name" value={name} onChange={setName} autoFocus autoComplete="off" placeholder="CI on the build server" />
+              <SelectField label="Works for" value={lifetime} onChange={setLifetime} options={LIFETIMES} />
+            </div>
+            <div className="min-w-0">
+              <div className="mb-1.5 text-[12.5px] font-medium text-soft">What it may do</div>
+              <div className="grid gap-1.5">
+                {[{ on: false, title: 'Everything you hold, except machine access', note: 'The usual choice for nc and scripts. A terminal on this machine stays out of reach.' },
+                  { on: true, title: 'Only what I choose', note: 'Named permissions only. Choose machine access here if the token must open a terminal.' }].map((o) => (
+                  <label key={String(o.on)} className={cn('flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors',
+                    limited === o.on ? 'border-brand/45 bg-brand/6' : 'border-line hover:bg-surface-2/60')}>
+                    <input type="radio" name="token-scope" className="mt-0.5 size-4 shrink-0 accent-[var(--os-brand)]"
+                      checked={limited === o.on} onChange={() => setLimited(o.on)} />
+                    <span className="min-w-0">
+                      <span className="block text-[13.5px] font-medium text-ink">{o.title}</span>
+                      <span className="block text-[12.5px] leading-snug text-soft">{o.note}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {limited && (
+                <div className="mt-2 max-h-[240px] space-y-1 overflow-y-auto rounded-lg border border-line p-2">
+                  {held.length === 0 ? (
+                    <p className="px-1 py-1.5 text-[12.5px] text-dim">Your roles hold no permissions, so there is nothing to give a token.</p>
+                  ) : held.map((p) => {
+                    const on = picked.includes(p.id);
+                    return (
+                      <label key={p.id} className="flex cursor-pointer items-start gap-2.5 rounded-md px-1.5 py-1.5 hover:bg-surface-2/60">
+                        <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-[var(--os-brand)]" checked={on}
+                          onChange={(e) => setPicked(e.target.checked ? [...picked, p.id] : picked.filter((x) => x !== p.id))} />
+                        <span className="min-w-0">
+                          <span className="block text-[13px] text-ink">
+                            {p.label} <span className="font-mono text-[11.5px] text-dim">{p.id}</span>
+                          </span>
+                          {p.id === MACHINE_PERMISSION
+                            ? <span className="block text-[12px] text-warn">Lets the token open a terminal and change files on this machine.</span>
+                            : p.description && <span className="block text-[12px] leading-snug text-dim">{p.description}</span>}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={close}>Cancel</Button>
+              <Button type="submit" disabled={!ready || busy}>{busy && <Loader2 className="size-3.5 animate-spin" />}Make token</Button>
+            </DialogFooter>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }

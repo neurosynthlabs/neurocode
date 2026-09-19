@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     #: Where the folder browser may go, separated by ':'. `~` is the home of the account the API runs as.
     machine_roots: str = "~"
 
+    #: The routines' scheduler: a loop in the API's lifespan that fires due routines every thirty seconds.
+    #: Several API processes may all run it — an advisory lock lets only one claim a routine — and the
+    #: tests switch it off, so nothing fires on its own while a test is looking.
+    scheduler: bool = True
+
     # ── the web layer ────────────────────────────────────────────
     #: Origins allowed to carry the session cookie. Local by default; add a domain to host it.
     cors_origin_regex: str = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"

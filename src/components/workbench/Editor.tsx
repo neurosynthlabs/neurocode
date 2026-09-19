@@ -1,4 +1,4 @@
-import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type Ref } from 'react';
+import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type MouseEvent, type Ref } from 'react';
 import { basicSetup } from 'codemirror';
 import { indentWithTab } from '@codemirror/commands';
 import { HighlightStyle, LanguageDescription, syntaxHighlighting, type LanguageSupport } from '@codemirror/language';
@@ -6,6 +6,7 @@ import { languages } from '@codemirror/language-data';
 import { Compartment, EditorSelection, EditorState, Prec, RangeSetBuilder, type Extension, type StateEffect, type Text } from '@codemirror/state';
 import { Decoration, EditorView, GutterMarker, gutter, keymap } from '@codemirror/view';
 import { tags as t } from '@lezer/highlight';
+import { isDesktop, onPathMenu } from '@/lib/desktop';
 import { baseName } from '@/lib/live/machine';
 
 /* The Workbench's editor: CodeMirror 6, one view whose state is swapped per tab — so each open file keeps
@@ -302,5 +303,14 @@ export default function Editor(props: EditorProps) {
     focus: () => view.current?.focus(),
   }), []);
 
-  return <div ref={host} className="h-full min-h-0 overflow-hidden [&_.cm-editor]:h-full" />;
+  // In the desktop app a right click gives the Mac's menu for this file — Cut, Copy and Paste, then Open in the
+  // person's editor at the line clicked, Reveal in Finder, Copy Path. A browser keeps its own menu.
+  const menu = (e: MouseEvent<HTMLDivElement>) => {
+    const v = view.current;
+    const at = v?.posAtCoords({ x: e.clientX, y: e.clientY });
+    const line = v ? v.state.doc.lineAt(at ?? v.state.selection.main.head).number : undefined;
+    onPathMenu(e, current.current, { line, edit: !latest.current.readOnly });
+  };
+
+  return <div ref={host} onContextMenu={isDesktop ? menu : undefined} className="h-full min-h-0 overflow-hidden [&_.cm-editor]:h-full" />;
 }

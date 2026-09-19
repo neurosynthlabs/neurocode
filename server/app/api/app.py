@@ -27,6 +27,7 @@ from ..events import Bus
 from . import (
     routes_admin,
     routes_admin_system,
+    routes_agents,
     routes_ai,
     routes_auth,
     routes_blueprints,
@@ -41,11 +42,13 @@ from . import (
     routes_plans,
     routes_platform,
     routes_research,
+    routes_routines,
     routes_runs,
     routes_sessions,
     routes_system,
     routes_terminal,
     routes_testing,
+    routes_tokens,
     routes_work,
     routes_workflows,
     stream,
@@ -60,7 +63,8 @@ ROUTERS = (routes_auth.router, routes_work.router, routes_plans.router, routes_k
            routes_ai.router, routes_system.router, routes_admin.router, routes_admin_system.router,
            routes_testing.router, routes_git.router, routes_extensions.router, routes_workflows.router,
            routes_evals.router, routes_research.router, routes_ops.router, routes_permissions.router,
-           routes_machine.router, routes_terminal.router, routes_blueprints.router, stream.router)
+           routes_machine.router, routes_terminal.router, routes_blueprints.router, routes_routines.router,
+           routes_tokens.router, routes_agents.router, stream.router)
 
 #: What a row that was in flight when the process died says about itself afterwards.
 INTERRUPTED = "interrupted: the server restarted"
@@ -150,7 +154,19 @@ def create_api(db: Database | None = None, *, config: Settings | None = None) ->
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await _on_start(app)
+        # Routines fire from here, in this process, after the start-up chores have run. The loop survives
+        # a database that is not there yet; stopping the app stops it and any fire it has under way.
+        clock: asyncio.Task[None] | None = None
+        scheduler = None
+        if cfg.scheduler:
+            from ..services.schedules import Scheduler
+            scheduler = Scheduler(app.state.db, app.state.gateway)
+            clock = asyncio.create_task(scheduler.run())
         yield
+        if clock is not None and scheduler is not None:
+            clock.cancel()
+            await asyncio.gather(clock, return_exceptions=True)
+            await scheduler.stop()
         app.state.ledger.close()
         if owned:                                   # an engine this app made is an engine it closes
             await app.state.db.close()

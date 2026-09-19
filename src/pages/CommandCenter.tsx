@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ArrowUp, Bug, ChevronRight, Compass, Cpu, FolderGit2, GitBranchPlus, Lightbulb, Loader2, MessagesSquare, ShieldAlert, ShieldCheck,
+  ArrowUp, Bell, BellOff, Bug, Check, ChevronRight, Compass, Cpu, FolderGit2, GitBranchPlus, Lightbulb, Loader2, MessagesSquare, ShieldAlert, ShieldCheck,
   Sparkles, TriangleAlert, WandSparkles, X, type LucideIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -12,6 +12,9 @@ import { useAuth } from '@/lib/auth';
 import { useProject } from '@/lib/project-context';
 import { useData } from '@/lib/data';
 import { fetchModels, type ModelsReport } from '@/lib/live/models';
+import { inboxApi, inboxTarget, type Inbox, type InboxItem } from '@/lib/live/inbox';
+import { disableNotify, enableNotify, useNotifyState } from '@/lib/notify';
+import { useRemote } from '@/lib/remote';
 import { clock } from '@/lib/live/work';
 import { ago } from '@/lib/time';
 import { cn } from '@/lib/utils';
@@ -262,6 +265,9 @@ export default function CommandCenter() {
           </p>
         </section>
 
+        {/* The inbox: what needs you, what is working, what finished since you last looked. */}
+        <InboxStrip />
+
         {/* A workspace with no project yet: the two ways in. */}
         {all.length === 0 && (
           <section className="mx-auto mt-10 grid w-full max-w-[760px] grid-cols-1 gap-4 sm:grid-cols-2" aria-label="Get started">
@@ -399,5 +405,152 @@ export default function CommandCenter() {
         </section>
       </PageBody>
     </Page>
+  );
+}
+
+/* ── The inbox strip ─────────────────────────────────────────────
+   Three calm columns read from the work itself: nothing here is stored, so marking it seen only moves
+   the moment "done since" counts from. It is read again whenever the stream says something changed. */
+
+const NEEDS_WORD: Record<string, string> = { approval: 'Decision', question: 'Question', signature: 'Signature', permission: 'Permission' };
+const WORKING_WORD: Record<string, string> = { run: 'Run', session: 'Session', routine: 'Routine' };
+const DONE_WORD: Record<string, string> = { run: 'Run', plan: 'Plan', routine: 'Routine', review: 'Review', research: 'Research', eval: 'Eval' };
+const BAD = new Set(['failed', 'cancelled', 'refused']);
+
+function InboxStrip() {
+  const nav = useNavigate();
+  const { approvals, runs, activity, onChat } = useData();
+  const notifyState = useNotifyState();
+  const [chatTick, setChatTick] = useState(0);
+  const [marking, setMarking] = useState(false);
+
+  // A session's turn (a permission card, a finished answer) is not a document the store holds, so it
+  // nudges a re-read here — once a second at most, however fast the turns arrive.
+  useEffect(() => {
+    let t: number | undefined;
+    const off = onChat((m) => {
+      if (m.stream || t !== undefined) return;
+      t = window.setTimeout(() => { t = undefined; setChatTick((n) => n + 1); }, 1000);
+    });
+    return () => { off(); window.clearTimeout(t); };
+  }, [onChat]);
+
+  const stamp = useMemo(() => [
+    approvals.filter((a) => a.status === 'pending').map((a) => a.ref).join(','),
+    runs.slice(0, 30).map((r) => `${r.ref}:${r.status}`).join(','),
+    activity[0]?.id ?? '',
+    chatTick,
+  ].join('|'), [approvals, runs, activity, chatTick]);
+  const box = useRemote('inbox', () => inboxApi.read());
+  const reload = useRef(() => {});
+  useLayoutEffect(() => { reload.current = box.reload; });
+  const seen = useRef(stamp);
+  useEffect(() => {
+    if (seen.current === stamp) return;
+    seen.current = stamp;
+    const t = window.setTimeout(() => reload.current(), 400);
+    return () => window.clearTimeout(t);
+  }, [stamp]);
+
+  const markSeen = async () => {
+    setMarking(true);
+    try {
+      await inboxApi.seen();
+      box.reload();
+    } catch (e) {
+      toast.error('Not marked', { description: e instanceof Error ? e.message : 'The local API did not answer.' });
+    } finally {
+      setMarking(false);
+    }
+  };
+
+  const toggleNotify = async () => {
+    if (notifyState === 'on') {
+      disableNotify();
+      toast('Notifications off');
+      return;
+    }
+    const now = await enableNotify();
+    if (now === 'on') toast.success('Notifications on', { description: 'While NeuroCode is in the background, you hear when something needs you or finishes.' });
+    else toast.warning('Notifications are blocked', { description: 'This browser refused them. Allow notifications for this site in its settings, then try again.' });
+  };
+
+  const data: Inbox | null = box.data;
+  return (
+    <section className="mx-auto mt-10 w-full max-w-[1120px]" aria-label="Inbox">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1">
+        <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-ink">Inbox</h2>
+        <div className="flex items-center gap-1.5">
+          {notifyState !== 'unsupported' && (
+            <Button size="sm" variant="ghost" onClick={() => void toggleNotify()} aria-pressed={notifyState === 'on'}
+              title={notifyState === 'blocked' ? 'This browser blocks notifications for this site' : 'A notification when something needs you or finishes, while NeuroCode is in the background'}>
+              {notifyState === 'on' ? <Bell className="size-3.5" /> : <BellOff className="size-3.5" />}
+              {notifyState === 'on' ? 'Notifying you' : 'Notify me'}
+            </Button>
+          )}
+        </div>
+      </div>
+      {box.error ? (
+        <div className="rounded-xl border border-line/70 bg-surface">
+          <Empty title="The inbox did not load" hint={box.error} action={<Button size="sm" variant="outline" onClick={box.reload}>Try again</Button>} />
+        </div>
+      ) : !data ? (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          {[0, 1, 2].map((i) => <div key={i} className="h-[132px] animate-pulse rounded-xl border border-line/60 bg-surface" />)}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <InboxColumn title="Needs you" count={data.counts.needsYou} tone="warn" items={data.needsYou} words={NEEDS_WORD}
+            empty="Nothing is waiting for you." onOpen={(i) => nav(inboxTarget(i))} />
+          <InboxColumn title="Working" count={data.counts.working} tone="brand" items={data.working} words={WORKING_WORD}
+            empty="No agent, session or routine is working." onOpen={(i) => nav(inboxTarget(i))} />
+          <InboxColumn
+            title={data.sinceVisit ? 'Done since your last visit' : 'Done in the last day'} count={data.counts.doneSince} tone="ok"
+            items={data.doneSince} words={DONE_WORD} onOpen={(i) => nav(inboxTarget(i))}
+            empty={data.sinceVisit ? `Nothing has finished since ${ago(data.since)}.` : 'Nothing has finished in the last day.'}
+            action={data.counts.doneSince > 0 && (
+              <Button size="xs" variant="ghost" onClick={() => void markSeen()} disabled={marking}>
+                {marking ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />}Mark seen
+              </Button>
+            )} />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function InboxColumn({ title, count, tone, items, words, empty, action, onOpen }: {
+  title: string; count: number; tone: 'warn' | 'brand' | 'ok'; items: InboxItem[]; words: Record<string, string>;
+  empty: string; action?: ReactNode; onOpen: (item: InboxItem) => void;
+}) {
+  const shown = items.slice(0, 4);
+  return (
+    <div className="flex min-w-0 flex-col rounded-xl border border-line/70 bg-surface">
+      <div className="flex items-center gap-2 px-4 pt-3.5 pb-2">
+        <span className="text-[13.5px] font-semibold text-ink">{title}</span>
+        <span className={cn('tnum text-[13px]', count ? { warn: 'text-warn', brand: 'text-brand', ok: 'text-ok' }[tone] : 'text-dim')}>{count}</span>
+        <span className="ml-auto">{action}</span>
+      </div>
+      {shown.length === 0 ? (
+        <p className="px-4 pb-4 text-[13px] text-dim">{empty}</p>
+      ) : (
+        <div className="pb-1.5">
+          {shown.map((i) => (
+            <button key={`${i.kind}:${i.ref}:${i.at ?? ''}`} onClick={() => onOpen(i)}
+              className="flex w-full items-start gap-2.5 px-4 py-2 text-left transition-colors hover:bg-surface-2/60">
+              <Dot state={i.status && BAD.has(i.status) ? 'error' : tone === 'warn' ? 'waiting' : tone === 'brand' ? 'running' : 'done'}
+                pulse={tone === 'brand'} className="mt-1.5" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[13.5px] text-ink-2">{i.title}</span>
+                <span className="mt-0.5 block truncate text-[12px] text-dim">
+                  {words[i.kind] ?? i.kind} · {i.kind !== 'routine' && i.ref !== i.title ? `${i.ref} · ` : ''}{i.detail ? `${i.detail} · ` : ''}{ago(i.at)}
+                </span>
+              </span>
+            </button>
+          ))}
+          {count > shown.length && <p className="px-4 pt-0.5 pb-2 text-[12px] text-dim">and {count - shown.length} more</p>}
+        </div>
+      )}
+    </div>
   );
 }

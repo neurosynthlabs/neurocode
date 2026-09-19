@@ -417,7 +417,8 @@ class ScheduleFire(Base):
     trigger: Mapped[str] = mapped_column(String(20), nullable=False)
     plan_ref: Mapped[str | None] = mapped_column(String(40))
     run_ref: Mapped[str | None] = mapped_column(String(40))
-    #: fired | refused | failed — and why, in words.
+    #: firing (compiling or dispatching now) | fired | refused | failed | skipped (the last fire's work was
+    #: still unfinished) — and why, in words.
     outcome: Mapped[str] = mapped_column(String(20), nullable=False)
     detail: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     #: The first part of a webhook's payload, kept as quoted data — never read as an instruction.

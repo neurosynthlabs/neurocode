@@ -158,12 +158,32 @@ async def test_the_test_phase_appears_only_where_the_project_has_a_test_command(
     ({"requirementTemplate": "Always the same thing."}, "{input}"),
     ({"steps": [{"label": "Plan it", "agent": "AI Commander"}]}, "never run"),
     ({"steps": [{"label": "Get approval from the lead", "agent": "Backend Engineer"}]}, "approval"),
-    ({"steps": [{"label": "Write it", "agent": "Nobody In Particular"}]}, "not on the roster"),
+    ({"steps": [{"label": "Write it", "agent": "Nobody In Particular"}]}, "neither on the roster"),
 ])
 async def test_a_step_the_runtime_would_silently_drop_is_refused(client: AsyncClient, change: dict[str, Any],
                                                                  words: str):
     refused = await client.post("/workflows", json={**TWO_AGENTS, **change})
     assert refused.status_code == 422 and words in refused.json()["detail"]
+
+
+async def test_a_custom_agent_that_may_write_can_own_a_step_and_one_that_cannot_is_refused(client: AsyncClient):
+    """A workspace's own agent is an owner like a roster agent — offered in the editor and accepted — as long as it is
+    a subagent that may edit files; one limited to reading would own a step that never writes anything."""
+    writer = {"name": "Ledger Auditor", "role": "Fixes rounding", "prompt": "Round money with round(x, 2).",
+              "lane": None, "tools": ["read_file", "edit"], "maxSteps": 3, "mode": "subagent"}
+    reader = {**writer, "name": "Ledger Reader", "tools": ["read_file"]}
+    assert (await client.post("/agents/custom", json=writer)).status_code == 201
+    assert (await client.post("/agents/custom", json=reader)).status_code == 201
+    writers = (await client.get("/workflows/overview")).json()["writers"]
+    assert "Ledger Auditor" in writers and "Ledger Reader" not in writers
+
+    steps = [{"label": "Round the totals", "agent": "Ledger Auditor"}, {"label": "Add its test", "agent": "Backend Engineer"}]
+    made = await client.post("/workflows", json={**TWO_AGENTS, "name": "Rounding", "steps": steps})
+    assert made.status_code == 201, made.text
+    assert [s["agent"] for s in made.json()["steps"]] == ["Ledger Auditor", "Backend Engineer"]
+    refused = await client.post("/workflows", json={**TWO_AGENTS, "name": "Reading",
+                                                    "steps": [{"label": "Read it", "agent": "Ledger Reader"}]})
+    assert refused.status_code == 422 and "neither on the roster" in refused.json()["detail"]
 
 
 async def test_names_are_unique_whatever_the_case_and_editing_replaces_the_steps(client: AsyncClient):

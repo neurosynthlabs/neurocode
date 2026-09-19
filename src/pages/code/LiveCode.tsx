@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ChevronDown, ChevronRight, FileCode, Folder, GitBranchPlus, Loader2, Network, RefreshCw, Search } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink, FileCode, Folder, FolderSearch, GitBranchPlus, Loader2, Network, RefreshCw, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Cell, DataTable, Empty, Mono, Page, PageBody, PageHeader, Panel, RiskPill, Row, Stat, StatGrid, Tag } from '@/components/os';
 import { ApiError, api, type CodeSummary } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { FILE_BROWSER, absoluteIn, isDesktop, onPathMenu, openInEditor, revealInFinder } from '@/lib/desktop';
 import { knowledgeApi, type RetrievalStatus } from '@/lib/live/knowledge';
+import { sourcesApi } from '@/lib/live/sources';
 import { useRemote } from '@/lib/remote';
 import { cn } from '@/lib/utils';
 import type { Project } from '@/types';
@@ -376,11 +378,15 @@ function FileView({ pid, stamp, path, onOpen, onGraph, onPlan }: {
   pid: string; stamp: string; path: string; onOpen: (path: string) => void; onGraph: (path: string) => void; onPlan: (path: string) => void;
 }) {
   const r = useRemote(`${pid}:${stamp}:file:${path}`, () => api.code.file(pid, path));
+  // In the desktop app, where the file is on this Mac — so it can be opened in the person's editor or shown in the
+  // Finder. The API names a source's folder only to someone who may browse the machine; for anyone else there is none.
+  const sources = useRemote(isDesktop ? `${pid}:${stamp}:sources` : null, () => sourcesApi.list(pid));
   if (r.error) return <Empty title="This file did not load" hint={r.error} />;
   if (!r.data) return <Empty icon={<Loader2 className="size-5 animate-spin" />} title="Loading…" />;
   const { file: f, symbols, dependsOn, database, usedBy, impact } = r.data;
   const internal = dependsOn.filter((d) => d.path);
   const packages = [...new Set(dependsOn.filter((d) => !d.path).map((d) => d.target))];
+  const onDisk = sources.data ? absoluteIn(sources.data, f.path) : null;
 
   return (
     <div className="space-y-4">
@@ -392,6 +398,12 @@ function FileView({ pid, stamp, path, onOpen, onGraph, onPlan }: {
           {f.test && <Tag tone="ok">test</Tag>}
         </div>
         <Mono className="mt-1 inline-block max-w-full truncate">{f.path}</Mono>
+        {onDisk && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => openInEditor(onDisk)}><ExternalLink className="size-3.5" />Open in editor</Button>
+            <Button size="sm" variant="outline" onClick={() => revealInFinder(onDisk)}><FolderSearch className="size-3.5" />{FILE_BROWSER}</Button>
+          </div>
+        )}
       </div>
 
       <StatGrid cols={5}>
@@ -407,7 +419,10 @@ function FileView({ pid, stamp, path, onOpen, onGraph, onPlan }: {
           {symbols.length === 0 ? <p className="px-5 py-3 text-[12.5px] text-dim">No symbols declared here.</p> : (
             <div className="max-h-[320px] divide-y divide-line/60 overflow-y-auto">
               {symbols.map((sym, i) => (
-                <div key={`${sym.name}:${i}`} className="flex items-center gap-2 px-5 py-1.5">
+                <div key={`${sym.name}:${i}`} className="flex items-center gap-2 px-5 py-1.5"
+                  onContextMenu={(e) => onPathMenu(e, onDisk, { line: sym.line })}
+                  onDoubleClick={onDisk ? () => openInEditor(onDisk, sym.line) : undefined}
+                  title={onDisk ? `Double-click to open ${baseName(f.path)} at line ${sym.line} in your editor` : undefined}>
                   <Tag tone={KIND_TONE[sym.kind] ?? 'neutral'}>{sym.kind}</Tag>
                   <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-ink-2">{sym.name}</span>
                   <span className="tnum shrink-0 font-mono text-[11.5px] text-dim">:{sym.line}</span>

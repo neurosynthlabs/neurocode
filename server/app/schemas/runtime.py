@@ -156,6 +156,8 @@ def chat_json(chat: Chat, *, project_name: str = "",
         "autoCompactAt": AUTO_COMPACT_AT,
         # Forked from another session: the parent's id and the turn it was forked at.
         "parentId": chat.parent_id, "forkedAt": chat.forked_at,
+        # The agent it is asked through ("Ask <agent>"): `custom:<id>`, `file:<name>` or a roster agent's id.
+        "agent": chat.agent,
         # What "Allow for this session" has allowed here, and who allowed it.
         "grants": [{"tool": g.get("tool"), "subject": g.get("subject"), "covers": g.get("covers"),
                     "by": g.get("by"), "at": g.get("at")} for g in (chat.grants or []) if isinstance(g, dict)],

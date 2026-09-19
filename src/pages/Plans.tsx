@@ -14,6 +14,7 @@ import { inFlight, useData } from '@/lib/data';
 import { ApiError, type RunDoc } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useAccess } from '@/lib/access';
+import { agentsApi } from '@/lib/live/agents';
 import { instructionsApi } from '@/lib/live/instructions';
 import {
   COMMENT_KINDS, newer, plansApi,
@@ -131,6 +132,9 @@ export default function Plans() {
   const p: ShapedPlan | undefined = held && newer(held as ShapedPlan, fresh);
   // Comments are not in the store: read for the open plan, again when it is revised or edited.
   const comments = useRemote(p ? `comments:${p.ref}:${p.revision ?? 1}` : null, () => plansApi.comments(p?.ref ?? ''));
+  // A step can be handed to a custom agent too: the subagents that may write files and are not shadowed, the same
+  // ones the compiler is offered.
+  const custom = useRemote(p ? `custom-agents:${p.projectId}` : null, () => agentsApi.list(p?.projectId ?? null));
   // Workflow names, only when a plan came from one: the plan keeps the id, the workflow keeps the name.
   const fromWorkflow = plans.some((x) => x.workflowId);
   useEffect(() => {
@@ -161,7 +165,10 @@ export default function Plans() {
   const g = p;
   const criteria = g.acceptanceCriteria ?? [];
   const shapeable = !inFlight(p) && can('plans:compile');
-  const names = agents.length ? agents.map((a) => a.name) : Array.from(new Set(p.steps.map((s) => s.agent)));
+  const writers = (custom.data?.agents ?? [])
+    .filter((a) => a.source !== 'built-in' && !a.shadowedBy && a.mode === 'subagent' && (!a.tools.length || a.tools.includes('edit')))
+    .map((a) => a.name);
+  const names = Array.from(new Set([...(agents.length ? agents.map((a) => a.name) : p.steps.map((s) => s.agent)), ...writers]));
   const editingStep = stepDraft?.plan === p.ref ? stepDraft : null;
   const writing = commentDraft?.plan === p.ref ? commentDraft : null;
   const thread = comments.data?.items ?? [];

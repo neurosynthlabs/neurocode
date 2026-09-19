@@ -9,6 +9,7 @@ import { AuthProvider, useAuth } from '@/lib/auth';
 import { ProjectProvider, useProject } from '@/lib/project-context';
 import { DataProvider, useData } from '@/lib/data';
 import { NAV } from '@/lib/nav';
+import { useNotifier } from '@/lib/notify';
 import { cn } from '@/lib/utils';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Topbar } from '@/components/layout/Topbar';
@@ -36,6 +37,7 @@ const Plans = lazy(() => import('@/pages/Plans'));
 const Blueprints = lazy(() => import('@/pages/Blueprints'));
 const Runs = lazy(() => import('@/pages/Runs'));
 const Workflows = lazy(() => import('@/pages/Workflows'));
+const Routines = lazy(() => import('@/pages/Routines'));
 const Testing = lazy(() => import('@/pages/Testing'));
 const Review = lazy(() => import('@/pages/Review'));
 const Git = lazy(() => import('@/pages/Git'));
@@ -89,6 +91,8 @@ function Shell() {
   const { mode, offlineReason, reconnect } = useData();
   const { rail } = useTheme();
   const loc = useLocation();
+  // "Notify me" (Command Center): watches the stream for what needs you or finished, while you are away.
+  useNotifier();
 
   // Picking a screen from the drawer should put you on it, not leave the menu over it.
   useEffect(() => { setNavOpen(false); }, [loc.pathname]);
@@ -148,6 +152,7 @@ function Shell() {
                   <Route path="/plans" element={<Plans />} />
                   <Route path="/runs" element={<Runs />} />
                   <Route path="/workflows" element={<Workflows />} />
+                  <Route path="/routines" element={<Routines />} />
                   <Route path="/testing" element={<Testing />} />
                   <Route path="/review" element={<Review />} />
                   <Route path="/git" element={<Git />} />

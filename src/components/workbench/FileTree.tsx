@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ApiError } from '@/lib/api';
+import { onPathMenu } from '@/lib/desktop';
 import {
   dirName, joinPath, machineApi, within, type GitLetter, type MachineEntry, type MachineGit, type MachineListing,
 } from '@/lib/live/machine';
@@ -187,6 +188,8 @@ export function FileTree({ roots, activePath, hidden, refresh, onOpen, onCreated
       <li key={e.path}>
         <button type="button" disabled={!openable} title={e.kind === 'link' && !e.linkTo ? `${e.name} points outside the folders this server opens` : e.path}
           onClick={() => { if (folder) toggle(e.path); else { setFocusDir(dirName(e.path)); onOpen(e.path); } }}
+          // The desktop app's menu for it: Open in the editor, Reveal in Finder, Copy Path. Nothing changes in a browser.
+          onContextMenu={(ev) => { if (openable) onPathMenu(ev, e.path); }}
           className={cn('group flex w-full items-center gap-1.5 py-[3px] pr-2 text-left text-[13px] transition-colors',
             active ? 'bg-brand/10 text-ink' : 'text-ink-2 hover:bg-surface-2/70', !openable && 'cursor-default opacity-60')}
           style={{ paddingLeft: 6 + depth * 14 }}>
@@ -215,6 +218,7 @@ export function FileTree({ roots, activePath, hidden, refresh, onOpen, onCreated
             {heading && <h3 className="eyebrow mt-2 border-t border-line/60 px-3 pt-3 pb-1">{heading}</h3>}
             <div className="sticky top-0 z-10 flex items-center gap-1 bg-surface/95 px-2 py-1.5 backdrop-blur">
               <button type="button" disabled={!root.path} onClick={() => root.path && toggle(root.path)}
+                onContextMenu={(ev) => onPathMenu(ev, root.path)}
                 className="flex min-w-0 flex-1 items-center gap-1 text-left">
                 <ChevronRight className={cn('size-3 shrink-0 text-dim transition-transform', open && 'rotate-90')} />
                 <span className="truncate text-[12.5px] font-semibold text-ink">{root.label}</span>

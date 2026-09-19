@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApiError } from '@/lib/api';
 
 const reason = (e: unknown) => (e instanceof ApiError ? e.message : 'The local API did not answer. Is it still running?');
@@ -24,11 +24,14 @@ export function useRemote<T>(key: string | null, load: () => Promise<T>) {
     return () => { current = false; };
   }, [key, version]);
 
+  // One function for the hook's life: a screen that reloads from an effect lists `reload` among its
+  // dependencies, and a new one each render re-ran that effect after every reload, for ever.
+  const reload = useCallback(() => setVersion((v) => v + 1), []);
   const fresh = key !== null && state.key === key;
   return {
     data: fresh ? state.data : null,
     error: fresh ? state.error : null,
     loading: key !== null && !fresh,
-    reload: () => setVersion((v) => v + 1),
+    reload,
   };
 }

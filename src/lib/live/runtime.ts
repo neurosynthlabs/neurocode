@@ -87,7 +87,13 @@ export type RuntimeRun = Omit<RunDoc, 'steps'> & {
   goalBudget: number | null;
   checks: RunCheck[];
   goal: RunGoal | null;
-  review: RunDoc['review'] & { receipt?: ReviewReceipt; instructions?: { path: string; bytes: number }[]; taste?: string[] };
+  review: RunDoc['review'] & {
+    receipt?: ReviewReceipt; instructions?: { path: string; bytes: number }[]; taste?: string[];
+    /** The repository's REVIEW.md the reviewer was handed, read from the checkout the run branched from. */
+    brief?: { path: string; bytes: number };
+    /** Each finding may name the line in the new file it is about. */
+    findings: { severity: string; file: string; line?: number; note: string }[];
+  };
   grants: RunGrant[];
   reverts: RunRevert[];
   /** Labels of the project's reference sources: read for grounding, never written. */

@@ -16,6 +16,10 @@ The events, by name:
   reasoning) so far — or `{sessionRef, stream: {step, restart: true, lane}}` when a lane failed halfway
   and the next starts afresh. These are never stored: the finished turn is written once, and arrives
   as an ordinary message that replaces them. A tab that misses one ignores the rest of that step.
+- `routine` — `{scheduleId, projectId, name, fire}`: a routine's fire opened, ended or was skipped, with the
+  fire as `GET /schedules/{id}/fires` lists it.
+- `review` — a review asked for on demand, as `GET /reviews/{ref}` returns it: when it is asked for, when it
+  finishes or fails, and when it is sent to a session or made into a plan.
 - `reset` — `{at: <ISO 8601>}`: the workspace was emptied. Emptying is one bulk statement per table,
   so there is no document-by-document account of it to send; a tab that hears this reloads everything
   it holds. Published only after the emptying has committed, so the reload reads the empty workspace.
@@ -55,7 +59,8 @@ def publish(bus_or_none: Bus | None, kind: str, data: Any) -> None:
 
 @router.get("/activity/stream", dependencies=[Depends(current_person)])
 async def stream(feed: Bus = Depends(bus)) -> StreamingResponse:
-    """Server-sent events: `activity`, `change`, `run` and `chat`, exactly as the screens expect."""
+    """Server-sent events: `activity`, `change`, `run`, `chat`, `routine`, `review` and `reset`, exactly as the
+    screens expect."""
     queue = feed.subscribe()
 
     async def events():

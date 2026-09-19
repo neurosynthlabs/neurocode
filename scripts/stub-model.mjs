@@ -27,9 +27,14 @@ const KINDS = [
   ['synthesis', 'You write the conclusion of a research'],
   ['judge', 'You are a strict evaluator'],
   ['chat', 'You are NeuroCode, working inside an engineering workspace'],
+  // A session asked through an agent opens with the agent's own words, then NeuroCode's.
+  ['chat', 'You work inside NeuroCode, an engineering workspace'],
 ];
 
-const kindOf = (system) => KINDS.find(([, start]) => system.startsWith(start))?.[0] ?? 'unknown';
+// A custom agent's instructions come first and the runtime's rules follow on a line of their own, so a kind is
+// the one whose opening words begin the prompt or any line of it.
+const kindOf = (system) =>
+  KINDS.find(([, start]) => system.startsWith(start) || system.includes(`\n${start}`))?.[0] ?? 'unknown';
 const firstLine = (text) => (text.split('\n').find((l) => l.trim()) ?? '').trim();
 
 function reply(kind, system, user) {

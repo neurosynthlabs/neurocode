@@ -39,6 +39,7 @@ from ..models import (
     Blueprint,
     Brainstorm,
     Chunk,
+    CustomAgent,
     Decision,
     EvalSuite,
     McpServer,
@@ -87,10 +88,12 @@ COLLECTIONS: tuple[tuple[str, Any], ...] = (
 #: goes with it through its foreign key — tasks, plans, runs, the code index, sessions, research, and
 #: the facts, chunks, workflows and suites filed under it, its taste signals and rules, and every plan's
 #: comments with their plan. What is left are the rows that belong to no project — the workspace's own
-#: taste among them. Kept: accounts, sessions, roles, teams, the agent roster, keys, the workspace's settings,
-#: the audit log, and the usage ledger, which is history rather than work.
+#: taste among them, blueprints and the workspace's custom agents. Kept: accounts, sessions, personal access
+#: tokens, roles, teams, the agent roster, keys, the workspace's settings, a person's saved blueprint
+#: templates (their library, not work), the audit log, and the usage ledger, which is history rather than work.
 EMPTIED: tuple[Any, ...] = (Project, MemoryFact, Chunk, ActivityEvent, Approval, Decision, Pref, Brainstorm,
-                            McpServer, WorkflowDefinition, EvalSuite, TasteSignal, TasteRule, Blueprint)
+                            McpServer, WorkflowDefinition, EvalSuite, TasteSignal, TasteRule, Blueprint,
+                            CustomAgent)
 #: Settings that belong to one project, keyed `<prefix><project id>`. They have no foreign key to the
 #: project, so they do not go with it on their own — and a project id is only the last segment of its
 #: repository's path, so a different repository onboarded later under the same name got the old one's

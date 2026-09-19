@@ -91,6 +91,12 @@
       "description": "Register MCP servers."
     },
     {
+      "id": "agents:manage",
+      "group": "Platform",
+      "label": "Manage custom agents",
+      "description": "Write the workspace's and projects' own agents: their prompts, lanes and the tools they may ask for — never more than the tool rules allow."
+    },
+    {
       "id": "settings:write",
       "group": "Platform",
       "label": "Change screen settings",
@@ -154,6 +160,7 @@
         "evals:write",
         "projects:onboard",
         "mcp:manage",
+        "agents:manage",
         "settings:write",
         "users:manage",
         "roles:manage",
@@ -183,6 +190,7 @@
         "evals:write",
         "projects:onboard",
         "mcp:manage",
+        "agents:manage",
         "settings:write",
         "users:manage",
         "roles:manage",
@@ -208,6 +216,7 @@
         "sessions:chat",
         "projects:onboard",
         "mcp:manage",
+        "agents:manage",
         "settings:write",
         "workflows:write",
         "evals:write"

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src data:">
+<title>NeuroCode</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --ink: #1b1c20; --soft: #5d5f66; --dim: #8b8d94; --line: rgba(0, 0, 0, .09);
+    --surface: #ffffff; --brand: #e08600; --danger: #c2413b;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0b0d11; --ink: #eceef2; --soft: #a4a8b1; --dim: #6f737c; --line: rgba(255, 255, 255, .08); --surface: #14161b; --brand: #ff9f1c; --danger: #f07167; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 13px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    display: grid; place-items: center; -webkit-user-select: none; user-select: none;
+  }
+  main { width: min(460px, calc(100vw - 32px)); display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }
+  img { width: 64px; height: 64px; filter: drop-shadow(0 6px 18px rgba(0, 0, 0, .18)); }
+  h1 { margin: 4px 0 0; font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+  #status { margin: 0; color: var(--soft); min-height: 1.55em; }
+  .bar { width: 120px; height: 3px; border-radius: 3px; background: var(--line); overflow: hidden; }
+  .bar::after { content: ""; display: block; width: 40%; height: 100%; border-radius: 3px; background: var(--brand); animation: slide 1.3s ease-in-out infinite; }
+  @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(260%); } }
+  @media (prefers-reduced-motion: reduce) { .bar::after { animation: none; width: 100%; opacity: .5; } }
+  .problem { display: none; width: 100%; flex-direction: column; gap: 12px; }
+  .problem h2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--danger); }
+  pre {
+    margin: 0; max-height: 220px; overflow: auto; text-align: left; white-space: pre-wrap; word-break: break-word;
+    padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+    font: 11.5px/1.6 ui-monospace, "SF Mono", Menlo, monospace; -webkit-user-select: text; user-select: text;
+  }
+  .actions { display: flex; gap: 8px; justify-content: center; }
+  button {
+    font: inherit; font-size: 12.5px; height: 28px; padding: 0 12px; border-radius: 7px; cursor: default;
+    border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+  }
+  button.primary { background: var(--brand); border-color: transparent; color: #1b1c20; font-weight: 600; }
+  button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+  body.problem-shown .bar, body.problem-shown #status { display: none; }
+  body.problem-shown .problem { display: flex; }
+</style>
+</head>
+<body>
+<main>
+  <img alt="" src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpath d='M30 0H70C87 0 100 13 100 30V70C100 87 87 100 70 100H30C13 100 0 87 0 70V30C0 13 13 0 30 0Z' fill='%231B1C20'/%3E%3Cg transform='translate(16 16) scale(.68)'%3E%3Cpath d='M27 76V38c0-11 12-14 18-5l10 17c6 9 18 6 18-5V44' fill='none' stroke='%23FF9F1C' stroke-width='13' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='73' cy='23' r='7.5' fill='%23FF9F1C'/%3E%3C/g%3E%3C/svg%3E">
+  <h1>NeuroCode</h1>
+  <p id="status">Opening…</p>
+  <div class="bar" aria-hidden="true"></div>
+  <section class="problem" role="alert">
+    <h2 id="problem-title"></h2>
+    <pre id="problem-detail"></pre>
+    <div class="actions">
+      <button id="log" type="button">Show the API log</button>
+      <button id="retry" class="primary" type="button">Try again</button>
+    </div>
+  </section>
+</main>
+<script src="splash.js"></script>
+</body>
+</html>

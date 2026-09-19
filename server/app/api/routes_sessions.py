@@ -28,6 +28,7 @@ from ..models import Chat
 from ..schemas import chat_json, chat_message_json, plan_json, task_json
 from ..services import chat as chat_service
 from ..services.chat import MAX_ATTACHED, MAX_QUESTION, ChatService
+from ..services.custom_agents import CustomAgentService
 from ..services.identity import Person
 from ..services.sessions import MAX_IMAGE_UPLOAD, SessionShapes, upload_json
 from .deps import current_person, database, gateway, hand_off, require, session
@@ -39,6 +40,8 @@ sessions_router = APIRouter(prefix="/sessions")
 class SessionIn(BaseModel):
     projectId: str = Field(max_length=80)
     title: str = Field(default="", max_length=80)
+    #: "Ask <agent>": the agent every answer in this session is given by — its key from GET /agents/custom.
+    agent: str | None = Field(default=None, max_length=120)
 
 
 class Mention(BaseModel):
@@ -114,7 +117,7 @@ async def sessions(project: str | None = None, limit: int | None = None, offset:
 async def create(body: SessionIn, who: Person = Depends(require("sessions:chat")),
                  open_session: AsyncSession = Depends(session),
                  gw: Gateway = Depends(gateway)) -> dict[str, Any]:
-    chat = await ChatService(open_session, gw).start(body.projectId, who.name, body.title)
+    chat = await ChatService(open_session, gw).start(body.projectId, who.name, body.title, agent=body.agent)
     return chat_json(chat, project_name=await _name_of(open_session, chat.project_id))
 
 
@@ -218,8 +221,15 @@ async def regenerate(ref: str, message_id: int, jobs: BackgroundTasks, body: Reg
 @sessions_router.post("/{ref}/fork", status_code=201)
 async def fork(ref: str, body: ForkIn, who: Person = Depends(require("sessions:chat")),
                open_session: AsyncSession = Depends(session), gw: Gateway = Depends(gateway)) -> dict[str, Any]:
-    """A new session with this one's turns up to `at`, which remembers where it came from."""
+    """A new session with this one's turns up to `at`, which remembers where it came from — and the agent
+    it was asked through, while that agent is still there."""
     made = await SessionShapes(open_session, gw).fork(ref, body.at, who)
+    parent = await ChatRepository(open_session).by_ref(ref)
+    if parent is not None and parent.agent:
+        project = await ProjectRepository(open_session).get(made.project_id)
+        if await CustomAgentService(open_session).resolve(project, parent.agent) is not None:
+            made.agent = parent.agent
+            await open_session.flush()
     return await _json(open_session, made)
 
 

@@ -181,7 +181,7 @@ async def test_the_catalogue_is_the_one_the_roles_screen_groups_by(client: Async
     from app.data import catalogue as shipped
 
     catalogue = (await client.get("/admin/permissions")).json()
-    assert len(catalogue) == len(shipped.PERMISSIONS) == 22
+    assert len(catalogue) == len(shipped.PERMISSIONS) == 23
     assert all(set(p) >= {"id", "label", "group", "description"} for p in catalogue)
     assert {p["group"] for p in catalogue} <= {"Work", "Gates", "Knowledge", "Platform", "Admin"}
     assert [p["id"] for p in catalogue[:2]] == ["plans:compile", "plans:decide"]

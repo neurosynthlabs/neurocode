@@ -9,6 +9,7 @@ answer, compiling now says so and writes nothing.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -63,6 +64,13 @@ class Context:
     #: Where the plan must not change anything: a source kept as reference, a project this one reads from.
     #: One line each, `label/ — why`.
     readonly: list[str] = field(default_factory=list)
+    #: The custom agents a step may be given beyond the roster: `{name, role}` — the project's and the
+    #: workspace's subagents that may write (`services/custom_agents.for_compiler`).
+    agents: list[dict[str, str]] = field(default_factory=list)
+
+    def owners(self) -> list[str]:
+        """Every name a step may be owned by: the roster, then the custom agents."""
+        return [*roster.NAMES, *(a["name"] for a in self.agents if a["name"] not in roster.NAMES)]
 
 
 SYSTEM = """You are the requirement compiler inside NeuroCode, an AI engineering OS. The operator writes
@@ -120,6 +128,10 @@ def messages(requirement: str, ctx: Context) -> list[dict[str, str]]:
     if ctx.taste:
         lines.append("\nHow this team likes the work done — rules a person adopted from their own decisions "
                      f"(follow them unless the requirement says otherwise):\n{ctx.taste}")
+    if ctx.agents:
+        lines.append("\nThis project's own agents, beside the roster — give one a step when its role fits the step "
+                     "better than a roster agent's:")
+        lines += [f"- {a['name']} — {a['role'] or 'no role written'}" for a in ctx.agents]
     if ctx.readonly:
         lines.append("\nRead only — read these for context, and never plan a change inside them:")
         lines += [f"- {x}" for x in ctx.readonly]
@@ -135,7 +147,7 @@ def messages(requirement: str, ctx: Context) -> list[dict[str, str]]:
         lines.append("\nQuestions the operator has already answered:")
         lines += [f"- {a['q']} → {a['a']}" for a in ctx.answers]
     lines.append(f"\nRequirement:\n{requirement}")
-    system = SYSTEM.format(agents=", ".join(roster.NAMES), tester=roster.TESTER, reviewer=roster.REVIEWER,
+    system = SYSTEM.format(agents=", ".join(ctx.owners()), tester=roster.TESTER, reviewer=roster.REVIEWER,
                            commander=roster.COMMANDER, schema=json.dumps(SCHEMA_HINT, indent=1))
     return [{"role": "system", "content": system}, {"role": "user", "content": "\n".join(lines)}]
 
@@ -148,8 +160,14 @@ HINTS = (("front", "frontend"), ("back", "backend"), ("api", "backend"), ("data"
          ("doc", "docs"), ("research", "researcher"), ("vision", "vision"))
 
 
-def agent_name(raw: str) -> str:
+def agent_name(raw: str, custom: Sequence[str] = ()) -> str:
+    """The owner a model wrote, as a name the runtime knows: a roster agent (by name, id or a word that
+    points at one), or a custom agent the compiler was offered, by its exact name. Anything else is the
+    Commander's, which never runs — so a made-up owner can never become work."""
     s = raw.strip().lower()
+    for name in custom:
+        if s == name.lower():
+            return name
     for name, agent_id in roster.IDS_BY_NAME.items():
         if s in (name.lower(), agent_id):
             return name
@@ -179,9 +197,9 @@ def criteria(raw: Any) -> list[str]:
     return list(dict.fromkeys(c for c in clean if c))[:MAX_CRITERIA]
 
 
-def parse(raw: str) -> PlanOut:
+def parse(raw: str, custom: Sequence[str] = ()) -> PlanOut:
     data = extract_json(raw)
-    data["steps"] = [{**s, "agent": agent_name(str(s.get("agent", "")))}
+    data["steps"] = [{**s, "agent": agent_name(str(s.get("agent", "")), custom)}
                      for s in data.get("steps", []) if isinstance(s, dict) and s.get("label")]
     data["layers"] = list(dict.fromkeys(x for x in map(layer_name, data.get("layers", [])) if x))
     data["acceptanceCriteria"] = criteria(data.get("acceptanceCriteria"))
@@ -265,17 +283,17 @@ def revise_messages(requirement: str, ctx: Context, plan: dict[str, Any],
     for c in comments:
         where = f"on step {c['step']['n']} \"{c['step']['label']}\"" if c.get("step") else "on the whole plan"
         lines.append(f"[{c['id']}] {c['kind']} · {where} · {c['body']}")
-    system = REVISE_SYSTEM.format(agents=", ".join(roster.NAMES), tester=roster.TESTER, reviewer=roster.REVIEWER,
+    system = REVISE_SYSTEM.format(agents=", ".join(ctx.owners()), tester=roster.TESTER, reviewer=roster.REVIEWER,
                                   schema=json.dumps(REVISE_HINT, indent=1))
     return [{"role": "system", "content": system}, {"role": "user", "content": "\n".join(lines)}]
 
 
-def parse_revision(ids: set[int]):
-    """A revision safe to store: owners from the roster, criteria trimmed, and replies only to comments it
-    was shown."""
+def parse_revision(ids: set[int], custom: Sequence[str] = ()):
+    """A revision safe to store: owners from the roster or the custom agents offered, criteria trimmed, and
+    replies only to comments it was shown."""
     def parse(raw: str) -> RevisionOut:
         data = extract_json(raw)
-        data["steps"] = [{**s, "agent": agent_name(str(s.get("agent", "")))}
+        data["steps"] = [{**s, "agent": agent_name(str(s.get("agent", "")), custom)}
                          for s in data.get("steps", []) if isinstance(s, dict) and s.get("label")]
         data["acceptanceCriteria"] = criteria(data.get("acceptanceCriteria"))
         data["openQuestions"] = [q for q in data.get("openQuestions") or [] if isinstance(q, str) and q.strip()]
@@ -294,7 +312,8 @@ def revise_plan(gw: Gateway, requirement: str, ctx: Context, plan: dict[str, Any
     """The plan rewritten to deal with the comments. A revise is a compile, so it is ledgered as one and
     routed like one. Raises `NoModel` / `ProviderError` as compiling does."""
     ids = {int(c["id"]) for c in comments}
-    return gw.ask(revise_messages(requirement, ctx, plan, comments), parse_revision(ids), feature="compile",
+    custom = [a["name"] for a in ctx.agents]
+    return gw.ask(revise_messages(requirement, ctx, plan, comments), parse_revision(ids, custom), feature="compile",
                   actor=actor, project=project)
 
 
@@ -305,5 +324,7 @@ def compile_plan(gw: Gateway, requirement: str, ctx: Context, *, actor: str | No
     Raises `NoModel` when no lane can answer, and `ProviderError` when every lane that tried failed —
     carrying the last one's reason — so the caller can say which of the two happened.
     """
-    result = gw.ask(messages(requirement, ctx), parse, feature="compile", actor=actor, project=project)
+    custom = [a["name"] for a in ctx.agents]
+    result = gw.ask(messages(requirement, ctx), lambda raw: parse(raw, custom), feature="compile", actor=actor,
+                    project=project)
     return result, [f["ref"] for f in ctx.facts]

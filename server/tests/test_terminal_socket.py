@@ -236,6 +236,26 @@ async def test_a_socket_needs_the_permission_and_the_terminal(live: FastAPI, own
         assert closed["code"] == 4404 and closed["reason"] == "Machine access is off on this server"
 
 
+async def test_a_personal_token_opens_a_terminal_only_when_it_names_machine_access(live: FastAPI, owner: AsyncClient):
+    """`nc` signs in with a token, not a cookie. A token carries everything its person holds except a shell on
+    this machine, which it carries only when it names it — and a revoked one is nobody."""
+    terminal = await _terminal(owner, live)
+    plain = (await owner.post("/tokens", json={"name": "script", "scopes": [], "expiresInDays": 30})).json()
+    shell = (await owner.post("/tokens", json={"name": "nc", "scopes": ["machine:access"], "expiresInDays": 30})).json()
+
+    def bearer(token: dict[str, Any]) -> dict[str, str]:
+        return {"authorization": f"Bearer {token['token']}", "origin": ORIGIN}
+
+    async with Socket(live, f"/machine/terminals/{terminal}/ws", bearer(plain)) as ws:
+        closed = await ws.receive()
+        assert closed["code"] == 4403 and "machine:access" in closed["reason"]
+    async with Socket(live, f"/machine/terminals/{terminal}/ws", bearer(shell)) as ws:
+        assert json.loads((await ws.receive())["text"])["type"] == "hello"
+    assert (await owner.post(f"/tokens/{shell['id']}/revoke")).status_code == 200
+    async with Socket(live, f"/machine/terminals/{terminal}/ws", bearer(shell)) as ws:
+        assert (await ws.receive())["code"] == 4401
+
+
 async def test_closing_a_terminal_closes_its_sockets(live: FastAPI, owner: AsyncClient):
     terminal = await _terminal(owner, live)
     async with Socket(live, f"/machine/terminals/{terminal}/ws",

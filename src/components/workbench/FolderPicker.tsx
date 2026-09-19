@@ -1,6 +1,6 @@
-import { useState, type SyntheticEvent } from 'react';
+import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
 import {
-  ChevronRight, Download, File, FileArchive, FileText, Folder, FolderPlus, GitBranch, HardDrive, Link2, Loader2, Monitor,
+  AppWindow, ChevronRight, Download, File, FileArchive, FileText, Folder, FolderPlus, GitBranch, HardDrive, Link2, Loader2, Monitor,
   RefreshCw, ShieldAlert,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Switch } from '@/components/ui/switch';
 import { Empty, Tag } from '@/components/os';
 import { ApiError } from '@/lib/api';
+import { desktop } from '@/lib/desktop';
 import {
   bytes, dirName, joinPath, machineApi, osPermission, within, type MachineEntry, type MachineListing, type MachineRoot,
   type OsPermission,
@@ -79,6 +80,11 @@ export function OsPermissionCard({ blocked, onRetry }: { blocked: OsPermission; 
  * "Use this folder"; files are shown dimmed so a person can tell where they are. In file mode it picks one file
  * whose name ends with one of `accept`, showing each file's size and date. With `purpose` it opens where it was
  * last used for that purpose.
+ *
+ * In the desktop app the Mac's own dialog comes first, in the same mode (a folder, or a file with one of `accept`'s
+ * endings), opening where this browser would have. What it picks still has to be inside the folders the API may
+ * open: a pick outside them, or one the dialog could not make, falls back to this browser with the reason said,
+ * and "Finder…" there asks the Mac's dialog again. Cancelling the Mac's dialog cancels the picker.
  */
 export function FolderPicker({
   open, onPick, onClose, title = 'Choose a folder', start, confirmLabel, mode = 'folder', accept = [], purpose, description,
@@ -107,19 +113,68 @@ export function FolderPicker({
   const [version, setVersion] = useState(0);
   const [naming, setNaming] = useState<string | null>(null);
   const [making, setMaking] = useState(false);
+  // The desktop's own dialog: 'asking' while it is up (this dialog stays hidden behind it), then 'browse' when the
+  // pick has to be made here after all. `note` says why.
+  const [native, setNative] = useState<{ phase: 'asking' | 'browse'; note: string | null } | null>(null);
+  const askedFor = useRef(false);
   const inRoots = (p: string | null | undefined): p is string => !!p && !!roots.data?.some((r) => within(p, r.path));
   const remembered = lastFolder(purpose);
   // It begins where it was asked to, or where it was last used, or at the first root — until a folder is chosen.
   const begin = inRoots(start) ? start : inRoots(remembered) ? remembered : roots.data?.[0]?.path ?? null;
   const path = chosen ?? begin;
   const go = (p: string) => { setChosen(p); setNaming(null); setFile(null); };
-  const close = () => { setChosen(null); setNaming(null); setFile(null); onClose(); };
+  const close = () => { setChosen(null); setNaming(null); setFile(null); setNative(null); askedFor.current = false; onClose(); };
   const pick = (p: string) => {
     keepFolder(purpose, fileMode ? dirName(p) : p);
     setChosen(null);
     setFile(null);
+    setNative(null);
+    askedFor.current = false;
     onPick(p);
   };
+
+  /** The Mac's dialog, then the API's own checks (inside a root, readable) and, in file mode, an accepted ending. */
+  const askMac = async () => {
+    if (!desktop) return;
+    setNative({ phase: 'asking', note: null });
+    const opening = start ?? remembered ?? null;
+    let got: string | null;
+    try {
+      const options = { title, start: opening, confirmLabel, accept };
+      got = fileMode ? await desktop.pickFile(options) : await desktop.pickFolder(options);
+    } catch (e) {
+      setNative({ phase: 'browse', note: `The Mac's dialog did not open: ${e instanceof Error ? e.message : String(e)}` });
+      return;
+    }
+    if (!got) { close(); return; }
+    // The API is asked, not a string compared: it resolves links (/var is /private/var on a Mac) and holds the
+    // pick to its roots exactly as it holds this browser, and what it answers is the real path every later call uses.
+    const folder = fileMode ? dirName(got) : got;
+    try {
+      const listed = await machineApi.list(folder, true);
+      if (!fileMode) { pick(listed.path); return; }
+      const name = got.slice(folder.length).replace(/^\/+/, '');
+      // A folder of more than 2 000 entries is listed in part; a file past that is taken by its name.
+      const entry = listed.entries.find((e) => e.name === name)
+        ?? (listed.capped ? { name, path: joinPath(listed.path, name) } : null);
+      if (!entry || !matches(entry.name, accept)) {
+        go(listed.path);
+        setNative({ phase: 'browse', note: `${name} is not a ${accept.join(', ')} file NeuroCode can open here.` });
+        return;
+      }
+      pick(entry.path);
+    } catch (e) {
+      setNative({ phase: 'browse', note: `${got} cannot be used: ${reason(e)}` });
+    }
+  };
+  // Opened in the desktop app: straight to the Mac's dialog, once per opening (React's development double run included).
+  useEffect(() => {
+    if (!open) askedFor.current = false;
+    if (!open || !desktop || askedFor.current) return;
+    askedFor.current = true;
+    void askMac();
+  });
+  const hiddenForMac = !!desktop && open && native?.phase !== 'browse';
 
   const listing = useRemote<Read>(open && path ? `machine-list:${path}:${hidden}:${version}` : null,
     () => machineApi.list(path ?? '', hidden).then((l): Read => ({ listing: l }), (e: unknown) => {
@@ -158,7 +213,7 @@ export function FolderPicker({
   const shortcutOn = (s: MachineRoot) => !!path && within(path, s.path)
     && !shortcuts.some((o) => o !== s && o.path.length > s.path.length && within(path, o.path));
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) close(); }}>
+    <Dialog open={open && !hiddenForMac} onOpenChange={(o) => { if (!o) close(); }}>
       <DialogContent className="flex max-h-[min(88vh,720px)] flex-col gap-3 sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
@@ -168,6 +223,10 @@ export function FolderPicker({
               : 'Folders on the machine the NeuroCode API runs on.')}
           </DialogDescription>
         </DialogHeader>
+
+        {native?.note && (
+          <p role="status" className="rounded-lg border border-warn/30 bg-warn/8 px-3 py-2 text-[12.5px] leading-relaxed text-ink-2">{native.note}</p>
+        )}
 
         {roots.error ? (
           <Empty icon={<HardDrive className="size-6" />} title="The folders could not be listed" hint={roots.error}
@@ -275,6 +334,7 @@ export function FolderPicker({
           <div className="flex shrink-0 flex-wrap gap-2">
             {!fileMode && <Button variant="outline" size="sm" disabled={!path || naming !== null} onClick={() => setNaming('')}><FolderPlus className="size-3.5" />New folder</Button>}
             <Button variant="outline" size="sm" onClick={() => { setVersion((v) => v + 1); }} disabled={!path}><RefreshCw className="size-3.5" /><span className="sr-only">Refresh</span></Button>
+            {desktop && <Button variant="outline" size="sm" onClick={() => void askMac()}><AppWindow className="size-3.5" />Finder…</Button>}
             <Button variant="ghost" size="sm" onClick={close}>Cancel</Button>
             <Button size="sm" disabled={!ready} onClick={() => { const p = fileMode ? file : path; if (p) pick(p); }}>
               {confirmLabel ?? (fileMode ? 'Use this file' : 'Use this folder')}

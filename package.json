@@ -19,7 +19,12 @@
     "lint:layout": "npm run build && node scripts/layout-lint.mjs",
     "api": "uv run --project server uvicorn app.api.app:create_api --factory --app-dir server --host 127.0.0.1 --port ${NC_API_PORT:-8787} --timeout-graceful-shutdown 5",
     "api:test": "cd server && uv run pytest -q",
-    "e2e": "node scripts/e2e.mjs"
+    "e2e": "node scripts/e2e.mjs",
+    "desktop:dev": "node desktop/scripts/prepare.mjs && NEUROCODE_DESKTOP_DEV_URL=${NEUROCODE_DESKTOP_DEV_URL:-http://localhost:${NC_PORT:-5180}} electron desktop/app",
+    "desktop:start": "node desktop/scripts/prepare.mjs && electron desktop/app",
+    "desktop:build": "npm run build && node desktop/scripts/build.mjs",
+    "desktop:test": "node desktop/scripts/prepare.mjs && node --test desktop/test/",
+    "desktop:smoke": "node desktop/scripts/smoke.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

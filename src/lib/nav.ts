@@ -25,6 +25,7 @@ export const NAV: NavItem[] = [
   { section: 'Build', sub: 'Execution',  to: '/agents',    label: 'Agents',          icon: 'Bot',           keywords: 'architect frontend backend qa reviewer devops security' },
   { section: 'Build', sub: 'Execution',  to: '/runs',      label: 'Live Runs',       icon: 'Activity',      keywords: 'parallel agents terminal output progress' },
   { section: 'Build', sub: 'Execution',  to: '/workflows', label: 'Workflows',       icon: 'Workflow',      keywords: 'orchestration fan out pipeline judge panel scripts' },
+  { section: 'Build', sub: 'Execution',  to: '/routines',  label: 'Routines',        icon: 'CalendarClock',     keywords: 'schedule cron cadence nightly recurring webhook trigger automation run now' },
   { section: 'Build', sub: 'Quality',    to: '/testing',   label: 'Testing',         icon: 'FlaskConical',  keywords: 'unit integration e2e playwright regression visual' },
   { section: 'Build', sub: 'Quality',    to: '/review',    label: 'Review',          icon: 'ScanEye',       keywords: 'code review solid findings approve changes' },
   { section: 'Build', sub: 'Quality',    to: '/evals',     label: 'Evals',           icon: 'Gauge',         keywords: 'benchmark score regression quality judge' },

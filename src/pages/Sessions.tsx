@@ -14,8 +14,10 @@ import { Ascii, Bar, Dot, Empty, ListRow, Mono, Page, PageBody, PageHeader, Pane
 import { Composer, type Chip } from '@/components/sessions/Composer';
 import { PermissionCard } from '@/components/sessions/PermissionCard';
 import { api, type ChatAttachment, type ChatMessage, type ChatStream, type SessionDoc } from '@/lib/api';
+import { agentName, useAccess } from '@/lib/access';
 import { useAuth } from '@/lib/auth';
 import { useData } from '@/lib/data';
+import { agentsApi, SOURCE_LABEL, type AgentSession, type CustomAgent } from '@/lib/live/agents';
 import { fetchModels, type FleetLane } from '@/lib/live/models';
 import { download, sessionsApi, workbenchLink, type PermitDecision } from '@/lib/live/sessions';
 import { referencesOf } from '@/lib/live/sources';
@@ -142,6 +144,9 @@ export default function Sessions() {
   const [acting, setActing] = useState<string | null>(null);
   const [lanes, setLanes] = useState<FleetLane[] | null>(null);
   const [importing, setImporting] = useState<unknown>(null);
+  // "Ask <agent>": after a project is picked, who answers in it — when the project has agents of its own.
+  const [answerers, setAnswerers] = useState<{ projectId: string; name: string; agents: CustomAgent[] } | null>(null);
+  const { catalogue } = useAccess();
   const box = useRef<HTMLDivElement>(null);
   const importFile = useRef<HTMLInputElement>(null);
 
@@ -208,17 +213,38 @@ export default function Sessions() {
 
   useEffect(() => { if (box.current) box.current.scrollTop = box.current.scrollHeight; }, [messages.length, thinking, writing?.answer.length, writing?.reasoning.length]);
 
-  const begin = async (projectId: string, name: string) => {
+  const begin = async (projectId: string, name: string, agent: CustomAgent | null = null) => {
     setChoosing(null);
+    setAnswerers(null);
     try {
-      const made = await api.newSession(projectId);
+      const made = agent ? await agentsApi.ask(projectId, agent.key) : await api.newSession(projectId);
       setList((all) => [made, ...(all ?? [])]);
       setPicked(made.ref);
-      toast.success(`${made.ref} started`, { description: `Reading ${name}.` });
+      toast.success(`${made.ref} started`, { description: agent ? `${agent.name} answers every question in it.` : `Reading ${name}.` });
     } catch (e) {
       toast.error('Session not started', { description: failed(e) });
     }
   };
+
+  /** A project picked for a new session: when it has agents, ask who answers; otherwise start at once. */
+  const pickProject = async (projectId: string, name: string) => {
+    let found: CustomAgent[] = [];
+    try {
+      found = (await agentsApi.list(projectId)).agents.filter((a) => !a.shadowedBy);
+    } catch (e) {
+      toast.warning('Its agents could not be read', { description: `${failed(e)} An ordinary session was started.` });
+    }
+    if (found.length === 0) return begin(projectId, name);
+    setAnswerers({ projectId, name, agents: [...found].sort((a, b) => (a.mode === b.mode ? 0 : a.mode === 'primary' ? -1 : 1)) });
+  };
+
+  // The agent a session is answered by, by name: its own list for a custom or file agent, the catalogue for a built-in.
+  const agentKey = (session as AgentSession | null)?.agent ?? null;
+  const theirs = useRemote(agentKey?.includes(':') && session ? `session-agents:${session.projectId}` : null,
+    () => agentsApi.list(session?.projectId ?? null));
+  const answeredBy = !agentKey ? null
+    : agentKey.includes(':') ? theirs.data?.agents.find((a) => a.key === agentKey)?.name ?? (agentKey.startsWith('file:') ? agentKey.slice(5) : null)
+    : agentName(catalogue, agentKey);
 
   const send = async (text: string, chips: Chip[]): Promise<boolean> => {
     if (!session) return false;
@@ -500,18 +526,36 @@ export default function Sessions() {
     );
   };
 
-  const picker = choosing && (
+  const picker = choosing && (answerers ? (
+    <>
+      <p className="border-b border-line/60 px-4 py-2 text-[12px] text-dim">Who answers in {answerers.name}?</p>
+      <ListRow onClick={() => void begin(answerers.projectId, answerers.name)}>
+        <p className="truncate text-[13.5px] text-ink">NeuroCode</p>
+        <p className="mt-0.5 truncate text-[11.5px] text-dim">The ordinary session: every tool, the router's lane</p>
+      </ListRow>
+      {answerers.agents.map((a) => (
+        <ListRow key={a.key} onClick={() => void begin(answerers.projectId, answerers.name, a)}>
+          <div className="flex items-center gap-2">
+            <Bot className="size-3.5 shrink-0 text-dim" />
+            <p className="truncate text-[13.5px] text-ink">{a.name}</p>
+            <Tag className="ml-auto shrink-0">{SOURCE_LABEL[a.source]}</Tag>
+          </div>
+          <p className="mt-0.5 truncate text-[11.5px] text-dim">{a.role || (a.mode === 'primary' ? 'talks in sessions' : 'takes plan steps')}</p>
+        </ListRow>
+      ))}
+    </>
+  ) : (
     <>
       {choosing === 'import' && <p className="border-b border-line/60 px-4 py-2 text-[12px] text-dim">Import into which project?</p>}
       {projects.length === 0 && <p className="px-4 py-3 text-[12.5px] text-dim">No projects yet. Onboard one on Projects first.</p>}
       {projects.map((p) => (
-        <ListRow key={p.id} onClick={() => void (choosing === 'import' ? doImport(p.id) : begin(p.id, p.name))}>
+        <ListRow key={p.id} onClick={() => void (choosing === 'import' ? doImport(p.id) : pickProject(p.id, p.name))}>
           <p className="truncate text-[13.5px] text-ink">{p.name}</p>
           <p className="mt-0.5 truncate text-[11.5px] text-dim">{p.stack.length ? p.stack.join(' · ') : p.id}</p>
         </ListRow>
       ))}
     </>
-  );
+  ));
 
   return (
     <Page>
@@ -534,7 +578,7 @@ export default function Sessions() {
           <div className="flex w-full shrink-0 max-h-[32vh] md:max-h-none md:w-[280px] flex-col overflow-y-auto rounded-xl border border-line bg-surface">
             <div className="flex shrink-0 items-center border-b border-line px-4 py-2.5 text-[12px] font-medium text-dim">
               <span className="flex-1">{choosing ? 'Pick a project' : `${sessions.length} sessions`}</span>
-              {choosing && <button type="button" className="text-[12px] text-dim hover:text-ink" onClick={() => { setChoosing(null); setImporting(null); }}>Cancel</button>}
+              {choosing && <button type="button" className="text-[12px] text-dim hover:text-ink" onClick={() => { setChoosing(null); setImporting(null); setAnswerers(null); }}>Cancel</button>}
             </div>
             <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
               {choosing ? picker : sessions.map((s) => (
@@ -543,6 +587,7 @@ export default function Sessions() {
                     <Dot state={s.waitingOn ? 'waiting' : s.status === 'thinking' ? 'running' : 'idle'} pulse={s.status === 'thinking'} />
                     <Mono>{s.ref}</Mono>
                     {s.parentId && <GitFork className="size-3 text-dim" aria-label="Forked" />}
+                    {(s as AgentSession).agent && <Bot className="size-3 text-dim" aria-label="Answered by an agent" />}
                     <span className="ml-auto text-[11.5px] text-dim">{ago(s.lastAt)}</span>
                   </div>
                   <p className="mt-1 truncate text-[13px] text-ink">{s.title}</p>
@@ -583,8 +628,14 @@ export default function Sessions() {
                     </DropdownMenuContent>
                   </DropdownMenu>
                 )} />
-              {(detail.data?.parentRef || session.grants.length > 0 || readsFrom.length > 0) && (
+              {(detail.data?.parentRef || session.grants.length > 0 || readsFrom.length > 0 || agentKey) && (
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[12px] text-dim">
+                  {agentKey && (
+                    <Link to="/agents" className="inline-flex items-center gap-1 rounded-full border border-brand/30 bg-brand/8 px-2 py-px text-ink-2 hover:text-ink"
+                      title="Every answer here is given by this agent: its instructions, the lane it prefers and only the tools it lists — each still under the tool rules.">
+                      <Bot className="size-3 text-brand" />Answered by {answeredBy ?? (theirs.loading ? '…' : 'an agent that is no longer there')}
+                    </Link>
+                  )}
                   {readsFrom.length > 0 && (
                     <span className="inline-flex items-center gap-1 rounded-full border border-line px-2 py-px text-ink-2"
                       title={`Read only, labelled as references: ${readsFrom.join(', ')}. Their files are read as <project id>:<path>.`}>

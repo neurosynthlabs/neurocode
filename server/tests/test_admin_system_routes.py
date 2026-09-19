@@ -241,6 +241,8 @@ async def test_a_reset_needs_the_header_and_empties_the_work_but_keeps_the_peopl
         m.Pref(id="skills.rag", value=True),
         m.WorkflowDefinition(id="wf-ws", name="Workspace flow", requirement_template="Do {input}"),
         m.EvalSuite(id="es-ws", name="Workspace suite", target_kind="prompt"),
+        m.Blueprint(id="bp-ws", name="A shop"),
+        m.CustomAgent(id="ca-ws", name="release-notes", prompt="Write the notes"),
         m.AiCall(feature="ask", lane="groq", model="m"),
     ])
     await session.flush()
@@ -267,7 +269,7 @@ async def test_a_reset_needs_the_header_and_empties_the_work_but_keeps_the_peopl
 
     for model in (m.Project, m.Task, m.Plan, m.Approval, m.MemoryFact, m.MemoryConflict, m.Chunk,
                   m.ActivityEvent, m.McpServer, m.McpTool, m.Brainstorm, m.Decision,
-                  m.Pref, m.WorkflowDefinition, m.EvalSuite, m.Blueprint):
+                  m.Pref, m.WorkflowDefinition, m.EvalSuite, m.Blueprint, m.CustomAgent):
         assert await left(model) == 0, model.__tablename__
     assert await left(m.User) == people and people > 0                # accounts are kept
     assert await left(m.Role) == len(catalogue.ROLES)                 # and the roles

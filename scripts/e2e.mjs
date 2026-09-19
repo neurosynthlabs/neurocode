@@ -362,11 +362,91 @@ try {
     await page.getByText('The stub model answers without reading anything.').waitFor({ timeout: 20000 });
     const doc = await call(`/sessions/${session.ref}`);
     const turns = doc.messages.filter((m) => m.tool !== 'grounding');
-    expect(turns[0]?.text.startsWith('where are invoice totals') && turns.some((m) => m.role !== 'you'), `turns: ${doc.messages.map((m) => m.role)}`);    const forked = await post(`/sessions/${session.ref}/fork`, { at: turns[turns.length - 1].id });
+    expect(turns[0]?.text.startsWith('where are invoice totals') && turns.some((m) => m.role !== 'you'), `turns: ${doc.messages.map((m) => m.role)}`);
+    const forked = await post(`/sessions/${session.ref}/fork`, { at: turns[turns.length - 1].id });
     const copy = await call(`/sessions/${forked.ref}`);
     expect(copy.messages.some((m) => m.text?.startsWith('where are invoice totals')), 'the fork lost the question');
     const md = await call(`/sessions/${session.ref}/export?format=md`);
     expect(md.text.includes('where are invoice totals') && md.filename.endsWith('.md'), 'the export is missing the conversation');
+  });
+
+  await step('a custom agent answers a session asked through it, and may own a plan step', async () => {
+    const agent = await post('/agents/custom', { name: 'Ledger Auditor', role: 'Checks money code for rounding',
+      prompt: 'Round every money value with round(x, 2).', lane: null, tools: ['read_file', 'search_code', 'edit'],
+      maxSteps: 3, mode: 'subagent', projectId: project.id });
+    await open('/agents');
+    await page.getByRole('button', { name: 'Custom', exact: true }).click();
+    await page.getByRole('button', { name: 'Ask Ledger Auditor' }).first().click();
+    await page.waitForURL(/\/sessions\?ref=/, { timeout: 10000 });
+    await settle(page);
+    const ref = new URL(page.url()).searchParams.get('ref');
+    expect((await call(`/sessions/${ref}`)).agent === `custom:${agent.id}`, 'the session is not answered by the agent');
+    await page.getByPlaceholder(/Ask/).first().fill('is the invoice total rounded?');
+    await page.getByRole('button', { name: 'Ask', exact: true }).click();
+    await page.getByText('The stub model answers without reading anything.').first().waitFor({ timeout: 20000 });
+    const writers = (await call('/workflows/overview')).writers;
+    expect(!writers.includes('Ledger Auditor'), 'a project agent was offered to workflows of every project');
+  });
+
+  await step('a review of a branch, asked for on demand, is stored with the reviewer\'s verdict', async () => {
+    for (const args of [['checkout', '-qb', 'rounding'], ['-c', 'commit.gpgsign=false', 'commit', '-qam', 'Round the totals'],
+      ['checkout', '-q', 'main']]) {
+      if (args[0] === '-c') fs.appendFileSync(path.join(repo, 'pkg', 'api.py'), '\n\ndef rounded(lines):\n    return round(total(lines), 2)\n');
+      spawnSync('git', args, { cwd: repo });
+    }
+    const asked = await post(`/projects/${project.id}/review`, { target: 'branch', base: 'main', head: 'rounding' });
+    const done = await until(async () => { const r = await call(`/reviews/${asked.ref}`); return r.status !== 'running' && r; },
+      'the review finishing', 30000);
+    expect(done.status === 'done' && done.stats.files >= 1, `review ${done.status}: ${JSON.stringify(done.stats)}`);
+    expect(done.verdict.startsWith('The change is small'), `verdict: ${done.verdict}`);
+    const listed = await call(`/projects/${project.id}/reviews?limit=50&offset=0`);
+    expect(listed.reviews.some((x) => x.ref === done.ref), 'the review is not in the project\'s list');
+    await open('/review');
+    await page.getByRole('button', { name: 'On demand', exact: true }).click();
+    await page.getByText(done.verdict).first().waitFor({ timeout: 10000 });
+  });
+
+  await step('a routine fires a requirement on Run now, and the fire is kept with its plan', async () => {
+    const routine = await post('/schedules', { name: 'Nightly rounding check', projectId: project.id,
+      requirement: 'Check rounding in pkg/api.py', cadence: '0 2 * * *', enabled: true });
+    expect(routine.nextAt && routine.cadenceLabel, `routine: ${JSON.stringify(routine)}`);
+    await open('/routines');
+    await page.getByText('Nightly rounding check').first().click();
+    await page.getByRole('button', { name: /Run now/ }).first().click();
+    const fire = await until(async () => {
+      const [last] = (await call(`/schedules/${routine.id}/fires`)).items;
+      return last && last.outcome !== 'firing' && last;
+    }, 'the fire ending', 30000);
+    expect(fire.trigger === 'manual' && fire.planRef, `fire: ${JSON.stringify(fire)}`);
+    const made = (await call('/plans')).find((x) => x.ref === fire.planRef);
+    expect(made?.rawRequirement.includes('rounding'), `the fire's plan ${fire.planRef} is not the routine's`);
+  });
+
+  await step('the inbox says what needs you and what finished, and marking it seen moves the line', async () => {
+    const inbox = await call('/inbox');
+    expect(inbox.counts && Array.isArray(inbox.needsYou) && Array.isArray(inbox.doneSince), `inbox: ${JSON.stringify(inbox).slice(0, 160)}`);
+    await open('/');
+    await page.getByText('Needs you', { exact: true }).first().waitFor({ timeout: 10000 });
+    const seen = await post('/inbox/seen');
+    expect(seen.since && (await call('/inbox')).sinceVisit === true, 'marking the inbox seen did not stick');
+  });
+
+  await step('a personal access token made in Settings signs a script in, and revoking it shuts it out', async () => {
+    await open('/settings');
+    await page.getByRole('button', { name: /New token/ }).first().click();
+    const dlg = page.locator('[data-slot="dialog-content"]');
+    await dlg.getByRole('textbox', { name: 'Name' }).fill('e2e script');
+    await dlg.getByRole('button', { name: /Make token/ }).click();
+    const secret = (await dlg.locator('code').first().innerText()).trim();
+    expect(secret.startsWith('nc_pat_'), `the token shown is ${secret.slice(0, 10)}…`);
+    const as = (p) => fetch(API + p, { headers: { Authorization: `Bearer ${secret}` } });
+    expect((await as('/auth/me')).status === 200, 'the token does not sign in');
+    // Everything its person holds except a shell on this machine, which a token must name.
+    expect((await as('/machine/terminals')).status === 403, 'a token that did not name machine access reached the machine');
+    await dlg.getByRole('button', { name: 'Done', exact: true }).click();
+    await page.getByRole('button', { name: 'Revoke', exact: true }).first().click();
+    await page.getByRole('button', { name: /Click again to revoke/ }).first().click();
+    await until(async () => (await as('/auth/me')).status === 401, 'the revoked token being refused', 5000);
   });
 
   await step('registering an MCP server persists it, untrusted', async () => {

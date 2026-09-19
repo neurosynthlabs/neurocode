@@ -24,8 +24,10 @@ from ..ai.gateway import Gateway
 from ..data.engine import Database
 from ..services.errors import Denied, Refused
 from ..services.identity import IdentityService, Person
+from ..services.tokens import PREFIX as TOKEN_PREFIX, TokenPerson, TokenService
 
-#: The session cookie. A script may send `Authorization: Bearer <token>` instead.
+#: The session cookie. A script may send `Authorization: Bearer <token>` instead — a session token, or a
+#: personal access token (`nc_pat_…`) made in Settings or by `nc login`.
 COOKIE = "nc_session"
 
 
@@ -67,14 +69,31 @@ def token_from(request: Request) -> str | None:
 
 async def person_or_none(request: Request,
                          identity: IdentityService = Depends(identity_service)) -> Person | None:
-    """Who is asking, when anyone is. Used by the public routes that answer differently once signed in."""
+    """Who is asking, when anyone is. Used by the public routes that answer differently once signed in.
+
+    A personal access token is its own kind of answer: the person, cut to the token's scopes. One that
+    is expired, revoked or unknown is a 401 at once, even on a public route — a script holding a dead
+    token should hear so, not quietly be treated as nobody."""
     token = token_from(request)
-    return await identity.whoami(token) if token else None
+    if not token:
+        return None
+    if token.startswith(TOKEN_PREFIX):
+        return await TokenService(identity.session).person(token)
+    return await identity.whoami(token)
 
 
 async def current_person(who: Person | None = Depends(person_or_none)) -> Person:
     if who is None:
         raise Refused("Sign in to continue.", status=401)
+    return who
+
+
+async def signed_in_person(who: Person = Depends(current_person)) -> Person:
+    """A person who signed in themselves — a browser session or a session token — and not a personal
+    access token. Managing tokens needs this: a token that could make tokens could make itself one
+    with more than it was given."""
+    if isinstance(who, TokenPerson):
+        raise Refused("Access tokens are managed from a signed-in session, not with a token.", status=403)
     return who
 
 

@@ -17,6 +17,7 @@ import { useTheme } from '@/lib/theme';
 import { inFlight, useData } from '@/lib/data';
 import type { Catalogue, RunDoc } from '@/lib/api';
 import { useAccess } from '@/lib/access';
+import { useDesktopShell } from '@/lib/desktop';
 
 /* ═══════════════════════════════════════════════════════════════
    SIDEBAR — a macOS source list. Quick actions on top, sections
@@ -149,6 +150,8 @@ export function Sidebar({ collapsed, onToggle, onSearch, variant = 'rail' }: {
     // The store holds open conflicts only: a resolved one is dropped, even when it streams back.
     '/memory': { n: conflicts.length, alert: true, more: capped.conflicts },
   }), [tasks, plans, runs, approvals, conflicts, agents, capped]);
+  // In the desktop app the same count is the Dock badge, and its menus navigate through this sidebar's router.
+  useDesktopShell(counts['/permissions'].n, !drawer);
 
   const isActive = (to: string) => (to === '/' ? loc.pathname === '/' : loc.pathname === to || loc.pathname.startsWith(`${to}/`));
   const compose = () => nav('/', { state: { compose: Date.now() } });

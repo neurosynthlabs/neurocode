@@ -1,0 +1,7 @@
+# Compiled from src/ by scripts/prepare.mjs, and written by it: never edited by hand.
+app/out/
+app/package.json
+app/build.json
+# The icon made from public/neurocode.svg, and what electron-builder makes.
+build/
+dist/
