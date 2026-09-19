@@ -11,9 +11,14 @@ memory and knowledge management. Requirements arrive in broken Hindi/Hinglish an
 compiled into technical work. The moat is memory + legacy knowledge + orchestration,
 not "another coding chat".
 
-Everything starts from the **mock data** in `src/mock/`, which is also the local API's seed.
-Every number, log line and name must look like it came from a real day of work on a
-14-year-old ERP — never `Lorem ipsum`, never `Item 1 / Item 2`, never round marketing numbers.
+**There is no mock data.** Every screen reads the real workspace through the local API, and a new
+workspace is empty. So the rules are about honesty rather than realism:
+
+- A number, chart, badge, status or sentence appears only when something measured or stored it. No
+  invented defaults, no constant-step formulas, no `Math.random`, no hard-coded names, dates, counts or prices.
+- A list that is empty shows `<Empty>` saying what fills it, with a button to the action that does.
+- A control does something real, or it is not there. No disabled "coming soon", no toast that pretends.
+- Copy never says demo, sample or seed. Placeholders may show an example of what to type.
 
 ## Non-negotiable visual rules
 
@@ -40,18 +45,19 @@ The product should feel like a native macOS app: calm, roomy and legible. Nothin
 - Radii come from `--radius` (`rounded-lg` for controls, `rounded-xl` for cards). Numbers use the
   `tnum` class. IDs, paths, refs, SHAs, timestamps and commands are `font-mono`.
 - Desktop-first at 1440px, and every screen must also work at 820px (tablet) and 390px (phone):
-  `npm run lint:layout` fails on anything that spills.
+  `npm run lint:layout` checks 390 and 820 and fails on anything that spills, and on a screen that
+  never rendered (offline, crashed, signed out or empty), since that one was not checked at all.
 
 ## File conventions
 
 - Pages live at `src/pages/<Name>.tsx` and `export default function <Name>()`.
-- Page-specific mock data lives at `src/mock/<name>.ts`, typed against `src/types/index.ts`.
+- A screen's own API calls and response types live at `src/lib/live/<area>.ts`; shared document types
+  live in `src/lib/api.ts` and `src/types/index.ts`.
 - Page-specific sub-components live at `src/components/<area>/<Component>.tsx`.
 - Every screen is listed once in `src/lib/nav.ts`, with its `section` and, when it belongs with
   others, a `sub`. The sidebar, the smoke test and ⌘K all read that list.
-- **Never edit** `src/App.tsx`, `src/index.css`, `src/components/os/index.tsx`,
-  `src/components/ui/*`, `src/types/index.ts`, or another agent's page/mock. Routes already exist.
-- If you need a type that is missing, define it locally in your own mock file. Do not touch `src/types`.
+- Change `src/App.tsx`, `src/index.css`, `src/components/os/index.tsx`, `src/components/ui/*` and
+  `src/types/index.ts` only on purpose, in small edits: every screen depends on them.
 - No `any`. No unused variables or imports — `tsc` runs with `strict`, `noUnusedLocals`
   and `noUnusedParameters`, and a single violation fails the whole build.
 - `verbatimModuleSyntax` is on: import types with `import type { X } from '...'`.
@@ -103,46 +109,42 @@ The operator's own actions go through the data store, never through local state:
 
 - `useData()` from `@/lib/data` owns **projects, approvals, tasks, plans, memory facts and their
   conflicts, MCP servers and the activity log**. Read them from there (projects through
-  `useProject().all`), never from `@/mock/*`, so a decision made on one screen shows on every other
-  one. Toggles (`decide`, `moveTask`, `toggleCheck`, `setPinned`, `archive`) are optimistic. Actions
+  `useProject().all`), so a decision made on one screen shows on every other one. Toggles (`decide`, `moveTask`, `toggleCheck`, `setPinned`, `archive`) are optimistic. Actions
   that create or reshape documents (`createProject`, `registerMcp`, `resolveConflict`,
   `settleQuestion`, `dispatchPlan`, `compile`, `recompile`) wait for the server. Every action writes
   its own activity event and resolves to `false` or `null` when it was not saved.
-- With the local API up (`npm run dev:start`), those actions persist to SQLite and the log streams
-  in over SSE. With no API, which is how the Vercel demo runs, the same actions work on the seed
-  data for the life of the tab. `mode` tells you which of the two you are in.
+- Those actions persist to Postgres through the local API, and what anyone changes streams back over
+  SSE. `mode` is `connecting`, `live` or `offline`; the shell shows one "Not connected" panel when it is
+  offline, so a screen never branches on it for content.
+- Screen data outside that store goes through `useRemote(key, load)`.
 - Screen state that must survive a reload (a switch, a mode, a setting) uses `usePref(key, DEFAULTS)`
   with a module-level `DEFAULTS`. A verdict that is final once given uses `useDecision(key)` or
   `recordDecision`. Neither belongs in `useState`.
-- Anything else that would need a backend can still be a `sonner` toast.
+- Something that needs a backend that does not exist yet is built on the server first, or left out.
 
-## Shared mock data you must reuse (do not duplicate or redefine)
+## Shared sources you must reuse (do not duplicate or redefine)
 
-- `@/mock/projects` — `projectName`, `activeProjectId` (the live list is `useProject().all`)
-- `@/mock/agents` — `agents`, `getAgent`, `agentName`
-- `@/mock/tasks` — `byStatus`, `getTask` for static lookups (the live list is `useData().tasks`)
-- `@/mock/permissions` — `permissionRules` (approvals come from `useData()`)
 - `@/lib/data` — `useData()`: the operator's state and every action on it; `inFlight(plan)`
-- `@/lib/project-context` — `useProject()` returns the active project
+- `@/lib/project-context` — `useProject()` returns the active project and `all` of them
+- `@/lib/access` — `useAccess()`: permission labels, role names and the agent roster from `GET /auth/catalogue`;
+  `permissionLabel`, `roleName`, `agentName`
+- `@/lib/auth` — `useAuth()`: who is signed in, `can(perm)`
+- `@/lib/remote` — `useRemote(key, load)` for a screen's own reads
 - `@/lib/theme` — `useTheme()`
 
-The mocks in `src/mock/` are also the API's seed. After changing tasks, approvals, memory or
-activity, run `npm run seed` to regenerate `server/seed/seed.json`. CI fails when they disagree.
-
-Names must stay consistent across screens: the ERP tax bug is always **TASK-492 /
-BUG-883 / InvoiceService.cs / TaxService.cs / SP_CalculateTax / MST_TAX / TRANS_INVOICE /
-MEM-142 / ADR-52**. Agents are always the twelve in `@/mock/agents`. Models are always
-Qwen3-Coder-Next, Kimi-K2.5, DeepSeek-V3.2, GLM-4.7, Qwen3-Next-80B, BGE-M3, BGE-Reranker-v2.
+The browser checks build their own data. `npm run e2e` starts from an empty workspace and makes
+everything it looks at; `npm run smoke` and `npm run lint:layout` load the API tests' fixture
+(`server/tests/fixtures/workspace.json`) into a throwaway database. Nothing reads the fixture in the app.
 
 ## Verify before you finish
 
 ```
 npm run build          # tsc -b + vite build; no chunk may pass 500 KB
 npm run smoke          # every route in two themes, plus the key interactions, headless
-npm run lint:layout    # nothing spills at 390 / 820 / 1440
+npm run lint:layout    # nothing spills at 390 / 820 (LINT_WIDTHS=390,820,1440 adds desktop)
 npm run audit:themes   # text contrast across every palette × mode × ground
 npm run api:test       # the local API
-npm run e2e            # API + web app + browser, on a throwaway database
+npm run e2e            # API + web app + stub model + browser, from an empty workspace
 ```
 All of them must pass. Fix anything you broke.
 

@@ -33,7 +33,8 @@ class CompileIn(BaseModel):
 async def compile_requirement(body: CompileIn, who: Person = Depends(require("plans:compile")),
                               open_session: AsyncSession = Depends(session),
                               gw: Gateway = Depends(gateway)) -> dict[str, Any]:
-    """A requirement becomes a plan and the task that carries it. Open questions are kept, not guessed."""
+    """A requirement becomes a plan and the task that carries it. Open questions are kept, not guessed.
+    Needs a model: 409 when none is configured, 502 with the provider's reason when every lane failed."""
     plan, task = await PlanService(open_session, gw).compile(
         body.projectId, body.requirement, by=who.name, by_id=who.id)
     return {**plan_json(plan, task_ref=task.ref), "task": task_json(task)}

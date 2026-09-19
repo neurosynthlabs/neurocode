@@ -23,7 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import agent
 from ..ai.gateway import Gateway
-from ..ai.lanes import price_of
+from ..ai.lanes import price_of, priced_call
+from ..data import roster
 from ..data.base import utcnow
 from ..models import Plan, Project, Run, Task, WorkflowDefinition, WorkflowStep
 from ..repositories import ActivityRepository, NotFound, ProjectRepository
@@ -38,9 +39,6 @@ from .runs import GATE_WORDS
 #: The workflow nobody wrote: a requirement compiled into a plan. It has no row; its runs are the runs
 #: of plans with no workflow.
 BUILTIN = "requirement-to-pr"
-#: Agents a plan step may not name. The runtime drops their steps — you are the gate, and the
-#: commander only plans — so a workflow step owned by one would be saved and then silently never run.
-NOT_WRITERS = ("AI Commander", "AI Project Manager")
 MAX_STEPS = 20
 SLOT = "{input}"
 MANUAL = "manual · Run button"
@@ -74,7 +72,11 @@ class Started:
     note: str
 
 
-def _cost(lines: list[Spend]) -> float:
+def _cost(lines: list[Spend]) -> float | None:
+    """What the lines cost, or None when any of them ran a model its lane has no price for: a partial sum
+    shown as the whole would read as a measured total."""
+    if not all(priced_call(s.lane, s.model) for s in lines if s.tokens_in or s.tokens_out):
+        return None
     return round(sum(s.tokens_in / 1e6 * price_of(s.lane)[0] + s.tokens_out / 1e6 * price_of(s.lane)[1]
                      for s in lines), 4)
 
@@ -253,7 +255,7 @@ class WorkflowService:
                       "costToday": _cost(today)},
             "live": await self._live(live) if live else None,
             "history": await self._history(history),
-            "writers": [name for name in await self.workflows.roster() if name not in NOT_WRITERS],
+            "writers": [name for name in await self.workflows.roster() if name not in roster.NOT_WRITERS],
         }
 
     async def _live(self, lead: Run) -> dict[str, Any]:
@@ -330,14 +332,16 @@ class WorkflowService:
                           "would ask for the same thing.", status=422)
         if not 1 <= len(draft.steps) <= MAX_STEPS:
             raise Refused(f"A workflow has between 1 and {MAX_STEPS} steps.", status=422)
-        roster = set(await self.workflows.roster())
+        on_roster = set(await self.workflows.roster())
         for i, step in enumerate(draft.steps, 1):
             if not step.label.strip():
                 raise Refused(f"Step {i} needs a label.", status=422)
-            if step.agent in NOT_WRITERS:
+            # The runtime drops these owners' steps — you are the gate, and the commander only plans —
+            # so a workflow step owned by one would be saved and then silently never run.
+            if step.agent in roster.NOT_WRITERS:
                 raise Refused(f"Step {i} is given to {step.agent}, and the runtime never gives a writing step "
                               "to them — it would be saved and never run.", status=422)
-            if step.agent not in roster:
+            if step.agent not in on_roster:
                 raise Refused(f"Step {i}: {step.agent} is not on the roster.", status=422)
             if any(word in step.label.lower() for word in GATE_WORDS):
                 raise Refused(f"Step {i} asks for an approval. Every run already ends at your signature, and "

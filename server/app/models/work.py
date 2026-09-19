@@ -66,8 +66,8 @@ class Project(Base, Mixin):
     modules: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     db_tables: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     stored_procs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    memory_pct: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    understood_pct: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    #: The share of the files the scan found that the code index holds. Null until it has been indexed.
+    understood_pct: Mapped[int | None] = mapped_column(Integer)
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Where its code is on this machine, when it was onboarded from here.
@@ -92,15 +92,9 @@ class Agent(Base, Mixin):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     role: Mapped[str] = mapped_column(String(120), nullable=False, server_default="")
     icon: Mapped[str] = mapped_column(String(40), nullable=False, server_default="")
-    model: Mapped[str] = mapped_column(String(120), nullable=False, server_default="")
-    fallback_model: Mapped[str] = mapped_column(String(120), nullable=False, server_default="")
     status: Mapped[str] = mapped_column(AgentStatus, nullable=False, server_default="idle")
     autonomy: Mapped[str] = mapped_column(Autonomy, nullable=False, server_default="supervised")
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
-
-    tasks_done: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    success_rate: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    avg_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
     tools: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
     skills: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
@@ -174,7 +168,8 @@ class Plan(Base, Mixin):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     status: Mapped[str] = mapped_column(PlanStatus, nullable=False, server_default="draft")
     risk: Mapped[str] = mapped_column(Risk, nullable=False, server_default="LOW")
-    confidence: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    #: What the model that wrote the plan said of it, or nothing when it did not say.
+    confidence: Mapped[int | None] = mapped_column(Integer)
 
     raw_requirement: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     business_requirement: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
@@ -191,6 +186,12 @@ class Plan(Base, Mixin):
     test_plan: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
     #: The memory facts the compiler was given, and which lane wrote the plan.
     cited: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    #: The code and documents the compiler was handed from retrieval — `[{kind, ref, path}]` — so a
+    #: reader can see what a plan's files and modules were read from, the way `cited` shows the facts.
+    grounding: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    #: What "done" means for this plan, one checkable sentence each — written by the compiler or by a
+    #: person — which a goal run is judged against before it stops at the signature.
+    acceptance_criteria: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
     compiler: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
 
     steps: Mapped[list[PlanStep]] = relationship(back_populates="plan", cascade="all, delete-orphan",

@@ -1,5 +1,7 @@
 import { useState, type SyntheticEvent, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { fetchModels } from '@/lib/live/models';
+import { FEATURE_LABEL } from '@/lib/live/usage';
 import { useRemote } from '@/lib/remote';
 import { tokens } from '@/pages/code/format';
 import { KeyRound, Loader2, PlugZap } from 'lucide-react';
@@ -10,38 +12,22 @@ import { api, type AiConfig, type AiLane, type AiPatch, type AiPreference, type 
 import { useAuth } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { attempt, useAdmin } from './load';
-import { DemoNote, LoadError, Loading } from './kit';
+import { LoadError, Loading } from './kit';
 
 type ProviderId = CompilerInfo['provider'];
 type Test = AiTestResult | 'running';
 
-const DEMO_AI: AiConfig = {
-  preference: 'auto', preferenceLocked: false, active: { provider: 'rules', model: 'offline planner', lanes: 0 },
-  deepseek: { hasKey: false, keyMask: null, keySource: null, model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com', rejected: false },
-  ollama: { url: 'http://127.0.0.1:11434', model: 'qwen2.5-coder:7b', ready: false },
-  lanes: [],
-};
 const ROUTES: { id: AiPreference; label: string }[] = [
-  { id: 'auto', label: 'Automatic' }, { id: 'free', label: 'Free only' }, { id: 'local', label: 'This Mac only' }, { id: 'rules', label: 'Offline rules' },
+  { id: 'auto', label: 'Automatic' }, { id: 'free', label: 'Free only' }, { id: 'local', label: 'This Mac only' }, { id: 'rules', label: 'No model' },
 ];
-const ROUTE_NOTE: Partial<Record<AiPreference, string>> = {
-  auto: 'Every lane that has a key, free ones first and the paid one only when they are spent. Agents working at the same time are spread across different lanes.',
-  free: 'Only lanes that cost nothing. When the day’s free allowance runs out, the offline rules answer and say so.',
-  local: 'Only the model on this Mac, so nothing leaves the machine.',
-  rules: 'No model at all. Every feature answers with its offline rules, instantly and for free.',
-};
-const FEATURES = [
-  ['Requirement compiler', 'A plan with steps, risks and open questions', 'A keyword planner that follows memory into the database'],
-  ['Ask memory', 'An answer written from the facts, with citations', 'The matching facts, quoted'],
-  ['Brainstorm', 'A sharp brief that argues against itself', 'A template that keeps your words'],
-  ['Add from text', 'Durable facts picked out of notes and chats', 'Sentences that state a rule or a decision'],
-];
-const answering = (a: CompilerInfo) => (a.provider === 'rules' ? 'Offline rules' : a.model);
+const answering = (a: CompilerInfo) => (a.provider === 'rules' ? 'No model' : a.model);
 
 export default function AiProviders() {
   const { can } = useAuth();
-  const { data: cfg, setData, error, live, reload } = useAdmin(api.admin.ai, DEMO_AI);
-  const manage = live && can('workspace:admin');
+  const { data: cfg, setData, error, reload } = useAdmin<AiConfig>(api.admin.ai);
+  // What each routing choice allows, and what each feature does without a lane, in the gateway's own words.
+  const models = useRemote('models', fetchModels);
+  const manage = can('workspace:admin');
   const [key, setKey] = useState('');
   const [ds, setDs] = useState<{ model?: string; baseUrl?: string }>({});
   const [ol, setOl] = useState<{ url?: string; model?: string }>({});
@@ -70,10 +56,9 @@ export default function AiProviders() {
     <Page>
       <PageHeader
         title="AI providers"
-        subtitle="Every AI feature goes through one gateway. With no key, offline rules answer and say so. Add a DeepSeek key or a local Ollama model whenever you are ready."
+        subtitle="Every AI feature goes through one gateway. Add a free key (Groq, Cerebras or Gemini take a minute) or a local Ollama model; with none, the features that need a model say so."
       />
       <PageBody>
-        {!live && <DemoNote what="Keys and provider settings" />}
         {error ? <LoadError error={error} onRetry={reload} /> : !cfg ? <Loading /> : (
           <div className="space-y-5">
             <Panel
@@ -92,7 +77,13 @@ export default function AiProviders() {
                   onChange={(p) => void update({ preference: p }, `Routing: ${ROUTES.find((r) => r.id === p)?.label}`)}
                 />
               </div>
-              <p className="mt-2.5 text-[13px] text-soft">{ROUTE_NOTE[cfg.preference] ?? `Pinned to ${cfg.preference}.`}</p>
+              {models.data && (
+                <p className="mt-2.5 text-[13px] text-soft">
+                  {cfg.preference in models.data.preferences
+                    ? models.data.preferences[cfg.preference as keyof typeof models.data.preferences]
+                    : `Pinned to ${cfg.preference}.`}
+                </p>
+              )}
               <p className="mt-1.5 text-[12.5px] text-dim">
                 {cfg.active.lanes ? `${cfg.active.lanes} ${cfg.active.lanes === 1 ? 'lane can' : 'lanes can'} answer right now.` : 'No lane can answer right now.'}
               </p>
@@ -104,7 +95,7 @@ export default function AiProviders() {
             <Lanes lanes={cfg.lanes} manage={manage} busy={busy} tests={tests} onTest={(id) => void test(id)}
               onPatch={(patch, done) => update(patch, done)} />
 
-            {live && <Usage />}
+            <Usage />
 
             <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
               <Panel eyebrow="Cloud model" title="DeepSeek">
@@ -129,15 +120,15 @@ export default function AiProviders() {
                   <Button type="submit" disabled={!manage || busy || !key.trim()}>Save key</Button>
                 </form>
                 <p className="mt-2 text-[12px] leading-relaxed text-dim">
-                  Kept in server/secrets.json beside the database, readable only by the account that runs the API. Never sent back
-                  in full, never logged.
+                  Kept in the API’s keys file, readable only by the account that runs the API. Never sent back in full, never
+                  logged.
                 </p>
                 <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <Field label="Model" mono value={ds.model ?? cfg.deepseek.model} onChange={(v) => setDs({ ...ds, model: v })} disabled={!manage} />
                   <Field label="Base URL" mono value={ds.baseUrl ?? cfg.deepseek.baseUrl} onChange={(v) => setDs({ ...ds, baseUrl: v })} disabled={!manage} />
                 </div>
                 <Footer
-                  result={tests.deepseek} canTest={live} onTest={() => void test('deepseek')}
+                  result={tests.deepseek} onTest={() => void test('deepseek')}
                   dirty={ds.model !== undefined || ds.baseUrl !== undefined}
                   onSave={async () => { if (await update({ deepseekModel: ds.model, deepseekUrl: ds.baseUrl }, 'DeepSeek settings saved')) setDs({}); }}
                   extra={manage && cfg.deepseek.hasKey && cfg.deepseek.keySource === 'workspace' && (
@@ -161,24 +152,26 @@ export default function AiProviders() {
                   Free and private: nothing leaves this machine. Install Ollama, then run <Mono>ollama pull {cfg.ollama.model}</Mono>.
                 </p>
                 <Footer
-                  result={tests.ollama} canTest={live} onTest={() => void test('ollama')}
+                  result={tests.ollama} onTest={() => void test('ollama')}
                   dirty={ol.url !== undefined || ol.model !== undefined}
                   onSave={async () => { if (await update({ ollamaUrl: ol.url, ollamaModel: ol.model }, 'Ollama settings saved')) setOl({}); }}
                 />
               </Panel>
             </div>
 
-            <Panel flush eyebrow="Always available" title="Offline rules">
-              <DataTable head={['Feature', 'With a model', 'With no model']}>
-                {FEATURES.map(([feature, model, rules]) => (
-                  <Row key={feature}>
-                    <Cell className="font-medium whitespace-nowrap text-ink">{feature}</Cell>
-                    <Cell className="text-[13px] text-ink-2">{model}</Cell>
-                    <Cell className="text-[13px] text-soft">{rules}</Cell>
-                  </Row>
-                ))}
-              </DataTable>
-            </Panel>
+            {models.data && (
+              <Panel flush eyebrow="What each feature asks the gateway for" title="When no lane answers">
+                <DataTable head={['Feature', 'Without a model', 'How it routes']}>
+                  {models.data.routes.map((r) => (
+                    <Row key={r.feature}>
+                      <Cell className="font-medium whitespace-nowrap text-ink">{FEATURE_LABEL[r.feature] ?? r.feature}</Cell>
+                      <Cell><Tag tone={r.offline ? 'ok' : 'neutral'}>{r.offline ? 'Answers offline' : 'Needs a model'}</Tag></Cell>
+                      <Cell className="text-[13px] text-soft">{r.how}</Cell>
+                    </Row>
+                  ))}
+                </DataTable>
+              </Panel>
+            )}
           </div>
         )}
       </PageBody>
@@ -284,15 +277,15 @@ function Usage() {
   );
 }
 
-function Footer({ result, canTest, onTest, dirty, onSave, extra }: {
-  result?: Test; canTest: boolean; onTest: () => void; dirty: boolean; onSave: () => void; extra?: ReactNode;
+function Footer({ result, onTest, dirty, onSave, extra }: {
+  result?: Test; onTest: () => void; dirty: boolean; onSave: () => void; extra?: ReactNode;
 }) {
   return (
     <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line/60 pt-4">
       <TestLine result={result} />
       <div className="flex flex-wrap items-center gap-2">
         {extra}
-        <Button size="sm" variant="outline" onClick={onTest} disabled={!canTest || result === 'running'}>
+        <Button size="sm" variant="outline" onClick={onTest} disabled={result === 'running'}>
           {result === 'running' ? <Loader2 className="size-3.5 animate-spin" /> : <PlugZap className="size-3.5" />}Test connection
         </Button>
         {dirty && <Button size="sm" onClick={onSave}>Save</Button>}

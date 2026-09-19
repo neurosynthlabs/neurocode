@@ -17,13 +17,15 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import agent, onboarding
+from .. import agent
 from ..ai.gateway import Gateway
+from ..data import roster
 from ..models import Project, Run
 from ..repositories import ActivityRepository, AuditRepository, NotFound, ProjectRepository, RunLogRepository
 from ..repositories.runtime import ExpectationRepository, ResultsRepository
 from ..schemas.runtime import run_log_json
 from ..schemas.testing import coverage_json, expectation_json, failure_json, history_json, suite_json
+from .code import checkout
 from .errors import Refused
 from .identity import Person
 from .runs import RunService
@@ -38,8 +40,7 @@ def _commands(projects: list[Project]) -> dict[str, str | None]:
     """The test command each project would run now, detected in its checkout. Blocking."""
     out: dict[str, str | None] = {}
     for project in projects:
-        root = onboarding.source_root({"id": project.id, "source": {
-            "kind": project.source_kind, "repo": project.source_repo}})
+        root = checkout(project)
         found = agent.detect_tests(root) if root is not None and root.is_dir() else None
         out[project.id] = found["command"] if found else None
     return out
@@ -50,7 +51,7 @@ def _trigger(run: Run) -> str:
     and the QA Engineer — whose step it is — for a solo or merge run."""
     if run.role == "check":
         return run.requested_by or "Someone"
-    return run.agent or "QA Engineer"
+    return run.agent or roster.TESTER
 
 
 class TestingService:

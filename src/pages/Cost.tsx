@@ -1,255 +1,300 @@
 import { useMemo, useState } from 'react';
-import { Coins, TriangleAlert, HardDrive } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Coins, HardDrive, Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Mono, Segmented, DataTable, Row, Cell,
-  Stat, StatGrid, Bar, KV, Ring, SectionTitle,
+  Stat, StatGrid, Bar, Empty, SectionTitle,
 } from '@/components/os';
-import { costDays, byAgent, byModel, byProject, budget, expensiveOps, savings, savingsTotals } from '@/mock/cost';
-import { api } from '@/lib/api';
-import { useData } from '@/lib/data';
+import { useAccess, agentName } from '@/lib/access';
+import { FEATURE_LABEL, fetchUsage, type Priced, type SpendDay, type SpendReport } from '@/lib/live/usage';
 import { useRemote } from '@/lib/remote';
 import { cn } from '@/lib/utils';
 import { ago, tokens } from '@/pages/code/format';
 
-const FEATURE: Record<string, string> = {
-  compile: 'Requirement compiler', ask: 'Ask memory', brainstorm: 'Brainstorm', extract: 'Add from text', test: 'Connection test',
-};
+/* Everything here is the AI gateway's ledger, as GET /usage sums it: one line per model call and per
+   offline answer, each priced at its lane's declared price. Nothing is projected, and nothing is
+   compared against a model nobody called. */
 
-/** The gateway's ledger: every model call and every offline answer, as they really happened. */
-function Measured() {
-  const u = useRemote('usage:30', () => api.usage(30));
-  if (u.error) return <Panel><p className="text-[13px] text-soft">The usage ledger did not load: {u.error}</p></Panel>;
-  if (!u.data) return null;
-  const { totals: t, byFeature, byProvider, recent, byPerson } = u.data;
-  return (
-    <section className="space-y-4">
-      <SectionTitle right={<span className="text-[12.5px] text-dim">last 30 days · from the AI gateway’s ledger</span>}>Measured</SectionTitle>
-      {t.calls === 0 ? (
-        <Panel><p className="text-[13.5px] text-soft">No AI call yet. Compile a requirement, ask memory or brainstorm, and every call is counted here.</p></Panel>
-      ) : (
-        <>
-          <StatGrid cols={5}>
-            <Stat label="AI calls" value={t.calls.toLocaleString()} sub={`${t.modelCalls} to a model · ${t.offline} offline`} />
-            <Stat label="Tokens" value={tokens(t.tokensIn + t.tokensOut)} sub={`${tokens(t.tokensIn)} in · ${tokens(t.tokensOut)} out`} />
-            <Stat label="Failed model calls" value={t.failures} tone={t.failures ? 'warn' : 'ok'} sub="the rules answered instead" />
-            <Stat label="Average answer" value={`${(t.avgMs / 1000).toFixed(1)} s`} />
-            <Stat label="Offline share" value={`${Math.round((100 * t.offline) / Math.max(1, t.calls))}%`} tone="ok" sub="free, on this machine" icon={<HardDrive className="size-3" />} />
-          </StatGrid>
-          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-            <Panel flush title="By feature">
-              <DataTable head={['Feature', 'Calls', 'Model', 'Offline', 'Failed', 'Tokens']}>
-                {byFeature.map((f) => (
-                  <Row key={f.feature}>
-                    <Cell className="font-medium text-ink">{FEATURE[f.feature] ?? f.feature}</Cell>
-                    <Cell className="tnum">{f.calls}</Cell>
-                    <Cell className="tnum">{f.model}</Cell>
-                    <Cell className="tnum text-ok">{f.offline}</Cell>
-                    <Cell className={cn('tnum', f.failures && 'text-warn')}>{f.failures || '—'}</Cell>
-                    <Cell className="tnum">{tokens(f.tokensIn + f.tokensOut)}</Cell>
-                  </Row>
-                ))}
-              </DataTable>
-            </Panel>
-            <Panel flush title="By provider">
-              <DataTable head={['Answered by', 'Calls', 'Failed', 'Tokens', 'Average']}>
-                {byProvider.map((p) => (
-                  <Row key={`${p.provider}:${p.model}`}>
-                    <Cell className="font-medium text-ink">{p.provider === 'rules' ? `Offline · ${p.model}` : p.model}</Cell>
-                    <Cell className="tnum">{p.calls}</Cell>
-                    <Cell className={cn('tnum', p.failures && 'text-warn')}>{p.failures || '—'}</Cell>
-                    <Cell className="tnum">{p.provider === 'rules' ? 'free' : tokens(p.tokensIn + p.tokensOut)}</Cell>
-                    <Cell className="tnum">{p.avgMs} ms</Cell>
-                  </Row>
-                ))}
-              </DataTable>
-            </Panel>
-          </div>
-          <Panel flush title="Latest calls" eyebrow={byPerson ? `${byPerson.length} ${byPerson.length === 1 ? 'person' : 'people'} used AI` : undefined}>
-            <DataTable head={['When', 'Feature', 'Answered by', 'Tokens', 'Time', ...(byPerson ? ['By'] : [])]}>
-              {recent.map((r, i) => (
-                <Row key={`${r.at}:${i}`}>
-                  <Cell className="whitespace-nowrap text-soft">{ago(r.at)}</Cell>
-                  <Cell className="text-ink">{FEATURE[r.feature] ?? r.feature}</Cell>
-                  <Cell>
-                    <span className="flex items-center gap-1.5" title={r.error || undefined}>
-                      {!r.ok && <Tag tone="warn">failed</Tag>}
-                      <span className={cn('text-[13px]', r.provider === 'rules' ? 'text-ok' : 'text-ink-2')}>{r.provider === 'rules' ? 'offline rules' : r.model}</span>
-                    </span>
-                  </Cell>
-                  <Cell className="tnum">{r.tokensIn + r.tokensOut ? tokens(r.tokensIn + r.tokensOut) : '—'}</Cell>
-                  <Cell className="tnum">{r.ms} ms</Cell>
-                  {byPerson && <Cell className="text-soft">{r.by ?? '—'}</Cell>}
-                </Row>
-              ))}
-            </DataTable>
-          </Panel>
-        </>
-      )}
-    </section>
-  );
+const feature = (id: string) => FEATURE_LABEL[id] ?? id;
+
+/** Dollars as the ledger knows them: small sums keep their fractions of a cent, and an unpriced line says so. */
+function usd(line: Priced): string {
+  if (line.costUsd === null) return 'unpriced';
+  const n = line.costUsd;
+  const text = n === 0 ? '$0' : n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`;
+  return line.costComplete ? text : `≥ ${text}`;
 }
 
-const W = 560, H = 116;
+/* The ledger's days are UTC days: the server buckets every call by its UTC date, whatever zone the
+   database or the browser is in. So every key made here is a UTC date too — a day made in local time
+   would miss the server's by one for part of every day (5.5 hours of it in India) and draw that
+   day's calls as a zero. The screen says "UTC days" so nobody reads them as their own. */
+
+/** 'YYYY-MM-DD' of the UTC day `back` days before today's. */
+const utcDay = (back = 0): string => {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - back)).toISOString().slice(0, 10);
+};
+
+/** The window as UTC calendar days, oldest first. A day with no call spent nothing, so it is a real zero. */
+function everyDay(r: SpendReport): SpendDay[] {
+  const seen = new Map(r.byDay.map((d) => [d.day, d]));
+  return Array.from({ length: r.days }, (_, i) => {
+    const day = utcDay(r.days - 1 - i);
+    return seen.get(day) ?? { day, calls: 0, model: 0, offline: 0, tokens: 0, costUsd: 0, costComplete: true };
+  });
+}
+
+/** This UTC calendar month, summed from the days in the window, which is always long enough to reach the 1st. */
+function thisMonth(r: SpendReport): Priced & { calls: number } {
+  const month = utcDay().slice(0, 7);
+  const days = r.byDay.filter((d) => d.day.startsWith(month));
+  const priced = days.filter((d) => d.costUsd !== null);
+  return {
+    calls: days.reduce((n, d) => n + d.calls, 0),
+    costUsd: days.length && !priced.length ? null : priced.reduce((n, d) => n + (d.costUsd ?? 0), 0),
+    costComplete: days.every((d) => d.costComplete),
+  };
+}
 
 export default function Cost() {
-  const [split, setSplit] = useState<'agent' | 'model' | 'project'>('agent');
-  const [hover, setHover] = useState<number | null>(null);
-
-  const buckets = split === 'agent' ? byAgent : split === 'model' ? byModel : byProject;
-  const max = Math.max(...costDays.map((d) => d.cost));
-  const bw = (W - (costDays.length - 1) * 4) / costDays.length;
-  const day = hover !== null ? costDays[hover] : null;
-  const pctUsed = Math.round((budget.spent / budget.daily) * 100);
-
-  const totalTokens = useMemo(() => buckets.reduce((n, b) => n + b.tokensIn + b.tokensOut, 0), [buckets]);
-  const { mode } = useData();
+  const nav = useNavigate();
+  // Thirty days, or as many as it takes to reach the 1st of the (UTC) month on the 31st.
+  const days = Math.max(30, new Date().getUTCDate());
+  const u = useRemote(`usage:${days}`, () => fetchUsage(days));
 
   return (
     <Page>
       <PageHeader
         title="Cost & Usage"
-        subtitle="What the AI work really cost, measured call by call, and an honest account of what running models locally does and does not save."
+        subtitle="What the AI work really cost, call by call, from the gateway’s ledger and each lane’s declared price."
       />
+      {u.error ? (
+        <PageBody><Empty title="The usage ledger did not load" hint={u.error} action={<Button size="sm" variant="outline" onClick={u.reload}>Try again</Button>} /></PageBody>
+      ) : !u.data ? (
+        <PageBody><Empty icon={<Loader2 className="size-5 animate-spin" />} title="Reading the ledger…" /></PageBody>
+      ) : u.data.totals.calls === 0 && u.data.recent.length === 0 ? (
+        <PageBody>
+          <Empty
+            icon={<Coins className="size-5" />}
+            title="No AI call yet"
+            hint="Compile a requirement, ask memory or start a session, and every call is counted here with what it cost."
+            action={<Button size="sm" variant="outline" onClick={() => nav('/')}>Go to Command Center</Button>}
+          />
+        </PageBody>
+      ) : (
+        <Report r={u.data} />
+      )}
+    </Page>
+  );
+}
 
-      <PageBody className="space-y-4">
-        {mode === 'live' && <Measured />}
-        <SectionTitle right={<span className="text-[12.5px] text-dim">sample data · fleet spend arrives with the agent runtime</span>}>Fleet spend</SectionTitle>
-        <StatGrid cols={5}>
-          <Stat label="Spent today" value={`$${budget.spent.toFixed(2)}`} tone={pctUsed > 80 ? 'warn' : 'brand'} sub={`${pctUsed}% of $${budget.daily.toFixed(2)}`} icon={<Coins className="size-3" />} />
-          <Stat label="This month" value={`$${budget.monthSpent.toFixed(2)}`} sub={`${budget.monthDays} days elapsed`} />
-          <Stat label="Projected" value={`$${budget.projectedMonth.toFixed(2)}`} sub={`last month $${budget.lastMonth.toFixed(2)}`} tone={budget.projectedMonth < budget.lastMonth ? 'ok' : 'warn'} />
-          <Stat label="If all frontier" value={`$${savingsTotals.ifAllFrontier.toFixed(2)}`} tone="danger" sub="same work, one big model" />
-          <Stat label="Local share" value="71%" tone="ok" sub="of all calls today" icon={<HardDrive className="size-3" />} />
-        </StatGrid>
+function Report({ r }: { r: SpendReport }) {
+  const t = r.totals;
+  const month = thisMonth(r);
+  return (
+    <PageBody className="space-y-4">
+      <SectionTitle right={<span className="text-[12.5px] text-dim">last {r.days} days · from the AI gateway’s ledger</span>}>Spend</SectionTitle>
+      <StatGrid cols={5}>
+        <Stat label="This month" value={usd(month)} tone="brand" sub={`${month.calls.toLocaleString()} call${month.calls === 1 ? '' : 's'} since the 1st (UTC)`} icon={<Coins className="size-3" />} />
+        <Stat label={`Last ${r.days} days`} value={usd(t)} sub={`${t.calls.toLocaleString()} calls · ${t.modelCalls.toLocaleString()} to a model`} />
+        <Stat label="Tokens" value={tokens(t.tokensIn + t.tokensOut)} sub={`${tokens(t.tokensIn)} in · ${tokens(t.tokensOut)} out`} />
+        <Stat label="Failed model calls" value={t.failures} tone={t.failures ? 'warn' : 'ok'} sub="a lane that fails hands the call to the next" />
+        <Stat label="Offline share" value={`${t.calls ? Math.round((100 * t.offline) / t.calls) : 0}%`} tone="ok" sub={`${t.offline.toLocaleString()} answered by the rules, no model`} icon={<HardDrive className="size-3" />} />
+      </StatGrid>
+      {!t.costComplete && (
+        <p className="text-[12.5px] text-warn">
+          Some calls ran on lanes with no price, so the dollar figures marked ≥ are a floor, and a line with only those calls reads unpriced.
+        </p>
+      )}
 
-        <div className="grid grid-cols-12 gap-3">
-          <Panel className="col-span-12 xl:col-span-8" eyebrow="14 days · local vs remote" title="Daily spend"
-            actions={day ? <span className="text-[12.5px] text-soft"><Mono>{day.day}</Mono> ${day.cost.toFixed(2)} · remote ${day.remote.toFixed(2)}</span> : <span className="text-[12px] text-dim">hover a bar</span>}>
-            <svg width={W} height={H} className="w-full" viewBox={`0 0 ${W} ${H}`} onMouseLeave={() => setHover(null)}>
-              {[0.25, 0.5, 0.75, 1].map((f) => (
-                <line key={f} x1="0" y1={H - 18 - f * (H - 26)} x2={W} y2={H - 18 - f * (H - 26)} stroke="var(--os-line)" strokeDasharray="2 4" />
-              ))}
-              {costDays.map((d, i) => {
-                const x = i * (bw + 4);
-                const total = (d.cost / max) * (H - 26);
-                const local = (d.local / max) * (H - 26);
-                const on = hover === i;
-                return (
-                  <g key={d.day} onMouseEnter={() => setHover(i)}>
-                    <rect x={x} y={0} width={bw} height={H} fill="transparent" />
-                    <rect x={x} y={H - 18 - total} width={bw} height={total - local} rx="2"
-                      fill="var(--os-brand)" opacity={on ? 1 : 0.78} />
-                    {local > 0 && <rect x={x} y={H - 18 - local} width={bw} height={local} rx="2" fill="var(--os-ok)" opacity={on ? 1 : 0.78} />}
-                    <text x={x + bw / 2} y={H - 5} fontSize="8.5" textAnchor="middle" fill={on ? 'var(--os-ink)' : 'var(--os-dim)'}>
-                      {d.day.split(' ')[1]}
-                    </text>
-                  </g>
-                );
-              })}
-            </svg>
-            <div className="mt-2 flex items-center gap-4 border-t border-line pt-2 text-[11.5px] text-dim">
-              <span className="flex items-center gap-1.5"><span className="size-2 rounded-xs bg-brand" />remote API</span>
-              <span className="flex items-center gap-1.5"><span className="size-2 rounded-xs bg-ok" />local inference</span>
-              <span className="ml-auto">the drop on Sep 04 is the day the local coder model came online</span>
-            </div>
-          </Panel>
+      {t.calls > 0 && <DailySpend r={r} />}
+      {t.calls > 0 && <Breakdown r={r} />}
+      {t.calls > 0 && <Costliest r={r} />}
+      <Latest r={r} />
+    </PageBody>
+  );
+}
 
-          <Panel className="col-span-12 xl:col-span-4" eyebrow="Guard rail" title="Daily budget">
-            <div className="flex items-center gap-4">
-              <Ring pct={pctUsed} size={64} tone={pctUsed > 80 ? 'warn' : 'brand'} />
-              <div className="min-w-0 flex-1">
-                <div className="figure text-[24px] text-ink">${budget.spent.toFixed(2)}</div>
-                <div className="text-[12.5px] text-dim">of ${budget.daily.toFixed(2)} · ${(budget.daily - budget.spent).toFixed(2)} left</div>
-              </div>
-            </div>
-            <Bar className="mt-3" pct={pctUsed} tone={pctUsed > 80 ? 'warn' : 'brand'} height="h-1.5" />
-            <div className="mt-3 flex items-start gap-2 rounded-sm border border-warn/30 bg-warn/8 px-2.5 py-2">
-              <TriangleAlert className="mt-px size-3.5 shrink-0 text-warn" />
-              <p className="text-[12.5px] text-warn">
-                At {budget.guard}% of the daily budget the router stops offering remote models entirely and serves
-                everything locally. Quality drops on hard reasoning; nothing stops.
-              </p>
-            </div>
-          </Panel>
-        </div>
+const W = 560, H = 116;
 
-        <div className="flex items-center gap-2">
-          <Segmented options={[{ id: 'agent', label: 'By agent' }, { id: 'model', label: 'By model' }, { id: 'project', label: 'By project' }]} value={split} onChange={setSplit} />
-          <span className="ml-auto text-[12.5px] text-dim">{(totalTokens / 1_000_000).toFixed(1)}M tokens across {buckets.length} buckets</span>
-        </div>
+function DailySpend({ r }: { r: SpendReport }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const list = useMemo(() => everyDay(r), [r]);
+  // When every call ran on a free lane there is no dollar to draw, so the bars count calls and say so.
+  const dollars = list.some((d) => (d.costUsd ?? 0) > 0);
+  const value = (d: SpendDay) => (dollars ? d.costUsd ?? 0 : d.calls);
+  const max = Math.max(...list.map(value), dollars ? 0.0001 : 1);
+  const bw = (W - (list.length - 1) * 3) / list.length;
+  const day = hover !== null ? list[hover] : null;
 
-        <Panel flush>
-          <DataTable head={[split === 'agent' ? 'Agent' : split === 'model' ? 'Model' : 'Project', 'Tokens in', 'Tokens out', 'Calls', 'Cost', 'Share']}>
-            {buckets.map((b) => (
-              <Row key={b.label}>
+  return (
+    <Panel
+      eyebrow={dollars ? `${r.days} UTC days · dollars per day` : `${r.days} UTC days · every call was free, so this counts calls`}
+      title="Daily spend"
+      actions={day
+        ? <span className="text-[12.5px] text-soft"><Mono>{day.day} UTC</Mono> {usd(day)} · {day.calls} call{day.calls === 1 ? '' : 's'} · {day.offline} offline</span>
+        : <span className="text-[12px] text-dim">hover a bar</span>}
+    >
+      <svg width={W} height={H} className="w-full" viewBox={`0 0 ${W} ${H}`} onMouseLeave={() => setHover(null)}>
+        {[0.25, 0.5, 0.75, 1].map((f) => (
+          <line key={f} x1="0" y1={H - 18 - f * (H - 26)} x2={W} y2={H - 18 - f * (H - 26)} stroke="var(--os-line)" strokeDasharray="2 4" />
+        ))}
+        {list.map((d, i) => {
+          const x = i * (bw + 3);
+          const total = (value(d) / max) * (H - 26);
+          // Counting calls, the offline answers sit at the foot of the bar; in dollars they are nothing to draw.
+          const offline = dollars ? 0 : (d.offline / max) * (H - 26);
+          const on = hover === i;
+          const label = i === 0 || i === list.length - 1 || d.day.endsWith('-01');
+          return (
+            <g key={d.day} onMouseEnter={() => setHover(i)}>
+              <rect x={x} y={0} width={bw} height={H} fill="transparent" />
+              {total - offline > 0 && (
+                <rect x={x} y={H - 18 - total} width={bw} height={total - offline} rx="2"
+                  fill={dollars && !d.costComplete ? 'var(--os-warn)' : 'var(--os-brand)'} opacity={on ? 1 : 0.78} />
+              )}
+              {offline > 0 && <rect x={x} y={H - 18 - offline} width={bw} height={offline} rx="2" fill="var(--os-ok)" opacity={on ? 1 : 0.78} />}
+              {label && (
+                <text x={x + bw / 2} y={H - 5} fontSize="8.5" textAnchor="middle" fill={on ? 'var(--os-ink)' : 'var(--os-dim)'}>
+                  {d.day.slice(5)}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+      <div className="mt-2 flex flex-wrap items-center gap-4 border-t border-line pt-2 text-[11.5px] text-dim">
+        <span className="flex items-center gap-1.5"><span className="size-2 rounded-xs bg-brand" />{dollars ? 'spend' : 'calls to a model'}</span>
+        {!dollars && <span className="flex items-center gap-1.5"><span className="size-2 rounded-xs bg-ok" />offline answers</span>}
+        {dollars && !r.totals.costComplete && <span className="flex items-center gap-1.5"><span className="size-2 rounded-xs bg-warn" />a day with unpriced calls, drawn at its floor</span>}
+      </div>
+    </Panel>
+  );
+}
+
+type Split = 'agent' | 'project' | 'feature' | 'lane';
+
+interface Line { key: string; label: string; calls: number; tokensIn: number; tokensOut: number; cost?: string; failures?: number }
+
+function lines(r: SpendReport, split: Split): Line[] {
+  switch (split) {
+    case 'agent':
+      return r.byAgent.map((a) => ({ key: a.agent, label: a.name, calls: a.calls, tokensIn: a.tokensIn, tokensOut: a.tokensOut, cost: usd(a) }));
+    case 'project':
+      return r.byProject.map((p) => ({ key: p.projectId ?? '', label: p.projectName ?? 'Workspace · no project', calls: p.calls, tokensIn: p.tokensIn, tokensOut: p.tokensOut, cost: usd(p) }));
+    case 'feature':
+      return r.byFeature.map((f) => ({ key: f.feature, label: feature(f.feature), calls: f.calls, tokensIn: f.tokensIn, tokensOut: f.tokensOut, failures: f.failures }));
+    case 'lane':
+      return r.byProvider.map((p) => ({ key: `${p.provider}:${p.model}`, label: p.provider === 'rules' ? 'Offline rules' : `${p.provider} · ${p.model}`, calls: p.calls, tokensIn: p.tokensIn, tokensOut: p.tokensOut, failures: p.failures }));
+  }
+}
+
+const SPLIT_HEAD: Record<Split, string> = { agent: 'Agent', project: 'Project', feature: 'Feature', lane: 'Answered by' };
+
+function Breakdown({ r }: { r: SpendReport }) {
+  const nav = useNavigate();
+  const [split, setSplit] = useState<Split>('agent');
+  const all = r.totals.tokensIn + r.totals.tokensOut;
+  const share = (n: number) => (all ? Math.round((100 * n) / all) : 0);
+  const rows = lines(r, split);
+  // Dollars are grouped by agent and by project on the server; a feature or a lane is counted, not priced.
+  const priced = split === 'agent' || split === 'project';
+
+  return (
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Segmented
+          options={[{ id: 'agent', label: 'By agent' }, { id: 'project', label: 'By project' }, { id: 'feature', label: 'By feature' }, { id: 'lane', label: 'By lane' }]}
+          value={split} onChange={setSplit}
+        />
+        <span className="ml-auto text-[12.5px] text-dim">
+          {split === 'agent' ? 'calls an agent asked for; a person’s own calls are not counted here' : `${tokens(all)} tokens in the window`}
+        </span>
+      </div>
+      <Panel flush>
+        {rows.length === 0 ? (
+          <Empty
+            title="No agent made a model call in this window"
+            hint="Dispatch a plan, and every step an agent works is counted here with what it cost."
+            action={<Button size="sm" variant="outline" onClick={() => nav('/plans')}>Open Plans</Button>}
+          />
+        ) : (
+          <DataTable head={[SPLIT_HEAD[split], 'Calls', 'Tokens in', 'Tokens out', priced ? 'Cost' : 'Failed', 'Share of tokens']}>
+            {rows.map((b) => (
+              <Row key={b.key}>
                 <Cell className="font-medium text-ink">{b.label}</Cell>
-                <Cell className="tnum">{(b.tokensIn / 1000).toFixed(0)}k</Cell>
-                <Cell className="tnum">{(b.tokensOut / 1000).toFixed(0)}k</Cell>
                 <Cell className="tnum">{b.calls.toLocaleString()}</Cell>
-                <Cell className={cn('tnum', b.cost === 0 ? 'text-ok' : 'text-ink')}>{b.cost === 0 ? 'free' : `$${b.cost.toFixed(2)}`}</Cell>
-                <Cell><span className="flex items-center gap-2"><Bar className="w-24" pct={b.share} /><span className="tnum text-[12px]">{b.share}%</span></span></Cell>
+                <Cell className="tnum">{tokens(b.tokensIn)}</Cell>
+                <Cell className="tnum">{tokens(b.tokensOut)}</Cell>
+                {priced
+                  ? <Cell className={cn('tnum', b.cost === 'unpriced' ? 'text-dim' : 'text-ink')}>{b.cost}</Cell>
+                  : <Cell className={cn('tnum', b.failures && 'text-warn')}>{b.failures ? b.failures.toLocaleString() : 'none'}</Cell>}
+                <Cell><span className="flex items-center gap-2"><Bar className="w-24" pct={share(b.tokensIn + b.tokensOut)} /><span className="tnum text-[12px]">{share(b.tokensIn + b.tokensOut)}%</span></span></Cell>
               </Row>
             ))}
           </DataTable>
-        </Panel>
+        )}
+      </Panel>
+    </section>
+  );
+}
 
-        <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-          <Panel eyebrow="An honest comparison, not a marketing claim" title="What local inference saves" flush>
-            <DataTable head={['Task class', 'Local calls', 'Local $', 'Frontier $', 'Quality Δ']}>
-              {savings.map((s) => (
-                <Row key={s.label}>
-                  <Cell className="font-medium text-ink">{s.label}
-                    <span className="mt-0.5 block max-w-[300px] text-[12px] font-normal text-dim">{s.honest}</span>
-                  </Cell>
-                  <Cell className="tnum">{s.localCalls.toLocaleString()}</Cell>
-                  <Cell className="tnum text-ok">${s.localCost.toFixed(2)}</Cell>
-                  <Cell className="tnum text-danger">${s.frontierCost.toFixed(2)}</Cell>
-                  <Cell className="text-[12.5px] text-soft">{s.qualityDelta}</Cell>
-                </Row>
-              ))}
-            </DataTable>
-            <div className="border-t border-line px-3.5 py-2.5">
-              <KV k="Actual today" v={<span className="text-ok">${savingsTotals.actualToday.toFixed(2)}</span>} />
-              <KV k="If everything went frontier" v={<span className="text-danger">${savingsTotals.ifAllFrontier.toFixed(2)}</span>} />
-              <p className="mt-2 text-[12px] text-dim">{savingsTotals.note}</p>
-            </div>
-          </Panel>
+function Costliest({ r }: { r: SpendReport }) {
+  const { catalogue } = useAccess();
+  const anyCost = r.costliest.some((c) => (c.costUsd ?? 0) > 0);
+  return (
+    <Panel
+      flush
+      title="Costliest calls"
+      eyebrow={anyCost ? `the ${r.costliest.length} most expensive in the window` : 'no call in the window cost anything known, so these are the largest'}
+    >
+      <DataTable head={['When', 'Call', 'Run', 'Answered by', 'Tokens', 'Cost']}>
+        {r.costliest.map((c, i) => (
+          <Row key={`${c.at}:${i}`}>
+            <Cell className="whitespace-nowrap text-soft">{ago(c.at)}</Cell>
+            <Cell className="font-medium text-ink">
+              {feature(c.feature)}
+              {c.agent && <span className="mt-0.5 block text-[12px] font-normal text-dim">{agentName(catalogue, c.agent)}</span>}
+            </Cell>
+            <Cell>
+              {c.runRef ? (
+                <span className="flex flex-wrap items-center gap-1"><Mono>{c.runRef}</Mono>{c.taskRef && <Mono tone="brand">{c.taskRef}</Mono>}</span>
+              ) : <span className="text-[12.5px] text-dim">not in a run</span>}
+            </Cell>
+            <Cell className={cn('text-[13px]', c.lane === 'rules' ? 'text-ok' : 'text-ink-2')}>{c.lane === 'rules' ? 'offline rules' : `${c.lane} · ${c.model}`}</Cell>
+            <Cell className="tnum">{tokens(c.tokensIn + c.tokensOut)}</Cell>
+            <Cell className={cn('tnum', c.costUsd === null ? 'text-dim' : 'text-ink')}>{usd({ costUsd: c.costUsd, costComplete: true })}</Cell>
+          </Row>
+        ))}
+      </DataTable>
+    </Panel>
+  );
+}
 
-          <Panel eyebrow="Today's most expensive work" title="Top operations" flush>
-            <DataTable head={['Operation', 'Task', 'Model', 'Tokens', 'Cost']}>
-              {expensiveOps.map((o) => (
-                <Row key={o.id}>
-                  <Cell className="font-medium text-ink">{o.op}
-                    <span className="mt-0.5 block text-[12px] font-normal text-dim">{o.agent} · {o.at}</span>
-                  </Cell>
-                  <Cell><Mono>{o.task}</Mono></Cell>
-                  <Cell className="text-[12.5px]">{o.model}</Cell>
-                  <Cell className="tnum">{((o.tokensIn + o.tokensOut) / 1000).toFixed(0)}k</Cell>
-                  <Cell className={cn('tnum', o.cost === 0 ? 'text-ok' : 'text-ink')}>{o.cost === 0 ? 'free' : `$${o.cost.toFixed(2)}`}</Cell>
-                </Row>
-              ))}
-            </DataTable>
-          </Panel>
-        </div>
-
-        <SectionTitle>Where the money actually goes</SectionTitle>
-        <Panel>
-          <p className="max-w-4xl text-[13.5px] leading-relaxed text-ink-2">
-            Reasoning and review are the only places a frontier model earns its price — architecture decisions, legacy risk
-            calls and the final code review. Coding, extraction, summarising and embedding all sit within a point or two of
-            frontier quality on local weights, and they are the overwhelming majority of calls. That is the whole trade:
-            spend on judgement, never on typing.
-          </p>
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            <Tag tone="violet">reasoning → remote</Tag>
-            <Tag tone="brand">review → remote</Tag>
-            <Tag tone="ok">coding → local</Tag>
-            <Tag tone="ok">extraction → local</Tag>
-            <Tag tone="ok">embeddings → local</Tag>
-            <Tag tone="ok">reranking → local</Tag>
-          </div>
-        </Panel>
-      </PageBody>
-    </Page>
+function Latest({ r }: { r: SpendReport }) {
+  const { recent, byPerson } = r;
+  if (!recent.length) return null;
+  return (
+    <Panel flush title="Latest calls" eyebrow={`newest calls, any date${byPerson ? ` · ${byPerson.length} ${byPerson.length === 1 ? 'person' : 'people'} used AI in the window` : ''}`}>
+      <DataTable head={['When', 'Feature', 'Answered by', 'Tokens', 'Time', ...(byPerson ? ['By'] : [])]}>
+        {recent.map((c, i) => (
+          <Row key={`${c.at}:${i}`}>
+            <Cell className="whitespace-nowrap text-soft">{ago(c.at)}</Cell>
+            <Cell className="text-ink">{feature(c.feature)}</Cell>
+            <Cell>
+              <span className="flex items-center gap-1.5" title={c.error || undefined}>
+                {!c.ok && <Tag tone="warn">failed</Tag>}
+                <span className={cn('text-[13px]', c.provider === 'rules' ? 'text-ok' : 'text-ink-2')}>{c.provider === 'rules' ? 'offline rules' : c.model}</span>
+              </span>
+            </Cell>
+            <Cell className="tnum">{c.tokensIn + c.tokensOut ? tokens(c.tokensIn + c.tokensOut) : 'none'}</Cell>
+            <Cell className="tnum">{c.ms} ms</Cell>
+            {byPerson && <Cell className="text-soft">{c.by ?? 'Nobody signed in'}</Cell>}
+          </Row>
+        ))}
+      </DataTable>
+    </Panel>
   );
 }

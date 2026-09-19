@@ -1,9 +1,25 @@
 import type { ReactNode } from 'react';
-import { Target, TriangleAlert } from 'lucide-react';
-import { Empty, Mono, Panel, RiskPill, Ring } from '@/components/os';
+import { useNavigate } from 'react-router-dom';
+import { FolderGit2, Target, TriangleAlert } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Empty, Mono, Page, PageBody, PageHeader, Panel, RiskPill, Ring } from '@/components/os';
 import type { Impact } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { baseName } from './format';
+
+/** A screen that reads one project, in a workspace that has none yet: say what fills it, and go there. */
+export function NoProject({ title, hint }: { title: string; hint: string }) {
+  const nav = useNavigate();
+  return (
+    <Page>
+      <PageHeader title={title} />
+      <PageBody>
+        <Empty icon={<FolderGit2 className="size-6" />} title="No project yet" hint={hint}
+          action={<Button size="sm" onClick={() => nav('/projects')}>Onboard a repository</Button>} />
+      </PageBody>
+    </Page>
+  );
+}
 
 /** "If this changes…": the blast radius of a file, a module or a database object, measured on the graph. */
 export function ImpactPanel({ impact, onOpen, actions }: { impact: Impact; onOpen?: (path: string) => void; actions?: ReactNode }) {

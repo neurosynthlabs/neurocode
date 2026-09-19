@@ -107,9 +107,6 @@ export interface TestingReport {
   window: number;
 }
 
-/** A run's test step as GET /runs carries it: the command and status, and the parsed totals beside them. */
-export type RunTests = RunDoc["tests"] & TestCounts & { sha: string; runner: TestRunner };
-
 const seg = encodeURIComponent;
 
 export const testing = {

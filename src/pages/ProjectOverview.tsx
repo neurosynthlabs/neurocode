@@ -1,55 +1,96 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ExternalLink, RefreshCw, AlertTriangle, Scale, ShieldAlert, Search } from 'lucide-react';
+import { ExternalLink, FolderGit2, Globe, Loader2, RefreshCw, Scale, Search } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
   Page, PageHeader, PageBody, Panel, Stat, StatGrid, Tag, RiskPill, Dot, Mono,
-  DataTable, Row, Cell, MeterRow, Segmented, KV, BlockBar, Empty, SectionTitle,
+  DataTable, Row, Cell, MeterRow, Segmented, KV, BlockBar, Empty, SectionTitle, ListRow,
 } from '@/components/os';
-import { useProject } from '@/lib/project-context';
-import { getModules, rulesByProject, adrsByProject, riskyByProject, infraByProject, type InfraKv, type ProjectRule } from '@/mock/modules';
+import { agentName, useAccess } from '@/lib/access';
+import { ApiError, api } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { useData } from '@/lib/data';
-import { agentName } from '@/mock/agents';
-import { cn } from '@/lib/utils';
+import { useProject } from '@/lib/project-context';
+import { useRemote } from '@/lib/remote';
+import type { Project } from '@/types';
+import { ago } from './code/format';
 
-type Tab = 'modules' | 'rules' | 'decisions' | 'risk';
-
-const RENEWAL_TONE = { legacy: 'neutral', 'in-renewal': 'warn', renewed: 'ok' } as const;
-const ADR_TONE = { accepted: 'ok', proposed: 'warn', superseded: 'neutral', rejected: 'danger' } as const;
-const SEV_TONE = { blocker: 'danger', major: 'warn', minor: 'neutral' } as const;
+type Tab = 'modules' | 'rules' | 'decisions' | 'hotspots';
 
 export default function ProjectOverview() {
   const { projectId } = useParams();
   const nav = useNavigate();
   const { all: projects } = useProject();
-  const p = useMemo(() => projects.find((x) => x.id === projectId) ?? projects[0], [projects, projectId]);
-  // Onboarded from this app: show only what the scan measured, never another project's sample data.
-  const src = p.source;
+  const p = projects.find((x) => x.id === projectId);
+  if (!p) {
+    return (
+      <Page>
+        <PageHeader title="Project" />
+        <PageBody>
+          <Empty icon={<FolderGit2 className="size-6" />} title="No such project"
+            hint="It may have been removed, or the workspace was emptied. Pick one in Projects."
+            action={<Button size="sm" variant="outline" onClick={() => nav('/projects')}>Open Projects</Button>} />
+        </PageBody>
+      </Page>
+    );
+  }
+  return <Overview key={p.id} p={p} />;
+}
+
+function Overview({ p }: { p: Project }) {
+  const nav = useNavigate();
+  const { can } = useAuth();
+  const { catalogue } = useAccess();
+  const { tasks, memory } = useData();
+  const { setProjectId } = useProject();
   const [tab, setTab] = useState<Tab>('modules');
   const [q, setQ] = useState('');
+  const [asked, setAsked] = useState<string | null>(null);
 
-  const allModules = useMemo(() => (src ? [] : getModules(p.id)), [src, p.id]);
+  // The index's finish time streams in on the project record: a new index reloads the summary.
+  const stamp = p.codeIndex?.at ?? 'none';
+  const s = useRemote(p.source ? `${p.id}:${stamp}:summary` : null, () => api.code.summary(p.id));
+  const summary = s.data;
+  const indexing = asked === stamp || !!summary?.indexing;
+
   const modules = useMemo(() => {
-    const list = allModules;
-    const s = q.trim().toLowerCase();
-    return s ? list.filter((m) => (m.name + m.path + m.note + m.tables.join(' ')).toLowerCase().includes(s)) : list;
-  }, [allModules, q]);
-
-  const rules: ProjectRule[] = src
-    ? (p.rules ?? []).map((r) => ({ id: r.id, rule: r.label, detail: r.note, enforcedBy: 'Code Reviewer · from the first change', severity: 'major' as const, violations24h: 0 }))
-    : rulesByProject[p.id] ?? rulesByProject.erp;
-  const adrs = src ? [] : adrsByProject[p.id] ?? adrsByProject.erp;
-  const risky = src ? [] : riskyByProject[p.id] ?? riskyByProject.erp;
-  const infra: InfraKv[] = src
-    ? [
-        { k: 'Source', v: src.repo, mono: true },
-        { k: src.kind === 'git' ? 'Branch' : 'Kind', v: src.branch ?? 'local folder', mono: src.kind === 'git' },
-        { k: 'Files measured', v: (p.files ?? 0).toLocaleString() },
-        { k: 'Languages', v: p.languages?.map((l) => `${l.name} ${l.pct}%`).join(' · ') || 'not measured yet' },
-      ]
-    : infraByProject[p.id] ?? infraByProject.erp;
-  const { tasks } = useData();
+    const all = summary?.modules ?? [];
+    const t = q.trim().toLowerCase();
+    return t ? all.filter((m) => m.name.toLowerCase().includes(t)) : all;
+  }, [summary, q]);
+  const hotspots = summary?.hotspots ?? [];
+  const rules = p.rules ?? [];
+  const decisions = useMemo(
+    () => memory.filter((f) => f.category === 'decisions' && !f.archived && (f.projectId === p.id || f.projectId === null)),
+    [memory, p.id],
+  );
   const myTasks = useMemo(() => tasks.filter((t) => t.projectId === p.id), [tasks, p.id]);
+
+  const reindex = async () => {
+    setAsked(stamp);
+    try {
+      await api.code.reindex(p.id);
+      toast('Reading the code again', { description: 'The modules and hotspots refresh on their own when the index is ready.' });
+    } catch (e) {
+      setAsked(null);
+      toast.error('Not re-indexed', { description: e instanceof ApiError ? e.message : 'The local API did not answer.' });
+    }
+  };
+  const openIn = (to: string) => { setProjectId(p.id); nav(to); };
+
+  const notIndexed = (
+    <Empty icon={indexing ? <Loader2 className="size-5 animate-spin" /> : undefined}
+      title={indexing ? `Reading ${p.name}…` : `${p.name} has no index yet`}
+      hint={!p.source ? 'Its code was not onboarded on this machine, so there is nothing to index.'
+        : indexing ? 'This fills in the moment the index is ready.' : 'Index it to see its modules and the files most depended on.'}
+      action={p.source && !indexing && can('projects:onboard') && summary?.canIndex
+        ? <Button size="sm" onClick={() => void reindex()}>Index now</Button> : undefined} />
+  );
+  const indexBody = (ready: ReactNode) =>
+    s.error ? <Empty title="The index did not load" hint={s.error} action={<Button size="sm" variant="outline" onClick={s.reload}>Try again</Button>} />
+      : p.source && !summary ? <Empty icon={<Loader2 className="size-5 animate-spin" />} title="Loading the index…" />
+        : !summary?.indexed ? notIndexed : ready;
 
   return (
     <Page>
@@ -58,175 +99,183 @@ export default function ProjectOverview() {
         subtitle={p.description}
         actions={
           <>
-            <Button size="sm" variant="outline" onClick={() => nav('/code')}><ExternalLink className="size-3.5" />Code intelligence</Button>
-            <Button size="sm" variant="outline"><RefreshCw className="size-3.5" />Re-onboard</Button>
+            <Button size="sm" variant="outline" onClick={() => openIn('/code')}><ExternalLink className="size-3.5" />Code intelligence</Button>
+            {p.source && can('projects:onboard') && summary?.canIndex && (
+              <Button size="sm" variant="outline" disabled={indexing} onClick={() => void reindex()}>
+                {indexing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}{indexing ? 'Indexing…' : 'Re-index'}
+              </Button>
+            )}
           </>
         }
       >
         <div className="flex flex-wrap items-center gap-3 pb-3">
           <span className="flex items-center gap-1.5"><Dot state={p.status} pulse={p.status === 'active'} /><span className="text-[13px] text-ink-2 capitalize">{p.status}</span></span>
           <Mono>{p.codename}</Mono>
-          <Mono>{p.repo}</Mono>
+          {p.repo && <Mono>{p.repo}</Mono>}
           <div className="flex flex-wrap gap-1">
-            {p.stack.map((s) => <span key={s} className="rounded-xs border border-line bg-surface-2 px-1.5 py-px text-[11.5px] text-ink-2">{s}</span>)}
+            {p.stack.map((x) => <span key={x} className="rounded-xs border border-line bg-surface-2 px-1.5 py-px text-[11.5px] text-ink-2">{x}</span>)}
           </div>
         </div>
       </PageHeader>
 
       <PageBody className="space-y-4">
-        {/* Understanding */}
         <div className="grid grid-cols-12 gap-3">
-          <Panel eyebrow="How well the OS knows this codebase" title={`Project understood: ${p.understoodPct}%`} className="col-span-12 xl:col-span-5">
-            {p.coverage.map((c) => <MeterRow key={c.label} label={c.label} pct={c.pct} />)}
+          <Panel eyebrow="Measured when the code was indexed" className="col-span-12 xl:col-span-5"
+            title={p.understoodPct === null ? 'Not indexed yet' : `Project understood: ${p.understoodPct}%`}>
+            {p.coverage.length === 0
+              ? <p className="text-[13px] text-dim">Nothing has been measured yet.</p>
+              : p.coverage.map((c) => <MeterRow key={c.label} label={c.label} pct={c.pct} />)}
             <p className="mt-2 border-t border-line pt-2 text-[12px] text-dim">
-              Understanding is measured against what the OS can prove — parsed symbols, mapped tables, cited decisions —
-              not against how much it has read.
+              Understood is the share of the files the onboarding scan found that the code index holds.
             </p>
           </Panel>
 
           <div className="col-span-12 space-y-3 xl:col-span-7">
             <StatGrid cols={4}>
-              <Stat label="Tasks" value={p.work.tasks} sub={`${myTasks.filter((t) => t.status === 'done').length} done all-time`} />
-              <Stat label="Running" value={p.work.running} tone="ok" sub="agents in worktrees" />
-              <Stat label="In review" value={p.work.review} tone="warn" sub="awaiting reviewer or you" />
-              <Stat label="Blocked" value={p.work.blocked} tone={p.work.blocked ? 'danger' : 'neutral'} sub="need a human decision" />
+              <Stat label="Tasks" value={p.work.tasks} sub={`${myTasks.filter((t) => t.status === 'done').length} done`} />
+              <Stat label="Running" value={p.work.running} tone="ok" sub="in progress" />
+              <Stat label="In review" value={p.work.review} tone="warn" sub="awaiting review" />
+              <Stat label="Blocked" value={p.work.blocked} tone={p.work.blocked ? 'danger' : 'neutral'} sub="need a decision" />
             </StatGrid>
-            <Panel eyebrow="Stack & infrastructure" title="Environment" flush>
+            <Panel eyebrow="Where the code came from" title="Source" flush>
               <div className="grid grid-cols-1 gap-x-6 px-3.5 py-1.5 md:grid-cols-2">
-                {infra.map((i) => <KV key={i.k} k={i.k} v={i.v} mono={i.mono} />)}
+                {p.source ? (
+                  <>
+                    <KV k="Source" v={p.source.repo} mono />
+                    <KV k={p.source.kind === 'git' ? 'Branch' : 'Kind'} v={p.source.kind === 'git' ? p.source.branch ?? '' : 'local folder'} mono={p.source.kind === 'git'} />
+                    <KV k="Files measured" v={(p.files ?? 0).toLocaleString()} />
+                    <KV k="Lines" v={p.lines} />
+                    {p.languages && p.languages.length > 0 && <KV k="Languages" v={p.languages.map((l) => `${l.name} ${l.pct}%`).join(' · ')} />}
+                    {p.codeIndex && <KV k="Indexed" v={ago(p.codeIndex.at)} />}
+                  </>
+                ) : (
+                  <KV k="Repository" v={p.repo || 'not recorded'} mono />
+                )}
               </div>
             </Panel>
           </div>
         </div>
 
-        {/* Tabs */}
         <div className="flex flex-wrap items-center gap-2">
           <Segmented
             options={[
-              { id: 'modules', label: `Modules (${allModules.length})` },
+              { id: 'modules', label: summary?.indexed ? `Modules (${summary.modules?.length ?? 0})` : 'Modules' },
               { id: 'rules', label: `Rules (${rules.length})` },
-              { id: 'decisions', label: `Decisions (${adrs.length})` },
-              { id: 'risk', label: `Risky areas (${risky.length})` },
+              { id: 'decisions', label: `Decisions (${decisions.length})` },
+              { id: 'hotspots', label: summary?.indexed ? `Most depended on (${hotspots.length})` : 'Most depended on' },
             ]}
             value={tab}
             onChange={setTab}
           />
-          {tab === 'modules' && (
+          {tab === 'modules' && summary?.indexed && (
             <div className="flex h-9 w-72 items-center gap-2 rounded-lg border border-line bg-surface-2 px-2.5 focus-within:border-brand">
               <Search className="size-3.5 shrink-0 text-dim" />
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter modules, paths, tables…"
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter modules…" aria-label="Filter modules"
                 className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-dim focus-visible:outline-none" />
             </div>
           )}
         </div>
 
         {tab === 'modules' && (
-          <Panel flush>
-            {modules.length === 0 ? (src
-              ? <Empty title="Modules are not mapped yet" hint="They come from the syntax-tree pass, step 3 of onboarding, which is not connected yet." />
-              : <Empty title="No module matches" hint="Try a table name like MST_TAX." />) : (
-              <DataTable head={['Module', 'Path', 'LOC', 'Understood', 'Coverage', 'Risk', 'Renewal', 'Owner', 'Bugs']}>
+          <Panel flush eyebrow="From the code index" title="Modules">
+            {indexBody(modules.length === 0 ? (
+              <Empty title={q.trim() ? 'No module matches' : 'No modules found'} hint={q.trim() ? 'Try part of a module name.' : 'The index holds no source files grouped into modules.'} />
+            ) : (
+              <DataTable head={['Module', 'Files', 'Lines', 'Symbols', 'Complexity', 'Depended on by', 'Depends on']}>
                 {modules.map((m) => (
-                  <Row key={m.id} onClick={() => nav('/code')}>
-                    <Cell className="font-medium text-ink">
-                      {m.name}
-                      <span className="mt-0.5 block max-w-[420px] truncate text-[12px] font-normal text-dim">{m.note}</span>
-                    </Cell>
-                    <Cell mono className="text-dim">{m.path}</Cell>
-                    <Cell className="tnum">{(m.loc / 1000).toFixed(1)}k</Cell>
-                    <Cell><span className="flex items-center gap-2"><BlockBar pct={m.understood} width={8} /><span className="tnum text-[12px]">{m.understood}%</span></span></Cell>
-                    <Cell><span className="flex items-center gap-2"><BlockBar pct={m.coverage} width={8} /><span className="tnum text-[12px]">{m.coverage}%</span></span></Cell>
-                    <Cell><RiskPill risk={m.risk} bare /></Cell>
-                    <Cell><Tag tone={RENEWAL_TONE[m.renewal]}>{m.renewal}</Tag></Cell>
-                    <Cell className="text-[12.5px]">{agentName(m.owner)}</Cell>
-                    <Cell className={cn('tnum', m.openBugs > 3 ? 'text-danger' : m.openBugs ? 'text-warn' : 'text-dim')}>{m.openBugs}</Cell>
+                  <Row key={m.name} onClick={() => openIn(`/architecture?module=${encodeURIComponent(m.name)}`)}>
+                    <Cell mono className="font-medium text-ink">{m.name}</Cell>
+                    <Cell className="tnum">{m.files.toLocaleString()}</Cell>
+                    <Cell className="tnum">{m.lines.toLocaleString()}</Cell>
+                    <Cell className="tnum">{m.symbols.toLocaleString()}</Cell>
+                    <Cell className="tnum">{m.complexity.toLocaleString()}</Cell>
+                    <Cell className="tnum">{m.fanIn} {m.fanIn === 1 ? 'module' : 'modules'}</Cell>
+                    <Cell className="tnum">{m.fanOut} {m.fanOut === 1 ? 'module' : 'modules'}</Cell>
                   </Row>
                 ))}
               </DataTable>
-            )}
+            ))}
           </Panel>
         )}
 
         {tab === 'rules' && (
-          <Panel eyebrow="Enforced automatically — a violation stops the pipeline" title="Project rules" flush>
-            {rules.length === 0 && <Empty title="No rules yet" hint="Choose them when you onboard a project, or add them as it grows." />}
-            <div className="divide-y divide-line">
-              {rules.map((r) => (
-                <div key={r.id} className="px-3.5 py-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Tag tone={SEV_TONE[r.severity]}>{r.severity}</Tag>
-                    <span className="text-[13.5px] font-medium text-ink">{r.rule}</span>
-                    {r.violations24h > 0 && <span className="tnum text-[12px] text-warn">{r.violations24h} caught in 24h</span>}
+          <Panel eyebrow="Chosen when the project was onboarded · recorded, not yet enforced" title="Project rules" flush>
+            {rules.length === 0 ? (
+              <Empty title="No rules recorded" hint="Rules are chosen in the onboarding wizard. Nothing checks a change against them yet." />
+            ) : (
+              <div className="divide-y divide-line">
+                {rules.map((r) => (
+                  <div key={r.id} className="px-3.5 py-3">
+                    <span className="text-[13.5px] font-medium text-ink">{r.label}</span>
+                    {r.note && <p className="mt-1 text-[12.5px] text-soft">{r.note}</p>}
                   </div>
-                  <p className="mt-1 text-[12.5px] text-soft">{r.detail}</p>
-                  <p className="mt-1 flex items-center gap-1.5 text-[12px] text-dim"><ShieldAlert className="size-3" />{r.enforcedBy}</p>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </Panel>
         )}
 
         {tab === 'decisions' && (
-          <Panel eyebrow="Rejected decisions are kept — they are memory too" title="Architecture decision records" flush>
-            {adrs.length === 0 && <Empty title="No decisions recorded yet" hint="ADRs appear as plans are compiled, reviewed and decided." />}
-            <div className="divide-y divide-line">
-              {adrs.map((a) => (
-                <div key={a.id} className="px-3.5 py-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Mono tone="brand">{a.ref}</Mono>
-                    <span className="text-[13.5px] font-medium text-ink">{a.title}</span>
-                    <Tag tone={ADR_TONE[a.status]}>{a.status}</Tag>
-                    {a.supersedes && <span className="text-[12px] text-dim">supersedes {a.supersedes}</span>}
-                  </div>
-                  <p className="mt-1 text-[12.5px] text-soft">{a.summary}</p>
-                  <p className="mt-1 flex items-center gap-1.5 text-[12px] text-dim"><Scale className="size-3" />{a.by} · {a.at}</p>
+          <Panel eyebrow="Facts filed under Decisions, for this project and the workspace" title="Decisions" flush>
+            {decisions.length === 0 ? (
+              <Empty icon={<Scale className="size-6" />} title="No decisions recorded yet"
+                hint="Facts filed under Decisions in Memory appear here — from Add from text, or from a plan's answered question."
+                action={<Button size="sm" variant="outline" onClick={() => openIn('/memory')}>Open Memory</Button>} />
+            ) : decisions.map((f) => (
+              <ListRow key={f.id} onClick={() => openIn(`/memory?ref=${encodeURIComponent(f.ref)}`)}>
+                <div className="flex items-center gap-2">
+                  <Mono tone={f.pinned ? 'brand' : 'neutral'}>{f.ref}</Mono>
+                  {f.projectId === null && <Tag tone="violet"><Globe className="size-3" />workspace</Tag>}
+                  <span className="ml-auto text-[11.5px] text-dim">{ago(f.createdAt)}</span>
                 </div>
-              ))}
-            </div>
+                <p className="mt-1 text-[13.5px] font-medium text-ink">{f.title}</p>
+                <p className="mt-0.5 line-clamp-2 text-[12.5px] text-soft">{f.body}</p>
+              </ListRow>
+            ))}
           </Panel>
         )}
 
-        {tab === 'risk' && (
-          <Panel eyebrow="Ranked by churn × complexity × incident history" title="Risky areas" flush>
-            {risky.length === 0 && <Empty title="Not ranked yet" hint="Risk needs churn and complexity, which come from the git and syntax-tree passes." />}
-            <DataTable head={['Path', 'Risk', 'Churn', 'Complexity', 'Why it is risky', 'Last incident']}>
-              {risky.map((r) => (
-                <Row key={r.id}>
-                  <Cell mono className="text-ink-2">{r.path}</Cell>
-                  <Cell><RiskPill risk={r.risk} bare /></Cell>
-                  <Cell className="tnum">{r.churn}</Cell>
-                  <Cell><span className="flex items-center gap-2"><BlockBar pct={r.complexity} width={8} tone={r.complexity > 80 ? 'danger' : 'warn'} /><span className="tnum text-[12px]">{r.complexity}</span></span></Cell>
-                  <Cell className="max-w-[460px] text-[12.5px] text-soft">{r.reason}</Cell>
-                  <Cell className="text-dim">{r.lastIncident}</Cell>
+        {tab === 'hotspots' && (
+          <Panel eyebrow="Ranked by how many files reach each one, then by its complexity" title="Most depended on" flush>
+            {indexBody(hotspots.length === 0 ? (
+              <Empty title="Nothing depends on anything yet" hint="The index found no file that another file uses." />
+            ) : (
+              <DataTable head={['Path', 'Risk', 'Reached by', 'Complexity', 'Lines']}>
+                {hotspots.map((h) => (
+                  <Row key={h.path} onClick={() => openIn(`/code?path=${encodeURIComponent(h.path)}`)}>
+                    <Cell mono className="text-ink-2">{h.path}</Cell>
+                    <Cell><RiskPill risk={h.risk} bare /></Cell>
+                    <Cell className="tnum">{h.fanIn} {h.fanIn === 1 ? 'file' : 'files'}</Cell>
+                    <Cell className="tnum">{h.complexity}</Cell>
+                    <Cell className="tnum">{h.lines.toLocaleString()}</Cell>
+                  </Row>
+                ))}
+              </DataTable>
+            ))}
+          </Panel>
+        )}
+
+        <SectionTitle>Tasks in {p.name}</SectionTitle>
+        <Panel flush>
+          {myTasks.length === 0 ? (
+            <Empty title={`No tasks in ${p.name} yet`} hint="A requirement compiled for this project becomes a task here."
+              action={can('plans:compile') ? <Button size="sm" variant="outline" onClick={() => openIn('/')}>Compile a requirement</Button> : undefined} />
+          ) : (
+            <DataTable head={['Ref', 'Task', 'Status', 'Priority', 'Risk', 'Layers', 'Agents', 'Progress']}>
+              {myTasks.map((t) => (
+                <Row key={t.id} onClick={() => openIn('/tasks')}>
+                  <Cell mono>{t.ref}</Cell>
+                  <Cell className="font-medium text-ink">{t.title}</Cell>
+                  <Cell><span className="flex items-center gap-1.5"><Dot state={t.status} pulse={t.status === 'in_progress'} /><span className="capitalize">{t.status.replace('_', ' ')}</span></span></Cell>
+                  <Cell><Tag tone={t.priority === 'URGENT' ? 'danger' : t.priority === 'HIGH' ? 'warn' : 'neutral'}>{t.priority}</Tag></Cell>
+                  <Cell><RiskPill risk={t.risk} bare /></Cell>
+                  <Cell className="text-[12.5px] text-dim">{t.layers.join(' · ')}</Cell>
+                  <Cell className="text-[12.5px]">{t.agents.map((a) => agentName(catalogue, a)).join(', ')}</Cell>
+                  <Cell><span className="flex items-center gap-2"><BlockBar pct={t.progress} width={10} /><span className="tnum text-[12px]">{t.progress}%</span></span></Cell>
                 </Row>
               ))}
             </DataTable>
-            <div className="flex items-start gap-2 border-t border-line px-3.5 py-2.5">
-              <AlertTriangle className="mt-px size-3.5 shrink-0 text-warn" />
-              <p className="text-[12.5px] text-soft">
-                <span className="text-ink-2">Risk here is advisory, not a blocker.</span> The OS uses it to decide how many
-                verification passes a change needs — a CRITICAL path gets three independent reviewers instead of one.
-              </p>
-            </div>
-          </Panel>
-        )}
-
-        <SectionTitle>Active tasks in {p.name}</SectionTitle>
-        <Panel flush>
-          <DataTable head={['Ref', 'Task', 'Status', 'Priority', 'Risk', 'Layers', 'Agents', 'Progress']}>
-            {myTasks.map((t) => (
-              <Row key={t.id} onClick={() => nav('/tasks')}>
-                <Cell mono>{t.ref}</Cell>
-                <Cell className="font-medium text-ink">{t.title}</Cell>
-                <Cell><span className="flex items-center gap-1.5"><Dot state={t.status} pulse={t.status === 'in_progress'} /><span className="capitalize">{t.status.replace('_', ' ')}</span></span></Cell>
-                <Cell><Tag tone={t.priority === 'URGENT' ? 'danger' : t.priority === 'HIGH' ? 'warn' : 'neutral'}>{t.priority}</Tag></Cell>
-                <Cell><RiskPill risk={t.risk} bare /></Cell>
-                <Cell className="text-[12.5px] text-dim">{t.layers.join(' · ')}</Cell>
-                <Cell className="text-[12.5px]">{t.agents.length ? t.agents.map(agentName).join(', ') : '—'}</Cell>
-                <Cell><span className="flex items-center gap-2"><BlockBar pct={t.progress} width={10} /><span className="tnum text-[12px]">{t.progress}%</span></span></Cell>
-              </Row>
-            ))}
-          </DataTable>
+          )}
         </Panel>
       </PageBody>
     </Page>

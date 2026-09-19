@@ -643,8 +643,13 @@ class ExtensionUsage:
         found = await PrefRepository(self.session).get(key)
         return found.value if found is not None and isinstance(found.value, dict) else {}
 
-    async def per_key(self, tool: str, project_id: str) -> dict[str, dict[str, Any]]:
-        """Per skill or command key: uses in 24 hours, uses ever, the last use, and who started those sessions."""
+    async def per_key(self, tool: str, project_id: str | None) -> dict[str, dict[str, Any]]:
+        """Per skill or command key: uses in 24 hours, uses ever, the last use, and who started those sessions.
+
+        With no project there is nothing to count: every session belongs to a project, so the answer is
+        the real "none" rather than a query that could only come back empty."""
+        if project_id is None:
+            return {}
         since = utcnow() - timedelta(hours=24)
         stmt = (select(ChatMessage.detail,
                        func.count().filter(ChatMessage.at > since),
@@ -657,7 +662,9 @@ class ExtensionUsage:
         return {key: {"day": day, "ever": ever, "last": last, "by": sorted(b for b in by if b)}
                 for key, day, ever, last, by in (await self.session.execute(stmt)).all()}
 
-    async def sessions_24h(self, project_id: str) -> int:
+    async def sessions_24h(self, project_id: str | None) -> int:
+        if project_id is None:
+            return 0
         since = utcnow() - timedelta(hours=24)
         stmt = (select(func.count(distinct(ChatMessage.chat_id)))
                 .join(Chat, Chat.id == ChatMessage.chat_id)
@@ -695,31 +702,39 @@ async def snapshot(session: AsyncSession, project: Project | None) -> Snapshot:
 
 
 class ExtensionService:
-    """The four extension screens for one project."""
+    """The four extension screens, for one project or for none.
+
+    A workspace starts with no project, and what this machine already has — the skills, commands, hooks
+    and plugins under the Claude home — is real before any project exists. So with no project the
+    screens read those roots alone, and the counts that belong to a project's sessions are zero.
+    """
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.usage = ExtensionUsage(session)
 
-    async def _project(self, project_id: str) -> Project:
+    async def _project(self, project_id: str | None) -> Project | None:
+        if project_id is None:
+            return None
         project = await ProjectRepository(self.session).get(project_id)
         if project is None:
             raise NotFound(f"project {project_id}")
         return project
 
-    async def _catalogue(self, project: Project) -> Catalogue:
+    async def _catalogue(self, project: Project | None) -> Catalogue:
         use, home = await self.usage.pref(PLUGINS_PREF), claude_home()
-        return await asyncio.to_thread(lambda: discover(home, _root_of(project), project.id, use))
+        pid = project.id if project else None
+        return await asyncio.to_thread(lambda: discover(home, _root_of(project), pid, use))
 
-    async def skills(self, project_id: str) -> dict[str, Any]:
+    async def skills(self, project_id: str | None) -> dict[str, Any]:
         project = await self._project(project_id)
         cat = await self._catalogue(project)
-        used = await self.usage.per_key("load_skill", project.id)
+        used = await self.usage.per_key("load_skill", project_id)
         return {"skills": [skill_json(s, used.get(s.key)) for s in cat.skills],
-                "sessions24h": await self.usage.sessions_24h(project.id),
+                "sessions24h": await self.usage.sessions_24h(project_id),
                 "roots": [asdict(r) for r in cat.roots], "unreadable": cat.unreadable[:50]}
 
-    async def skill(self, project_id: str, key: str) -> dict[str, Any]:
+    async def skill(self, project_id: str | None, key: str) -> dict[str, Any]:
         """One skill with its body. The key is looked up in discovery; it is never used as a path."""
         project = await self._project(project_id)
         cat = await self._catalogue(project)
@@ -730,32 +745,32 @@ class ExtensionService:
         root = _root_of(project)
         if found.scope == "project" and root is not None and not (found.version and found.author):
             extra = await asyncio.to_thread(_last_commit, root, found.path)
-        used = (await self.usage.per_key("load_skill", project.id)).get(found.key)
+        used = (await self.usage.per_key("load_skill", project_id)).get(found.key)
         out = skill_json(found, used)
         out["version"] = out["version"] or extra.get("sha", "")
         out["author"] = out["author"] or extra.get("author", "")
         return {**out, "body": found.body, "truncated": found.truncated}
 
-    async def commands(self, project_id: str) -> dict[str, Any]:
+    async def commands(self, project_id: str | None) -> dict[str, Any]:
         project = await self._project(project_id)
         cat = await self._catalogue(project)
-        used = await self.usage.per_key("command", project.id)
+        used = await self.usage.per_key("command", project_id)
         return {"commands": [command_json(c, used.get(c.key)) for c in cat.commands],
                 "shellLines": {c.key: SHELL_LINE.findall(c.body) for c in cat.commands if SHELL_LINE.search(c.body)},
                 "conflicts": conflicts(cat.commands), "roots": [asdict(r) for r in cat.roots]}
 
-    async def hooks(self, project_id: str) -> dict[str, Any]:
+    async def hooks(self, project_id: str | None) -> dict[str, Any]:
         project = await self._project(project_id)
         home, root = claude_home(), _root_of(project)
         found, roots = await asyncio.to_thread(discover_hooks, home, root)
         return {"hooks": [hook_json(h) for h in found], "files": [asdict(r) for r in roots]}
 
-    async def plugins(self, project_id: str) -> dict[str, Any]:
+    async def plugins(self, project_id: str | None) -> dict[str, Any]:
         project = await self._project(project_id)
         use, home, root = await self.usage.pref(PLUGINS_PREF), claude_home(), _root_of(project)
 
         def read() -> tuple[dict[str, Any], Catalogue]:
-            return discover_plugins(home, use), discover(home, root, project.id, use)
+            return discover_plugins(home, use), discover(home, root, project.id if project else None, use)
 
         out, cat = await asyncio.to_thread(read)
         return {**out, "conflicts": conflicts(cat.commands)}

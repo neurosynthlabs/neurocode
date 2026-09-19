@@ -16,7 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.api.app import create_api
-from app.data.loader import load_seed, sync_roles
+from app.services.identity import MIN_PASSWORD, IdentityService
+from app.settings import Settings
+from tests.fixtures.workspace import load_workspace
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
 HEADERS = {"X-NC-Client": "test"}
@@ -25,9 +27,7 @@ PASSWORD = "a long enough password"
 
 @pytest_asyncio.fixture
 async def api(session: AsyncSession) -> FastAPI:
-    await load_seed(session)
-    await sync_roles(session)
-    await session.flush()
+    await load_workspace(session)
     built = create_api(db=None)
 
     async def use_the_test_session() -> AsyncIterator[AsyncSession]:
@@ -178,17 +178,56 @@ async def test_a_team_carries_its_members_and_refuses_a_stranger(client: AsyncCl
 
 
 async def test_the_catalogue_is_the_one_the_roles_screen_groups_by(client: AsyncClient):
+    from app.data import catalogue as shipped
+
     catalogue = (await client.get("/admin/permissions")).json()
-    assert len(catalogue) == 20
+    assert len(catalogue) == len(shipped.PERMISSIONS) == 20
     assert all(set(p) >= {"id", "label", "group", "description"} for p in catalogue)
     assert {p["group"] for p in catalogue} <= {"Work", "Gates", "Knowledge", "Platform", "Admin"}
     assert [p["id"] for p in catalogue[:2]] == ["plans:compile", "plans:decide"]
 
 
+async def test_anyone_signed_in_reads_the_catalogue_the_screens_name_things_by(api: FastAPI, client: AsyncClient):
+    """A Viewer holds no permission, and is still shown role names and told which permission a button
+    needs — so the names come from a route any signed-in person may read, not from the admin ones."""
+    from app.data import catalogue as shipped
+
+    custom = await client.post("/admin/roles", json={"name": "QA Lead", "permissions": ["tasks:write"]})
+    assert custom.status_code == 201
+    await add(client, "reader@example.com", "Reader", ["viewer"])
+
+    async with signed_in(api, "reader@example.com") as viewer:
+        assert (await viewer.get("/admin/permissions")).status_code == 403
+        answer = await viewer.get("/auth/catalogue")
+    assert answer.status_code == 200
+    body = answer.json()
+    assert set(body) == {"permissions", "roles", "agents"}
+
+    assert body["permissions"] == (await client.get("/admin/permissions")).json()
+    assert [p["id"] for p in body["permissions"]] == [p.id for p in shipped.PERMISSIONS]
+    assert all(set(p) == {"id", "group", "label", "description"} for p in body["permissions"])
+
+    roles = {r["id"]: r for r in body["roles"]}
+    assert all(set(r) == {"id", "name", "description", "builtin", "permissions"} for r in body["roles"])
+    assert [r["id"] for r in body["roles"][:len(shipped.ROLES)]] == [r.id for r in shipped.ROLES]
+    assert roles["approver"]["name"] == "AI Project Manager" and roles["approver"]["builtin"] is True
+    assert roles["viewer"]["permissions"] == []
+    assert roles[custom.json()["id"]] == {**{k: custom.json()[k] for k in ("id", "name", "description")},
+                                          "builtin": False, "permissions": ["tasks:write"]}
+
+    assert sorted(a["id"] for a in body["agents"]) == sorted(a.id for a in shipped.AGENTS)
+    assert all(set(a) == {"id", "name", "role", "icon"} for a in body["agents"])   # identity, no stats
+
+    async with AsyncClient(transport=ASGITransport(app=api), base_url="http://api", headers=HEADERS) as nobody:
+        assert (await nobody.get("/auth/catalogue")).status_code == 401
+
+
 async def test_the_workspace_counts_what_is_actually_there(client: AsyncClient):
     workspace = (await client.get("/admin/workspace")).json()
     assert workspace == {"name": "Acme", "createdAt": workspace["createdAt"], "people": 1,
-                         "roles": 5, "teams": 0}
+                         "roles": 5, "builtinRoles": 5, "teams": 0,
+                         "security": {"sessionDays": 14, "minPassword": MIN_PASSWORD, "loginAttempts": 5,
+                                      "lockoutSeconds": 30}}
     assert workspace["createdAt"]
 
     await add(client, "counted@example.com", "Counted", ["viewer"])
@@ -197,6 +236,27 @@ async def test_the_workspace_counts_what_is_actually_there(client: AsyncClient):
     assert renamed.status_code == 200
     assert renamed.json()["name"] == "Acme Two"
     assert renamed.json()["people"] == 2 and renamed.json()["teams"] == 1
+
+    await client.post("/admin/roles", json={"name": "Release manager", "permissions": ["runs:merge"]})
+    counted = (await client.get("/admin/workspace")).json()
+    assert counted["roles"] == 6 and counted["builtinRoles"] == 5   # a custom role is not a built-in one
+
+
+async def test_the_workspace_reports_the_sign_in_rules_the_identity_service_enforces(
+        client: AsyncClient, api: FastAPI, session: AsyncSession):
+    """The screen used to print "14 days", "10 characters" and "5 … 30 s" as text. Where the API runs
+    with other settings, those sentences described rules nobody was applying; the answer comes from
+    the service that applies them, and changes with it."""
+    stricter = Settings(session_days=3, login_attempts=2, lockout_seconds=900)
+    api.dependency_overrides[deps.identity_service] = lambda: IdentityService(session, config=stricter)
+    security = (await client.get("/admin/workspace")).json()["security"]
+    assert security == {"sessionDays": 3, "minPassword": MIN_PASSWORD, "loginAttempts": 2, "lockoutSeconds": 900}
+
+    # And the password floor it reports is the one a new account is refused under.
+    short = await client.post("/admin/users", json={"email": "short@example.com", "name": "Short",
+                                                    "password": "x" * (MIN_PASSWORD - 1), "roles": ["viewer"]})
+    assert short.status_code == 422
+    assert str(MIN_PASSWORD) in short.json()["detail"]
 
 
 async def test_every_change_lands_in_the_audit_log_and_it_pages_backwards(client: AsyncClient):

@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.api.app import create_api
-from app.data.loader import load_seed, sync_roles
+from tests.fixtures.workspace import load_workspace
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
 HEADERS = {"X-NC-Client": "test"}
@@ -22,9 +22,7 @@ HEADERS = {"X-NC-Client": "test"}
 
 @pytest_asyncio.fixture
 async def client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
-    await load_seed(session)
-    await sync_roles(session)
-    await session.flush()
+    await load_workspace(session)
     api = create_api(db=None)
 
     async def use_the_test_session() -> AsyncIterator[AsyncSession]:

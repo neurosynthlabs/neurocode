@@ -2,8 +2,8 @@
 
 What is checked is the contract — the paths, the JSON the screens read, and the status codes — plus the
 places where a plausible answer would be a false one. An agent's status, lanes, record and current run
-are derived from the runs, the router and the ledger; the seed's stored status and model are sample
-text and must never come back. The router screen must say what the gateway really does, so the map of
+are derived from the runs, the router and the ledger; the roster row holds only what the catalogue
+declares, and no stored status or model may come back. The router screen must say what the gateway really does, so the map of
 feature to role is checked against the call sites themselves. And the ledger has a lane where it used
 to have a provider, so `offline` is the lane called `rules` and nothing else.
 """
@@ -12,7 +12,8 @@ from __future__ import annotations
 import ast
 import threading
 from collections.abc import AsyncIterator
-from datetime import date, timedelta
+from dataclasses import replace
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -26,13 +27,14 @@ from app.ai.gateway import Gateway
 from app.ai.ledger import MemoryLedger
 from app.api import deps
 from app.api.app import create_api
+from app.data import catalogue
 from app.data.base import utcnow
-from app.data.loader import load_seed, sync_roles
 from app.models import ActivityEvent, AiCall, Run, RunStep, Task
 from app.schemas.system import ROUTES
 from app.secrets import Secrets
 from app.services.identity import IdentityService
 from app.services.runs import EDIT_SYSTEM, REVIEW_SYSTEM
+from tests.fixtures.workspace import load_workspace, rows
 
 SERVER = Path(__file__).resolve().parent.parent
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
@@ -58,9 +60,7 @@ def lane_gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Gateway:
 
 @pytest_asyncio.fixture
 async def client(session: AsyncSession, lane_gateway: Gateway) -> AsyncIterator[AsyncClient]:
-    await load_seed(session)
-    await sync_roles(session)
-    await session.flush()
+    await load_workspace(session)
     api = create_api(db=None)
 
     async def use_the_test_session() -> AsyncIterator[AsyncSession]:
@@ -115,13 +115,15 @@ async def roster(client: AsyncClient) -> dict[str, dict]:
 
 
 # ── the roster ───────────────────────────────────────────────────
-async def test_the_roster_is_derived_and_never_echoes_the_seed(client: AsyncClient):
-    """Every seeded agent says `running` and names a model no lane serves. With no run anywhere, all
-    of them are idle, and the stored model is not in the answer at all."""
+async def test_the_roster_is_the_catalogue_and_everything_else_is_derived(client: AsyncClient):
+    """The old sample said every agent was `running` on a model no lane serves. The roster is written
+    from the catalogue now, with no status or model on it: with no run anywhere, every agent is idle,
+    and no model is in the answer at all."""
     answer = (await client.get("/agents")).json()
     assert set(answer) == {"agents", "lanesOpen", "worktreesOnDisk", "enforced"}
     cards = answer["agents"]
-    assert len(cards) == 12 and [a["name"] for a in cards] == sorted(a["name"] for a in cards)
+    assert [a["id"] for a in sorted(cards, key=lambda a: a["name"])] == \
+        [a.id for a in sorted(catalogue.AGENTS, key=lambda a: a.name)] and [a["name"] for a in cards] == sorted(a["name"] for a in cards)
     assert {a["status"] for a in cards} == {"idle"}
     assert answer["worktreesOnDisk"] == 0 and answer["lanesOpen"] == 3 and answer["enforced"]
 
@@ -134,14 +136,15 @@ async def test_the_roster_is_derived_and_never_echoes_the_seed(client: AsyncClie
 
 
 async def test_an_agents_tasks_done_is_counted_not_stored(client: AsyncClient):
-    """The sample workspace says the Backend Engineer has finished 502 tasks. The board says two."""
+    """The old sample said the Backend Engineer had finished 502 tasks. The board is what counts."""
     cards = await roster(client)
     board = (await client.get("/tasks", params={"limit": 500})).json()
     for agent_id, card in cards.items():
         done = sum(1 for t in board if t["status"] == "done" and agent_id in t["agents"])
         assert card["tasksDone"] == done
 
-    assert cards["backend"]["tasksDone"] == 2
+    finished = rows("tasks", status="done")
+    assert cards["backend"]["tasksDone"] == sum(1 for t in finished if "backend" in t["agents"]) > 0
     assert cards["commander"]["tasksDone"] == 0          # it never takes a task; it hands them out
 
 
@@ -274,6 +277,21 @@ async def test_the_router_is_asked_off_the_event_loop(client: AsyncClient, lane_
 
 
 # ── the router ───────────────────────────────────────────────────
+async def test_a_lane_that_ran_a_model_its_price_is_not_for_has_no_known_cost_that_day(
+        client: AsyncClient, session: AsyncSession):
+    # groq is free for its catalogue model. The same lane pointed at another model has no price: the day's
+    # cost is unknown, not $0. A call that used no tokens (a 429) cost nothing either way.
+    session.add_all([
+        AiCall(feature="agent", lane="groq", model="llama-3.3-70b-versatile", tokens_in=100, tokens_out=40),
+        AiCall(feature="agent", lane="groq", model="a-paid-model-an-admin-chose", tokens_in=500, tokens_out=90),
+        AiCall(feature="agent", lane="cerebras", model="a-refused-model", ok=False, error="429"),
+    ])
+    await session.flush()
+    lanes_by_id = {lane["id"]: lane for lane in (await client.get("/models")).json()["lanes"]}
+    assert lanes_by_id["groq"]["cost24h"] is None
+    assert lanes_by_id["cerebras"]["cost24h"] == 0.0
+
+
 async def test_the_router_answers_with_its_lanes_and_no_key_material(client: AsyncClient, session: AsyncSession):
     session.add_all([
         AiCall(feature="agent", lane="groq", model="llama-3.3-70b-versatile", ms=300, tokens_in=100, tokens_out=40),
@@ -360,8 +378,10 @@ def test_the_prompt_preambles_are_the_ones_the_runtime_writes():
 async def test_the_feed_comes_back_in_the_shape_the_log_reads(client: AsyncClient):
     feed = (await client.get("/activity")).json()
     assert feed
-    assert set(feed[0]) >= {"id", "t", "actor", "actorKind", "action", "detail", "projectId", "level"}
+    assert set(feed[0]) >= {"id", "t", "at", "actor", "actorKind", "action", "detail", "projectId", "level"}
     assert len(feed[0]["t"]) == len("14:21:05")
+    at = datetime.fromisoformat(feed[0]["at"])               # the whole moment, with its zone
+    assert at.tzinfo is not None and at.strftime("%H:%M:%S") == feed[0]["t"]
 
 
 async def test_the_feed_is_paged_and_no_limit_gets_past_the_ceiling(client: AsyncClient,
@@ -379,6 +399,43 @@ async def test_the_feed_is_paged_and_no_limit_gets_past_the_ceiling(client: Asyn
     assert [e["id"] for e in second] == [e["id"] for e in most[3:6]]
 
 
+async def test_the_summary_counts_the_whole_log_not_the_page_a_screen_holds(client: AsyncClient,
+                                                                           session: AsyncSession):
+    me = (await client.get("/auth/me")).json()["user"]["name"]
+    before = (await client.get("/activity/summary")).json()
+    long_ago = utcnow() - timedelta(days=3)
+    session.add_all(
+        # More than the feed's ceiling, so a count taken from the feed would come out short.
+        [ActivityEvent(actor="Orchestrator", actor_kind="system", action=f"Step {n}", detail="",
+                       level="info", project_id="erp") for n in range(600)]
+        + [ActivityEvent(actor="Summary Coder", actor_kind="agent", action="Wrote", detail="", level="ok")
+           for _ in range(7)]
+        + [ActivityEvent(actor="Summary Reviewer", actor_kind="agent", action="Read", detail="", level="ok")
+           for _ in range(4)]
+        + [ActivityEvent(actor=me, actor_kind="human", action="Moved", detail="", level="info"),
+           ActivityEvent(actor=me, actor_kind="human", action="Moved", detail="", level="info", at=long_ago),
+           ActivityEvent(actor="Someone Else", actor_kind="human", action="Moved", detail="", level="info"),
+           # An agent that shares my name is not me.
+           ActivityEvent(actor=me, actor_kind="agent", action="Echo", detail="", level="info")])
+    await session.flush()
+
+    after = (await client.get("/activity/summary")).json()
+    assert after["total"] - before["total"] == 615
+    assert after["today"] - before["today"] == 614            # the one from three days ago is not today
+    assert after["mine"] - before["mine"] == 2                 # both of mine, whenever they were
+    delta = {k: after["byKind"].get(k, 0) - before["byKind"].get(k, 0) for k in after["byKind"]}
+    assert delta == {"system": 600, "agent": 12, "human": 3} | {
+        k: 0 for k in after["byKind"] if k not in {"system", "agent", "human"}}
+    agents = {a["name"]: a["events"] for a in after["agents"]}
+    assert agents["Summary Coder"] == 7 and agents["Summary Reviewer"] == 4
+    ranked = [a["events"] for a in after["agents"]]
+    assert ranked == sorted(ranked, reverse=True)
+    newest = (await client.get("/activity", params={"limit": 1})).json()[0]
+    assert after["through"] == int(newest["id"])               # the stream adds only what comes after it
+    day = datetime.fromisoformat(after["dayStart"])
+    assert day.utcoffset() == timedelta(0) and (day.hour, day.minute, day.second) == (0, 0, 0)
+
+
 # ── the ledger ───────────────────────────────────────────────────
 async def test_usage_answers_in_the_shape_the_screen_was_written_against(client: AsyncClient,
                                                                          session: AsyncSession):
@@ -390,13 +447,16 @@ async def test_usage_answers_in_the_shape_the_screen_was_written_against(client:
 
     report = (await client.get("/usage", params={"days": 7})).json()
     assert report["days"] == 7
+    # `reason` is no lane in the catalogue, so its two calls have no price: the total is the rules' $0,
+    # and it says it is a floor.
     assert report["totals"] == {"calls": 3, "modelCalls": 2, "offline": 1, "failures": 1,
-                                "tokensIn": 200, "tokensOut": 100, "avgMs": 534}
+                                "tokensIn": 200, "tokensOut": 100, "avgMs": 534,
+                                "costUsd": 0.0, "costComplete": False}
 
     assert len(report["byDay"]) == 1                      # all three landed on the same day
     day = report["byDay"][0]
     assert date.fromisoformat(day.pop("day"))             # a real date, not a sliced timestamp
-    assert day == {"calls": 3, "model": 2, "offline": 1, "tokens": 300}
+    assert day == {"calls": 3, "model": 2, "offline": 1, "tokens": 300, "costUsd": 0.0, "costComplete": False}
 
     compile_line = next(f for f in report["byFeature"] if f["feature"] == "compile")
     assert compile_line == {"feature": "compile", "calls": 2, "model": 1, "offline": 1, "failures": 0,
@@ -432,6 +492,111 @@ async def test_the_window_bounds_the_totals_but_not_the_recent_strip(client: Asy
     assert (await client.get("/usage", params={"days": -3})).json()["days"] == 1
 
 
+async def test_usage_is_priced_per_lane_and_grouped_by_agent_project_and_call(
+        client: AsyncClient, session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
+    """Every dollar on the cost screen comes from here. DeepSeek is given a price for the test, because
+    every lane in the catalogue is either free (priced at zero) or paid with no price declared, and a
+    report that only ever sums zeros would pass whatever it multiplied."""
+    monkeypatch.setattr(lanes, "LANES", tuple(
+        replace(x, usd_per_m_in=1.0, usd_per_m_out=2.0) if x.id == "deepseek" else x for x in lanes.LANES))
+    task = (await session.execute(select(Task).where(Task.ref == "TASK-492"))).scalar_one()
+    run = await a_run(session, "RUN-7", status="done", steps=[], agent="Backend Engineer", task_id=task.id)
+
+    def line(**kw: object) -> AiCall:
+        return AiCall(ok=True, ms=100, **kw)
+
+    session.add_all([
+        # Today: the backend agent by name on the priced lane, for a run in a project — $1 + $1 = $2.
+        line(at=utcnow(), feature="agent", lane="deepseek", model="deepseek-chat", tokens_in=1_000_000,
+             tokens_out=500_000, agent="Backend Engineer", project_id="erp", run_id=run.id),
+        # Today: another agent on a lane nobody priced, in the same project.
+        line(at=utcnow(), feature="review", lane="mystery", model="m", tokens_in=3000, tokens_out=1000,
+             agent="reviewer", project_id="erp"),
+        # Yesterday: the backend agent again, by id this time, on a free lane, for the workspace.
+        line(at=utcnow() - timedelta(days=1), feature="agent", lane="groq", model="llama-3.3-70b-versatile",
+             tokens_in=500,
+             tokens_out=500, agent="backend"),
+        # Yesterday: a person's call, answered by the rules, for the workspace.
+        line(at=utcnow() - timedelta(days=1), feature="ask", lane="rules", model="", tokens_in=0, tokens_out=0),
+        # Outside the week: counted nowhere below.
+        line(at=utcnow() - timedelta(days=20), feature="agent", lane="deepseek", model="deepseek-chat",
+             tokens_in=9_000_000, tokens_out=0, agent="Backend Engineer", project_id="erp"),
+    ])
+    await session.flush()
+
+    report = (await client.get("/usage", params={"days": 7})).json()
+    assert report["totals"]["calls"] == 4
+    assert report["totals"]["costUsd"] == 2.0 and report["totals"]["costComplete"] is False
+
+    yesterday, today = report["byDay"]
+    assert (yesterday["calls"], yesterday["costUsd"], yesterday["costComplete"]) == (2, 0.0, True)
+    assert (today["calls"], today["costUsd"], today["costComplete"]) == (2, 2.0, False)
+
+    agents = {a["agent"]: a for a in report["byAgent"]}
+    assert set(agents) == {"backend", "reviewer"}          # a person's call is not an agent's
+    assert agents["backend"] == {"agent": "backend", "name": "Backend Engineer", "calls": 2,
+                                 "tokensIn": 1_000_500, "tokensOut": 500_500, "costUsd": 2.0,
+                                 "costComplete": True}
+    # Every call it made was unpriced, so nothing is known — not "free".
+    assert agents["reviewer"]["costUsd"] is None and agents["reviewer"]["costComplete"] is False
+    assert agents["reviewer"]["name"] == "Code Reviewer"
+
+    projects = {p["projectId"]: p for p in report["byProject"]}
+    assert set(projects) == {"erp", None}
+    assert projects["erp"] == {"projectId": "erp", "projectName": "Legacy ERP", "calls": 2,
+                               "tokensIn": 1_003_000, "tokensOut": 501_000, "costUsd": 2.0,
+                               "costComplete": False}
+    assert projects[None] == {"projectId": None, "projectName": None, "calls": 2, "tokensIn": 500,
+                              "tokensOut": 500, "costUsd": 0.0, "costComplete": True}
+
+    costliest = report["costliest"]
+    assert len(costliest) == 4
+    top = costliest[0]
+    assert date.fromisoformat(top.pop("at")[:10])
+    assert top == {"lane": "deepseek", "model": "deepseek-chat", "feature": "agent", "agent": "backend",
+                   "tokensIn": 1_000_000, "tokensOut": 500_000, "costUsd": 2.0, "runRef": "RUN-7",
+                   "taskRef": "TASK-492"}
+    # Free calls by size, and the one with no price last rather than guessed into place.
+    assert [c["lane"] for c in costliest[1:]] == ["groq", "rules", "mystery"]
+    assert costliest[-1]["costUsd"] is None and costliest[1]["agent"] == "backend"
+    assert costliest[2]["agent"] is None and costliest[2]["runRef"] is None
+
+
+async def test_a_free_lane_pointed_at_another_model_is_unpriced_not_free(client: AsyncClient,
+                                                                         session: AsyncSession):
+    """A lane's price is its catalogue model's. An admin (or NEUROCODE_OPENROUTER_MODEL) can point the
+    free OpenRouter lane at a paid model, and those calls then have no known cost — not $0."""
+    session.add_all([
+        AiCall(feature="agent", lane="openrouter", model="anthropic/claude-sonnet-4", ok=True, ms=100,
+               tokens_in=100_000, tokens_out=20_000, agent="Backend Engineer"),
+        AiCall(feature="agent", lane="groq", model="llama-3.3-70b-versatile", ok=True, ms=100,
+               tokens_in=10, tokens_out=10, agent="Backend Engineer"),
+        AiCall(feature="embed", lane="gemini", model="text-embedding-004", ok=True, ms=100, tokens_in=10),
+        AiCall(feature="chat", lane="ollama", model="llama3.1:8b", ok=True, ms=100, tokens_in=10),
+    ])
+    await session.flush()
+
+    report = (await client.get("/usage", params={"days": 7})).json()
+    assert report["totals"]["calls"] == 4
+    assert report["totals"]["costUsd"] == 0.0 and report["totals"]["costComplete"] is False
+    by_lane = {c["lane"]: c["costUsd"] for c in report["costliest"]}
+    # The catalogue model, the lane's own embedding model, and any model on this machine are priced.
+    assert by_lane["groq"] == 0.0 and by_lane["gemini"] == 0.0 and by_lane["ollama"] == 0.0
+    assert by_lane["openrouter"] is None
+    agent = next(a for a in report["byAgent"] if a["agent"] == "backend")
+    assert agent["costUsd"] == 0.0 and agent["costComplete"] is False
+    assert lanes.priced_call("openrouter", "deepseek/deepseek-chat-v3.1:free")
+    assert not lanes.priced_call("openrouter", "anthropic/claude-sonnet-4")
+
+
+async def test_the_costliest_list_is_capped_at_ten(client: AsyncClient, session: AsyncSession):
+    session.add_all([AiCall(feature="ask", lane="groq", model="llama", ok=True, ms=10, tokens_in=n,
+                            tokens_out=0) for n in range(1, 15)])
+    await session.flush()
+    costliest = (await client.get("/usage")).json()["costliest"]
+    assert [c["tokensIn"] for c in costliest] == list(range(14, 4, -1))
+
+
 async def test_only_an_admin_is_told_who_made_a_call(client: AsyncClient, session: AsyncSession):
     me = (await client.get("/auth/me")).json()["user"]["id"]
     await call(session, user_id=me)
@@ -451,7 +616,7 @@ async def test_only_an_admin_is_told_who_made_a_call(client: AsyncClient, sessio
 
 async def test_none_of_them_answers_anyone_who_is_not_signed_in(client: AsyncClient):
     await client.post("/auth/logout")
-    for path in ("/agents", "/activity", "/usage", "/models"):
+    for path in ("/agents", "/activity", "/activity/summary", "/usage", "/models"):
         refused = await client.get(path)
         assert refused.status_code == 401 and refused.json()["detail"] == "Sign in to continue."
 
@@ -459,9 +624,10 @@ async def test_none_of_them_answers_anyone_who_is_not_signed_in(client: AsyncCli
 async def test_an_empty_ledger_answers_with_zeroes_rather_than_nothing(client: AsyncClient):
     report = (await client.get("/usage")).json()
     assert report["totals"] == {"calls": 0, "modelCalls": 0, "offline": 0, "failures": 0,
-                                "tokensIn": 0, "tokensOut": 0, "avgMs": 0}
+                                "tokensIn": 0, "tokensOut": 0, "avgMs": 0, "costUsd": 0.0, "costComplete": True}
     assert report["byDay"] == [] and report["byFeature"] == [] and report["byProvider"] == []
     assert report["recent"] == [] and report["byPerson"] == []
+    assert report["byAgent"] == [] and report["byProject"] == [] and report["costliest"] == []
 
 
 async def test_an_agents_spend_is_summed_from_the_ledger(client: AsyncClient, session: AsyncSession):

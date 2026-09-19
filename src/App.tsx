@@ -7,13 +7,14 @@ import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { ThemeProvider, useTheme } from '@/lib/theme';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { ProjectProvider, useProject } from '@/lib/project-context';
-import { DataProvider } from '@/lib/data';
+import { DataProvider, useData } from '@/lib/data';
 import { NAV } from '@/lib/nav';
 import { cn } from '@/lib/utils';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Topbar } from '@/components/layout/Topbar';
 import { CommandPalette } from '@/components/layout/CommandPalette';
 import { PageSkeleton, RouteBoundary } from '@/components/layout/RouteBoundary';
+import { NotConnected } from '@/components/layout/NotConnected';
 import { Empty, LogoMark, Page, PageBody } from '@/components/os';
 
 // The home screen ships in the entry chunk so first paint never waits on a second request.
@@ -42,7 +43,6 @@ const Commands = lazy(() => import('@/pages/Commands'));
 const Hooks = lazy(() => import('@/pages/Hooks'));
 const Plugins = lazy(() => import('@/pages/Plugins'));
 const Mcp = lazy(() => import('@/pages/Mcp'));
-const Acp = lazy(() => import('@/pages/Acp'));
 const Models = lazy(() => import('@/pages/Models'));
 const Brainstorm = lazy(() => import('@/pages/Brainstorm'));
 const Research = lazy(() => import('@/pages/Research'));
@@ -83,6 +83,7 @@ function Shell() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const { projectId, setProjectId } = useProject();
+  const { mode, offlineReason, reconnect } = useData();
   const { rail } = useTheme();
   const loc = useLocation();
 
@@ -121,52 +122,57 @@ function Shell() {
           className={cn('min-h-0 flex-1 overflow-hidden bg-bg', rail === 'flush' ? '' : 'elevated border border-line')}
           style={rail === 'flush' ? undefined : { borderRadius: 'calc(var(--radius) * 1.6)' }}
         >
+          {/* The workspace stopped loading after sign-in: one honest panel instead of thirty empty screens. */}
+          {mode === 'offline' && <NotConnected variant="panel" reason={offlineReason} onRetry={reconnect} />}
+          {/* Until the first load settles every screen would read as empty, which is not yet true. */}
+          {mode === 'connecting' && <PageSkeleton />}
           {/* Keyed by path: a crash stays on its own screen and clears the moment you navigate. */}
-          <RouteBoundary key={loc.pathname}>
-            <Suspense fallback={<PageSkeleton />}>
-              <Routes>
-                <Route path="/" element={<CommandCenter />} />
-                <Route path="/projects" element={<Projects />} />
-                <Route path="/projects/:projectId" element={<ProjectOverview />} />
-                <Route path="/memory" element={<Memory />} />
-                <Route path="/knowledge" element={<Knowledge />} />
-                <Route path="/code" element={<CodeIntelligence />} />
-                <Route path="/architecture" element={<Architecture />} />
-                <Route path="/agents" element={<Agents />} />
-                <Route path="/tasks" element={<Tasks />} />
-                <Route path="/plans" element={<Plans />} />
-                <Route path="/runs" element={<Runs />} />
-                <Route path="/workflows" element={<Workflows />} />
-                <Route path="/testing" element={<Testing />} />
-                <Route path="/review" element={<Review />} />
-                <Route path="/git" element={<Git />} />
-                <Route path="/devops" element={<DevOps />} />
-                <Route path="/skills" element={<Skills />} />
-                <Route path="/commands" element={<Commands />} />
-                <Route path="/hooks" element={<Hooks />} />
-                <Route path="/plugins" element={<Plugins />} />
-                <Route path="/mcp" element={<Mcp />} />
-                <Route path="/acp" element={<Acp />} />
-                <Route path="/models" element={<Models />} />
-                <Route path="/brainstorm" element={<Brainstorm />} />
-                <Route path="/research" element={<Research />} />
-                <Route path="/activity" element={<ActivityPage />} />
-                <Route path="/sessions" element={<Sessions />} />
-                <Route path="/permissions" element={<Permissions />} />
-                <Route path="/cost" element={<Cost />} />
-                <Route path="/evals" element={<Evals />} />
-                <Route path="/settings" element={<Settings />} />
-                <Route path="/admin/users" element={<Guard to="/admin/users"><People /></Guard>} />
-                <Route path="/admin/roles" element={<Guard to="/admin/roles"><Roles /></Guard>} />
-                <Route path="/admin/teams" element={<Guard to="/admin/teams"><Teams /></Guard>} />
-                <Route path="/admin/ai" element={<Guard to="/admin/ai"><AiProviders /></Guard>} />
-                <Route path="/admin/audit" element={<Guard to="/admin/audit"><Audit /></Guard>} />
-                <Route path="/admin/workspace" element={<Guard to="/admin/workspace"><WorkspacePage /></Guard>} />
-                <Route path="/admin/database" element={<Guard to="/admin/database"><DatabasePage /></Guard>} />
-                <Route path="*" element={<CommandCenter />} />
-              </Routes>
-            </Suspense>
-          </RouteBoundary>
+          {mode === 'live' && (
+            <RouteBoundary key={loc.pathname}>
+              <Suspense fallback={<PageSkeleton />}>
+                <Routes>
+                  <Route path="/" element={<CommandCenter />} />
+                  <Route path="/projects" element={<Projects />} />
+                  <Route path="/projects/:projectId" element={<ProjectOverview />} />
+                  <Route path="/memory" element={<Memory />} />
+                  <Route path="/knowledge" element={<Knowledge />} />
+                  <Route path="/code" element={<CodeIntelligence />} />
+                  <Route path="/architecture" element={<Architecture />} />
+                  <Route path="/agents" element={<Agents />} />
+                  <Route path="/tasks" element={<Tasks />} />
+                  <Route path="/plans" element={<Plans />} />
+                  <Route path="/runs" element={<Runs />} />
+                  <Route path="/workflows" element={<Workflows />} />
+                  <Route path="/testing" element={<Testing />} />
+                  <Route path="/review" element={<Review />} />
+                  <Route path="/git" element={<Git />} />
+                  <Route path="/devops" element={<DevOps />} />
+                  <Route path="/skills" element={<Skills />} />
+                  <Route path="/commands" element={<Commands />} />
+                  <Route path="/hooks" element={<Hooks />} />
+                  <Route path="/plugins" element={<Plugins />} />
+                  <Route path="/mcp" element={<Mcp />} />
+                  <Route path="/models" element={<Models />} />
+                  <Route path="/brainstorm" element={<Brainstorm />} />
+                  <Route path="/research" element={<Research />} />
+                  <Route path="/activity" element={<ActivityPage />} />
+                  <Route path="/sessions" element={<Sessions />} />
+                  <Route path="/permissions" element={<Permissions />} />
+                  <Route path="/cost" element={<Cost />} />
+                  <Route path="/evals" element={<Evals />} />
+                  <Route path="/settings" element={<Settings />} />
+                  <Route path="/admin/users" element={<Guard to="/admin/users"><People /></Guard>} />
+                  <Route path="/admin/roles" element={<Guard to="/admin/roles"><Roles /></Guard>} />
+                  <Route path="/admin/teams" element={<Guard to="/admin/teams"><Teams /></Guard>} />
+                  <Route path="/admin/ai" element={<Guard to="/admin/ai"><AiProviders /></Guard>} />
+                  <Route path="/admin/audit" element={<Guard to="/admin/audit"><Audit /></Guard>} />
+                  <Route path="/admin/workspace" element={<Guard to="/admin/workspace"><WorkspacePage /></Guard>} />
+                  <Route path="/admin/database" element={<Guard to="/admin/database"><DatabasePage /></Guard>} />
+                  <Route path="*" element={<CommandCenter />} />
+                </Routes>
+              </Suspense>
+            </RouteBoundary>
+          )}
         </main>
       </div>
       {/* The palette is an overlay — if it ever throws, drop it rather than take the app down. */}
@@ -199,18 +205,18 @@ function Standalone({ children }: { children: ReactNode }) {
 
 /** Nothing of the workspace renders until the server says who is here. */
 function Gate() {
-  const { state, user } = useAuth();
+  const { state, user, offlineReason, refresh } = useAuth();
   if (state === 'loading') return <Splash />;
+  if (state === 'offline') return <NotConnected reason={offlineReason} onRetry={refresh} />;
   if (state === 'setup') return <Standalone><Setup /></Standalone>;
   if (state === 'signed-out') return <Standalone><Login /></Standalone>;
-  const demo = state === 'demo';
   return (
     // Keyed by the person, so signing in as someone else starts from a clean store.
-    <DataProvider key={user?.id ?? 'demo'}>
+    <DataProvider key={user?.id}>
       <ProjectProvider>
         <Routes>
-          <Route path="/login" element={demo ? <Standalone><Login /></Standalone> : <Navigate to="/" replace />} />
-          <Route path="/setup" element={demo ? <Standalone><Setup /></Standalone> : <Navigate to="/" replace />} />
+          <Route path="/login" element={<Navigate to="/" replace />} />
+          <Route path="/setup" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Shell />} />
         </Routes>
       </ProjectProvider>

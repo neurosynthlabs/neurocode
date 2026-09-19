@@ -2,47 +2,61 @@
 // Layout lint — renders every route at phone and tablet widths and reports two kinds of breakage:
 //   spill  an element pokes past the viewport without sitting inside a horizontal scroller
 //   clip   an element is wider than an overflow:hidden ancestor, so part of it is silently cut off
-// Only the outermost offender of each problem is reported.
+// Only the outermost offender of each problem is reported. It runs on the real stack with the tests'
+// workspace loaded (see scripts/stack.mjs), because an empty screen cannot spill.
 //   node scripts/layout-lint.mjs            (uses dist/, run `npm run build` first)
 //   LINT_WIDTHS=390,820,1440 node scripts/layout-lint.mjs
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { findChrome } from './chrome.mjs';
+import { ROOT, startStack } from './stack.mjs';
+import { signedIn, settle } from './browser.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = Number(process.env.LINT_PORT ?? 5193);
-const BASE = `http://127.0.0.1:${PORT}`;
+const API_PORT = Number(process.env.LINT_API_PORT ?? 8797);
+const WEB_PORT = Number(process.env.LINT_PORT ?? 5197);
 const WIDTHS = (process.env.LINT_WIDTHS ?? '390,820').split(',').map(Number);
 const HEIGHTS = { 390: 844, 820: 1180 };
-
 
 const nav = fs.readFileSync(path.join(ROOT, 'src/lib/nav.ts'), 'utf8');
 const ROUTES = ['/login', ...[...nav.matchAll(/to: '(\/[^']*)'/g)].map((m) => m[1]), '/projects/erp'];
 
-let exited = null;
-const server = spawn(process.execPath, [path.join(ROOT, 'node_modules/vite/bin/vite.js'), 'preview', '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'], { cwd: ROOT, stdio: 'ignore' });
-server.on('exit', (c) => { exited = c; });
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { server.kill(); process.exit(130); });
+if (!fs.existsSync(path.join(ROOT, 'dist/index.html'))) throw new Error('dist/ is missing — run npm run build first');
+const stack = await startStack({ name: 'layout', apiPort: API_PORT, webPort: WEB_PORT, web: 'preview', fixture: true, owner: true });
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { void stack.stop().finally(() => process.exit(130)); });
+const BASE = stack.web;
 
 const report = [];
+// Routes that never rendered a real screen. A dead API, a rejected cookie or a crashed route leaves a small
+// login, "Not connected" or error panel that cannot spill, so without this the run passed while testing nothing.
+const unchecked = [];
 let browser;
 try {
-  for (let t = 0; ; t++) {
-    if (exited !== null) throw new Error(`vite preview exited (${exited}) — port ${PORT} busy?`);
-    try { if ((await fetch(BASE)).ok) break; } catch { /* starting */ }
-    if (t > 80) throw new Error('preview never came up');
-    await new Promise((r) => setTimeout(r, 250));
-  }
   browser = await chromium.launch({ executablePath: findChrome() });
   for (const w of WIDTHS) {
-    const ctx = await browser.newContext({ viewport: { width: w, height: HEIGHTS[w] ?? 900 }, isMobile: w < 640, hasTouch: w < 1024 });
+    const ctx = await signedIn(browser, stack, { viewport: { width: w, height: HEIGHTS[w] ?? 900 }, isMobile: w < 640, hasTouch: w < 1024 });
     for (const route of ROUTES) {
       const page = await ctx.newPage();
-      await page.goto(BASE + route, { waitUntil: 'networkidle', timeout: 20000 }).catch(() => {});
-      await page.waitForTimeout(200);
+      // /login redirects a signed-in person home, so it is linted with the cookie cleared.
+      if (route === '/login') await ctx.clearCookies();
+      let p = null;
+      try {
+        await page.goto(BASE + route, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        p = await settle(page);
+      } catch (e) {
+        unchecked.push({ w, route, why: 'navigation: ' + String(e.message).split('\n')[0].slice(0, 160) });
+      } finally {
+        if (route === '/login') await ctx.addCookies([{ name: 'nc_session', value: stack.token, url: stack.web, httpOnly: true, sameSite: 'Lax' }]);
+      }
+      if (!p) { await page.close(); continue; }
+      const why = [
+        p.offline && 'the app says it is not connected',
+        p.crashed && 'the route crashed',
+        p.busy && 'still loading after 15 s',
+        p.text < 80 && `only ${p.text} chars of content`,
+        route !== '/login' && new URL(page.url()).pathname === '/login' && 'signed out: it landed on /login',
+      ].filter(Boolean);
+      if (why.length) { unchecked.push({ w, route, why: why.join('; ') }); await page.close(); continue; }
       const r = await page.evaluate(() => {
         const W = window.innerWidth;
         const inScroller = (el) => {
@@ -94,7 +108,7 @@ try {
   }
 } finally {
   await browser?.close();
-  server.kill();
+  await stack.stop();
 }
 
 const byW = Object.fromEntries(WIDTHS.map((w) => [w, report.filter((x) => x.w === w)]));
@@ -106,6 +120,10 @@ for (const w of WIDTHS) {
     if (process.env.LINT_VERBOSE) for (const o of r.offenders) console.log(`      ${o}`);
   }
 }
+if (unchecked.length) {
+  console.log(`\n${unchecked.length} route×width combinations never rendered a screen, so they were not checked`);
+  for (const u of unchecked) console.log(`  ${String(u.w).padStart(4)}px ${u.route.padEnd(16)} ${u.why}`);
+}
 const total = report.length;
-console.log(total ? `\n✗ ${total} route×width combinations spill` : '\n✓ nothing spills at any width');
-process.exitCode = total ? 1 : 0;
+console.log(total ? `\n✗ ${total} route×width combinations spill` : unchecked.length ? '\n✗ nothing spilled, but not every screen was checked' : '\n✓ nothing spills at any width');
+process.exitCode = total || unchecked.length ? 1 : 0;

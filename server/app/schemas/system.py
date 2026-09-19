@@ -2,7 +2,7 @@
 
 The roster is where the interesting change is. An agent's card used to read everything off the agent's
 own row — its status, its model, tasks done, success rate — and every one of those was sample text
-written once. Only what a person authored is still read from the row, and it goes out under
+written once. The row now holds only what the catalogue declares, and it goes out under
 `declared`, because nothing in the runtime obeys it. Everything else is derived: the status from the
 runs, the lanes from the router, the record from the steps, the spend from the ledger.
 
@@ -21,17 +21,21 @@ from typing import Any
 
 from ..ai import lanes
 from ..ai.lanes import CHAT, REVIEW, WRITE, Lane
+from ..data import roster
 from ..models import Agent
 from ..repositories.usage import (
     OFFLINE,
+    AgentSpend,
     Answered,
     CallLine,
+    CostlyCall,
     CurrentRun,
     DayLine,
     FeatureLine,
     InFlight,
     LaneLine,
     PersonLine,
+    ProjectSpend,
     StepRecord,
     Usage,
 )
@@ -58,10 +62,10 @@ ENFORCED = (
 #: Agents the runtime never makes a model call as, and why. The commander is skipped when a plan is
 #: split into runs; the QA Engineer's step runs a command; the Orchestrator's merges are git's.
 NO_CALL = {
-    "AI Commander": "Hands the work out. The runtime makes no model call as it.",
-    "AI Project Manager": "That is you: every run stops at your signature.",
-    "QA Engineer": "Runs the project's own test command. No model is asked.",
-    "Orchestrator": "Merges the agents' branches with git. No model is asked.",
+    roster.COMMANDER: "Hands the work out. The runtime makes no model call as it.",
+    roster.APPROVER: "That is you: every run stops at your signature.",
+    roster.TESTER: "Runs the project's own test command. No model is asked.",
+    roster.ORCHESTRATOR: "Merges the agents' branches with git. No model is asked.",
 }
 
 #: What each kind of step's verdict really measures, in the words the card uses.
@@ -84,7 +88,7 @@ def calls_as(agent: Agent, records: Sequence[StepRecord]) -> str | None:
     steps by a plan that named them.
     """
     kinds = {r.kind for r in records}
-    if "review" in kinds or agent.name == "Code Reviewer":
+    if "review" in kinds or agent.name == roster.REVIEWER:
         return REVIEW
     if "edit" in kinds:
         return WRITE
@@ -173,9 +177,9 @@ class Route:
 #: _review, services/chat.py, services/retrieval.py and the admin test. `offline` is whether the
 #: feature has an answer of its own when no lane does.
 ROUTES = (
-    Route("compile", None, True, False,
-          "Asks for no particular role, so every open lane is equal. With none, the offline planner "
-          "writes the plan and says so."),
+    Route("compile", None, False, False,
+          "Asks for no particular role, so every open lane is equal. With none, compiling is refused: "
+          "no plan is invented."),
     Route("agent", WRITE, False, False,
           "Starts with the lane the run was given when it was dispatched, then lanes good at writing. "
           "With no lane the step is skipped: no code is invented."),
@@ -186,8 +190,8 @@ ROUTES = (
           "Lanes good at chat. With no lane the session says so and stops."),
     Route("ask", None, True, False,
           "No particular role. With no lane, memory search answers from the facts alone."),
-    Route("brainstorm", None, True, False,
-          "No particular role. With no lane, an offline template fills the brief and says so."),
+    Route("brainstorm", None, False, False,
+          "No particular role. With no lane, brainstorming is refused: no brief is invented."),
     Route("extract", None, True, False,
           "No particular role. With no lane, rules pull the facts out and say so."),
     Route("embed", None, False, False,
@@ -226,6 +230,10 @@ def fleet_json(report: list[dict[str, Any]], catalogue: Sequence[Lane],
         tin, tout = sum(line.tokens_in for line in mine), sum(line.tokens_out for line in mine)
         per_in, per_out = lanes.price_of(row["id"])
         known = lanes.priced(row["id"])
+        # The lane's price holds for the model it names; a day that ran another model through it has no
+        # known cost, even on a free lane.
+        all_priced = known and all(lanes.priced_call(line.lane, line.model)
+                                   for line in mine if line.tokens_in or line.tokens_out)
         out.append({
             **{k: v for k, v in row.items() if k not in PRIVATE},
             "hosting": "local" if row["api"] == "ollama" else "remote", "embed": embeds.get(row["id"]),
@@ -233,7 +241,7 @@ def fleet_json(report: list[dict[str, Any]], catalogue: Sequence[Lane],
             "calls24h": calls, "failures24h": sum(line.failures for line in mine),
             "avgMs24h": round(sum(line.avg_ms * line.calls for line in mine) / calls) if calls else 0,
             "tokensIn24h": tin, "tokensOut24h": tout,
-            "cost24h": round(tin / 1e6 * per_in + tout / 1e6 * per_out, 4) if known else None,
+            "cost24h": round(tin / 1e6 * per_in + tout / 1e6 * per_out, 4) if all_priced else None,
         })
     return out
 
@@ -273,7 +281,28 @@ def totals_json(fleet: Sequence[dict[str, Any]], lines: Sequence[LaneLine]) -> d
 
 def day_json(line: DayLine) -> dict[str, Any]:
     return {"day": line.day, "calls": line.calls, "model": line.model, "offline": line.offline,
-            "tokens": line.tokens}
+            "tokens": line.tokens, "costUsd": line.cost_usd, "costComplete": not line.unpriced}
+
+
+def agent_spend_json(line: AgentSpend) -> dict[str, Any]:
+    """`agent` is the roster id when the roster knows the agent, and the name the ledger wrote when it
+    does not — a renamed or removed agent's spend is still history, under the name it had."""
+    known = roster.BY_ID.get(line.agent)
+    return {"agent": line.agent, "name": known.name if known else line.agent, "calls": line.calls,
+            "tokensIn": line.tokens_in, "tokensOut": line.tokens_out, "costUsd": line.cost_usd,
+            "costComplete": not line.unpriced}
+
+
+def project_spend_json(line: ProjectSpend) -> dict[str, Any]:
+    return {"projectId": line.project_id, "projectName": line.project_name, "calls": line.calls,
+            "tokensIn": line.tokens_in, "tokensOut": line.tokens_out, "costUsd": line.cost_usd,
+            "costComplete": not line.unpriced}
+
+
+def costly_json(line: CostlyCall) -> dict[str, Any]:
+    return {"at": when(line.at), "lane": line.lane, "model": line.model, "feature": line.feature,
+            "agent": line.agent, "tokensIn": line.tokens_in, "tokensOut": line.tokens_out,
+            "costUsd": line.cost_usd, "runRef": line.run_ref, "taskRef": line.task_ref}
 
 
 def feature_json(line: FeatureLine) -> dict[str, Any]:
@@ -307,8 +336,13 @@ def usage_json(report: Usage, *, admin: bool) -> dict[str, Any]:
         "totals": {"calls": totals.calls, "modelCalls": totals.model_calls,
                    "offline": totals.offline, "failures": totals.failures,
                    "tokensIn": totals.tokens_in, "tokensOut": totals.tokens_out,
-                   "avgMs": totals.avg_ms},
+                   "avgMs": totals.avg_ms,
+                   # A floor whenever `costComplete` is false; None when no call in the window was priced.
+                   "costUsd": totals.cost_usd, "costComplete": not totals.unpriced},
         "byDay": [day_json(d) for d in report.by_day],
+        "byAgent": [agent_spend_json(a) for a in report.by_agent],
+        "byProject": [project_spend_json(p) for p in report.by_project],
+        "costliest": [costly_json(c) for c in report.costliest],
         "byFeature": [feature_json(f) for f in report.by_feature],
         "byProvider": [lane_json(line) for line in report.by_lane],
         "recent": [call_json(c, admin=admin) for c in report.recent],

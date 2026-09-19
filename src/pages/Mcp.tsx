@@ -1,16 +1,17 @@
 import { useMemo, useState } from 'react';
-import { Plus, ShieldAlert, Search, Server } from 'lucide-react';
+import { Loader2, Plus, PlugZap, Search, Server, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
   Page, PageHeader, PageBody, Panel, Tag, RiskPill, Dot, Mono, ListRow, Toolbar, Field,
   SelectField, DataTable, Row, Cell, Stat, StatGrid, KV, Empty, Ascii, StatusText, Wizard,
 } from '@/components/os';
-import { mcpCallLog, rawConfigs, untrustedSourceIds } from '@/mock/mcp';
+import { useAuth } from '@/lib/auth';
 import { useData } from '@/lib/data';
+import { LAUNCH_PERMISSION } from '@/lib/live/mcp';
 import type { McpServer } from '@/types';
-import { agentName } from '@/mock/agents';
 import { cn } from '@/lib/utils';
+import { ago } from './code/format';
 
 const GENERIC_LABELS = new Set(['mcp', 'api', 'www', 'app', 'server', 'localhost']);
 
@@ -54,15 +55,22 @@ function connectionProblem(transport: string, raw: string): string | null {
 const TRANSPORTS = [
   { id: 'stdio', label: 'stdio', note: 'A local process the OS launches and talks to over pipes. Fastest, and the most common.' },
   { id: 'http', label: 'Streamable HTTP', note: 'A remote server over HTTPS. Needs a URL and usually a token.' },
-  { id: 'sse', label: 'SSE (legacy)', note: 'The older remote transport. Prefer HTTP unless the server only speaks SSE.' },
+  { id: 'sse', label: 'SSE (legacy)', note: 'The older remote transport. A check speaks streamable HTTP to it, so a server that only speaks the old transport reports why it refused.' },
 ];
+
+const STATUSES: McpServer['status'][] = ['connected', 'disconnected', 'error', 'auth_required'];
+
+/** A server nobody has checked has no status of its own yet; "disconnected" would read as a measurement. */
+const statusLabel = (m: McpServer) => (m.checkedAt ? m.status.replace('_', ' ') : 'not checked');
 
 export default function Mcp() {
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('all');
-  const { mcp: servers, registerMcp, mode } = useData();
-  const [sel, setSel] = useState(servers[0]?.id ?? '');
+  const { mcp: servers, registerMcp, checkMcp, trustMcp } = useData();
+  const { can } = useAuth();
+  const [sel, setSel] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState<string | null>(null);
   const [add, setAdd] = useState(false);
   const [cmd, setCmd] = useState('');
   const [transport, setTransport] = useState('stdio');
@@ -83,129 +91,173 @@ export default function Mcp() {
   const list = useMemo(() => {
     const s = q.trim().toLowerCase();
     return servers.filter((m) =>
-      (status === 'all' || m.status === status) &&
+      (status === 'all' || (m.checkedAt !== null && m.status === status) || (status === 'unchecked' && m.checkedAt === null)) &&
       (!s || (m.name + m.command + m.tools.map((t) => t.name).join(' ')).toLowerCase().includes(s)));
   }, [servers, q, status]);
 
-  const srv = useMemo(() => list.find((m) => m.id === sel) ?? list[0] ?? servers[0], [list, sel, servers]);
-  const calls = useMemo(() => mcpCallLog.filter((c) => c.server === srv.id), [srv.id]);
-  const connected = servers.filter((m) => m.status === 'connected').length;
+  const srv = list.find((m) => m.id === sel) ?? list[0] ?? null;
+  const checked = servers.filter((m) => m.checkedAt !== null);
+  const connected = checked.filter((m) => m.status === 'connected').length;
   const tools = servers.reduce((n, m) => n + m.tools.length, 0);
+  const untrusted = servers.filter((m) => m.untrusted);
+
+  const mayLaunch = can(LAUNCH_PERMISSION);
+  /** Why this server cannot be checked by this person right now, or null when it can. */
+  const checkBlocker = (m: McpServer) =>
+    !can('mcp:manage') ? 'Your role cannot manage MCP servers (mcp:manage).'
+      : m.transport !== 'stdio' ? null
+        : m.untrusted ? 'Untrusted: its command is never launched. Trust it first.'
+          : !mayLaunch ? `Launching a command needs ${LAUNCH_PERMISSION}.` : null;
+
+  const check = async (m: McpServer) => {
+    setChecking(m.id);
+    const doc = await checkMcp(m.id);
+    setChecking(null);
+    if (!doc) return;
+    if (doc.status === 'connected') {
+      toast.success(`${doc.name} connected`, { description: `${doc.tools.length} ${doc.tools.length === 1 ? 'tool' : 'tools'} listed in ${doc.latencyMs} ms.` });
+    } else {
+      toast.warning(`${doc.name}: ${statusLabel(doc)}`, { description: doc.lastError });
+    }
+  };
+  const trust = async (m: McpServer) => {
+    const doc = await trustMcp(m.id, !!m.untrusted);
+    if (doc) toast.success(doc.untrusted ? `${doc.name} is untrusted again` : `${doc.name} is trusted`,
+      { description: doc.untrusted ? 'Its command will not be launched.' : 'Its command may now be launched to check it.' });
+  };
 
   return (
     <Page>
       <PageHeader
         title="MCP & Tools"
-        subtitle="Model Context Protocol servers give agents hands. Everything they return is treated as data — never as instructions."
+        subtitle="Model Context Protocol servers this workspace knows about. A check connects once and records what each one offers."
         actions={<Button size="sm" onClick={() => setAdd(true)}><Plus className="size-3.5" />Add server</Button>}
       >
-        <Toolbar>
-          <Field className="w-64" value={q} onChange={setQ} icon={<Search className="size-3.5" />} placeholder="Search servers, tools, commands…" onClear={() => setQ('')} />
-          <SelectField className="w-40" value={status} onChange={setStatus}
-            options={[{ value: 'all', label: 'Any status' }, { value: 'connected', label: 'connected' }, { value: 'disconnected', label: 'disconnected' }, { value: 'error', label: 'error' }, { value: 'auth_required', label: 'auth required' }]} />
-          <span className="ml-auto text-[12.5px] text-dim">{list.length} of {servers.length} servers · {tools} tools</span>
-        </Toolbar>
+        {servers.length > 0 && (
+          <Toolbar>
+            <Field className="w-64" value={q} onChange={setQ} icon={<Search className="size-3.5" />} placeholder="Search servers, tools, commands…" onClear={() => setQ('')} />
+            <SelectField className="w-40" value={status} onChange={setStatus}
+              options={[{ value: 'all', label: 'Any status' }, { value: 'unchecked', label: 'not checked' },
+                ...STATUSES.map((x) => ({ value: x, label: x.replace('_', ' ') }))]} />
+            <span className="ml-auto text-[12.5px] text-dim">{list.length} of {servers.length} servers · {tools} tools listed</span>
+          </Toolbar>
+        )}
       </PageHeader>
 
       <PageBody className="space-y-4">
-        <StatGrid cols={5}>
-          <Stat label="Connected" value={connected} tone="ok" sub={`${servers.length - connected} not available`} icon={<Server className="size-3" />} />
-          <Stat label="Tools exposed" value={tools} sub="across every server" />
-          <Stat label="Calls 24h" value={servers.reduce((n, m) => n + m.calls24h, 0).toLocaleString()} />
-          <Stat label="Median latency" value={`${Math.round(servers.reduce((n, m) => n + m.latencyMs, 0) / servers.length)}ms`} />
-          <Stat label="Untrusted sources" value={untrustedSourceIds.length} tone="warn" sub="output is data, not orders" icon={<ShieldAlert className="size-3" />} />
-        </StatGrid>
+        {servers.length === 0 ? (
+          <Empty icon={<Server className="size-6" />} title="No MCP servers registered"
+            hint="Add one to record how it is launched or reached. Check it afterwards to see the tools it offers."
+            action={<Button size="sm" variant="outline" onClick={() => setAdd(true)}>Register a server</Button>} />
+        ) : (
+          <>
+            <StatGrid cols={4}>
+              <Stat label="Registered" value={servers.length} sub={`${checked.length} checked`} icon={<Server className="size-3" />} />
+              <Stat label="Connected" value={connected} tone={connected ? 'ok' : 'neutral'} sub="at their last check" />
+              <Stat label="Tools listed" value={tools} sub="by the servers themselves" />
+              <Stat label="Untrusted" value={untrusted.length} tone={untrusted.length ? 'warn' : 'neutral'} sub="never launched" icon={<ShieldAlert className="size-3" />} />
+            </StatGrid>
 
-        <Panel className="border-warn/30 accent-left" eyebrow="Non-negotiable" title="Tool output is untrusted input">
-          <p className="text-[13.5px] leading-relaxed text-ink-2">
-            A web page, a GitHub issue, a Jira ticket or a database row can contain text addressed to the agent. The OS
-            treats every tool result as <span className="text-ink">data</span>. If a result contains an instruction, the
-            agent surfaces it to you and stops — it never acts on it. Servers marked untrusted below carry that label
-            into every prompt that quotes them.
-          </p>
-          <div className="mt-2.5 flex flex-wrap gap-1">
-            {untrustedSourceIds.map((i) => <Tag key={i} tone="warn">{i}</Tag>)}
-          </div>
-        </Panel>
-
-        <div className="flex min-h-[520px] flex-col gap-3 md:flex-row">
-          <div className="no-scrollbar w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[290px] overflow-y-auto rounded-md border border-line bg-surface">
-            {list.length === 0 ? <Empty title="No server matches" /> : list.map((m) => (
-              <ListRow key={m.id} active={m.id === srv.id} onClick={() => setSel(m.id)}>
-                <div className="flex items-center gap-2">
-                  <Dot state={m.status} pulse={m.status === 'connected'} />
-                  <span className="truncate text-[13.5px] font-medium text-ink">{m.name}</span>
-                  {(m.untrusted || untrustedSourceIds.includes(m.id)) && <ShieldAlert className="ml-auto size-3 text-warn" />}
+            <Panel className="border-warn/30 accent-left" eyebrow="Recorded, not yet enforced" title="Tool output is untrusted input">
+              <p className="text-[13.5px] leading-relaxed text-ink-2">
+                A web page, an issue or a database row can contain text addressed to an agent. No agent in NeuroCode calls
+                MCP tools yet; a check only lists what a server offers. What is enforced today: an untrusted stdio
+                server's command is never launched. Each server's trust and default effect are recorded for when tools
+                can be called.
+              </p>
+              {untrusted.length > 0 && (
+                <div className="mt-2.5 flex flex-wrap gap-1">
+                  {untrusted.map((m) => <Tag key={m.id} tone="warn">{m.name}</Tag>)}
                 </div>
-                <div className="mt-1 flex items-center gap-2 text-[11.5px] text-dim">
-                  <Mono>{m.transport}</Mono>
-                  <span>{m.tools.length} tools</span>
-                  <span className="ml-auto tnum">{m.latencyMs}ms</span>
-                </div>
-              </ListRow>
-            ))}
-          </div>
-
-          <div className="min-w-0 flex-1 space-y-3">
-            <Panel
-              eyebrow={`${srv.scope} scope`}
-              title={<span className="flex items-center gap-2">{srv.name}<StatusText state={srv.status} /></span>}
-              actions={(srv.untrusted || untrustedSourceIds.includes(srv.id)) ? <Tag tone="warn"><ShieldAlert className="size-3" />untrusted source</Tag> : <Tag tone="ok">trusted</Tag>}
-            >
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 xl:grid-cols-4">
-                <KV k="Transport" v={srv.transport} />
-                <KV k="Latency" v={`${srv.latencyMs} ms`} />
-                <KV k="Calls 24h" v={srv.calls24h.toLocaleString()} />
-                <KV k="Error rate" v={<span className={srv.errorRate > 1 ? 'text-warn' : 'text-ok'}>{srv.errorRate}%</span>} />
-                <KV k="Resources" v={srv.resources} />
-                <KV k="Prompts" v={srv.prompts} />
-                <KV k="Tools" v={srv.tools.length} />
-                <KV k="Scope" v={srv.scope} />
-              </div>
-              <Mono className="mt-2.5 block truncate">{srv.command}</Mono>
+              )}
             </Panel>
 
-            <Panel eyebrow={`${srv.tools.length} tools · risk decides whether a human is asked`} title="Exposed tools" flush>
-              <DataTable head={['Tool', 'What it does', 'Risk']}>
-                {srv.tools.map((t) => (
-                  <Row key={t.name}>
-                    <Cell mono className="text-brand">{t.name}</Cell>
-                    <Cell className="max-w-[520px] text-[12.5px] text-soft">{t.description}</Cell>
-                    <Cell><RiskPill risk={t.risk} bare /></Cell>
-                  </Row>
+            <div className="flex min-h-[520px] flex-col gap-3 md:flex-row">
+              <div className="no-scrollbar w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[290px] overflow-y-auto rounded-md border border-line bg-surface">
+                {list.length === 0 ? <Empty title="No server matches" hint="Clear the search or the status filter." /> : list.map((m) => (
+                  <ListRow key={m.id} active={m.id === srv?.id} onClick={() => setSel(m.id)}>
+                    <div className="flex items-center gap-2">
+                      <Dot state={m.checkedAt ? m.status : 'idle'} pulse={m.status === 'connected' && !!m.checkedAt} />
+                      <span className="truncate text-[13.5px] font-medium text-ink">{m.name}</span>
+                      {m.untrusted && <ShieldAlert className="ml-auto size-3 text-warn" />}
+                    </div>
+                    <div className="mt-1 flex items-center gap-2 text-[11.5px] text-dim">
+                      <Mono>{m.transport}</Mono>
+                      <span>{m.checkedAt ? `${m.tools.length} tools` : 'not checked'}</span>
+                      {m.latencyMs !== null && <span className="ml-auto tnum">{m.latencyMs} ms</span>}
+                    </div>
+                  </ListRow>
                 ))}
-              </DataTable>
-            </Panel>
+              </div>
 
-            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-              <Panel eyebrow="As configured" title="Server config">
-                <Ascii className="max-h-[240px] overflow-auto">{srv.config ?? rawConfigs[srv.id] ?? '// no config recorded for this server'}</Ascii>
-              </Panel>
-              <Panel eyebrow={`${calls.length} recent calls`} title="Call log" flush>
-                {calls.length === 0 ? <Empty title="No calls recorded" hint="This server has been idle in the current window." /> : (
-                  <DataTable head={['At', 'Tool', 'Agent', 'ms', 'Result']}>
-                    {calls.map((c, i) => (
-                      <Row key={i}>
-                        <Cell mono className="text-dim">{c.at}</Cell>
-                        <Cell mono>{c.tool}</Cell>
-                        <Cell className="text-[12.5px]">{agentName(c.agent)}</Cell>
-                        <Cell className="tnum">{c.ms}</Cell>
-                        <Cell><Tag tone={c.result === 'ok' ? 'ok' : c.result === 'denied' ? 'warn' : 'danger'}>{c.result}</Tag></Cell>
-                      </Row>
-                    ))}
-                  </DataTable>
-                )}
-              </Panel>
+              {srv && (
+                <div className="min-w-0 flex-1 space-y-3">
+                  <Panel
+                    eyebrow={`${srv.scope} scope · ${srv.checkedAt ? `checked ${ago(srv.checkedAt)}` : 'never checked'}`}
+                    title={<span className="flex items-center gap-2">{srv.name}<StatusText state={srv.checkedAt ? srv.status : 'idle'} label={statusLabel(srv)} /></span>}
+                    actions={
+                      <div className="flex items-center gap-1.5">
+                        {srv.untrusted ? <Tag tone="warn"><ShieldAlert className="size-3" />untrusted</Tag> : <Tag tone="ok"><ShieldCheck className="size-3" />trusted</Tag>}
+                        {can('mcp:manage') && mayLaunch && (
+                          <Button size="xs" variant="outline" onClick={() => void trust(srv)}>{srv.untrusted ? 'Trust' : 'Untrust'}</Button>
+                        )}
+                        <Button size="xs" disabled={!!checkBlocker(srv) || checking === srv.id} title={checkBlocker(srv) ?? undefined} onClick={() => void check(srv)}>
+                          {checking === srv.id ? <Loader2 className="size-3 animate-spin" /> : <PlugZap className="size-3" />}{checking === srv.id ? 'Checking…' : 'Check'}
+                        </Button>
+                      </div>
+                    }
+                  >
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 xl:grid-cols-4">
+                      <KV k="Transport" v={srv.transport} />
+                      <KV k="Default effect" v={srv.defaultEffect ?? 'ask'} />
+                      {srv.latencyMs !== null && <KV k="Listing took" v={`${srv.latencyMs} ms`} />}
+                      {srv.checkedAt && srv.status === 'connected' && <KV k="Tools" v={srv.tools.length} />}
+                      {srv.resources !== null && <KV k="Resources" v={srv.resources} />}
+                      {srv.prompts !== null && <KV k="Prompts" v={srv.prompts} />}
+                    </div>
+                    <Mono className="mt-2.5 block truncate">{srv.command}</Mono>
+                    {srv.lastError && (
+                      <p className="mt-2.5 rounded-sm border border-warn/30 bg-warn/8 px-3 py-2 text-[12.5px] leading-relaxed text-warn">{srv.lastError}</p>
+                    )}
+                    {srv.transport === 'stdio' && srv.untrusted && (
+                      <p className="mt-2.5 text-[12.5px] text-dim">
+                        Checking launches this command on the machine running NeuroCode, so it needs trusting first — by someone with {LAUNCH_PERMISSION}.
+                      </p>
+                    )}
+                  </Panel>
+
+                  <Panel eyebrow={srv.checkedAt ? `${srv.tools.length} listed at the last check · risk from the tool's own hints` : 'not checked yet'} title="Tools" flush>
+                    {srv.tools.length === 0 ? (
+                      <Empty title={srv.checkedAt ? 'The server listed no tools' : 'Tools are listed when the server is checked'}
+                        hint={srv.checkedAt ? (srv.status === 'connected' ? 'It connected and offers none.' : 'The last check did not connect.') : 'A check connects once and asks the server what it offers.'} />
+                    ) : (
+                      <DataTable head={['Tool', 'What it does', 'Risk']}>
+                        {srv.tools.map((t) => (
+                          <Row key={t.name}>
+                            <Cell mono className="text-brand">{t.name}</Cell>
+                            <Cell className="max-w-[520px] text-[12.5px] text-soft">{t.description}</Cell>
+                            <Cell><RiskPill risk={t.risk} bare /></Cell>
+                          </Row>
+                        ))}
+                      </DataTable>
+                    )}
+                  </Panel>
+
+                  <Panel eyebrow="As reviewed in the wizard" title="Server config">
+                    <Ascii className="max-h-[240px] overflow-auto">{srv.config ?? '// no config recorded for this server'}</Ascii>
+                  </Panel>
+                </div>
+              )}
             </div>
-          </div>
-        </div>
+          </>
+        )}
       </PageBody>
 
       <Wizard
         open={add}
         onOpenChange={setAdd}
         title="Add an MCP server"
-        description="New servers arrive disconnected, and every tool they expose starts on the default effect you pick here until you promote it in Permissions."
+        description="A new server is recorded untrusted and not checked. Check it afterwards to see what it offers."
         finishLabel="Register server"
         busy={busy}
         onFinish={async () => {
@@ -220,7 +272,7 @@ export default function Mcp() {
           setAdd(false);
           setSel(doc.id);
           toast.success(`${doc.name} registered`, {
-            description: mode === 'live' ? 'Saved. It stays disconnected until you connect it.' : 'Disconnected until you connect it from the list.',
+            description: doc.transport === 'stdio' ? 'Trust it, then check it to list its tools.' : 'Check it to list its tools.',
           });
           setCmd('');
           setTransport('stdio');
@@ -251,7 +303,7 @@ export default function Mcp() {
                 <Field
                   label={transport === 'stdio' ? 'Launch command' : 'Server URL'}
                   value={cmd} onChange={setCmd} mono
-                  placeholder={transport === 'stdio' ? 'npx -y @modelcontextprotocol/server-postgres postgres://readonly@localhost/erp' : 'https://mcp.example.com/mcp'}
+                  placeholder={transport === 'stdio' ? 'npx -y @modelcontextprotocol/server-filesystem ~/code' : 'https://mcp.example.com/mcp'}
                 />
                 <SelectField label="Scope" value={scope} onChange={setScope}
                   options={[
@@ -269,9 +321,9 @@ export default function Mcp() {
                 <div className="flex items-start gap-2.5 rounded-sm border border-warn/30 bg-warn/8 px-3 py-2.5">
                   <ShieldAlert className="mt-px size-3.5 shrink-0 text-warn" />
                   <span className="text-[13px] leading-relaxed text-warn">
-                    <span className="font-semibold">Output is treated as untrusted.</span> Always on for a new server — an
-                    instruction found inside a tool result is surfaced to you, never obeyed. You can mark a server trusted
-                    later, one server at a time.
+                    <span className="font-semibold">A new server starts untrusted.</span> Until someone trusts it, a stdio
+                    server's command is never launched, not even to check it. The default effect below is recorded for
+                    when agents can call its tools.
                   </span>
                 </div>
                 <SelectField label="Default effect for its tools" value={effect} onChange={setEffect}

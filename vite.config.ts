@@ -11,21 +11,21 @@ const { version } = JSON.parse(readFileSync(new URL('./package.json', import.met
 // often than the framework does.
 const vendor = (pkgs: string) => new RegExp(`[\\\\/]node_modules[\\\\/](${pkgs})[\\\\/]`)
 
+const apiProxy = {
+  target: `http://127.0.0.1:${process.env.NC_API_PORT ?? 8787}`,
+  rewrite: (p: string) => p.replace(/^\/api/, ''),
+}
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   define: { __APP_VERSION__: JSON.stringify(version) },
   resolve: {
     alias: { '@': new URL('./src', import.meta.url).pathname },
   },
-  // Dev only: /api/* is the local FastAPI server (server/), started next to Vite by scripts/dev.sh.
-  server: {
-    proxy: {
-      '/api': {
-        target: `http://127.0.0.1:${process.env.NC_API_PORT ?? 8787}`,
-        rewrite: (p) => p.replace(/^\/api/, ''),
-      },
-    },
-  },
+  // /api/* is the local FastAPI server (server/). The app always talks to it there, so the dev server and
+  // `vite preview` — which the smoke and layout checks run against a production build — proxy it the same way.
+  server: { proxy: { '/api': apiProxy } },
+  preview: { proxy: { '/api': apiProxy } },
   build: {
     rolldownOptions: {
       output: {

@@ -6,10 +6,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field, ListRow, Page, PageBody, PageHeader, Panel, SelectField, Tag } from '@/components/os';
 import { api, type PermissionDef, type RoleDoc } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { permissions as CATALOGUE } from '@/mock/rbac';
 import { cn } from '@/lib/utils';
-import { attempt, demoRoles, useAdmin } from './load';
-import { DemoNote, LoadError, Loading } from './kit';
+import { attempt, startingRole, useAdmin } from './load';
+import { LoadError, Loading } from './kit';
 
 interface Access { roles: RoleDoc[]; catalogue: PermissionDef[] }
 
@@ -17,15 +16,15 @@ const loadAccess = async (): Promise<Access> => {
   const [roles, catalogue] = await Promise.all([api.admin.roles(), api.admin.permissions()]);
   return { roles, catalogue };
 };
-const DEMO: Access = { roles: demoRoles, catalogue: CATALOGUE };
-const GROUPS = ['Work', 'Gates', 'Knowledge', 'Platform', 'Admin'];
+/** The catalogue's groups in the order it lists them: the API keeps catalogue order. */
+const groupsOf = (catalogue: PermissionDef[]) => [...new Set(catalogue.map((p) => p.group))];
 const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
 const people = (n: number) => `${n} ${n === 1 ? 'person' : 'people'}`;
 
 export default function Roles() {
   const { can } = useAuth();
-  const { data, setData, error, live, reload } = useAdmin(loadAccess, DEMO);
-  const manage = live && can('roles:manage');
+  const { data, setData, error, reload } = useAdmin<Access>(loadAccess);
+  const manage = can('roles:manage');
   const [sel, setSel] = useState<string | null>(null);
   const [draft, setDraft] = useState<string[] | null>(null);
   const [creating, setCreating] = useState(false);
@@ -59,7 +58,8 @@ export default function Roles() {
     setBusy(false);
     if (!r) return;
     setData((d) => d && { ...d, roles: d.roles.filter((x) => x.id !== r.id) });
-    pick('owner');
+    setSel(null);  // back to the first role in the list
+    setDraft(null);
     toast.success(`${r.name} deleted`);
   };
 
@@ -67,14 +67,13 @@ export default function Roles() {
     <Page>
       <PageHeader
         title="Roles & permissions"
-        subtitle="A role is a named set of permissions, and a person’s access is everything their roles allow. The five built-in roles are fixed; add custom ones beside them."
+        subtitle="A role is a named set of permissions, and a person’s access is everything their roles allow. Built-in roles are fixed; add custom ones beside them."
         actions={<Button size="sm" onClick={() => setCreating(true)} disabled={!manage}><Plus className="size-3.5" />New role</Button>}
       />
       <PageBody>
-        {!live && <DemoNote what="Custom roles" />}
         {error ? <LoadError error={error} onRetry={reload} /> : !data || !role ? <Loading /> : (
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-[290px_minmax(0,1fr)]">
-            <Panel flush title="Roles" eyebrow={`${data.roles.length} in this workspace`} className="self-start">
+            <Panel flush title="Roles" eyebrow={`${data.roles.length} in this workspace · ${data.roles.filter((r) => r.builtin).length} built in`} className="self-start">
               <div className="py-1">
                 {data.roles.map((r) => (
                   <ListRow key={r.id} active={r.id === role.id} onClick={() => pick(r.id)}>
@@ -110,7 +109,7 @@ export default function Roles() {
               )}
 
               <div className="mt-5 space-y-5">
-                {GROUPS.map((g) => {
+                {groupsOf(data.catalogue).map((g) => {
                   const items = data.catalogue.filter((p) => p.group === g);
                   if (!items.length) return null;
                   return (
@@ -162,10 +161,10 @@ function NewRole({ open, onOpenChange, roles, onCreated }: {
 }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [from, setFrom] = useState('engineer');
+  const [from, setFrom] = useState(() => startingRole(roles));
   const [busy, setBusy] = useState(false);
 
-  const close = () => { onOpenChange(false); setName(''); setDescription(''); setFrom('engineer'); };
+  const close = () => { onOpenChange(false); setName(''); setDescription(''); setFrom(startingRole(roles)); };
   const submit = async (e: SyntheticEvent) => {
     e.preventDefault();
     if (!name.trim() || busy) return;

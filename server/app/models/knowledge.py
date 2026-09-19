@@ -28,10 +28,11 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    select,
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
 from ..data.base import Base, Mixin
 from .enums import ChunkKind, Confidence, ConflictStatus, MemoryCategory, RunStatus, RunStepStatus
@@ -57,11 +58,12 @@ class MemoryFact(Base, Mixin):
     #: Null means the fact belongs to the workspace, not to one project.
     project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
     confidence: Mapped[str] = mapped_column(Confidence, nullable=False, server_default="MEDIUM")
-    strength: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    hits: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    #: When a feature last put this fact in front of a model or cited it — written with each recall,
+    #: so it is the newest row in `memory_hits` without a query per fact.
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     pinned: Mapped[bool] = mapped_column(nullable=False, server_default="false")
     archived: Mapped[bool] = mapped_column(nullable=False, server_default="false")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
 
     #: Derived by the database from the words themselves, so it can never be stale.
@@ -83,10 +85,52 @@ class MemoryTag(Base):
     fact: Mapped[MemoryFact] = relationship(back_populates="tags")
 
 
+class MemoryHit(Base):
+    """One fact recalled once: cited by an answer, or put in front of a model to answer from.
+
+    A row per recall rather than a counter on the fact. The fact used to carry `hits` and a `strength`
+    of 80 that nothing ever changed, so the screen showed numbers that looked measured and were not;
+    a row says which feature used the fact, for what, and when — and "in the last day" is a count.
+    """
+
+    __tablename__ = "memory_hits"
+    __table_args__ = (
+        CheckConstraint("feature IN ('ask', 'chat', 'retrieval', 'research', 'compile')", name="known_feature"),
+        Index("ix_memory_hits_fact_id_at", "fact_id", "at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    fact_id: Mapped[str] = mapped_column(ForeignKey("memory_facts.id", ondelete="CASCADE"), nullable=False)
+    feature: Mapped[str] = mapped_column(String(20), nullable=False)
+    #: What it was recalled for — a session, a research or a plan ref. Null for a question asked of
+    #: memory itself, which leaves nothing behind to point at.
+    ref: Mapped[str | None] = mapped_column(String(40))
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False,
+                                         index=True)
+
+
+#: Counted in the same statement that loads the fact, so a list of facts is one query, not one per fact.
+#: Not expired on flush: pinning a fact must not turn its count into a lazy load inside async code.
+MemoryFact.hits_24h = column_property(
+    select(func.count(MemoryHit.id))
+    .where(MemoryHit.fact_id == MemoryFact.id, MemoryHit.at > func.now() - text("interval '24 hours'"))
+    .correlate_except(MemoryHit)
+    .scalar_subquery(),
+    expire_on_flush=False,
+)
+
+
 class MemoryConflict(Base, Mixin):
     """Two facts that cannot both be true. Kept until a person settles it."""
 
     __tablename__ = "memory_conflicts"
+    __table_args__ = (
+        CheckConstraint("a <> b", name="two_different_facts"),
+        # One open conflict per pair, whichever way round it was filed. The service says so in words
+        # first; this is what holds when two people file the same pair at the same moment.
+        Index("uq_memory_conflicts_open_pair", func.least(text("a"), text("b")), func.greatest(text("a"), text("b")),
+              unique=True, postgresql_where=text("status = 'open'")),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     topic: Mapped[str] = mapped_column(Text, nullable=False)
@@ -266,5 +310,5 @@ class ResearchCitation(Base):
 
 # A chunk's text is searched by words as well as by meaning; both indexes above are on the same row,
 # so a hybrid search never has to reconcile two stores that drifted apart.
-__all__ = ["EMBED_DIM", "Chunk", "MemoryConflict", "MemoryFact", "MemoryTag", "ResearchAngle", "ResearchCitation",
+__all__ = ["EMBED_DIM", "Chunk", "MemoryConflict", "MemoryFact", "MemoryHit", "MemoryTag", "ResearchAngle", "ResearchCitation",
            "ResearchReport", "RetrievalRun", "text"]

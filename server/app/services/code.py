@@ -24,6 +24,7 @@ from .. import codeindex, onboarding
 from ..agent.git import Refused as PathRefused
 from ..agent.git import safe_path
 from ..ai.gateway import Gateway
+from ..data import roster
 from ..data.engine import Database
 from ..models import Project
 from ..repositories.base import NotFound
@@ -53,7 +54,8 @@ DATA_KINDS = ("reads", "writes", "calls")
 
 
 def checkout(project: Project) -> Path | None:
-    """Where this project's code is on this machine. A sample project has none, and says so."""
+    """Where this project's code is on this machine, or None for a project that was never onboarded
+    from here."""
     return onboarding.source_root({"id": project.id, "source": {
         "kind": project.source_kind, "repo": project.source_repo}} if project.source_kind else {})
 
@@ -431,7 +433,7 @@ def coverage_after(stored: Any, measured: dict[str, int]) -> list[dict[str, Any]
 # ── the slow jobs ────────────────────────────────────────────────
 async def _say(db: Database, project_id: str, action: str, detail: str, level: str = "ok") -> None:
     async with db.session() as open_session:
-        await ActivityRepository(open_session).record(actor="Architect", actor_kind="agent",
+        await ActivityRepository(open_session).record(actor=roster.ARCHITECT, actor_kind="agent",
                                                       action=action, detail=detail, level=level,
                                                       project_id=project_id)
 

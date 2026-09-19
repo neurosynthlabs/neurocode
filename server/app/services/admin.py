@@ -11,16 +11,14 @@ deserves.
 """
 from __future__ import annotations
 
-import asyncio
 import re
 import secrets as pysecrets
 from collections.abc import Iterable
-from functools import lru_cache
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..data.loader import load_seed_file
+from ..data.catalogue import PERMISSION_ORDER, PERMISSIONS
 from ..models.identity import Role, Team
 from ..repositories.base import NotFound
 from ..repositories.identity import RoleRepository, TeamRepository, UserRepository
@@ -30,38 +28,26 @@ from .errors import Refused
 ID_LENGTH = 40
 
 
-@lru_cache(maxsize=1)
-def _catalogue() -> tuple[tuple[dict[str, Any], ...], dict[str, int]]:
-    """The permission catalogue, and where each id sits in it.
-
-    Read from the seed, which is where the frontend's own copy is exported from, so the two cannot
-    drift. Read once: the file is the same file for the life of the process.
-    """
-    entries = tuple(load_seed_file().get("rbac", {}).get("permissions", []))
-    return entries, {entry["id"]: i for i, entry in enumerate(entries)}
-
-
-async def catalogue() -> list[dict[str, Any]]:
+def catalogue() -> list[dict[str, Any]]:
     """Every permission this workspace knows about, each carrying the group a screen files it under.
-    Reading a file blocks, so the first call does it on a worker thread and the rest is cached."""
-    entries, _ = await asyncio.to_thread(_catalogue)
-    return [dict(entry) for entry in entries]
+    The catalogue is the application's, read from `data/catalogue.json`, so no workspace can drift
+    from what the API enforces."""
+    return [{"id": p.id, "group": p.group, "label": p.label, "description": p.description}
+            for p in PERMISSIONS]
 
 
-async def sorted_permissions(chosen: Iterable[str]) -> list[str]:
+def sorted_permissions(chosen: Iterable[str]) -> list[str]:
     """Catalogue order, not alphabetical — it is the order the access screen draws its groups in."""
-    _, order = await asyncio.to_thread(_catalogue)
-    return sorted(set(chosen), key=lambda p: order.get(p, len(order)))
+    return sorted(set(chosen), key=lambda p: PERMISSION_ORDER.get(p, len(PERMISSION_ORDER)))
 
 
-async def known_permissions(chosen: Iterable[str]) -> list[str]:
+def known_permissions(chosen: Iterable[str]) -> list[str]:
     """The same, refusing anything the catalogue has never heard of. A misspelt permission grants
     nothing, and would sit in the role looking exactly as though it did."""
-    _, order = await asyncio.to_thread(_catalogue)
-    unknown = sorted(set(chosen) - set(order))
+    unknown = sorted(set(chosen) - set(PERMISSION_ORDER))
     if unknown:
         raise Refused(f"Unknown permissions: {', '.join(unknown)}", status=422)
-    return await sorted_permissions(chosen)
+    return sorted_permissions(chosen)
 
 
 class RoleService:
@@ -83,7 +69,7 @@ class RoleService:
         return found
 
     async def create(self, name: str, description: str, permissions: Iterable[str]) -> Role:
-        chosen = await known_permissions(permissions)
+        chosen = known_permissions(permissions)
         role = await self.roles.add(Role(id=await self._free_id(name), name=name.strip(),
                                          description=description.strip(), builtin=False,
                                          permissions=[]))
@@ -93,7 +79,7 @@ class RoleService:
     async def update(self, role_id: str, *, name: str | None = None, description: str | None = None,
                      permissions: Iterable[str] | None = None) -> Role:
         role = await self._changeable(role_id, "changed. Create a custom role instead")
-        chosen = await known_permissions(permissions) if permissions is not None else None
+        chosen = known_permissions(permissions) if permissions is not None else None
         if name is not None:
             role.name = name.strip()
         if description is not None:

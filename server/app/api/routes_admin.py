@@ -12,7 +12,6 @@ the fields that were actually sent.
 from __future__ import annotations
 
 import logging
-
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request
@@ -30,9 +29,10 @@ from ..repositories.identity import (
 from ..schemas.identity import audit_json, role_json, team_json, user_json, workspace_json
 from ..services.admin import RoleService, TeamService, catalogue, sorted_permissions
 from ..services.errors import Refused
-from ..services.identity import IdentityService, Person
+from ..services.identity import MIN_PASSWORD, IdentityService, Person
 from .deps import current_person, identity_service, require, require_any, session
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin")
 
 
@@ -163,14 +163,14 @@ async def reset_password(uid: str, body: PasswordReset, request: Request,
 
 # ── roles and the permissions they are built from ────────────────
 async def _role(open_session: AsyncSession, role: Role) -> dict[str, Any]:
-    return role_json(role, permissions=await sorted_permissions(p.permission for p in role.permissions),
+    return role_json(role, permissions=sorted_permissions(p.permission for p in role.permissions),
                      members=await RoleRepository(open_session).worn_by(role.id))
 
 
 @router.get("/permissions", dependencies=[Depends(require_any("roles:manage", "users:manage"))])
 async def permissions() -> list[dict[str, Any]]:
     """The whole catalogue, each entry carrying the group the access screen files it under."""
-    return await catalogue()
+    return catalogue()
 
 
 @router.get("/roles", dependencies=[Depends(require_any("roles:manage", "users:manage"))])
@@ -180,7 +180,7 @@ async def roles(limit: int | None = None, offset: int = 0,
     found = ((await repo.everything(repo.builtin_first))[0] if limit is None and offset == 0
              else (await repo.builtin_first(limit=limit, offset=offset)).items)
     worn = await repo.members_by_role()
-    return [role_json(role, permissions=await sorted_permissions(p.permission for p in role.permissions),
+    return [role_json(role, permissions=sorted_permissions(p.permission for p in role.permissions),
                       members=worn.get(role.id, 0)) for role in found]
 
 
@@ -263,28 +263,39 @@ async def delete_team(tid: str, request: Request, who: Person = Depends(require(
 
 
 # ── the workspace itself ─────────────────────────────────────────
-async def _workspace(open_session: AsyncSession) -> dict[str, Any]:
-    """The three totals are asked of the database every time. They used to be columns, and a column
-    that holds a count is a column that is wrong the first time someone is removed."""
+async def _workspace(open_session: AsyncSession, identity: IdentityService) -> dict[str, Any]:
+    """The totals are asked of the database every time. They used to be columns, and a column that
+    holds a count is a column that is wrong the first time someone is removed.
+
+    The security rules are read from the identity service that enforces them — its settings and its
+    password floor — rather than restated, so a NEUROCODE_SESSION_DAYS set where the API runs shows
+    here exactly as it applies at sign-in."""
+    roles = RoleRepository(open_session)
+    rules = identity.config
     return workspace_json(await WorkspaceRepository(open_session).current(),
                           people=await UserRepository(open_session).count(),
-                          roles=await RoleRepository(open_session).count(),
-                          teams=await TeamRepository(open_session).count())
+                          roles=await roles.count(), builtin_roles=await roles.count(Role.builtin.is_(True)),
+                          teams=await TeamRepository(open_session).count(),
+                          security={"sessionDays": rules.session_days, "minPassword": MIN_PASSWORD,
+                                    "loginAttempts": rules.login_attempts,
+                                    "lockoutSeconds": rules.lockout_seconds})
 
 
 @router.get("/workspace", dependencies=[Depends(current_person)])
-async def workspace(open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
-    return await _workspace(open_session)
+async def workspace(open_session: AsyncSession = Depends(session),
+                    identity: IdentityService = Depends(identity_service)) -> dict[str, Any]:
+    return await _workspace(open_session, identity)
 
 
 @router.patch("/workspace")
 async def update_workspace(body: WorkspacePatch, request: Request,
                            who: Person = Depends(require("workspace:admin")),
+                           identity: IdentityService = Depends(identity_service),
                            open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     await WorkspaceRepository(open_session).name_it(body.name)
     await AuditRepository(open_session).record(action="workspace.update", user_id=who.id,
                                                target=body.name.strip(), ip=_ip(request))
-    return await _workspace(open_session)
+    return await _workspace(open_session, identity)
 
 
 # ── the audit log ────────────────────────────────────────────────

@@ -63,7 +63,7 @@ MERGE_TREE = (2, 38)        # `merge-tree --write-tree` arrived in git 2.38
 AGENT_EMAIL = next(a.split("=", 1)[1] for a in AUTHOR if a.startswith("user.email="))
 SHA = re.compile(r"^[0-9a-f]{7,64}$")
 NOT_OURS = "Made outside NeuroCode — merge it with git."
-SAMPLE = "This is a sample project, so there is no code on this machine to read."
+NO_CODE = "This project has no code on this machine to read. Onboard a repository to read one."
 
 #: The rules the runtime really enforces at a merge. The same for every collision, because nothing
 #: decides a collision case by case — they are listed so nobody expects that something does.
@@ -540,7 +540,7 @@ class GitViewService:
     async def _root(self, project: Project) -> Path:
         root = checkout(project)
         if root is None:
-            raise Refused(SAMPLE)
+            raise Refused(NO_CODE)
         return root
 
     async def overview(self, project_id: str) -> dict[str, Any]:
@@ -549,7 +549,7 @@ class GitViewService:
             Approval.project_id == project_id, Approval.status == "pending", Approval.tool.like("Merge(%"))
         root = checkout(project)
         if root is None:
-            return overview_json(Snapshot(available=False, reason=SAMPLE), awaiting_you=awaiting)
+            return overview_json(Snapshot(available=False, reason=NO_CODE), awaiting_you=awaiting)
         snap = await asyncio.to_thread(snapshot, root, await self._facts(project_id))
         return overview_json(snap, awaiting_you=awaiting)
 

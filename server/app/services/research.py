@@ -39,6 +39,7 @@ from ..repositories.work import ActivityRepository, ProjectRepository
 from ..schemas.research import KIND_WORDS
 from .errors import Refused
 from .identity import Person
+from .knowledge import MemoryService
 from .retrieval import RetrievalService
 
 log = logging.getLogger(__name__)
@@ -204,7 +205,8 @@ class ResearchService:
         if await self.projects.get(project_id) is None:
             raise NotFound(f"project {project_id}")
         ref = await self.reports.next_ref()
-        # Not "r1": the sample reports use those ids, and a real one that collided would open the sample.
+        # A random suffix beside the number, so the id is never a bare `r1` that a client may already
+        # hold for something that is not this report.
         report = await self.reports.add(ResearchReport(
             id=f"r{ref.split('-')[-1]}-{uuid4().hex[:8]}", ref=ref, project_id=project_id, question=text,
             kinds=chosen, requested_by=who.name, user_id=who.id))
@@ -383,6 +385,9 @@ async def _write_findings(db: Database, job: _Job, pieces: list[list[dict[str, A
                     path=piece.get("path") or "", line=piece.get("line") or 0,
                     title=piece.get("title") or "", excerpt=(piece.get("text") or "")[:EXCERPT]))
             findings.append((angle.question, angle.finding, list(outcome.data.citations)))
+        # A fact cited by two angles is one recall by this research, not two.
+        await MemoryService(s).recall([c.ref for a in angles for c in a.citations if c.kind == "memory"],
+                                      via="research", context=job.ref)
     return findings
 
 

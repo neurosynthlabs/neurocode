@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Cell, DataTable, Empty, Mono, Page, PageBody, PageHeader, Panel, RiskPill, Row, Stat, StatGrid, Tag } from '@/components/os';
 import { ApiError, api, type CodeSummary } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { knowledgeApi, type RetrievalStatus } from '@/lib/live/knowledge';
 import { useRemote } from '@/lib/remote';
 import { cn } from '@/lib/utils';
 import type { Project } from '@/types';
@@ -195,22 +196,44 @@ function Retrieval({ pid, stamp, canBuild, onOpen }: {
 }) {
   const [q, setQ] = useState('');
   const [query, setQuery] = useState('');
-  const [building, setBuilding] = useState(false);
+  // From the click until the first answer read after the server accepted the build: 'post' while the
+  // request is out, then the poll whose answer ends the wait. After that the server's own `building`
+  // says when it is done — it is marked before the 202 is sent, so that answer already carries it.
+  const [pending, setPending] = useState<'post' | number | null>(null);
   useEffect(() => {
     const id = window.setTimeout(() => setQuery(q.trim()), 200);
     return () => window.clearTimeout(id);
   }, [q]);
-  const r = useRemote(`${pid}:${stamp}:rag:${query}`, () => api.code.retrieval(pid, query));
-  const state = r.data;
+  const [polled, setPolled] = useState(0);
+  const r = useRemote(`${pid}:${stamp}:rag:${query}:${polled}`, () => knowledgeApi.retrieval(pid, query));
+  // A new key reads nothing until it answers, so the last answer to the same question stands in while a
+  // poll is out — never one for another question or another project.
+  const asked = `${pid}:${query}`;
+  const [last, setLast] = useState<{ asked: string; data: RetrievalStatus } | null>(null);
+  if (r.data && r.data !== last?.data) setLast({ asked, data: r.data });
+  const state = r.data ?? (last?.asked === asked ? last.data : null);
+  const running = !!state?.building;
+  if (typeof pending === 'number' && r.data && polled >= pending) setPending(null);
+  const building = pending !== null || running;
+
+  // While a build runs — this screen's or anyone's — ask again two seconds after each answer, until an
+  // answer says it has finished.
+  useEffect(() => {
+    if (!running || !r.data) return;
+    const id = window.setTimeout(() => setPolled((n) => n + 1), 2000);
+    return () => window.clearTimeout(id);
+  }, [running, r.data]);
 
   const build = async () => {
-    setBuilding(true);
+    setPending('post');
     try {
       await api.code.buildRetrieval(pid);
       toast('Building retrieval', { description: 'Chunking the code and the documents, then embedding what a lane can.' });
-      window.setTimeout(() => { setBuilding(false); r.reload(); }, 5000);
+      // Nothing polls while the button is enabled, so no read has moved `polled` since the click.
+      setPolled(polled + 1);
+      setPending(polled + 1);
     } catch (e) {
-      setBuilding(false);
+      setPending(null);
       toast.error('Not built', { description: e instanceof ApiError ? e.message : 'The local API did not answer.' });
     }
   };
@@ -239,7 +262,7 @@ function Retrieval({ pid, stamp, canBuild, onOpen }: {
         <Search className="size-3.5 shrink-0 text-dim" />
         <input
           value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search by meaning"
-          placeholder="Ask by meaning: where is the interstate tax split…"
+          placeholder="Ask by meaning: where is this handled, and why there?"
           className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-dim focus-visible:outline-none"
         />
       </div>

@@ -109,7 +109,8 @@ export interface WorkflowOverview {
     agentsInFlight: number;
     lanesOpen: number;
     tokensToday: number;
-    costToday: number;
+    /** Null when a call ran a model its lane has no price for. */
+    costToday: number | null;
   };
   live: WorkflowLiveRun | null;
   history: WorkflowHistoryRow[];

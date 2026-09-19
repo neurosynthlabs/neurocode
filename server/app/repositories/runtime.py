@@ -8,12 +8,14 @@ reconnect after a drop and ask only for what it missed.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import ColumnElement, Select, and_, delete, func, select
 from sqlalchemy.dialects.postgresql import aggregate_order_by, array_agg, insert
 
 from ..models import (
+    Approval,
     Chat,
     ChatMessage,
     Project,
@@ -178,6 +180,34 @@ class ResultsRepository(Repository[TestFailure]):
         keys = {f"runtime.tests.{pid}": pid for pid in project_ids}
         rows = (await self.session.execute(select(Setting).where(Setting.key.in_(keys)))).scalars()
         return {keys[row.key]: str(row.value) for row in rows}
+
+    async def standing_answers(self, *, limit: int | None = None,
+                               offset: int = 0) -> list[tuple[Project, Setting]]:
+        """Every project's kept answer to the test gate, with the setting that holds it — the row the
+        runtime reads before it runs a command, so what is listed is exactly what is applied."""
+        stmt = (select(Project, Setting)
+                .join(Setting, Setting.key == func.concat("runtime.tests.", Project.id))
+                .order_by(Project.name).limit(bounded(limit)).offset(max(0, offset)))
+        return [(project, setting) for project, setting in (await self.session.execute(stmt)).all()]
+
+    async def gate_deciders(self, project_ids: Sequence[str]) -> dict[tuple[str, str], tuple[str, datetime]]:
+        """(project id, 'approved' | 'denied') → who last decided a test-step gate that way, and when.
+
+        Only a person's decision counts: a gate closed because its check run was stopped carries no
+        one and wrote no answer, so it can never be the one a standing rule is credited to. The time
+        comes from the same approval as the name: the setting's own `updated_at` does not move when a
+        second person writes the answer it already holds, so pairing the two put one person's name on
+        another's moment."""
+        if not project_ids:
+            return {}
+        stmt = (select(Approval.project_id, Approval.status, User.name, Approval.decided_at)
+                .join(Run, Run.ref == Approval.run_ref)
+                .join(RunStep, and_(RunStep.run_id == Run.id, RunStep.n == Approval.step, RunStep.kind == "test"))
+                .join(User, User.id == Approval.decided_by)
+                .where(Approval.project_id.in_(project_ids), Approval.status.in_(("approved", "denied")))
+                .order_by(Approval.project_id, Approval.status, Approval.decided_at.desc())
+                .distinct(Approval.project_id, Approval.status))
+        return {(pid, status): (name, at) for pid, status, name, at in (await self.session.execute(stmt)).all()}
 
     def _tested(self, project_ids: Sequence[str]) -> Select[tuple[Run, int | None]]:
         return (select(Run, RunStep.ms)

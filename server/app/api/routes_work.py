@@ -56,14 +56,14 @@ class DecisionIn(BaseModel):
     value: str = Field(min_length=1, max_length=40)
     action: str = Field(min_length=1, max_length=80)
     detail: str = Field(default="", max_length=300)
-    projectId: str = Field(default="aios", max_length=60)
+    projectId: str | None = Field(default=None, max_length=60)
     level: Literal["info", "ok", "warn", "err"] = "ok"
 
 
 class PrefIn(BaseModel):
     value: Any
     detail: str = Field(default="", max_length=300)
-    projectId: str = Field(default="aios", max_length=60)
+    projectId: str | None = Field(default=None, max_length=60)
 
     @field_validator("value")
     @classmethod
@@ -180,7 +180,10 @@ async def settle_question(ref: str, index: int, body: AnswerIn,
 # ── final decisions and screen settings ─────────────────────────
 @router.get("/decisions", dependencies=[Depends(current_person)])
 async def decisions(open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
-    return [decision_json(d) for d in await DecisionRepository(open_session).all_ordered()]
+    repo = DecisionRepository(open_session)
+    found = await repo.all_ordered()
+    names = await repo.names(found)
+    return [decision_json(d, by=names.get(d.by_user_id or "")) for d in found]
 
 
 @router.post("/decisions/{key}", status_code=201)
@@ -190,7 +193,7 @@ async def record_decision(body: DecisionIn, key: str = PathParam(pattern=KEY),
     made = await DecisionService(open_session).record(
         key, verdict=body.value, action=body.action, detail=body.detail, project_id=body.projectId,
         level=body.level, by_id=who.id, by_name=who.name)
-    return decision_json(made)
+    return decision_json(made, by=who.name)
 
 
 @router.get("/prefs", dependencies=[Depends(current_person)])

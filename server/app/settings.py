@@ -47,8 +47,11 @@ class Settings(BaseSettings):
     #: Where pg_dump lives, when it is not on PATH. Homebrew's postgresql@16 is keg-only, so on the most
     #: common Mac install it is not — which is why the usual install locations are searched as well.
     pg_bin_dir: Path | None = None
+    #: Where each run's git worktree is made, one folder per project. The runtime reads this setting —
+    #: it used to keep its own copy of the path, so a deployment that moved it moved only the screen.
     worktrees_dir: Path = SERVER_DIR / ".worktrees"
-    repos_dir: Path = SERVER_DIR / "repos"
+    #: Where a project onboarded from a git URL is cloned. `.repos` is where clones have always gone.
+    repos_dir: Path = SERVER_DIR / ".repos"
 
     # ── the web layer ────────────────────────────────────────────
     #: Origins allowed to carry the session cookie. Local by default; add a domain to host it.

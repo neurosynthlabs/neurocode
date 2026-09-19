@@ -7,17 +7,21 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..repositories.knowledge import ConflictRepository
+from ..repositories.knowledge import HITS_CEILING, ConflictRepository, MemoryHitRepository, MemoryRepository
 from ..schemas import conflict_json, fact_json
+from ..schemas.knowledge import recall_json
+from ..schemas.work import when
 from ..services.identity import Person
 from ..services.knowledge import MemoryService, NewFact
 from .deps import current_person, require, session
 
 router = APIRouter()
+#: The window the screen's "retired" figure covers.
+RETIRED_DAYS = 30
 Category = Literal["human", "project", "architecture", "business_rules", "legacy", "database", "bugs",
                    "decisions", "incidents", "preferences", "code"]
 
@@ -27,7 +31,15 @@ class PinIn(BaseModel):
 
 
 class ResolveIn(BaseModel):
-    keep: Literal["a", "b", "adr"]
+    keep: Literal["a", "b"]
+
+
+class ConflictIn(BaseModel):
+    a: str = Field(min_length=1, max_length=40)
+    b: str = Field(min_length=1, max_length=40)
+    topic: str = Field(min_length=1, max_length=200)
+    detail: str = Field(default="", max_length=2000)
+    severity: Literal["low", "medium", "high"] = "medium"
 
 
 class FactIn(BaseModel):
@@ -39,7 +51,8 @@ class FactIn(BaseModel):
 
 
 class FactsIn(BaseModel):
-    projectId: str = Field(default="global", max_length=60)
+    #: None — or "global", as the screens have always spelled it — files the facts under the workspace.
+    projectId: str | None = Field(default=None, max_length=60)
     facts: list[FactIn] = Field(min_length=1, max_length=20)
 
 
@@ -50,6 +63,19 @@ async def memory(q: str = "", category: Category | None = None, project: str | N
     found = await MemoryService(open_session).search(q, category=category, project=project,
                                                      include_archived=include_archived)
     return [fact_json(f) for f in found]
+
+
+@router.get("/memory/stats", dependencies=[Depends(current_person)])
+async def memory_stats(project: str | None = Query(default=None, max_length=60),
+                       open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    """The Memory screen's figures, counted by the database. They were counted from the list, which is
+    a page of at most a few hundred facts, so a large memory read as a small one."""
+    found = await MemoryRepository(open_session).stats(project=project, retired_days=RETIRED_DAYS)
+    return {"held": found.held, "pinned": found.pinned, "global": found.workspace,
+            "recalled24h": found.recalled_24h, "retired": found.retired, "retiredDays": RETIRED_DAYS,
+            "byCategory": {category: {"held": c.held, "pinned": c.pinned, "recalled24h": c.recalled_24h,
+                                      "lastUsedAt": when(c.last_used_at)}
+                           for category, c in found.by_category.items()}}
 
 
 @router.post("/memory/facts", status_code=201)
@@ -75,10 +101,26 @@ async def archive(ref: str, who: Person = Depends(require("memory:write")),
     return fact_json(await MemoryService(open_session).archive(ref, who.name))
 
 
+@router.get("/memory/hits", dependencies=[Depends(current_person)])
+async def hits(limit: int = Query(default=50, ge=1, le=HITS_CEILING),
+               open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
+    """The latest recalls, newest first: which fact, which feature used it, for what, and when."""
+    return [recall_json(h) for h in await MemoryHitRepository(open_session).recent(limit)]
+
+
 @router.get("/memory/conflicts", dependencies=[Depends(current_person)])
 async def conflicts(open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
     page = await ConflictRepository(open_session).open()
     return [conflict_json(c) for c in page.items]
+
+
+@router.post("/memory/conflicts", status_code=201)
+async def file_conflict(body: ConflictIn, who: Person = Depends(require("memory:write")),
+                        open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    """Nothing detects a contradiction on its own; a person who notices one files it here."""
+    made = await MemoryService(open_session).conflict(body.a, body.b, topic=body.topic, detail=body.detail,
+                                                      severity=body.severity.upper(), by=who.name)
+    return conflict_json(made)
 
 
 @router.post("/memory/conflicts/{cid}/resolve")

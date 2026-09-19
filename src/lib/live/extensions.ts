@@ -18,9 +18,9 @@ export interface LiveSkill extends Skill {
   project: string;
   /** Estimated from the body's length (characters ÷ 4). */
   tokens: number;
-  /** NeuroCode sessions on this project that loaded it in the last 24 hours. */
+  /** NeuroCode sessions on this project that loaded it in the last 24 hours; 0 with no project. */
   loads24h: number;
-  /** Claude Code skills declare no rules; always empty, kept so the shape matches the sample. */
+  /** Claude Code skills declare no rules; always empty. */
   rules: { when: string; then: string }[];
   author: string;
 }
@@ -102,20 +102,21 @@ export interface LivePlugins {
   countsFetchedAt: string | null;
 }
 
-const q = (projectId: string, extra: Record<string, string> = {}) =>
-  new URLSearchParams({ projectId, ...extra }).toString();
+/* With no project (a workspace starts with none) the server reads this machine's Claude home alone. */
+const q = (projectId: string | null, extra: Record<string, string> = {}) =>
+  new URLSearchParams({ ...(projectId ? { projectId } : {}), ...extra }).toString();
 
 export const extensions = {
-  skills: (projectId: string) =>
+  skills: (projectId: string | null) =>
     request<LiveSkills>(`/extensions/skills?${q(projectId)}`),
-  skill: (projectId: string, key: string) =>
+  skill: (projectId: string | null, key: string) =>
     request<LiveSkillDetail>(
       `/extensions/skills/detail?${q(projectId, { key })}`,
     ),
-  commands: (projectId: string) =>
+  commands: (projectId: string | null) =>
     request<LiveCommands>(`/extensions/commands?${q(projectId)}`),
-  hooks: (projectId: string) =>
+  hooks: (projectId: string | null) =>
     request<LiveHooks>(`/extensions/hooks?${q(projectId)}`),
-  plugins: (projectId: string) =>
+  plugins: (projectId: string | null) =>
     request<LivePlugins>(`/extensions/plugins?${q(projectId)}`),
 };

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Make the databases this project needs, with the extensions only a superuser can enable.
 
-Run once on a new machine. Everything after this — the schema, the seed, the tests — is Alembic's
+Run once on a new machine. Everything after this — the schema and the tests — is Alembic's
 job and needs no special rights, which is the point: the application's own role stays ordinary.
 
     uv run python scripts/bootstrap-db.py              # the live database and the test one
@@ -23,6 +23,9 @@ from psycopg import sql  # noqa: E402
 from app.settings import settings  # noqa: E402
 
 EXTENSIONS = ("citext", "vector", "pg_trgm")
+#: Databases that hold someone's work, refused by --reset the way load-fixture.py refuses them. The live
+#: database this machine is configured for is refused too, whatever it is called.
+PROTECTED = {"neurocode", "postgres", "template0", "template1"}
 
 
 def plain(url: str) -> str:
@@ -76,7 +79,14 @@ def main() -> None:
     admin_dsn = superuser_dsn(live)
     at = admin_dsn.rsplit("/", 1)[0]
 
-    names = [urlsplit(live).path.lstrip("/"), urlsplit(test).path.lstrip("/")]
+    live_name = urlsplit(live).path.lstrip("/")
+    refused = sorted({name for name in args.reset if name in PROTECTED or name == live_name})
+    if refused:
+        # Checked before anything connects: --reset drops the whole schema and keeps no backup.
+        raise SystemExit(f"refusing to reset {', '.join(map(repr, refused))}: that database holds real work. "
+                         "--reset is for the throwaway databases the checks make.")
+
+    names = [live_name, urlsplit(test).path.lstrip("/")]
     names += [f"neurocode_test_{i}" for i in range(1, args.workers + 1)]
     names += args.reset
 

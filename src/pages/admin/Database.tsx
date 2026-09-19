@@ -7,20 +7,8 @@ import { api, type DatabaseCheck, type DatabaseInfo, type DatabaseOptimized } fr
 import { useAuth } from '@/lib/auth';
 import { bytes } from '@/pages/code/format';
 import { attempt, useAdmin, when } from './load';
-import { DemoNote, LoadError, Loading } from './kit';
+import { LoadError, Loading } from './kit';
 
-/* Alembic records which revision a database stands on, never when it got there, so `appliedAt` is
-   honestly null — the server sends it that way too. */
-const MIGRATIONS = [
-  { version: 1, name: 'initial relational schema', revision: '20fb0c814e83', appliedAt: null },
-  { version: 2, name: 'login attempts', revision: 'ba71ca7751e2', appliedAt: null },
-  { version: 3, name: 'a run log can be a tool call', revision: 'c3f1a9d24b70', appliedAt: null },
-  { version: 4, name: 'memory conflicts point at facts', revision: '037e1c34f71c', appliedAt: null },
-  { version: 5, name: 'the audit log refuses to be rewritten', revision: 'b95c70ab289a', appliedAt: null },
-  { version: 6, name: 'a workspace chunk is unique too', revision: '0d132a2d78a9', appliedAt: null },
-  { version: 7, name: 'the ledger records which agent asked', revision: 'b589e3c9d161', appliedAt: null },
-  { version: 8, name: 'roles keep the catalogue order', revision: 'd226f409c8fa', appliedAt: null },
-];
 /** What Postgres' `wal_level` means, for a screen read by someone deciding whether to act. */
 const WAL: Record<string, string> = {
   minimal: 'minimal: crash recovery only, no replicas and no point-in-time restore',
@@ -28,23 +16,12 @@ const WAL: Record<string, string> = {
   logical: 'logical: replica, plus row-level streaming to another system',
 };
 
-const DEMO: DatabaseInfo = {
-  path: '127.0.0.1:5432/neurocode', engine: 'PostgreSQL', version: '16.12', pageSize: 8192, pages: 594,
-  freePages: 34, walLevel: 'replica', sizeBytes: 4_866_048, walBytes: 0,
-  indexes: 93, indexHealth: { count: 93, unused: 41, invalid: 0 },
-  migrations: MIGRATIONS, backups: [], backupDir: null,
-  tables: [
-    { name: 'activity', rows: 91 }, { name: 'ai_calls', rows: 0 }, { name: 'approvals', rows: 6 }, { name: 'audit_log', rows: 6 },
-    { name: 'code_files', rows: 0 }, { name: 'memory', rows: 47 }, { name: 'plans', rows: 8 }, { name: 'projects', rows: 5 },
-    { name: 'roles', rows: 5 }, { name: 'sessions', rows: 1 }, { name: 'tasks', rows: 19 }, { name: 'users', rows: 4 },
-  ],
-};
 const loadDatabase = () => api.admin.database();
 
 export default function DatabasePage() {
   const { can } = useAuth();
-  const { data: db, error, live, reload } = useAdmin(loadDatabase, DEMO);
-  const manage = live && can('workspace:admin');
+  const { data: db, error, reload } = useAdmin<DatabaseInfo>(loadDatabase);
+  const manage = can('workspace:admin');
   const [busy, setBusy] = useState<'backup' | 'check' | 'optimize' | null>(null);
   const [check, setCheck] = useState<DatabaseCheck | null>(null);
   const [optimized, setOptimized] = useState<DatabaseOptimized | null>(null);
@@ -81,7 +58,7 @@ export default function DatabasePage() {
     <Page>
       <PageHeader
         title="Database"
-        subtitle="One SQLite file on this machine, in write-ahead-log mode: people, access, the audit log, the work and the code index all live in it. Back it up, check it and keep it compact from here."
+        subtitle={`${db ? `${db.engine} ${db.version} at ${db.path}` : 'The PostgreSQL database behind this workspace'}: people, access, the audit log, the work and the code index all live in it. Back it up, check it and keep it compact from here.`}
         actions={
           <Button size="sm" onClick={() => void backup()} disabled={!manage || busy !== null}>
             {busy === 'backup' ? <Loader2 className="size-3.5 animate-spin" /> : <DatabaseBackup className="size-3.5" />}Back up now
@@ -89,7 +66,6 @@ export default function DatabasePage() {
         }
       />
       <PageBody>
-        {!live && <DemoNote what="Backups, checks and optimizing" />}
         {error ? <LoadError error={error} onRetry={reload} /> : !db ? <Loading /> : (
           <div className="space-y-5">
             <StatGrid cols={4}>
@@ -104,12 +80,10 @@ export default function DatabasePage() {
               <Panel title="Health" eyebrow="What keeps the data sound">
                 <KV k="Engine" v={`${db.engine} ${db.version}`} />
                 <KV k="Write-ahead log" v={WAL[db.walLevel] ?? db.walLevel} />
-                <KV k="Foreign keys" v="enforced on every write" />
-                <KV k="Audit log" v="append-only, enforced by a trigger" />
-                {db.indexHealth && (
-                  <KV k="Indexes" v={`${db.indexHealth.count} · ${db.indexHealth.unused} never used`
-                    + (db.indexHealth.invalid ? ` · ${db.indexHealth.invalid} invalid` : '')} />
-                )}
+                <KV k="Foreign keys" v={check ? (check.foreignKeyProblems ? `${check.foreignKeyProblems.toLocaleString()} rows point at nothing` : 'every one walked, none violated') : 'declared in the schema · Check integrity walks them'} />
+                <KV k="Audit log" v="append-only by design: a trigger refuses edits and deletes" />
+                <KV k="Indexes" v={`${db.indexHealth.count} · ${db.indexHealth.unusedCount} never used`
+                  + (db.indexHealth.invalidCount ? ` · ${db.indexHealth.invalidCount} invalid` : '')} />
                 <KV k="Free pages" v={`${db.freePages.toLocaleString()} (${bytes(db.freePages * db.pageSize)})`} />
                 {check && (
                   <div className="mt-3 flex items-start gap-2 rounded-lg border border-line bg-surface-2/50 px-3 py-2.5">
@@ -133,9 +107,9 @@ export default function DatabasePage() {
                 </div>
               </Panel>
 
-              <Panel flush title="Backups" eyebrow={`the newest 20 are kept${db.backupDir ? ` in ${db.backupDir.split('/').slice(-2).join('/')}` : ''}`}>
+              <Panel flush title="Backups" eyebrow={db.backupDir ? `the newest are kept in ${db.backupDir.split('/').slice(-2).join('/')}` : 'the newest are kept'}>
                 {db.backups.length === 0 ? (
-                  <p className="px-5 py-3 text-[13px] text-soft">No backup yet. One is made on its own before every reset and every schema change.</p>
+                  <p className="px-5 py-3 text-[13px] text-soft">No backup yet. One is made on its own before every reset.</p>
                 ) : (
                   <DataTable head={['Backup', 'Size', 'Made']}>
                     {db.backups.map((b) => (

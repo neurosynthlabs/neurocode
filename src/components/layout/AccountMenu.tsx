@@ -7,7 +7,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from '@/components/ui/button';
 import { Field, Tag } from '@/components/os';
 import { ApiError, api } from '@/lib/api';
-import { roleName, useAuth } from '@/lib/auth';
+import { useAuth } from '@/lib/auth';
+import { roleName, useAccess } from '@/lib/access';
 import { useData } from '@/lib/data';
 import { cn } from '@/lib/utils';
 
@@ -17,12 +18,17 @@ const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2)
 /** The person at the foot of the sidebar: who is signed in, what they hold, and the way out. */
 export function AccountMenu({ mini }: { mini: boolean }) {
   const nav = useNavigate();
-  const { user, workspace, state, logout } = useAuth();
-  const { mode } = useData();
+  const { user, workspace, logout } = useAuth();
+  const { mode, reconnecting, health } = useData();
+  const { catalogue } = useAccess();
   const [open, setOpen] = useState(false);
   const [changing, setChanging] = useState(false);
   const name = user?.name ?? 'You';
-  const status = mode === 'live' ? 'Saved locally' : mode === 'demo' ? 'Demo data' : 'Connecting…';
+  // Where the workspace really is, as the API reports it: Postgres may well be on another host.
+  // Reconnecting: the live stream dropped, so what is on screen may be stale until it is back and reloaded.
+  const status = mode === 'live' ? (reconnecting ? 'Reconnecting…' : health?.db ? `Connected · ${health.db}` : 'Connected')
+    : mode === 'offline' ? 'Not connected' : 'Connecting…';
+  const dot = mode === 'live' ? (reconnecting ? 'var(--os-warn)' : 'var(--os-ok)') : 'var(--rail-dim)';
 
   return (
     <>
@@ -39,7 +45,7 @@ export function AccountMenu({ mini }: { mini: boolean }) {
               <span className="min-w-0 flex-1 leading-tight">
                 <span className="block truncate text-[13.5px] font-semibold" style={{ color: 'var(--rail-ink)' }}>{name}</span>
                 <span className="mt-0.5 flex items-center gap-1.5 text-[12px]" style={{ color: 'var(--rail-dim)' }}>
-                  <span className="size-1.5 shrink-0 rounded-full" style={{ background: mode === 'live' ? 'var(--os-ok)' : 'var(--rail-dim)' }} />
+                  <span className="size-1.5 shrink-0 rounded-full" style={{ background: dot }} />
                   <span className="truncate">{status}</span>
                 </span>
               </span>
@@ -53,21 +59,15 @@ export function AccountMenu({ mini }: { mini: boolean }) {
             <div className="truncate text-[12.5px] text-dim">{user?.email}</div>
             <div className="mt-2 flex flex-wrap gap-1">
               {(user?.roles ?? []).map((r) => (
-                <Tag key={r} tone={r === 'owner' || r === 'admin' ? 'brand' : 'neutral'}>{roleName(r)}</Tag>
+                <Tag key={r} tone={r === 'owner' || r === 'admin' ? 'brand' : 'neutral'}>{roleName(catalogue, r)}</Tag>
               ))}
             </div>
             {workspace && <div className="mt-2 truncate text-[12px] text-dim">{workspace.name}</div>}
           </div>
           <div className="border-t border-line/60 pt-1">
             <MenuItem icon={Settings} label="Settings" onClick={() => { setOpen(false); nav('/settings'); }} />
-            {state === 'signed-in' ? (
-              <>
-                <MenuItem icon={KeyRound} label="Change password" onClick={() => { setOpen(false); setChanging(true); }} />
-                <MenuItem icon={LogOut} label="Sign out" onClick={() => { setOpen(false); void logout(); }} />
-              </>
-            ) : (
-              <p className="px-2.5 py-2 text-[12px] leading-relaxed text-dim">Demo: there is no server here, so nobody signs in.</p>
-            )}
+            <MenuItem icon={KeyRound} label="Change password" onClick={() => { setOpen(false); setChanging(true); }} />
+            <MenuItem icon={LogOut} label="Sign out" onClick={() => { setOpen(false); void logout(); }} />
           </div>
         </PopoverContent>
       </Popover>

@@ -65,6 +65,7 @@ class ProviderError(RuntimeError):
     def __init__(self, status: int, body: str) -> None:
         super().__init__(f"HTTP {status}: {body}")
         self.status = status
+        self.body = body
 
 
 def _post(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
@@ -298,7 +299,7 @@ class Gateway:
 
     def status(self) -> dict[str, Any]:
         p = self.pick()
-        out: dict[str, Any] = {"provider": p.id, "model": p.model} if p else {"provider": "rules", "model": "offline planner"}
+        out: dict[str, Any] = {"provider": p.id, "model": p.model} if p else {"provider": "rules", "model": "no model"}
         open_now = [x for x in self.lanes() if self._allowed(x) and self.why_not(x) is None]
         out["lanes"] = len(open_now)
         if p is None:
@@ -344,7 +345,7 @@ class Gateway:
         return data, ms
 
     def run(self, messages: list[dict[str, str]], parse: Callable[[str], T], fallback: Callable[[], T], *,
-            offline: str = "offline planner", feature: str = "compile", actor: str | None = None,
+            offline: str = "offline rules", feature: str = "compile", actor: str | None = None,
             project: str | None = None, role: str | None = None, lane: str | None = None,
             avoid: str | None = None, agent: str = "", run_id: str | None = None) -> Result[T]:
         """Ask the best lane and validate its answer. A lane that fails hands the call to the next one;

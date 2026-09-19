@@ -12,10 +12,10 @@ The rules that keep a score honest:
 * **The model is called the way the feature calls it.** The compiler and ask memory are the same
   functions the screens use, handed the same facts; only the ledger label changes, so eval traffic
   never inflates what the compile and ask figures say.
-* **The rules are not a model.** Compile and ask fall back to offline rules when no lane answers. An
+* **The rules are not a model.** Ask falls back to offline memory search when no lane answers. An
   answer like that is marked offline; a suite that does not allow offline answers counts it as an
-  error, never as a pass. The review and prompt targets have no offline version at all, so with no
-  model they error — nothing is invented to fill the gap.
+  error, never as a pass. The compile, review and prompt targets have no offline version at all, so
+  with no model they error — nothing is invented to fill the gap.
 * **Blocking work never runs on the event loop.** Every target call and every judge call crosses a
   worker thread, because a provider can take two minutes to answer and the API has other requests.
 * **Stopping stops.** Each case begins by asking whether the run is still wanted, and each result is
@@ -106,13 +106,17 @@ class Verdict:
 
 class _Labelled:
     """The gateway as the compiler and ask memory see it, with every call ledgered as an eval and the
-    suite's lane asked first. The features only ever call `run`, so this is all they need of it."""
+    suite's lane asked first. Ask memory calls `run`, which has an offline answer; the compiler calls
+    `ask`, which has none. That is all either needs of it."""
 
     def __init__(self, gateway: Gateway, lane: str | None) -> None:
         self.gateway, self.lane = gateway, lane
 
     def run(self, messages: list[dict[str, str]], parse: Any, fallback: Any, **kwargs: Any) -> Result[Any]:
         return self.gateway.run(messages, parse, fallback, **{**kwargs, "feature": FEATURE, "lane": self.lane})
+
+    def ask(self, messages: list[dict[str, str]], parse: Any, **kwargs: Any) -> Result[Any]:
+        return self.gateway.ask(messages, parse, **{**kwargs, "feature": FEATURE, "lane": self.lane})
 
 
 # ── authoring ────────────────────────────────────────────────────
@@ -446,7 +450,7 @@ class EvalService:
             [NewFact(title=title, body=body, category=category, confidence="MEDIUM",
                      reason=f"Learned from {case.name} in {run.ref}.",
                      evidence=cast(list[dict[str, Any]], [f"{run.ref} · {suite.name} · {case.name}"]))],
-            project_id=suite.project_id or "global", by=who.name, source=lesson_source(suite.name, run.ref))
+            project_id=suite.project_id, by=who.name, source=lesson_source(suite.name, run.ref))
         return added[0].ref
 
 

@@ -2,7 +2,8 @@
 # NeuroCode local stack: the web app (Vite) and the local API (FastAPI + Postgres), together.
 #   ./scripts/dev.sh start | stop | restart | status | logs [web|api]
 # Ports: web 5180 (5173 is usually taken by another project here), API 8787.
-# NC_API=0 starts the web app alone. It then runs on seed data, exactly like the public demo.
+# NC_API=0 starts the web app alone, for working on a screen's layout: it holds no data of its own, so it
+# shows "Not connected" until an API answers on $NC_API_PORT.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -69,16 +70,16 @@ status_one() {
 
 start() {
   if [ "${NC_API:-1}" = 0 ]; then
-    printf '▸ NC_API=0: web app only, on seed data\n'
+    printf '▸ NC_API=0: web app only. It says "Not connected" until an API answers on %s\n' "$API_PORT"
   elif ! command -v uv >/dev/null 2>&1; then
-    printf '▸ uv not found: web app only, on seed data. Install uv for the local API: https://docs.astral.sh/uv/\n'
+    printf '▸ uv not found: web app only, and it holds no data without the API. Install uv: https://docs.astral.sh/uv/\n'
   elif ! trouble=$(uv run --project server --directory server python -m app.data.check); then
     # Asked before uvicorn, because no server, no database and no migrations all look the same in
     # its log — and each has a different one-line fix, which this prints.
     printf '✗ api: %s\n' "$trouble"
-    printf '▸ continuing without the API. The web app falls back to seed data.\n'
+    printf '▸ starting the web app anyway. It shows "Not connected" and how to fix it until the API answers.\n'
   else
-    start_one api || printf '▸ continuing without the API. The web app falls back to seed data.\n'
+    start_one api || printf '▸ starting the web app anyway. It shows "Not connected" and how to fix it until the API answers.\n'
   fi
   start_one web
 }

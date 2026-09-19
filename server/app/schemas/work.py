@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from ..models import ActivityEvent, Approval, Decision, Plan, Pref, Project, Task
+from ..models import ActivityEvent, Approval, Decision, Plan, Pref, Project, Setting, Task
 
 SIZES = ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K"))
 #: Which task statuses the project card counts as "running", "in review" and "blocked".
@@ -60,8 +60,8 @@ def plan_json(plan: Plan, *, task_ref: str | None = None, run_ref: str | None = 
                    "detail": s.detail, **({"durationS": s.duration_s} if s.duration_s else {})}
                   for s in plan.steps],
         "testPlan": plan.test_plan or [], "openQuestions": open_questions, "status": plan.status,
-        "answered": answered, "deferred": deferred, "cited": plan.cited or [],
-        "compiler": plan.compiler or None, "requestedBy": plan.requested_by,
+        "answered": answered, "deferred": deferred, "cited": plan.cited or [], "grounding": plan.grounding or [],
+        "compiler": plan.compiler or None, "requestedBy": plan.requested_by, "workflowId": plan.workflow_id,
         **({"runRef": run_ref} if run_ref else {}),
     }
 
@@ -73,7 +73,7 @@ def project_json(project: Project, *, tasks: dict[str, int] | None = None,
     return {
         "id": project.id, "name": project.name, "codename": project.codename,
         "stack": project.stack or [], "kind": project.kind, "status": project.status,
-        "memoryPct": project.memory_pct, "understoodPct": project.understood_pct,
+        "understoodPct": project.understood_pct,
         "lines": fmt_lines(project.lines_count), "modules": project.modules,
         "dbTables": project.db_tables, "storedProcs": project.stored_procs, "repo": project.repo,
         "lastActive": when(project.last_active_at), "coverage": project.coverage or [],
@@ -102,15 +102,28 @@ def approval_json(approval: Approval) -> dict[str, Any]:
 
 
 def activity_json(event: ActivityEvent) -> dict[str, Any]:
-    return {"id": str(event.seq), "t": event.at.strftime("%H:%M:%S"), "actor": event.actor,
+    return {"id": str(event.seq), "t": event.at.strftime("%H:%M:%S"),
+            # `t` is the clock time the log prints; `at` is the moment, to sort and to say "3 days ago".
+            "at": event.at.isoformat(), "actor": event.actor,
             "actorKind": event.actor_kind, "action": event.action, "detail": event.detail,
             "projectId": event.project_id, "level": event.level,
             **({"taskRef": event.task_ref} if event.task_ref else {})}
 
 
-def decision_json(decision: Decision) -> dict[str, Any]:
+def test_rule_json(project: Project, setting: Setting, *, answer: str, command: str | None,
+                   decided_by: str | None) -> dict[str, Any]:
+    """A project's standing answer to running its tests. `command` is what the project would run now,
+    null when none is found on this machine; `decidedBy` is null when no person's decision wrote it."""
+    return {"projectId": project.id, "projectName": project.name, "rule": "tests", "command": command,
+            "answer": answer, "decidedAt": when(setting.updated_at), "decidedBy": decided_by}
+
+
+def decision_json(decision: Decision, *, by: str | None = None) -> dict[str, Any]:
+    """`decidedBy` is the name of the person who decided — what the screen shows and what it writes
+    itself before the server's copy arrives — looked up by the caller (`DecisionRepository.names`).
+    It is absent when no person decided, or the account is gone. The id is not sent: nothing reads it."""
     return {"id": decision.id, "value": decision.verdict, "decidedAt": when(decision.created_at),
-            "decidedBy": decision.by_user_id, "subject": decision.subject, "note": decision.note}
+            **({"decidedBy": by} if by else {}), "subject": decision.subject, "note": decision.note}
 
 
 def pref_json(pref: Pref) -> dict[str, Any]:

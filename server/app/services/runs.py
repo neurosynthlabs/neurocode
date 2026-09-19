@@ -32,6 +32,7 @@ from ..agent import testparse
 from ..agent.testparse import all_expected
 from ..agent.git import LEFTOVERS, SECRETS, TODO
 from ..ai.gateway import REVIEW, WRITE, Gateway, NoModel, extract_json
+from ..data import roster
 from ..data.base import utcnow
 from ..data.engine import Database
 from ..models import Approval, CodeFile, CodeSymbol, Project, Run, RunConflict, RunStep, Setting
@@ -39,17 +40,25 @@ from ..repositories import (
     ActivityRepository,
     ApprovalRepository,
     NotFound,
+    PlanRepository,
     ProjectRepository,
     RunLogRepository,
     RunRepository,
     TaskRepository,
 )
 from ..repositories.runtime import ResultsRepository
-from .errors import Refused
+from ..settings import settings
+from .errors import Denied, Refused
 
 log = logging.getLogger(__name__)
 
-WORKTREES = Path(__file__).resolve().parent.parent.parent / ".worktrees"
+
+
+def worktrees_dir() -> Path:
+    """Where runs make their worktrees: the setting DevOps reports, read when a run is made."""
+    return settings().worktrees_dir
+
+
 MAX_CONTEXT, MAX_DIFF, AGENT_TIMEOUT, TEST_LINES = 60_000, 200_000, 1800, 400
 #: The largest coverage report read off disk. A report bigger than this is not one a runner wrote for us.
 MAX_REPORT = 20_000_000
@@ -136,9 +145,9 @@ def _by_agent(plan_steps: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]
     groups: dict[str, list[dict[str, Any]]] = {}
     for step in plan_steps:
         label = (step.get("label") or "").lower()
-        if any(word in label for word in GATE_WORDS) or step.get("agent") in ("AI Commander", "AI Project Manager"):
+        if any(word in label for word in GATE_WORDS) or step.get("agent") in roster.NOT_WRITERS:
             continue
-        groups.setdefault(step.get("agent") or "Engineer", []).append(step)
+        groups.setdefault(step.get("agent") or roster.UNNAMED, []).append(step)
     return groups
 
 
@@ -155,9 +164,13 @@ class RunService:
         self.projects = ProjectRepository(session)
 
     # ── making them ──────────────────────────────────────────────
-    async def plan_runs(self, plan: Any, task: Any, project: Project, by: str) -> list[Run]:
+    async def plan_runs(self, plan: Any, task: Any, project: Project, by: str,
+                        brief: str | None = None) -> list[Run]:
         """One run when one agent owns the work; otherwise an agent per worktree, plus the run that
-        merges them. The run that leads — the one to start — is last."""
+        merges them. The run that leads — the one to start — is last.
+
+        `brief` replaces the plan's requirement as what every agent is told, when the same work is done
+        again with a reviewer's notes; the plan's steps stay exactly as they were agreed."""
         setup = await asyncio.to_thread(_setup, project)
         steps = [{"label": s.label, "agent": s.agent, "detail": s.detail} for s in plan.steps]
         groups = _by_agent(steps)
@@ -166,7 +179,7 @@ class RunService:
         if len(groups) <= 1:
             work = [s for items in groups.values() for s in items]
             solo = await self._new_run(plan, task, project, by, setup, role="solo",
-                                       lane=self.gateway.spread(1, WRITE)[0])
+                                       lane=self.gateway.spread(1, WRITE)[0], brief=brief)
             await self._add_steps(solo, [*self._edit_steps(work), *self._tail(len(work), tests)])
             return [solo]
 
@@ -174,12 +187,12 @@ class RunService:
         children: list[Run] = []
         for (name, items), lane in zip(groups.items(), lanes, strict=True):
             child = await self._new_run(plan, task, project, by, setup, role="agent", agent=name,
-                                        lane=lane, suffix=_slug(name))
+                                        lane=lane, suffix=_slug(name), brief=brief)
             await self._add_steps(child, self._edit_steps(items))
             children.append(child)
 
-        integration = await self._new_run(plan, task, project, by, setup, role="integration")
-        merges = [{"n": i + 1, "kind": "merge", "label": f"Merge what {c.agent} wrote", "agent": "Orchestrator",
+        integration = await self._new_run(plan, task, project, by, setup, role="integration", brief=brief)
+        merges = [{"n": i + 1, "kind": "merge", "label": f"Merge what {c.agent} wrote", "agent": roster.ORCHESTRATOR,
                    "detail": c.branch, "child_run_id": c.id} for i, c in enumerate(children)]
         await self._add_steps(integration, [*merges, *self._tail(len(merges), tests)])
         for child in children:
@@ -195,10 +208,10 @@ class RunService:
         """What every run ends with: the project's tests, a read of the real diff, and your signature."""
         out: list[dict[str, Any]] = []
         if tests:
-            out.append({"n": done + 1, "kind": "test", "agent": "QA Engineer",
+            out.append({"n": done + 1, "kind": "test", "agent": roster.TESTER,
                         "label": f"Run the project's tests · {tests['command']}"})
-        out.append({"n": done + len(out) + 1, "kind": "review", "label": "Review the diff", "agent": "Code Reviewer"})
-        out.append({"n": done + len(out) + 1, "kind": "handoff", "label": "Your approval", "agent": "You"})
+        out.append({"n": done + len(out) + 1, "kind": "review", "label": "Review the diff", "agent": roster.REVIEWER})
+        out.append({"n": done + len(out) + 1, "kind": "handoff", "label": "Your approval", "agent": roster.YOU})
         return out
 
     async def check_run(self, project: Project, by: str, *, at_branch: str | None = None) -> Run:
@@ -229,11 +242,11 @@ class RunService:
         command = tests["command"]
         run = await self.runs.add(Run(
             id=f"r{ref.split('-')[-1]}-{int(time.time())}", ref=ref, project_id=project.id, status="queued",
-            role="check", branch=branch, worktree=str(WORKTREES / project.id / ref), repo=str(setup["repo"]),
+            role="check", branch=branch, worktree=str(worktrees_dir() / project.id / ref), repo=str(setup["repo"]),
             prefix=setup["prefix"], base=base, requirement=f"Run {command} at {base[:7]}", requested_by=by,
             targets=[], tests_command=command, tests_status="not run",
             review={"findings": [], "verdict": "", "by": ""}))
-        await self._add_steps(run, [{"n": 1, "kind": "test", "agent": "QA Engineer",
+        await self._add_steps(run, [{"n": 1, "kind": "test", "agent": roster.TESTER,
                                      "label": f"Run the project's tests · {command}"}])
         # Made in this session, so its steps were never loaded: load them before anyone reads them.
         await self.session.refresh(run, attribute_names=["steps", "conflicts"])
@@ -241,7 +254,7 @@ class RunService:
 
     async def _new_run(self, plan: Any, task: Any, project: Project, by: str, setup: dict[str, Any], *,
                        role: str, agent: str | None = None, lane: str | None = None,
-                       suffix: str = "") -> Run:
+                       suffix: str = "", brief: str | None = None) -> Run:
         ref = await self.runs.next_ref()
         stem = f"neurocode/{(task.ref if task else plan.ref).lower()}"
         wanted = f"{stem}-{suffix}" if suffix else stem
@@ -251,8 +264,8 @@ class RunService:
             id=f"r{ref.split('-')[-1]}-{int(time.time())}", ref=ref, project_id=project.id,
             task_id=getattr(task, "id", None), plan_id=plan.id, status="queued", role=role,
             agent=agent, lane=lane, branch=branch,
-            worktree=str(WORKTREES / project.id / ref), repo=str(setup["repo"]), prefix=setup["prefix"],
-            base=setup["base"], requirement=plan.raw_requirement, requested_by=by,
+            worktree=str(worktrees_dir() / project.id / ref), repo=str(setup["repo"]), prefix=setup["prefix"],
+            base=setup["base"], requirement=brief or plan.raw_requirement, requested_by=by,
             targets=list(plan.affected_files or [])[:12],
             tests_command=tests.get("command", "") or "", tests_status="not run",
             review={"findings": [], "verdict": "", "by": ""}))
@@ -325,6 +338,89 @@ class RunService:
                                    project_id=run.project_id)
         return run
 
+    async def rework(self, ref: str, notes: str, *, by: str, by_id: str, may_decide: bool) -> list[Run]:
+        """Send a run back: the same plan, done again as a new run whose brief carries your notes and what
+        the review found. The old run's worktree and branch are removed the way a discard removes them,
+        and a signature it was waiting for is refused, because this is the answer to it.
+
+        Returns the new runs, the one that leads last, exactly as dispatching does. The new ones are
+        made before anything of the old one is removed, so a project that can no longer be worked in
+        refuses with the old run intact.
+        """
+        run = await self.runs.by_ref(ref)
+        if run is None:
+            raise NotFound(f"run {ref}")
+        notes = notes.strip()
+        if not notes:
+            raise Refused("Say what should change, so the next run knows.", status=422)
+        if run.role == "check":
+            raise Refused(f"{ref} only ran the project's tests, so there is no work to send back. "
+                          "Run them again from Testing.")
+        if run.parent_id:
+            parent = await self.runs.get(run.parent_id)
+            raise Refused(f"{ref} is one agent's part of {parent.ref if parent else 'a larger run'}. "
+                          "Send back the run that merges them instead.")
+        if run.status in ("queued", "running"):
+            raise Refused(f"{ref} is still working. Stop it first.")
+        if run.merged:
+            raise Refused(f"{ref} is already merged into {run.merged['into']}. Compile the change you want "
+                          "as a new requirement instead.")
+        again = (run.review or {}).get("reworkedAs")
+        if again:
+            raise Refused(f"{ref} was already sent back — {again} is doing it again.")
+        if run.plan_id is None:
+            raise Refused(f"{ref} was not started from a plan, so there is nothing to do again.")
+
+        gate = None
+        if run.status == "waiting":
+            gate = await self.approvals.waiting_on_person(ref)
+            gated = next((x for x in run.steps if gate is not None and x.n == gate.step), None)
+            if gate is None or gated is None or gated.kind != "handoff":
+                raise Refused(f"{ref} is waiting for your answer about running its tests. Answer that first.")
+            if not may_decide:
+                raise Denied("approvals:decide", f"refuse the signature {ref} is waiting for")
+
+        plan = await PlanRepository(self.session).get(run.plan_id)
+        project = await self.projects.get(run.project_id)
+        if plan is None or project is None:
+            raise Refused(f"The plan behind {ref} is gone, so there is nothing to do again.")
+        task = await TaskRepository(self.session).get(plan.task_id) if plan.task_id else None
+
+        made = await self.plan_runs(plan, task, project, by, brief=_rework_brief(plan.raw_requirement, run, notes, by))
+        lead = made[-1]
+        for new in made:
+            # The first line of the new run's log, so reading it says what it is doing again, and why.
+            await self.logs.write(new.id, level="info", line=f"rework of {ref}, sent back by {by}: {notes[:300]}")
+
+        now = utcnow()
+        if gate is not None:
+            gate.status, gate.decided_at, gate.decided_by = "denied", now, by_id
+            step = next(x for x in run.steps if x.n == gate.step)
+            step.status, step.detail = "failed", f"Sent back for changes as {lead.ref}."
+        if run.status == "waiting":
+            run.status, run.finished_at, run.waiting_on = "cancelled", now, None
+        run.note = f"Sent back for changes as {lead.ref}."
+        run.review = {**(run.review or {"findings": [], "verdict": "", "by": ""}), "reworkedAs": lead.ref}
+        await self.logs.write(run.id, level="warn", line=f"sent back for changes by {by} · {lead.ref} does it again")
+
+        children = (await self.runs.children_of([run.id])).get(run.id, [])
+        for target in [run, *children]:
+            if not target.removed:
+                await asyncio.to_thread(agent.cleanup, Path(target.repo), Path(target.worktree), target.branch)
+                target.removed = True
+        if task is not None and task.status in ("review", "blocked"):
+            task.status = "in_progress"
+        await self.session.flush()
+
+        settled = f" · {gate.ref} refused" if gate is not None else ""
+        await self.activity.record(actor=by, actor_kind="human", action="Sent back for changes",
+                                   detail=f"{ref} → {lead.ref}{settled} · {run.branch} removed · {notes[:120]}",
+                                   level="warn", project_id=run.project_id, task_ref=task.ref if task else None)
+        for new in made:
+            # Made in this session, so their steps were never loaded: load them before anyone reads them.
+            await self.session.refresh(new, attribute_names=["steps", "conflicts"])
+        return made
+
     async def merge(self, ref: str, by: str) -> dict[str, Any]:
         """Merge an accepted run into whatever branch the repository has checked out."""
         run = await self.runs.by_ref(ref)
@@ -369,6 +465,22 @@ class RunService:
             return {"patch": "", "truncated": False, "stat": stat, "gone": True}
         patch = await asyncio.to_thread(agent.diff, tree, run.base)
         return {"patch": patch[:MAX_DIFF], "truncated": len(patch) > MAX_DIFF, "stat": stat, "gone": False}
+
+
+def _rework_brief(requirement: str, run: Run, notes: str, by: str) -> str:
+    """What a run sent back is told: the requirement, what the person asked to change, and what the
+    review of the last attempt found — so the next attempt starts from both, not from scratch."""
+    review = run.review or {}
+    findings = [f"- {f.get('severity', 'LOW')}{' ' + f['file'] if f.get('file') else ''}: {f.get('note', '')}"
+                for f in review.get("findings", [])]
+    lines = [requirement, "", f"This is being done again. {by} sent back {run.ref} and asked for these changes:",
+             notes]
+    if findings or review.get("verdict"):
+        lines += ["", f"What the review of {run.ref} found" + (f" ({review['by']})" if review.get("by") else "") + ":",
+                  *findings]
+        if review.get("verdict"):
+            lines.append(f"Verdict: {review['verdict']}")
+    return "\n".join(lines)
 
 
 def agent_free_branch(repo: Path, wanted: str) -> str:
@@ -456,7 +568,7 @@ async def _finish(db: Database, ref: str, status: str, note: str) -> None:
         level = "ok" if status == "done" else "warn" if status == "cancelled" else "err"
         await RunLogRepository(s).write(run.id, level=level, line=f"run {status}")
         await ActivityRepository(s).record(
-            actor="Orchestrator", actor_kind="agent", action=f"Run {status}",
+            actor=roster.ORCHESTRATOR, actor_kind="agent", action=f"Run {status}",
             detail=f"{ref} · {run.diff_files} files +{run.diff_insertions} −{run.diff_deletions} on "
                    f"{run.branch}" + (f" · {note}" if note else ""),
             level=level, project_id=run.project_id)
@@ -532,7 +644,7 @@ async def _pause(db: Database, ref: str, step_n: int, *, title: str, tool: str, 
         run.status, run.waiting_on = "waiting", approval_ref
         await RunLogRepository(s).write(run.id, level="warn", step=step_n,
                                         line=f"waiting for your decision · {approval_ref} · {title}")
-        await ActivityRepository(s).record(actor=step.agent if step else "Orchestrator", actor_kind="agent",
+        await ActivityRepository(s).record(actor=step.agent if step else roster.ORCHESTRATOR, actor_kind="agent",
                                            action="Approval needed", detail=f"{approval_ref} · {title}",
                                            level="warn", project_id=run.project_id)
 
@@ -763,7 +875,7 @@ async def _review(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool
     async with db.read() as s:
         run = await RunRepository(s).by_ref(ref)
         tree, base, requirement, lane, project_id = Path(run.worktree), run.base, run.requirement, run.lane, run.project_id
-        reviewer = next((x.agent for x in run.steps if x.n == step_n), "") or "Code Reviewer"
+        reviewer = next((x.agent for x in run.steps if x.n == step_n), "") or roster.REVIEWER
 
     diff = (await asyncio.to_thread(agent.diff, tree, base))[:MAX_DIFF]
     if not diff.strip():
@@ -860,7 +972,7 @@ async def execute(db: Database, gateway: Gateway, ref: str, resume_from: int | N
             await RunLogRepository(s).write(run.id, level="ok",
                                             line=f"worktree ready · {run.branch} from {run.base[:7]}")
             await ActivityRepository(s).record(
-                actor="Orchestrator", actor_kind="agent", action="Run started",
+                actor=roster.ORCHESTRATOR, actor_kind="agent", action="Run started",
                 detail=f"{ref} · {len(run.steps)} steps on {run.branch}", project_id=run.project_id)
         run.status = "running"
         run_id = run.id
@@ -935,7 +1047,7 @@ async def execute_batch(db: Database, gateway: Gateway, ref: str) -> None:
         await RunLogRepository(s).write(run.id, level="info",
                                         line=f"{len(children)} agents working in parallel: {names}")
         await ActivityRepository(s).record(
-            actor="Orchestrator", actor_kind="agent", action="Agents started",
+            actor=roster.ORCHESTRATOR, actor_kind="agent", action="Agents started",
             detail=f"{run.ref} · {len(children)} agents, a worktree each", project_id=run.project_id)
 
     await asyncio.gather(*(execute(db, gateway, child) for child in refs), return_exceptions=True)

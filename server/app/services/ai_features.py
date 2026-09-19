@@ -1,16 +1,17 @@
 """Ask memory, argue an idea with itself, pull candidate facts out of pasted text.
 
-The features themselves have not changed and still live in `ai/features.py` — the prompts, the
-validation, and the offline versions that stand in when no model can answer. What changed is where
+The features themselves live in `ai/features.py` — the prompts, the validation, and the offline
+versions of the two that have an honest one. What changed is where
 the words come from and where the answer goes. A question is answered from facts in Postgres, ranked
 by retrieval where the project has been indexed and by memory's own full-text search where it has
 not; and a brainstorm is a row, with its stages, its case against it and its roadmap in columns,
 rather than one document nobody could query.
 
 Two things hold everywhere here. The gateway is blocking by nature, so every call into it crosses a
-worker thread and never the event loop. And all three answer with no key configured at all: the
-offline rules write the answer, the answer says which model wrote it, and a lane that tried and
-failed is recorded on the feed rather than passing unnoticed.
+worker thread and never the event loop. And every answer says which model wrote it. Asking and
+extracting answer with no key configured at all — the offline rules write it, and a lane that tried
+and failed is recorded on the feed rather than passing unnoticed. A brainstorm needs a model, and
+without one it is refused in words that say how to add one; nothing is kept.
 """
 from __future__ import annotations
 
@@ -28,6 +29,8 @@ from ..repositories.knowledge import MemoryRepository
 from ..repositories.platform import BrainstormRepository
 from ..repositories.work import ActivityRepository, ProjectRepository
 from ..schemas.ai import brainstorm_nodes
+from .errors import needs_a_model
+from .knowledge import MemoryService
 from .retrieval import RetrievalService
 
 #: How many facts an answer may lean on, and how many pieces retrieval is asked for to find them —
@@ -95,7 +98,8 @@ class AiFeatureService:
         an un-indexed project still gets a real answer."""
         found: list[MemoryFact] = []
         if project_id and (refs := await self._ranked(question, project_id)):
-            by_ref = {f.ref: f for f in await self.memory.list(MemoryFact.ref.in_(refs), limit=FACTS)}
+            # Held facts only: an index built before a fact was archived may still name it.
+            by_ref = {f.ref: f for f in await self.memory.by_refs(refs)}
             found = [by_ref[ref] for ref in refs if ref in by_ref]
         seen = {fact.ref for fact in found}
         for fact in await self._searched(question, project_id):
@@ -116,6 +120,7 @@ class AiFeatureService:
                                          project_id=project_id)
         await self._fell_back(result, project_id)
         cited = [f for f in facts if f["ref"] in result.data.citations]
+        await MemoryService(self.session).recall([f["ref"] for f in cited], via="ask", context=None)
         await self.activity.record(
             actor=by, actor_kind="human", action="Asked memory",
             detail=f"“{question[:120]}” · {len(cited)} facts cited · {result.provider.model}",
@@ -126,15 +131,15 @@ class AiFeatureService:
 
     async def brainstorm(self, idea: str, project_id: str | None, *, by: str,
                          by_id: str | None = None) -> Brainstorm:
-        """An idea, expanded and then argued against — and kept, so it can be read again."""
+        """An idea, expanded and then argued against by a model — and kept, so it can be read again."""
         project = await self._project(project_id)
-        result = await asyncio.to_thread(features.brainstorm, self.gateway, idea,
-                                         _project_doc(project), actor=by_id, project_id=project_id)
-        await self._fell_back(result, project_id)
+        doc = _project_doc(project)
+        result = await asyncio.to_thread(needs_a_model, lambda: features.brainstorm(
+            self.gateway, idea, doc, actor=by_id, project_id=project_id))
         brief = result.data
         ref = await self.brainstorms.next_ref()
-        # Not "b1": the Brainstorm screen ships example briefs with exactly those ids, and a real
-        # brainstorm that collides with one makes the page open the sample instead.
+        # A random suffix beside the number, so the id is never a bare `b1` that a client may already
+        # hold for something that is not this brainstorm.
         bid = f"b{ref.split('-')[-1]}-{uuid4().hex[:8]}"
         # `verdict` and `score` stay as the database left them: this feature expands an idea and puts
         # the case against it, and nothing in it has earned the right to score the idea for you.

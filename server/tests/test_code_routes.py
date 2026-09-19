@@ -21,9 +21,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models as m
 from app.api import deps
 from app.api.app import create_api
-from app.data.loader import load_seed, sync_roles
 from app.models import Chunk, CodeEdge, CodeFile, CodeIndexRun, CodeSymbol, Project, RetrievalRun
 from app.services import code as code_jobs
+from app.services import retrieval
+from tests.fixtures.workspace import load_workspace
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
 ENGINEER = {"email": "dev@example.com", "name": "Dev", "password": "another long passphrase",
@@ -66,9 +67,7 @@ EDGES = [
 @pytest_asyncio.fixture
 async def api(session: AsyncSession) -> FastAPI:
     """The Postgres app, answering out of this test's transaction."""
-    await load_seed(session)
-    await sync_roles(session)
-    await session.flush()
+    await load_workspace(session)
     app = create_api(db=None)
 
     async def use_the_test_session() -> AsyncIterator[AsyncSession]:
@@ -247,8 +246,36 @@ async def test_the_graph_draws_the_modules_and_the_objects_they_touch(client: As
 async def test_retrieval_reports_what_it_holds_before_anything_is_built(client: AsyncClient,
                                                                        indexed: Path):
     body = (await client.get(f"/projects/{PID}/code/retrieval")).json()
-    assert body == {"built": False, "chunks": 0, "byKind": {}, "semantic": False, "q": "",
-                    "results": []}
+    assert body == {"built": False, "chunks": 0, "byKind": {}, "semantic": False, "building": False,
+                    "q": "", "results": []}
+
+
+async def test_retrieval_says_while_a_build_is_running_and_refuses_a_second(
+        client: AsyncClient, indexed: Path, monkeypatch):
+    """The screen polls `building` instead of guessing with a timer, so it must be true from the moment
+    the build is accepted until the job has ended — however it ends."""
+    seen: list[bool] = []
+
+    async def slow(_db, _gateway, project_id):
+        seen.append(project_id in retrieval.BUILDING)
+        seen.append((await client.get(f"/projects/{PID}/code/retrieval")).json()["building"])
+        refused = await client.post(f"/projects/{PID}/code/retrieval/build")
+        seen.append(refused.status_code == 409 and "being built already" in refused.json()["detail"])
+
+    monkeypatch.setattr(code_jobs, "build_retrieval", slow)
+    assert (await client.post(f"/projects/{PID}/code/retrieval/build")).status_code == 202
+    assert seen == [True, True, True]
+    assert (await client.get(f"/projects/{PID}/code/retrieval")).json()["building"] is False
+
+    async def fails(_db, _gateway, project_id):
+        raise RuntimeError("the job died before it built anything")
+
+    monkeypatch.setattr(code_jobs, "build_retrieval", fails)
+    try:
+        await client.post(f"/projects/{PID}/code/retrieval/build")
+    except RuntimeError:
+        pass                                               # the transport re-raises what a job raised
+    assert PID not in retrieval.BUILDING                   # never stuck "building" after a failure
 
 
 async def test_reindexing_is_queued_and_answered_at_once(client: AsyncClient, indexed: Path,
@@ -269,7 +296,7 @@ async def test_reindexing_is_queued_and_answered_at_once(client: AsyncClient, in
 
 async def test_a_project_with_no_code_on_this_machine_cannot_be_indexed(client: AsyncClient):
     refused = await client.post("/projects/erp/code/reindex")
-    assert refused.status_code == 409 and "sample project" in refused.json()["detail"]
+    assert refused.status_code == 409 and "no code on this machine" in refused.json()["detail"]
 
 
 async def test_building_retrieval_is_queued_behind_the_onboarding_permission(

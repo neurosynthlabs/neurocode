@@ -22,8 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models as m
 from app.api import deps
 from app.api.app import create_api
-from app.data.loader import load_seed, sync_roles
 from app.services import chat as chat_service
+from tests.fixtures.workspace import load_workspace
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
 VIEWER = {"email": "view@example.com", "name": "Neha", "password": "another long passphrase", "roles": ["viewer"]}
@@ -116,8 +116,7 @@ def repo(tmp_path: Path) -> Path:
 
 @pytest_asyncio.fixture
 async def api(session: AsyncSession, home: Path, repo: Path, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
-    await load_seed(session)
-    await sync_roles(session)
+    await load_workspace(session)
     session.add(m.Project(id=PID, name="Extension Lab", source_kind="local", source_repo=str(repo)))
     await session.flush()
     app = create_api(db=None)
@@ -307,6 +306,38 @@ async def test_plugins_are_counted_from_disk_and_install_is_a_command_to_copy(cl
     assert market["remote@acme-market"]["providesKnown"] is False
     assert market["linter@acme-market"]["installCommand"] == "/plugin install linter@acme-market"
     assert body["conflicts"][0]["command"] == "/plan"
+
+
+# ── no project yet ───────────────────────────────────────────────
+
+async def test_with_no_project_the_screens_read_this_machine_alone(client: AsyncClient, session: AsyncSession):
+    """A new workspace has no project, and the Claude home is real before one exists. Leaving projectId
+    out reads that home and nothing a project owns: no project root, no project skill, no session count."""
+    chat = await _chat(session, "CHAT-7101", "Arjun Shah")
+    session.add(m.ChatMessage(chat_id=chat.id, role="tool", body="…", tool="load_skill", detail="global/pdf", ok=True))
+    await session.flush()
+
+    skills = (await client.get("/extensions/skills")).json()
+    assert {s["id"] for s in skills["skills"]} == {"global/pdf", "global/broken", f"plugin:{PLUGIN}/pdf"}
+    assert {r["scope"] for r in skills["roots"]} == {"global", "plugin"}
+    # The load belongs to a project's session, so it is not counted where no project was asked about.
+    assert skills["sessions24h"] == 0 and all(s["loads24h"] == 0 for s in skills["skills"])
+    detail = await client.get("/extensions/skills/detail", params={"key": "global/pdf"})
+    assert detail.status_code == 200 and "Open the file" in detail.json()["body"]
+    assert (await client.get("/extensions/skills/detail", params={"key": f"project:{PID}/deploy"})).status_code == 404
+
+    commands = (await client.get("/extensions/commands")).json()
+    assert {c["scope"] for c in commands["commands"]} == {"global", "plugin"}
+
+    hooks = (await client.get("/extensions/hooks")).json()["hooks"]
+    assert hooks and not any(h["scope"] in ("project", "local") for h in hooks)
+
+    plugins = (await client.get("/extensions/plugins")).json()
+    assert [p["id"] for p in plugins["installed"]] == [PLUGIN]
+
+    # Named and missing is still a mistake, and an empty id is not "none".
+    assert (await client.get("/extensions/hooks", params={"projectId": "nope"})).status_code == 404
+    assert (await client.get("/extensions/hooks", params={"projectId": ""})).status_code == 422
 
 
 # ── who may ──────────────────────────────────────────────────────

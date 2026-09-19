@@ -6,9 +6,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Empty, Field, Page, PageBody, PageHeader, Panel } from '@/components/os';
 import { api, type Person, type TeamDoc } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { demoTeams, demoUsers } from '@/mock/rbac';
 import { attempt, useAdmin } from './load';
-import { Avatar, DemoNote, LoadError, Loading } from './kit';
+import { Avatar, LoadError, Loading } from './kit';
 
 interface TeamsData { teams: TeamDoc[]; people: Person[] }
 
@@ -16,12 +15,11 @@ const loadTeams = async (): Promise<TeamsData> => {
   const [teams, people] = await Promise.all([api.admin.teams(), api.admin.users()]);
   return { teams, people };
 };
-const DEMO: TeamsData = { teams: demoTeams, people: demoUsers };
 
 export default function Teams() {
   const { can } = useAuth();
-  const { data, setData, error, live, reload } = useAdmin(loadTeams, DEMO);
-  const manage = live && can('teams:manage');
+  const { data, setData, error, reload } = useAdmin<TeamsData>(loadTeams);
+  const manage = can('teams:manage');
   const [editing, setEditing] = useState<TeamDoc | 'new' | null>(null);
   // Deleting is two clicks: the first arms the button for four seconds.
   const [armed, setArmed] = useState<string | null>(null);
@@ -52,7 +50,6 @@ export default function Teams() {
         actions={<Button size="sm" onClick={() => setEditing('new')} disabled={!manage}><Plus className="size-3.5" />New team</Button>}
       />
       <PageBody>
-        {!live && <DemoNote what="Creating and editing teams" />}
         {error ? <LoadError error={error} onRetry={reload} /> : !data ? <Loading /> : data.teams.length === 0 ? (
           <Empty
             icon={<UsersRound className="size-6" />} title="No teams yet"
@@ -131,7 +128,7 @@ function TeamDialog({ team, people, onClose, onSaved }: {
             <DialogDescription>Pick who belongs to it. Their roles stay as they are.</DialogDescription>
           </DialogHeader>
           <Field label="Name" value={name} onChange={setName} autoFocus={!team} placeholder="ERP renewal" />
-          <Field label="What it works on" value={description} onChange={setDescription} placeholder="Legacy ERP, module by module" />
+          <Field label="What it works on" value={description} onChange={setDescription} placeholder="The billing service, and what it touches" />
           <div>
             <div className="mb-1.5 text-[12.5px] font-medium text-soft">Members · {members.length}</div>
             <div className="max-h-[260px] divide-y divide-line/50 overflow-y-auto rounded-xl border border-line/70">

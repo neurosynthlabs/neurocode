@@ -1,40 +1,26 @@
+import type { BrainstormDoc, Catalogue, CodeHit, RunDoc } from '@/lib/api';
+import { ICONS } from '@/lib/icons';
 import type { McpServer, MemoryFact, Plan, Project, SearchHit, Task } from '@/types';
 import { NAV, allowed } from './nav';
-import { agents } from '@/mock/agents';
-
-/** Curated hits for what the index cannot read yet: code, database objects, bugs, commits, tests. */
-const domainHits: SearchHit[] = [
-  { id: 's-code-1',  group: 'Code',         title: 'InvoiceService.cs',            subtitle: 'src/Services/Billing · 412 LOC · churn HIGH', to: '/code',         icon: 'FileCode', meta: 'C#' },
-  { id: 's-code-2',  group: 'Code',         title: 'TaxService.cs',                subtitle: 'src/Services/Billing · used by 4 modules',    to: '/code',         icon: 'FileCode', meta: 'C#' },
-  { id: 's-code-3',  group: 'Code',         title: 'InvoiceTaxSummary.tsx',        subtitle: 'src/features/invoice · React component',      to: '/code',         icon: 'FileCode', meta: 'TSX' },
-  { id: 's-db-1',    group: 'Database',     title: 'SP_CalculateTax',              subtitle: 'stored procedure · 412 lines · 11 callers',   to: '/code',         icon: 'Database', meta: 'SPROC' },
-  { id: 's-db-2',    group: 'Database',     title: 'MST_TAX',                      subtitle: 'master table · 2.1M rows · 6 indexes',        to: '/code',         icon: 'Table2',   meta: 'TABLE' },
-  { id: 's-db-3',    group: 'Database',     title: 'TRANS_INVOICE',                subtitle: 'append-only · never modify directly',         to: '/code',         icon: 'Table2',   meta: 'TABLE' },
-  { id: 's-bug-1',   group: 'Bugs',         title: 'BUG-883 · CGST/SGST reversed interstate', subtitle: 'open · 41 invoices affected',       to: '/tasks',        icon: 'Bug',      meta: 'OPEN' },
-  { id: 's-bug-2',   group: 'Bugs',         title: 'BUG-991 · Excel export times out >100k', subtitle: 'triaged · TASK-513',                 to: '/tasks',        icon: 'Bug',      meta: 'TRIAGED' },
-  { id: 's-req-1',   group: 'Requirements', title: 'REQ-291 · Customer bulk upload',   subtitle: 'Knowledge · linked to TASK-488',           to: '/knowledge',    icon: 'FileText', meta: 'REQ' },
-  { id: 's-req-2',   group: 'Requirements', title: 'REQ-238 · Invoice tax correctness', subtitle: 'Knowledge · linked to TASK-492',          to: '/knowledge',    icon: 'FileText', meta: 'REQ' },
-  { id: 's-adr-1',   group: 'Decisions',    title: 'ADR-42 · One repository per aggregate', subtitle: 'accepted · 2026-05-11',               to: '/memory',       icon: 'Scale',    meta: 'ADR' },
-  { id: 's-adr-2',   group: 'Decisions',    title: 'ADR-52 · Single jurisdiction resolver', subtitle: 'draft · Documentation Agent',         to: '/memory',       icon: 'Scale',    meta: 'ADR' },
-  { id: 's-com-1',   group: 'Commits',      title: 'a82f91c · fix(tax): resolve jurisdiction by place of supply', subtitle: 'Backend Engineer · 12 min ago', to: '/git', icon: 'GitCommit', meta: 'COMMIT' },
-  { id: 's-com-2',   group: 'Commits',      title: '4d0e17b · test(tax): interstate matrix',  subtitle: 'QA Engineer · 8 min ago',           to: '/git',          icon: 'GitCommit', meta: 'COMMIT' },
-  { id: 's-test-1',  group: 'Tests',        title: 'InvoiceTaxTest',                 subtitle: '18 cases · all passing',                     to: '/testing',      icon: 'FlaskConical', meta: 'PASS' },
-  { id: 's-test-2',  group: 'Tests',        title: 'InvoiceTaxLegacyTest',           subtitle: 'failing · legacy-expected, do not "fix"',     to: '/testing',      icon: 'FlaskConical', meta: 'LEGACY' },
-  { id: 's-mtg-1',   group: 'Knowledge',    title: 'Meeting 2026-08-21 · Billing review', subtitle: 'transcript · 38 min · 7 facts extracted', to: '/knowledge',   icon: 'Mic',      meta: 'MEETING' },
-];
 
 const navIcon = (to: string, fallback: string) => NAV.find((n) => n.to === to)?.icon ?? fallback;
 const sentence = (s: string) => s.split(/(?<=[.!?])\s/)[0].slice(0, 90);
 
-/** The parts of the store that ⌘K searches. */
-export interface Indexable { projects: Project[]; tasks: Task[]; plans: Plan[]; memory: MemoryFact[]; mcp: McpServer[] }
+/** The parts of the store, and of the catalogue, that ⌘K searches. */
+export interface Indexable {
+  projects: Project[]; tasks: Task[]; plans: Plan[]; runs: RunDoc[]; memory: MemoryFact[]; brainstorms: BrainstormDoc[];
+  mcp: McpServer[];
+  /** The agent roster from GET /auth/catalogue: names and roles, nothing measured. */
+  agents: Catalogue['agents'];
+}
 
 /**
- * Everything ⌘K can find. Built from the live store, so a plan compiled a minute ago or a project
- * onboarded just now is searchable at once. Hits that name one record open it through `?ref=`.
+ * Everything ⌘K can find without asking the server again. Built from the live store, so a plan compiled
+ * a minute ago or a project onboarded just now is searchable at once. Hits that name one record open it
+ * through `?ref=`. Symbols in the code index are a query of their own: see `codeHits`.
  */
 export function buildIndex(
-  { projects, tasks, plans, memory, mcp }: Indexable,
+  { projects, tasks, plans, runs, memory, brainstorms, mcp, agents }: Indexable,
   /** `useAuth().canAny`: screens a role cannot open are left out. */
   canAny: (...perms: string[]) => boolean = () => true,
 ): SearchHit[] {
@@ -45,7 +31,8 @@ export function buildIndex(
     })),
     ...projects.map<SearchHit>((p) => ({
       id: `proj-${p.id}`, group: 'Projects', title: p.name,
-      subtitle: `${p.stack.slice(0, 3).join(' · ') || p.status} · ${p.modules} modules`, to: `/projects/${p.id}`, icon: 'FolderKanban', meta: p.codename,
+      subtitle: [p.stack.slice(0, 3).join(' · ') || p.status, p.repo].filter(Boolean).join(' · '),
+      to: `/projects/${p.id}`, icon: 'FolderKanban', meta: p.codename,
     })),
     ...tasks.map<SearchHit>((t) => ({
       id: `task-${t.id}`, group: 'Tasks', title: `${t.ref} · ${t.title}`,
@@ -56,24 +43,41 @@ export function buildIndex(
       subtitle: `${p.taskRef} · ${p.steps.length} steps · ${p.openQuestions.length} open questions`, to: `/plans?ref=${p.ref}`,
       icon: navIcon('/plans', 'ListChecks'), meta: p.risk,
     })),
-    ...memory.map<SearchHit>((f) => ({
+    ...runs.map<SearchHit>((r) => ({
+      id: `run-${r.id}`, group: 'Runs', title: `${r.ref} · ${sentence(r.requirement)}`,
+      subtitle: `${r.projectName} · ${r.branch} · ${r.status}`, to: `/runs?ref=${r.ref}`,
+      icon: navIcon('/runs', 'Activity'), meta: r.status.toUpperCase(),
+    })),
+    // An archived fact is out of recall and off the Memory screen, so a hit for it would open to nothing.
+    ...memory.filter((f) => !f.archived).map<SearchHit>((f) => ({
       id: `mem-${f.id}`, group: 'Memory', title: `${f.ref} · ${f.title}`,
-      subtitle: `${f.category.replace('_', ' ')} · ${f.confidence.toLowerCase()} confidence · strength ${f.strength}`, to: `/memory?ref=${f.ref}`,
+      subtitle: `${f.category.replace('_', ' ')} · ${f.confidence.toLowerCase()} confidence`, to: `/memory?ref=${f.ref}`,
       icon: 'Brain', meta: f.pinned ? 'PINNED' : f.category.toUpperCase(),
+    })),
+    ...brainstorms.map<SearchHit>((b) => ({
+      id: `brief-${b.id}`, group: 'Brainstorms', title: `${b.ref} · ${b.brief.title}`,
+      subtitle: sentence(b.idea), to: `/brainstorm?ref=${b.ref}`, icon: navIcon('/brainstorm', 'Lightbulb'),
     })),
     ...mcp.map<SearchHit>((m) => ({
       id: `mcp-${m.id}`, group: 'Tools', title: m.name,
       subtitle: `${m.transport} · ${m.tools.length} tools · ${m.status.replace('_', ' ')}`, to: '/mcp', icon: navIcon('/mcp', 'Server'), meta: m.scope.toUpperCase(),
     })),
     ...agents.map<SearchHit>((a) => ({
-      id: `agent-${a.id}`, group: 'Agents', title: a.name,
-      subtitle: `${a.role} · ${a.model}`, to: '/agents', icon: 'Bot', meta: a.status,
+      id: `agent-${a.id}`, group: 'Agents', title: a.name, subtitle: a.role, to: '/agents',
+      icon: a.icon in ICONS ? a.icon : 'Bot',
     })),
-    ...domainHits,
   ];
 }
 
+/** Symbols the server found in a project's code index for one query, each opening its file. */
+export function codeHits(projectName: string, hits: CodeHit[]): SearchHit[] {
+  return hits.map((h) => ({
+    id: `code-${h.path}:${h.line}:${h.name}`, group: 'Code', title: h.name,
+    subtitle: `${h.path}:${h.line} · ${projectName}`, to: `/code?path=${encodeURIComponent(h.path)}`,
+    icon: 'FileCode', meta: h.kind.toUpperCase(),
+  }));
+}
+
 export const SEARCH_GROUPS = [
-  'Navigate', 'Tasks', 'Plans', 'Memory', 'Code', 'Database', 'Decisions',
-  'Bugs', 'Requirements', 'Knowledge', 'Commits', 'Tests', 'Tools', 'Agents', 'Projects',
+  'Navigate', 'Tasks', 'Plans', 'Runs', 'Memory', 'Code', 'Brainstorms', 'Tools', 'Agents', 'Projects',
 ];

@@ -11,6 +11,7 @@ from app.models import Role, RolePermission, User
 from app.repositories import ProjectRepository, RoleRepository, TaskRepository, UserRepository
 from app.services.errors import Refused
 from app.services.work import Actor, TaskService
+from tests.fixtures.workspace import WORKSPACE, rows
 
 ME = Actor(name="Rajat", permissions=frozenset({"tasks:write"}))
 
@@ -20,15 +21,16 @@ async def test_the_board_counts_are_asked_of_the_database(seeded):
     per_project = await ProjectRepository(seeded).task_counts()
     erp = await TaskRepository(seeded).counts_by_status("erp")
     assert per_project["erp"] == erp
-    assert sum(erp.values()) == 10                       # the seed's ten ERP tasks, counted in SQL
+    assert sum(erp.values()) == len(rows("tasks", projectId="erp"))       # the fixture's, counted in SQL
 
 
 async def test_a_page_says_how_many_there_are(seeded):
-    """No endpoint returns everything: a page knows its own total, so a screen can say "5 of 19"."""
+    """No endpoint returns everything: a page knows its own total, so a screen can say "5 of 13"."""
+    total = len(WORKSPACE["tasks"])
     page = await TaskRepository(seeded).board(limit=5)
-    assert len(page.items) == 5 and page.total == 19
+    assert len(page.items) == 5 and page.total == total
     assert page.more is True and page.next_offset == 5
-    assert (await TaskRepository(seeded).board(limit=5, offset=15)).more is False
+    assert (await TaskRepository(seeded).board(limit=5, offset=total - 4)).more is False
 
 
 async def test_a_task_cannot_skip_the_board(seeded):

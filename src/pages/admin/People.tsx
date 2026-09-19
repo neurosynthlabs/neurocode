@@ -6,28 +6,27 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Cell, DataTable, Field, Page, PageBody, PageHeader, Panel, Row, StatusText, Tag } from '@/components/os';
 import { api, type Person, type RoleDoc, type TeamDoc } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { demoTeams, demoUsers } from '@/mock/rbac';
-import { attempt, demoRoles, temporaryPassword, useAdmin, when } from './load';
-import { Avatar, Credentials, DemoNote, LoadError, Loading, RolePicker } from './kit';
+import { attempt, startingRole, temporaryPassword, useAdmin, when } from './load';
+import { Avatar, Credentials, LoadError, Loading, RolePicker } from './kit';
 
-interface Directory { people: Person[]; roles: RoleDoc[]; teams: TeamDoc[] }
+/** `minPassword` is the floor the API refuses a password under, so the dialog never offers one it would refuse. */
+interface Directory { people: Person[]; roles: RoleDoc[]; teams: TeamDoc[]; minPassword: number }
 
 // Someone who manages only teams can open this screen too; the lists they may not read stay empty.
 const loadDirectory = async (): Promise<Directory> => {
-  const [people, roles, teams] = await Promise.all([
-    api.admin.users(), api.admin.roles().catch(() => []), api.admin.teams().catch(() => []),
+  const [people, roles, teams, workspace] = await Promise.all([
+    api.admin.users(), api.admin.roles().catch(() => []), api.admin.teams().catch(() => []), api.admin.workspace(),
   ]);
-  return { people, roles, teams };
+  return { people, roles, teams, minPassword: workspace.security.minPassword };
 };
-const DEMO: Directory = { people: demoUsers, roles: demoRoles, teams: demoTeams };
 const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
 
 export default function People() {
   const { can, user: me } = useAuth();
-  const { data, setData, error, live, reload } = useAdmin(loadDirectory, DEMO);
+  const { data, setData, error, reload } = useAdmin<Directory>(loadDirectory);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Person | null>(null);
-  const manage = live && can('users:manage');
+  const manage = can('users:manage');
   const isOwner = !!me?.roles.includes('owner');
 
   const upsert = (p: Person) => {
@@ -48,7 +47,6 @@ export default function People() {
         actions={<Button size="sm" onClick={() => setAdding(true)} disabled={!manage}><Plus className="size-3.5" />Add person</Button>}
       />
       <PageBody>
-        {!live && <DemoNote what="Accounts, roles and passwords" />}
         {error ? <LoadError error={error} onRetry={reload} /> : !data ? <Loading /> : (
           <div className="space-y-5">
             <Panel flush title={`${data.people.length} ${data.people.length === 1 ? 'person' : 'people'}`} eyebrow={`${active} can sign in`}>
@@ -98,10 +96,10 @@ export default function People() {
         )}
       </PageBody>
 
-      {data && <AddPerson open={adding} onOpenChange={setAdding} roles={data.roles} isOwner={isOwner} onAdded={upsert} />}
+      {data && <AddPerson open={adding} onOpenChange={setAdding} roles={data.roles} minPassword={data.minPassword} isOwner={isOwner} onAdded={upsert} />}
       {data && editing && (
         <EditPerson
-          person={editing} roles={data.roles} isOwner={isOwner} isMe={editing.id === me?.id}
+          person={editing} roles={data.roles} minPassword={data.minPassword} isOwner={isOwner} isMe={editing.id === me?.id}
           onClose={() => setEditing(null)} onSaved={upsert}
         />
       )}
@@ -109,20 +107,22 @@ export default function People() {
   );
 }
 
-function AddPerson({ open, onOpenChange, roles, isOwner, onAdded }: {
-  open: boolean; onOpenChange: (open: boolean) => void; roles: RoleDoc[]; isOwner: boolean; onAdded: (p: Person) => void;
+function AddPerson({ open, onOpenChange, roles, minPassword, isOwner, onAdded }: {
+  open: boolean; onOpenChange: (open: boolean) => void; roles: RoleDoc[]; minPassword: number; isOwner: boolean;
+  onAdded: (p: Person) => void;
 }) {
+  const fresh = () => { const r = startingRole(roles); return r ? [r] : []; };
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState(temporaryPassword);
-  const [picked, setPicked] = useState<string[]>(['engineer']);
+  const [password, setPassword] = useState(() => temporaryPassword(minPassword));
+  const [picked, setPicked] = useState<string[]>(fresh);
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<Person | null>(null);
-  const ready = !!name.trim() && !!email.trim() && password.length >= 10 && picked.length > 0;
+  const ready = !!name.trim() && !!email.trim() && password.length >= minPassword && picked.length > 0;
 
   const close = () => {
     onOpenChange(false);
-    setName(''); setEmail(''); setPassword(temporaryPassword()); setPicked(['engineer']); setCreated(null);
+    setName(''); setEmail(''); setPassword(temporaryPassword(minPassword)); setPicked(fresh()); setCreated(null);
   };
   const submit = async (e: SyntheticEvent) => {
     e.preventDefault();
@@ -157,8 +157,11 @@ function AddPerson({ open, onOpenChange, roles, isOwner, onAdded }: {
             </div>
             <div className="flex items-end gap-2">
               <Field className="flex-1" label="Temporary password" value={password} onChange={setPassword} mono autoComplete="off" />
-              <Button type="button" variant="outline" onClick={() => setPassword(temporaryPassword())}>New one</Button>
+              <Button type="button" variant="outline" onClick={() => setPassword(temporaryPassword(minPassword))}>New one</Button>
             </div>
+            {password.length < minPassword && (
+              <p className="-mt-2 text-[12.5px] text-warn">At least {minPassword} characters.</p>
+            )}
             <div>
               <div className="mb-1.5 text-[12.5px] font-medium text-soft">Roles</div>
               <RolePicker roles={roles} value={picked} onChange={setPicked} isOwner={isOwner} />
@@ -174,8 +177,9 @@ function AddPerson({ open, onOpenChange, roles, isOwner, onAdded }: {
   );
 }
 
-function EditPerson({ person, roles, isOwner, isMe, onClose, onSaved }: {
-  person: Person; roles: RoleDoc[]; isOwner: boolean; isMe: boolean; onClose: () => void; onSaved: (p: Person) => void;
+function EditPerson({ person, roles, minPassword, isOwner, isMe, onClose, onSaved }: {
+  person: Person; roles: RoleDoc[]; minPassword: number; isOwner: boolean; isMe: boolean; onClose: () => void;
+  onSaved: (p: Person) => void;
 }) {
   const [name, setName] = useState(person.name);
   const [picked, setPicked] = useState(person.roles);
@@ -203,7 +207,7 @@ function EditPerson({ person, roles, isOwner, isMe, onClose, onSaved }: {
     onClose();
   };
   const newPassword = async () => {
-    const next = temporaryPassword();
+    const next = temporaryPassword(minPassword);
     setBusy(true);
     const ok = await attempt(() => api.admin.resetPassword(person.id, next), 'Password not reset');
     setBusy(false);

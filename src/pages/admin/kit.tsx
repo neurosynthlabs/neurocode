@@ -1,22 +1,10 @@
-import { Copy, Info, RotateCw, TriangleAlert } from 'lucide-react';
+import { Copy, RotateCw, TriangleAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Empty, KV } from '@/components/os';
 import type { RoleDoc } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { initials } from './load';
-
-/** Says the screen shows sample data, and what it takes to make it real. */
-export function DemoNote({ what }: { what: string }) {
-  return (
-    <div className="mb-5 flex items-start gap-2.5 rounded-xl border border-line/70 bg-surface px-4 py-3 text-[13px] leading-relaxed text-soft">
-      <Info className="mt-0.5 size-4 shrink-0 text-info" />
-      <span>
-        Sample data. {what} need the local API: run <code className="font-mono text-[12.5px] text-ink-2">npm run dev:start</code>, then sign in.
-      </span>
-    </div>
-  );
-}
 
 export function LoadError({ error, onRetry }: { error: string; onRetry: () => void }) {
   return (

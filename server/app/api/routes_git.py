@@ -18,8 +18,8 @@ router = APIRouter(prefix="/projects/{pid}/git")
 
 @router.get("", dependencies=[Depends(current_person)])
 async def overview(pid: str, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
-    """The checkout, every worktree beside it, and what merging each would do. A sample project answers
-    `available: false` with the reason, not an error."""
+    """The checkout, every worktree beside it, and what merging each would do. A project with no code on
+    this machine answers `available: false` with the reason, not an error."""
     return await GitViewService(open_session).overview(pid)
 
 

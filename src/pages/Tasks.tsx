@@ -1,17 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Search, Play, Pause, CheckCheck, GitBranch, AlertOctagon, Boxes } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Search, Play, Square, CheckCheck, GitBranch, AlertOctagon, Boxes, ListTodo } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import {
-  Page, PageHeader, PageBody, Panel, Tag, RiskPill, Dot, Mono, Ascii, Segmented,
+  Page, PageHeader, PageBody, Panel, Tag, RiskPill, Dot, Mono, Segmented,
   DataTable, Row, Cell, BlockBar, KV, Empty, SectionTitle, Avatar2, SelectField,
 } from '@/components/os';
 import { useData } from '@/lib/data';
-import { agentName, agents } from '@/mock/agents';
-import { projects } from '@/mock/projects';
+import { agentName, useAccess } from '@/lib/access';
+import type { RunDoc } from '@/lib/api';
+import { projectLabel } from '@/lib/live/work';
 import { useProject } from '@/lib/project-context';
+import { ago } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import type { Task, TaskStatus } from '@/types';
 
@@ -26,37 +28,13 @@ const COLUMNS: { id: TaskStatus; label: string }[] = [
 
 const PRIO_TONE = { URGENT: 'danger', HIGH: 'warn', NORMAL: 'neutral', LOW: 'neutral' } as const;
 
-const EPIC_TREE = `EPIC · TASK-488 — Customer bulk upload (CSV, 50k rows)
-│
-├── Architecture
-│     └── staging-table + transaction boundary  (ADR-49)
-│
-├── Frontend                          Frontend Engineer
-│     ├── drag-drop upload UI
-│     ├── client-side column validation
-│     └── chunked progress + row-level errors
-│
-├── Backend                           Backend Engineer
-│     ├── POST /customers/bulk  (chunked, idempotency key)
-│     ├── server validation + error envelope
-│     └── CustomerImportService  (interface-first)
-│
-├── Database                          Database Engineer
-│     ├── STG_CUSTOMER_IMPORT staging table
-│     └── SP_CommitCustomerImport  (all-or-nothing)
-│
-├── Testing                           QA Engineer
-│     ├── unit — validator matrix
-│     ├── integration — partial failure rolls back
-│     └── E2E — 50k row happy path under 90s
-│
-├── Security                          Security Engineer
-│     └── CSV formula-injection + upload size cap
-│
-└── Documentation                     Documentation Agent
-      └── import format + operator runbook`;
+/** How far a run got: its finished steps, as a share of all of them. */
+const progress = (r: RunDoc) =>
+  Math.round((100 * r.steps.filter((x) => ['done', 'skipped', 'failed'].includes(x.status)).length) / Math.max(1, r.steps.length));
+const WORKING: RunDoc['status'][] = ['queued', 'running', 'waiting'];
 
-function Card({ t, onOpen }: { t: Task; onOpen: () => void }) {
+function Card({ t, run, onOpen }: { t: Task; run: RunDoc | undefined; onOpen: () => void }) {
+  const { catalogue } = useAccess();
   return (
     <button
       onClick={onOpen}
@@ -76,29 +54,44 @@ function Card({ t, onOpen }: { t: Task; onOpen: () => void }) {
       )}
       <div className="mt-2 flex items-center gap-2">
         <div className="flex -space-x-1">
-          {t.agents.slice(0, 4).map((a) => <Avatar2 key={a} label={agentName(a)} />)}
+          {t.agents.slice(0, 4).map((a) => <Avatar2 key={a} label={agentName(catalogue, a)} />)}
         </div>
-        <span className="ml-auto tnum text-[11.5px] text-dim">{t.files}f · {t.tests}t</span>
+        {t.files > 0 && <span className="ml-auto tnum text-[11.5px] text-dim">{t.files} files</span>}
       </div>
-      {t.progress > 0 && <div className="mt-1.5"><BlockBar pct={t.progress} width={16} /></div>}
+      {run && <div className="mt-1.5" title={`${run.ref}: steps finished`}><BlockBar pct={progress(run)} width={16} /></div>}
     </button>
   );
 }
 
 export default function Tasks() {
+  const nav = useNavigate();
   const { projectId } = useProject();
+  const { catalogue } = useAccess();
   const [view, setView] = useState<'board' | 'table' | 'epics'>('board');
-  const [proj, setProj] = useState(projectId);
+  const [proj, setProj] = useState(projectId ?? 'all');
   const [prio, setPrio] = useState('all');
   const [risk, setRisk] = useState('all');
   const [agent, setAgent] = useState('all');
   const [q, setQ] = useState('');
-  const { tasks, moveTask, toggleCheck } = useData();
+  const { tasks, projects, plans, runs, moveTask, toggleCheck, dispatchPlan, cancelRun } = useData();
   // Held by ref, not by object, so the sheet always shows the task as it is now.
   const wanted = useSearchParams()[0].get('ref');
-  const [openRef, setOpenRef] = useState<string | null>(wanted);
-  useEffect(() => { if (wanted) setOpenRef(wanted); }, [wanted]);
-  const open = useMemo(() => tasks.find((t) => t.ref === openRef) ?? null, [tasks, openRef]);
+  // ?ref= opens a task; a click opens another (or closes it) until the link changes again.
+  const [picked, setPicked] = useState<{ link: string | null; ref: string | null } | null>(null);
+  const openRef = picked && picked.link === wanted ? picked.ref : wanted;
+  const setOpenRef = (ref: string | null) => setPicked({ link: wanted, ref });
+  const open = tasks.find((t) => t.ref === openRef) ?? null;
+  // A task's work is its runs. The newest one that leads (not one agent's part of it) is how far it got.
+  const latestRun = useMemo(() => {
+    const m = new Map<string, RunDoc>();
+    runs.forEach((r) => { if (r.taskRef && !r.parent && !m.has(r.taskRef)) m.set(r.taskRef, r); });
+    return m;
+  }, [runs]);
+  // The agents a plan named, as the tasks carry them: the only names this filter can match.
+  const agentNames = useMemo(() => [...new Set(tasks.flatMap((t) => t.agents))].sort(), [tasks]);
+  const openPlan = open ? plans.find((p) => p.taskRef === open.ref) : undefined;
+  const openRuns = open ? runs.filter((r) => r.taskRef === open.ref && !r.parent) : [];
+  const openRun = open ? latestRun.get(open.ref) : undefined;
 
   const list = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -115,7 +108,7 @@ export default function Tasks() {
   const epics = useMemo(() => {
     const m = new Map<string, Task[]>();
     list.forEach((t) => {
-      const k = t.epic ?? 'Unassigned';
+      const k = t.epic || 'No epic';
       m.set(k, [...(m.get(k) ?? []), t]);
     });
     return [...m.entries()];
@@ -125,12 +118,20 @@ export default function Tasks() {
     if (!open) return;
     if (await moveTask(open.ref, to)) toast(`${open.ref} → ${COLUMNS.find((c) => c.id === to)?.label}`, { description: note });
   };
+  const dispatch = async () => {
+    if (!openPlan) return;
+    if (await dispatchPlan(openPlan.ref)) toast.success(`${openPlan.ref} dispatched`, { description: 'Its run, once one starts, is in Live runs.' });
+  };
+  const stop = async () => {
+    if (!openRun) return;
+    if (await cancelRun(openRun.ref)) toast(`${openRun.ref} stopped`, { description: 'The worktree stays for you to look at.' });
+  };
 
   return (
     <Page>
       <PageHeader
         title="Tasks"
-        subtitle="A requirement becomes an epic, an epic becomes agent-sized tasks, each task becomes its own worktree."
+        subtitle="A compiled requirement becomes a task. Once its plan is dispatched, the work runs in worktrees of its own — see Live runs."
         actions={
           <Segmented
             options={[{ id: 'board', label: 'Board' }, { id: 'table', label: 'Table' }, { id: 'epics', label: 'Epics' }]}
@@ -157,14 +158,20 @@ export default function Tasks() {
           </select>
           <select value={agent} onChange={(e) => setAgent(e.target.value)} className="h-9 rounded-lg border border-line-strong bg-surface-2 px-2.5 text-[13px] text-ink-2">
             <option value="all" className="bg-surface">Any agent</option>
-            {agents.map((a) => <option key={a.id} value={a.id} className="bg-surface">{a.name}</option>)}
+            {agentNames.map((a) => <option key={a} value={a} className="bg-surface">{agentName(catalogue, a)}</option>)}
           </select>
           <span className="ml-auto text-[12.5px] text-dim">{list.length} of {tasks.length}</span>
         </div>
       </PageHeader>
 
       <PageBody className="space-y-4">
-        {view === 'board' && (
+        {tasks.length === 0 && (
+          <Empty icon={<ListTodo className="size-6" />} title="No tasks yet"
+            hint="A task is created when you compile a requirement or start a workflow."
+            action={<Button size="sm" onClick={() => nav('/')}>Compile a requirement</Button>} />
+        )}
+
+        {tasks.length > 0 && view === 'board' && (
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6">
             {COLUMNS.map((c) => {
               const items = list.filter((t) => t.status === c.id);
@@ -180,7 +187,7 @@ export default function Tasks() {
                   <div className="space-y-2">
                     {items.length === 0
                       ? <div className="rounded-md border border-dashed border-line px-2 py-4 text-center text-[12px] text-dim">empty</div>
-                      : items.map((t) => <Card key={t.id} t={t} onOpen={() => setOpenRef(t.ref)} />)}
+                      : items.map((t) => <Card key={t.id} t={t} run={latestRun.get(t.ref)} onOpen={() => setOpenRef(t.ref)} />)}
                   </div>
                 </div>
               );
@@ -188,41 +195,46 @@ export default function Tasks() {
           </div>
         )}
 
-        {view === 'table' && (
+        {tasks.length > 0 && view === 'table' && (
           <Panel flush>
             {list.length === 0 ? <Empty title="No task matches" /> : (
-              <DataTable head={['Ref', 'Task', 'Project', 'Status', 'Priority', 'Risk', 'Layers', 'Agents', 'Files', 'Tests', 'Progress', 'Updated']}>
-                {list.map((t) => (
+              <DataTable head={['Ref', 'Task', 'Project', 'Status', 'Priority', 'Risk', 'Layers', 'Agents', 'Files', 'Run', 'Updated']}>
+                {list.map((t) => {
+                  const run = latestRun.get(t.ref);
+                  return (
                   <Row key={t.id} onClick={() => setOpenRef(t.ref)}>
                     <Cell mono>{t.ref}</Cell>
                     <Cell className="font-medium text-ink">{t.title}</Cell>
-                    <Cell className="text-dim">{projects.find((p) => p.id === t.projectId)?.name}</Cell>
+                    <Cell className="text-dim">{projectLabel(projects, t.projectId)}</Cell>
                     <Cell><span className="flex items-center gap-1.5"><Dot state={t.status} /><span className="capitalize">{t.status.replace('_', ' ')}</span></span></Cell>
                     <Cell><Tag tone={PRIO_TONE[t.priority]}>{t.priority}</Tag></Cell>
                     <Cell><RiskPill risk={t.risk} bare /></Cell>
                     <Cell className="text-[12.5px] text-dim">{t.layers.join(' · ')}</Cell>
-                    <Cell className="text-[12.5px]">{t.agents.length ? t.agents.map(agentName).join(', ') : '—'}</Cell>
+                    <Cell className="text-[12.5px]">{t.agents.length ? t.agents.map((a) => agentName(catalogue, a)).join(', ') : <span className="text-dim">none named</span>}</Cell>
                     <Cell className="tnum">{t.files}</Cell>
-                    <Cell className="tnum">{t.tests}</Cell>
-                    <Cell><span className="flex items-center gap-2"><BlockBar pct={t.progress} width={10} /><span className="tnum text-[12px]">{t.progress}%</span></span></Cell>
-                    <Cell className="text-dim">{t.updatedAt}</Cell>
+                    <Cell>
+                      {run
+                        ? <span className="flex items-center gap-2"><BlockBar pct={progress(run)} width={10} /><span className="tnum text-[12px]">{progress(run)}%</span></span>
+                        : <span className="text-[12px] text-dim">not dispatched</span>}
+                    </Cell>
+                    <Cell className="text-dim">{ago(t.updatedAt)}</Cell>
                   </Row>
-                ))}
+                  );
+                })}
               </DataTable>
             )}
           </Panel>
         )}
 
-        {view === 'epics' && (
+        {tasks.length > 0 && view === 'epics' && (
           <div className="space-y-3">
-            <Panel eyebrow="Automatic decomposition" title="One Hinglish sentence became 14 agent-sized units">
-              <Ascii>{EPIC_TREE}</Ascii>
-            </Panel>
+            <p className="text-[12.5px] text-dim">{epics.length} epic{epics.length === 1 ? '' : 's'} · {list.length} task{list.length === 1 ? '' : 's'}</p>
+            {epics.length === 0 && <Empty title="No task matches" />}
             {epics.map(([epic, items]) => {
-              const pct = Math.round(items.reduce((n, t) => n + t.progress, 0) / items.length);
+              const finished = items.filter((t) => t.status === 'done').length;
               return (
                 <Panel key={epic} eyebrow={`${items.length} tasks`} title={<span className="flex items-center gap-1.5"><Boxes className="size-3.5 text-brand" />{epic}</span>}
-                  actions={<span className="flex items-center gap-2"><BlockBar pct={pct} width={14} /><span className="tnum text-[12.5px] text-soft">{pct}%</span></span>} flush>
+                  actions={<span className="flex items-center gap-2"><BlockBar pct={(100 * finished) / items.length} width={14} /><span className="tnum text-[12.5px] text-soft">{finished} of {items.length} done</span></span>} flush>
                   <div className="divide-y divide-line">
                     {items.map((t) => (
                       <button key={t.id} onClick={() => setOpenRef(t.ref)} className="flex w-full items-center gap-3 px-3.5 py-2 text-left hover:bg-surface-2">
@@ -231,7 +243,7 @@ export default function Tasks() {
                         <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink">{t.title}</span>
                         <Tag tone={PRIO_TONE[t.priority]}>{t.priority}</Tag>
                         <RiskPill risk={t.risk} bare />
-                        <span className="tnum w-10 text-right text-[12px] text-soft">{t.progress}%</span>
+                        <span className="w-24 text-right text-[12px] text-soft capitalize">{t.status.replace('_', ' ')}</span>
                       </button>
                     ))}
                   </div>
@@ -256,7 +268,7 @@ export default function Tasks() {
                 </div>
                 <SheetTitle className="mt-2 text-[16px] text-ink">{open.title}</SheetTitle>
                 <SheetDescription className="text-[13px] text-soft">
-                  {open.epic ? `Epic · ${open.epic}` : 'No epic'} · {projects.find((p) => p.id === open.projectId)?.name}
+                  {open.epic ? `Epic · ${open.epic}` : 'No epic'} · {projectLabel(projects, open.projectId)}
                 </SheetDescription>
               </SheetHeader>
 
@@ -273,22 +285,22 @@ export default function Tasks() {
 
                 <div className="grid grid-cols-2 gap-3">
                   <Panel eyebrow="Assignment" title="Agents">
-                    {open.agents.length === 0 ? <p className="text-[13px] text-dim">Unassigned — still in the backlog.</p> : (
+                    {open.agents.length === 0 ? <p className="text-[13px] text-dim">The plan named no agent.</p> : (
                       <div className="space-y-1.5">
                         {open.agents.map((a) => (
                           <div key={a} className="flex items-center gap-2">
-                            <Avatar2 label={agentName(a)} />
-                            <span className="text-[13px] text-ink-2">{agentName(a)}</span>
+                            <Avatar2 label={agentName(catalogue, a)} />
+                            <span className="text-[13px] text-ink-2">{agentName(catalogue, a)}</span>
                           </div>
                         ))}
                       </div>
                     )}
                   </Panel>
                   <Panel eyebrow="Scope" title="Surface">
-                    <KV k="Layers" v={open.layers.join(' · ')} />
-                    <KV k="Files" v={open.files} />
-                    <KV k="Tests" v={open.tests} />
-                    <KV k="Worktree" v={open.worktree ?? '—'} mono />
+                    {open.layers.length > 0 && <KV k="Layers" v={open.layers.join(' · ')} />}
+                    <KV k="Files named" v={open.files} />
+                    {openRun && <KV k="Branch" v={openRun.removed ? `${openRun.branch} (removed)` : openRun.branch} mono />}
+                    {openRun && <KV k="Run" v={`${openRun.ref} · ${openRun.status} · ${progress(openRun)}%`} />}
                   </Panel>
                 </div>
 
@@ -313,22 +325,28 @@ export default function Tasks() {
 
                 <SectionTitle>Linked</SectionTitle>
                 <div className="flex flex-wrap gap-1.5">
-                  <Mono tone="brand">PLAN-{open.ref.split('-')[1]}</Mono>
-                  <Mono>REV-{Number(open.ref.split('-')[1]) * 5 + 151}</Mono>
-                  {open.worktree && <Mono><GitBranch className="mr-1 inline size-2.5" />{open.worktree}</Mono>}
+                  {openPlan && <Link to={`/plans?ref=${openPlan.ref}`}><Mono tone="brand">{openPlan.ref}</Mono></Link>}
+                  {openRuns.map((r) => (
+                    <Link key={r.ref} to={`/runs?ref=${r.ref}`}><Mono><GitBranch className="mr-1 inline size-2.5" />{r.ref}</Mono></Link>
+                  ))}
+                  {!openPlan && openRuns.length === 0 && <span className="text-[12.5px] text-dim">Nothing is linked to this task yet.</span>}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">
-                  <Button size="sm" disabled={open.status === 'in_progress' || open.status === 'done'} onClick={() => move('in_progress', 'Handed to the orchestrator.')}>
-                    <Play className="size-3.5" />Run
-                  </Button>
-                  <Button size="sm" variant="outline" disabled={open.status === 'backlog' || open.status === 'done'} onClick={() => move('backlog', 'Paused. Its worktrees are kept.')}>
-                    <Pause className="size-3.5" />Pause
-                  </Button>
-                  <Button size="sm" variant="outline" disabled={open.status !== 'review'} title={open.status === 'review' ? undefined : 'Only a task in review can be approved for merge'}
-                    onClick={() => move('done', 'Approved for merge.')}>
-                    <CheckCheck className="size-3.5" />Approve
-                  </Button>
+                  {openPlan && openPlan.status !== 'dispatched' && (
+                    <Button size="sm" disabled={openPlan.openQuestions.length > 0} onClick={() => void dispatch()}
+                      title={openPlan.openQuestions.length > 0 ? 'Answer or defer the plan\'s open questions first' : undefined}>
+                      <Play className="size-3.5" />Dispatch plan
+                    </Button>
+                  )}
+                  {openRun && WORKING.includes(openRun.status) && (
+                    <Button size="sm" variant="outline" onClick={() => void stop()}><Square className="size-3.5" />Stop run</Button>
+                  )}
+                  {open.status === 'review' && (
+                    <Button size="sm" variant="outline" onClick={() => move('done', 'Marked done.')}>
+                      <CheckCheck className="size-3.5" />Mark done
+                    </Button>
+                  )}
                   <SelectField className="ml-auto w-36" value={open.status} onChange={(v) => move(v as TaskStatus, 'Moved by hand.')}
                     options={COLUMNS.map((c) => ({ value: c.id, label: c.label }))} />
                 </div>

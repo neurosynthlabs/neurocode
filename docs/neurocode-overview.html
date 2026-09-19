@@ -416,13 +416,13 @@
   </header>
 
   <div class="strip" role="group" aria-label="What is built today">
-    <div class="cell"><span class="n">86</span><span class="k">API endpoints</span></div>
-    <div class="cell"><span class="n">43</span><span class="k">Postgres tables</span></div>
-    <div class="cell"><span class="n">40</span><span class="k">screens</span></div>
+    <div class="cell"><span class="n">124</span><span class="k">API endpoints</span></div>
+    <div class="cell"><span class="n">55</span><span class="k">Postgres tables</span></div>
+    <div class="cell"><span class="n">39</span><span class="k">screens</span></div>
     <div class="cell"><span class="n">8</span><span class="k">model lanes</span></div>
-    <div class="cell"><span class="n">213</span><span class="k">backend tests</span></div>
-    <div class="cell"><span class="n">23</span><span class="k">end-to-end checks</span></div>
-    <div class="note mono">All figures are what the repository builds and passes today — not a roadmap.</div>
+    <div class="cell"><span class="n">366</span><span class="k">backend tests</span></div>
+    <div class="cell"><span class="n">26</span><span class="k">end-to-end checks</span></div>
+    <div class="note mono">All figures are what the repository builds and passes today — not a roadmap. There is no sample data in it.</div>
   </div>
 
   <!-- ─────────────────────────────────────────────────── -->
@@ -580,8 +580,8 @@
         <div class="body">
           <h3>A different model reviews the diff</h3>
           <p>The reviewer is routed to a lane the writer did not use — a second opinion is worth more
-            from a second model, and free tiers make that free. With no key configured, an offline
-            rule set reviews instead and says so.</p>
+            from a second model, and free tiers make that free. When no lane can answer, a rule set
+            reads the diff instead — secrets, debugging leftovers, a change with no test — and says so.</p>
         </div>
       </li>
       <li class="stepr">
@@ -653,8 +653,9 @@
         </p>
         <p>
           A key that a provider rejects trips a breaker so the same dead key is not tried fifty more
-          times. And every feature still works with <strong>no key at all</strong> — an offline rule
-          set answers, and the interface says plainly that rules wrote it, never a model.
+          times. And when no lane can answer at all, NeuroCode <strong>does not pretend</strong>: planning
+          and brainstorming refuse and name the free key to add, while asking memory quotes the matching
+          facts and says plainly that no model wrote it.
         </p>
       </div>
       <div class="rail">
@@ -662,7 +663,7 @@
         <div class="row"><span>1 · Free lanes</span><span>by role fit</span></div>
         <div class="row"><span>2 · Paid lane</span><span>backstop</span></div>
         <div class="row"><span>3 · Local model</span><span>never runs out</span></div>
-        <div class="row"><span>4 · Offline rules</span><span>always available</span></div>
+        <div class="row"><span>4 · No lane left</span><span>says so</span></div>
         <div class="row"><span>Reviewer lane</span><span>≠ writer's</span></div>
       </div>
     </div>
@@ -695,8 +696,8 @@
         </p>
         <p>
           And memory is a first-class thing, not a scratchpad: facts carry a source, a confidence and
-          a strength, they are pinned or archived, and when two facts contradict each other the
-          workspace says so and asks someone to settle it.
+          a reason, they are pinned or archived, every time one is cited or handed to a model the use is
+          recorded, and when someone marks two facts as contradicting, the workspace asks for one side to be kept.
         </p>
       </div>
       <div class="rail">
@@ -778,8 +779,9 @@
     <div class="prose" style="margin-top: 30px;">
       <p>
         The first screen is a three-step wizard: name the workspace, create the owner account, and —
-        optionally — paste a free API key. Skip that step and everything still works; the offline
-        rules answer and every screen tells you they did.
+        optionally — paste a free API key. Skip it and the workspace still opens, empty and honest:
+        planning waits for a model and says which free key to add, and every other screen shows only
+        what is really there.
       </p>
       <p>
         Then onboard a repository from <strong>Projects</strong>. It clones or reads the folder,
@@ -824,7 +826,7 @@
         <div class="row"><span>Migrations</span><span>Alembic · 8</span></div>
         <div class="row"><span>Isolation</span><span>git worktrees</span></div>
         <div class="row"><span>Live updates</span><span>server-sent events</span></div>
-        <div class="row"><span>Code, app + API</span><span>~34,700 lines</span></div>
+        <div class="row"><span>Code, app + API</span><span>~43,500 lines</span></div>
       </div>
     </div>
   </section>
@@ -835,20 +837,21 @@
       <span class="eyebrow">Where it stands</span>
       <h2>What is real today, and what is not.</h2>
       <p class="lede">
-        Worth being exact about, because a demo that quietly runs on sample data is how people get
-        misled.
+        Worth being exact about. Every screen reads the real workspace; nothing in the app is sample
+        data, and a figure appears only when something measured it.
       </p>
     </div>
 
     <div class="status">
-      <div class="item"><span class="s on">Live</span><span class="t"><b>The whole engineering loop</b> — requirement, plan, questions, dispatch, parallel worktrees, tests, review, approval, merge.</span></div>
+      <div class="item"><span class="s on">Live</span><span class="t"><b>The whole engineering loop</b> — requirement, plan, questions, dispatch, parallel worktrees, tests, review, approval or a send-back with notes, merge.</span></div>
       <div class="item"><span class="s on">Live</span><span class="t"><b>Memory, retrieval and the code index</b> — against real repositories, with real embeddings and real full-text ranking.</span></div>
       <div class="item"><span class="s on">Live</span><span class="t"><b>Accounts, roles, approvals and the audit log</b> — enforced by the database, not by convention.</span></div>
       <div class="item"><span class="s on">Live</span><span class="t"><b>Model routing and the usage ledger</b> — eight lanes, real budgets, every call recorded with its tokens and its time.</span></div>
       <div class="item"><span class="s on">Live</span><span class="t"><b>Sessions</b> — a conversation that can read the code and answer, saved turn by turn so a crash loses nothing.</span></div>
-      <div class="item"><span class="s off">Designed</span><span class="t"><b>Fourteen screens still render sample data</b> — workflows, evals, DevOps, plugins, research, skills, hooks and others. The interface is built; the back end behind them is not.</span></div>
+      <div class="item"><span class="s on">Live</span><span class="t"><b>Every screen on a real back end</b> — workflows, evals, research, testing, Git, DevOps, skills, commands, hooks, plugins, MCP servers checked by a real client, cost priced per lane. No demo mode, no seed, no invented numbers.</span></div>
+      <div class="item"><span class="s on">Live</span><span class="t"><b>Checks on the real stack</b> — a throwaway Postgres, the API and a stub model: 366 API tests, a 26-step end-to-end run from an empty workspace, every route rendered in two themes, and a layout lint at phone and tablet widths.</span></div>
       <div class="item"><span class="s off">Designed</span><span class="t"><b>Teams beyond one machine</b> — the data model has teams and roles, but it runs as a single process serving a single workspace.</span></div>
-      <div class="item"><span class="s off">Not yet</span><span class="t"><b>A hosted version</b> — the public demo is the interface alone, running on sample data in the browser. It never makes a request.</span></div>
+      <div class="item"><span class="s off">Not yet</span><span class="t"><b>A hosted version</b> — it runs on your machine. The web app deployed on its own has nothing to show, and says it is not connected.</span></div>
     </div>
   </section>
 

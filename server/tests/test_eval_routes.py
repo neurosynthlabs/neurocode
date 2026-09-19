@@ -27,10 +27,10 @@ from app.ai.gateway import NoModel, Provider, Result
 from app.api import deps
 from app.api.app import create_api
 from app.data.engine import Database
-from app.data.loader import load_seed, sync_roles
 from app.services import evals as eval_jobs
 from app.services.evals import Answer, EvalService, check
 from app.services.identity import Person
+from tests.fixtures.workspace import load_workspace
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
 ENGINEER = {"email": "dev@example.com", "name": "Dev", "password": "another long passphrase", "roles": ["engineer"]}
@@ -68,16 +68,14 @@ class FakeGateway:
 
     def run(self, messages: list[dict[str, str]], parse: Any, fallback: Any, **kwargs: Any) -> Result[Any]:
         self.calls.append(kwargs)
-        return Result(fallback(), Provider("rules", "offline planner"), 3)
+        return Result(fallback(), Provider("rules", "memory search"), 3)
 
 
 # ── over HTTP ────────────────────────────────────────────────────
 
 @pytest_asyncio.fixture
 async def api(session: AsyncSession) -> FastAPI:
-    await load_seed(session)
-    await sync_roles(session)
-    await session.flush()
+    await load_workspace(session)
     built = create_api(db=None)
 
     async def use_the_test_session() -> AsyncIterator[AsyncSession]:
@@ -379,8 +377,9 @@ async def test_no_model_is_an_error_never_an_answer(live: Database):
 
 @pytest.mark.parametrize("allow_offline", [False, True])
 async def test_the_offline_rules_count_only_where_the_suite_says_they_may(live: Database, allow_offline: bool):
-    _, ref = await _suite(live, target="compile", allow_offline=allow_offline,
-                          cases=[[{"kind": "json_contains", "path": "$.steps[*].agent", "value": "QA Engineer"}]])
+    """Ask memory is the target with an offline answer: memory search, quoting what it found."""
+    _, ref = await _suite(live, target="ask", allow_offline=allow_offline,
+                          cases=[[{"kind": "contains", "value": "memory"}]])
 
     await eval_jobs.execute(live, FakeGateway(), [ref])
 
@@ -390,6 +389,20 @@ async def test_the_offline_rules_count_only_where_the_suite_says_they_may(live: 
         assert result.status == "pass" and run.score == 100 and "offline rules" in run.note
     else:
         assert result.status == "error" and "offline rules" in result.error and run.status == "failed"
+
+
+@pytest.mark.parametrize("allow_offline", [False, True])
+async def test_a_compile_suite_has_no_offline_answer_to_count(live: Database, allow_offline: bool):
+    """The compiler has no rules of its own any more, so even a suite that allows offline answers gets
+    an error from it with no model — never a plan the rules made up."""
+    _, ref = await _suite(live, target="compile", allow_offline=allow_offline,
+                          cases=[[{"kind": "json_contains", "path": "$.steps[*].agent", "value": "QA Engineer"}]])
+
+    await eval_jobs.execute(live, FakeGateway(raises=NoModel("No model is configured.")), [ref])
+
+    run, (result,) = await _run(live, ref)
+    assert result.status == "error" and "No model could answer" in result.error and result.offline is False
+    assert run.status == "failed"
 
 
 async def test_stopping_a_run_drops_the_answer_in_flight_and_never_asks_again(live: Database):

@@ -117,18 +117,22 @@ async def optimize_database(request: Request, who: Person = Depends(require("wor
     return done
 
 
-# ── back to the seed ─────────────────────────────────────────────
+# ── emptying the workspace ───────────────────────────────────────
 @router.post("/reset")
 async def reset(request: Request, x_confirm: str | None = Header(default=None),
                 who: Person = Depends(require("workspace:admin")),
                 chores: MaintenanceService = Depends(maintenance),
                 open_session: AsyncSession = Depends(session),
                 gw: Gateway = Depends(gateway)) -> dict[str, Any]:
-    """Puts the sample work back. People, roles, teams, keys and the audit log are kept."""
+    """Empties the workspace: every project and everything done in it, memory, activity, gates,
+    decisions, screen preferences, brainstorms, MCP servers, workflows and eval suites, and each
+    project's own settings (its standing answer to running its tests). People, roles, teams, the agent
+    roster, keys, the workspace's settings, the usage ledger and the audit log are kept. Every open tab
+    hears one `reset` event once it has committed."""
     if x_confirm != "reset":
-        raise Refused("send header X-Confirm: reset — this restores the seed data and drops every change",
-                      status=400)
-    # A reset is undoable only where a copy can be taken. Where pg_dump is missing there is none, and
+        raise Refused("send header X-Confirm: reset — this empties the workspace (projects, work, memory, "
+                      "activity); people, roles, teams, keys and the audit log are kept", status=400)
+    # Emptying is undoable only where a copy can be taken. Where pg_dump is missing there is none, and
     # the audit line says so — rather than the reset quietly implying an undo that does not exist.
     saved, skipped = None, ""
     try:
@@ -138,12 +142,12 @@ async def reset(request: Request, x_confirm: str | None = Header(default=None),
         # attempted and failed — bad credentials, a full disk, a client older than the server — is
         # something to fix, and destroying the workspace anyway is the worst possible response to it.
         skipped = str(no_tool)
-    counts = await chores.reset()
+    counts = await chores.empty()
     await AuditRepository(open_session).record(
-        action="data.reset", user_id=who.id, target="workspace data",
+        action="data.reset", user_id=who.id, target="workspace emptied",
         detail={"backup": saved["name"] if saved else None,
                 **({"backupSkipped": skipped} if skipped else {})}, ip=_ip(request))
-    return {"ok": True, "backup": saved["name"] if saved else None, "counts": counts,
+    return {"ok": True, "emptied": True, "backup": saved["name"] if saved else None, "counts": counts,
             "compiler": await asyncio.to_thread(gw.status)}
 
 

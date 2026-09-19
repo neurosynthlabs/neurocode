@@ -254,11 +254,13 @@ export function StatGrid({ children, cols = 4, className }: { children: ReactNod
 }
 
 /* ── Key/value ────────────────────────────────────────────────── */
-export function KV({ k, v, mono }: { k: string; v: ReactNode; mono?: boolean }) {
+/** A label and its value on one line. `wrap` lets a value that must be read whole (a model id, a sentence) break
+    onto a second line on a narrow screen instead of losing its end to an ellipsis. */
+export function KV({ k, v, mono, wrap }: { k: string; v: ReactNode; mono?: boolean; wrap?: boolean }) {
   return (
     <div className="flex items-baseline justify-between gap-4 border-b border-line/50 py-2 last:border-0">
       <span className="shrink-0 text-[13px] text-dim">{k}</span>
-      <span className={cn('min-w-0 truncate text-right text-[13px] text-ink-2', mono && 'font-mono text-[12.5px]')}>{v}</span>
+      <span className={cn('min-w-0 text-right text-[13px] text-ink-2', wrap ? '[overflow-wrap:anywhere]' : 'truncate', mono && 'font-mono text-[12.5px]')}>{v}</span>
     </div>
   );
 }
@@ -370,7 +372,7 @@ export function Empty({ icon, title, hint, action }: { icon?: ReactNode; title: 
     <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 p-10 text-center">
       {icon && <div className="mb-1 text-dim">{icon}</div>}
       <p className="text-[14.5px] font-medium text-ink-2">{title}</p>
-      {hint && <p className="max-w-sm text-[13px] leading-relaxed text-dim">{hint}</p>}
+      {hint && <p className="max-w-sm text-[13px] leading-relaxed text-dim [overflow-wrap:anywhere]">{hint}</p>}
       {action && <div className="mt-3">{action}</div>}
     </div>
   );
@@ -536,27 +538,3 @@ export function Sparkline({ points, width = 72, height = 20, tone = 'brand' }: {
   );
 }
 
-/** Vertical bar chart drawn inline — used on Cost and Evals. */
-export function MiniBars({ values, width = 180, height = 40, tone = 'brand', onHover }: {
-  values: number[]; width?: number; height?: number; tone?: Tone; onHover?: (i: number | null) => void;
-}) {
-  const max = Math.max(...values, 1);
-  const gap = 2;
-  const bw = (width - gap * (values.length - 1)) / values.length;
-  const fill = { ok: 'var(--os-ok)', warn: 'var(--os-warn)', danger: 'var(--os-danger)', info: 'var(--os-info)', brand: 'var(--os-brand)', violet: 'var(--os-violet)', neutral: 'var(--os-line-strong)' }[tone];
-  return (
-    <svg width={width} height={height} onMouseLeave={() => onHover?.(null)}>
-      {values.map((v, i) => {
-        const h = Math.max(1, (v / max) * height);
-        return (
-          <rect
-            key={i}
-            x={i * (bw + gap)} y={height - h} width={bw} height={h}
-            rx={1.5} fill={fill} opacity={0.85}
-            onMouseEnter={() => onHover?.(i)}
-          />
-        );
-      })}
-    </svg>
-  );
-}

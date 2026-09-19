@@ -117,6 +117,27 @@ def price_of(lane_id: str) -> tuple[float, float]:
     lane = next((x for x in LANES if x.id == lane_id), None)
     return (lane.usd_per_m_in, lane.usd_per_m_out) if lane else (0.0, 0.0)
 
+
+def priced_models(lane_id: str) -> tuple[str, ...] | None:
+    """The models a lane's declared price is for, or None when it holds for any model.
+
+    A catalogue price is the price of the catalogue's model (and of the embedding model the lane
+    serves): an admin, or `NEUROCODE_<LANE>_MODEL`, can point a free lane at a paid model, and that
+    call's cost is then unknown, not zero. The local lane and the offline rules cost nothing whatever
+    they run, so any model is priced there."""
+    lane = next((x for x in LANES if x.id == lane_id), None)
+    if lane is None or lane.api == "ollama":
+        return None
+    return tuple(m for m in (lane.model, lane.embed) if m)
+
+
+def priced_call(lane_id: str, model: str) -> bool:
+    """Whether one call's cost is known: its lane declares a price, and the price is for this model."""
+    if not priced(lane_id):
+        return False
+    models = priced_models(lane_id)
+    return models is None or model in models
+
 def settled(store: Ledger, lane_id: str, environ: dict[str, str] | None = None) -> Lane | None:
     """The lane as this workspace has it: the catalogue, then what an admin saved, then the
     environment — which wins, so a script or CI can pin a model without touching the database."""

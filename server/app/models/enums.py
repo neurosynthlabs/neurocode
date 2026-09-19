@@ -38,7 +38,7 @@ RunRole = Enum("solo", "agent", "integration", "check", name="run_role")
 RunStepKind = Enum("edit", "merge", "test", "review", "handoff", name="run_step_kind")
 RunStepStatus = Enum("todo", "running", "waiting", "done", "failed", "skipped", name="run_step_status")
 ChatStatus = Enum("idle", "thinking", name="chat_status")
-ChatRole = Enum("you", "assistant", "tool", "note", name="chat_role")
+ChatRole = Enum("you", "assistant", "tool", "note", "summary", name="chat_role")
 
 # Testing
 #: A person's standing word about one test: red on purpose (`legacy`), or too flaky to gate on

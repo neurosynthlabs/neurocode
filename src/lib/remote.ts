@@ -5,8 +5,8 @@ const reason = (e: unknown) => (e instanceof ApiError ? e.message : 'The local A
 
 /**
  * Data a screen reads straight from the API, keyed by what it asks for: a new key loads again, and a
- * slow answer for an old key never replaces a newer one. A null key reads nothing (the demo, or nothing
- * chosen yet). `reload` keeps the last answer on screen until the fresh one arrives.
+ * slow answer for an old key never replaces a newer one. A null key reads nothing (nothing chosen yet,
+ * such as no project). `reload` keeps the last answer on screen until the fresh one arrives.
  */
 export function useRemote<T>(key: string | null, load: () => Promise<T>) {
   const [state, setState] = useState<{ key: string | null; data: T | null; error: string | null }>({ key: null, data: null, error: null });

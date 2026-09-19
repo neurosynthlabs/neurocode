@@ -56,6 +56,11 @@ IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 REF = re.compile(r"\b[A-Z]+-\d+\b")
 MAX_TOKENS = 400
 
+#: Projects whose retrieval chunks are being built right now, in this process. The screen polls the
+#: summary's `building` until it is false, the way the code summary reports `indexing` — a fixed timer
+#: guessed, and a build longer than it showed the old count as if it were the new one.
+BUILDING: set[str] = set()
+
 NO_LANE = ("No lane makes embeddings, so search here is by words only. Add a Gemini or Mistral key, "
            "or pull nomic-embed-text in Ollama.")
 
@@ -266,7 +271,8 @@ class RetrievalService:
         run = await self.session.get(RetrievalRun, project_id)
         counts = await self.chunks.counts(project_id)
         out: dict[str, Any] = {"built": run is not None, "chunks": sum(counts.values()),
-                               "byKind": counts, "semantic": bool(run and run.embedded)}
+                               "byKind": counts, "semantic": bool(run and run.embedded),
+                               "building": project_id in BUILDING}
         if run is not None:
             out.update({"at": run.finished_at.isoformat(timespec="seconds"), "ms": run.ms,
                         "embedded": run.embedded, "model": run.model, "lane": run.lane,
@@ -301,14 +307,15 @@ class RetrievalService:
         return found, {"lexical": await self.chunks.lexical_count(project_id, q, mode="all"), "semantic": semantic,
                        "fused": len(found), "lexicalCap": LEXICAL_COUNT_CAP, "k": RRF_K}
 
-    async def grounding(self, project_id: str, question: str, limit: int = 4) -> tuple[str, int]:
-        """What this workspace already holds about a question, as text a model can be handed."""
+    async def grounding(self, project_id: str, question: str, limit: int = 4) -> tuple[str, list[dict[str, Any]]]:
+        """What this workspace already holds about a question, as text a model can be handed — and the
+        pieces themselves, so the caller can record which remembered facts it was handed."""
         found = await self.search(project_id, question, limit)
         if not found:
-            return "", 0
+            return "", []
         pieces = [f"[{x['kind']} · {x['ref']}]\n{x['text'][:900]}" for x in found]
         return ("What this repository already holds about the question — quote these refs when you use "
-                "them, and read the files if you need more:\n\n" + "\n\n".join(pieces)), len(found)
+                "them, and read the files if you need more:\n\n" + "\n\n".join(pieces)), found
 
     # ── building ─────────────────────────────────────────────────
     async def _code_chunks(self, project: Project, root: Path) -> list[dict[str, Any]]:
@@ -359,6 +366,14 @@ class RetrievalService:
 
     async def build(self, project_id: str) -> dict[str, Any]:
         """Chunk a project's code and documents, and the workspace's memory, then embed what it can."""
+        BUILDING.add(project_id)
+        try:
+            built = await self._build(project_id)
+        finally:
+            BUILDING.discard(project_id)
+        return {**built, "building": project_id in BUILDING}
+
+    async def _build(self, project_id: str) -> dict[str, Any]:
         t0 = time.monotonic()
         project = await self.projects.get(project_id)
         if project is None:

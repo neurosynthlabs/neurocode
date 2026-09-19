@@ -21,11 +21,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models as m
+from app import onboarding
 from app.agent import coverage, testparse
 from app.api import deps
 from app.api.app import create_api
 from app.data.engine import Database
-from app.data.loader import load_seed, sync_roles
+from tests.fixtures.workspace import load_workspace
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
 ENGINEER = {"email": "dev@example.com", "name": "Dev", "password": "another long passphrase",
@@ -129,6 +130,14 @@ def test_coverage_reports_in_each_format_land_on_the_same_paths():
     assert coverage.go_profile(GO_PROFILE, "example.com/shop") == {"ok/ok.go": (1, 1), "tax/tax.go": (3, 3)}
 
 
+def test_a_project_with_no_source_has_no_checkout_and_so_no_test_command():
+    # Path("") is the current directory: a project never onboarded from here used to answer with the
+    # API's own folder, and so with the API's own test command.
+    for source in (None, {"kind": None, "repo": ""}, {"kind": "local", "repo": "  "}):
+        assert onboarding.source_root({"id": "p", "source": source}) is None
+    assert onboarding.source_root({"id": "p", "source": {"kind": "git", "repo": "x"}}) == onboarding.REPOS_DIR / "p"
+
+
 def test_coverage_outside_the_project_is_dropped_and_sums_by_directory():
     outside = "SF:/etc/secrets.py\nLF:4\nLH:4\nend_of_record\nSF:../other/x.js\nLF:2\nLH:1\nend_of_record\n"
     assert coverage.lcov(outside, ROOT) == {}
@@ -141,9 +150,7 @@ def test_coverage_outside_the_project_is_dropped_and_sums_by_directory():
 
 @pytest_asyncio.fixture
 async def api(session: AsyncSession, schema: str) -> AsyncIterator[FastAPI]:
-    await load_seed(session)
-    await sync_roles(session)
-    await session.flush()
+    await load_workspace(session)
     app = create_api(db=None)
     # A started run is handed to a job with a database of its own: the test database, never the real one.
     jobs_db = Database(url=schema)
@@ -175,7 +182,7 @@ def git(args: list[str], cwd: Path) -> None:
 
 @pytest_asyncio.fixture
 async def lab(client: AsyncClient, session: AsyncSession, tmp_path: Path) -> Path:
-    """Two onboarded projects — one with tests on record, one that never ran any — and a sample one."""
+    """Two onboarded projects — one with tests on record, one that never ran any — and one with no code here."""
     repo = tmp_path / "lab"
     repo.mkdir()
     (repo / "Makefile").write_text("test:\n\t@echo testing\n")
@@ -226,7 +233,7 @@ async def lab(client: AsyncClient, session: AsyncSession, tmp_path: Path) -> Pat
 async def test_the_report_reads_the_latest_run_that_really_tested(client: AsyncClient, lab: Path):
     body = (await client.get("/testing")).json()
     suites = {s["projectId"]: s for s in body["suites"]}
-    assert set(suites) == {PID, BARE}                           # sample projects have no tests to run
+    assert set(suites) == {PID, BARE}                           # a project with no code has no tests to run
     lab_suite = suites[PID]
     assert lab_suite["command"] == "make test" and lab_suite["tool"] == "make" and lab_suite["allowed"] is None
     assert lab_suite["latest"] == {"passed": 9, "failed": 2, "skipped": 1, "total": 12, "runRef": "RUN-702",

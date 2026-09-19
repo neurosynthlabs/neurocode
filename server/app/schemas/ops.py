@@ -1,9 +1,8 @@
 """The DevOps screen's shapes: this machine's services, its checks, what was delivered, and its logs.
 
-Where the sample screen's shapes fit what really exists they are kept — a health check, a pipeline
-stage, a log line, a container. Where they would force a lie they are changed rather than filled:
-there is no production environment to card, so a service is a process on this machine; nothing
-records a rollback, so a delivery can be discarded but never "rolled back".
+Each shape is what really exists on this machine — a health check, a pipeline stage, a log line, a
+container. There is no production environment to card, so a service is a process on this machine;
+nothing records a rollback, so a delivery can be discarded but never "rolled back".
 """
 from __future__ import annotations
 
@@ -25,7 +24,7 @@ def fact(k: str, v: Any) -> dict[str, str]:
 
 def check(id: str, name: str, target: str, status: Status, note: str, *, ms: int | None = None,
           at: datetime) -> dict[str, Any]:
-    return {"id": id, "name": name, "env": "LOCAL", "target": target, "status": status,
+    return {"id": id, "name": name, "target": target, "status": status,
             "latencyMs": ms, "lastRun": when(at), "note": note}
 
 
@@ -42,7 +41,7 @@ def delivery_json(run: Run, project_name: str) -> dict[str, Any]:
     merged = run.merged or {}
     finished = run.finished_at
     return {
-        "id": run.ref, "env": project_name, "version": run.branch, "status": delivery_status(run),
+        "id": run.ref, "project": project_name, "branch": run.branch, "status": delivery_status(run),
         "by": merged.get("by") or run.requested_by,
         "at": merged.get("at") or when(finished or run.created_at),
         "durationS": round((finished - run.created_at).total_seconds()) if finished else 0,

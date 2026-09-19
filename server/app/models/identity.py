@@ -79,7 +79,7 @@ class RolePermission(Base):
     __tablename__ = "role_permissions"
 
     role_id: Mapped[str] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
-    #: A permission id from the catalogue in src/mock/rbac.ts, e.g. `runs:merge`.
+    #: A permission id from the catalogue in app/data/catalogue.json, e.g. `runs:merge`.
     permission: Mapped[str] = mapped_column(String(60), primary_key=True)
 
     role: Mapped[Role] = relationship(back_populates="permissions")

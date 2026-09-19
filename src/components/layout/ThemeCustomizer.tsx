@@ -1,25 +1,17 @@
 import { useMemo, useState } from 'react';
-import { Check, Search, RotateCcw, Sun, Moon, MoonStar, Contrast, BookOpen, Monitor, CircleDot, PanelLeft, PanelLeftDashed, PanelLeftClose } from 'lucide-react';
+import { Check, Search, RotateCcw, PanelLeft, PanelLeftDashed, PanelLeftClose } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Segmented, SectionTitle, Divider } from '@/components/os';
-import { useTheme, THEMES, type Theme, type FontFamily, type FontSize, type Rail } from '@/lib/theme';
+import { useTheme, THEMES, type FontFamily, type FontSize, type Rail } from '@/lib/theme';
+import { MODES } from './theme-modes';
 import { cn } from '@/lib/utils';
 
-const MODES: { id: Theme; label: string; icon: typeof Sun }[] = [
-  { id: 'light', label: 'Light', icon: Sun },
-  { id: 'dark', label: 'Dark', icon: Moon },
-  { id: 'dim', label: 'Dim', icon: MoonStar },
-  { id: 'midnight', label: 'Midnight', icon: CircleDot },
-  { id: 'sepia', label: 'Sepia', icon: BookOpen },
-  { id: 'high-contrast', label: 'Contrast', icon: Contrast },
-  { id: 'system', label: 'System', icon: Monitor },
-];
 
 const RADII = [0, 0.25, 0.375, 0.5, 0.75, 1];
 
 const RAILS: { id: Rail; label: string; icon: typeof PanelLeft; note: string }[] = [
-  { id: 'tinted', label: 'Tinted', icon: PanelLeftDashed, note: 'Palette hue washed into the ground. Reads well in all 248 palettes.' },
+  { id: 'tinted', label: 'Tinted', icon: PanelLeftDashed, note: 'Palette hue washed into the ground. Reads well in every palette.' },
   { id: 'solid',  label: 'Solid',  icon: PanelLeft,       note: 'A full slab of the accent. Best on mid-tone palettes — bold, not subtle.' },
   { id: 'flush',  label: 'Flush',  icon: PanelLeftClose,  note: 'Edge to edge, no float. Maximum density for long sessions.' },
 ];
@@ -60,7 +52,7 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
         <SheetHeader className="shrink-0 border-b border-line px-4 pt-4 pb-3">
           <SheetTitle className="text-[14px] font-semibold text-ink">Appearance</SheetTitle>
           <SheetDescription className="text-[13px] text-soft">
-            {t.availableColors.length} palettes · {t.surfaceTones.length} grounds · 7 modes · live radius and type.
+            {t.availableColors.length} palettes · {t.surfaceTones.length} grounds · {MODES.length} modes · live radius and type.
             Everything applies instantly and persists.
           </SheetDescription>
         </SheetHeader>
@@ -329,11 +321,12 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
             <Button size="xs" variant="ghost" onClick={reset}><RotateCcw className="size-3" />Reset</Button>
           }>Preview</SectionTitle>
           <div className="flex items-center gap-2">
-            <div className="flex-1 rounded-md border border-line bg-surface p-2.5">
-              <div className="eyebrow">Tokens today</div>
-              <div className="tnum mt-1 text-[18px] leading-none font-semibold text-ink">6.31M</div>
+            {/* Shapes, not figures: a preview of the palette should not look like a report on the workspace. */}
+            <div className="flex-1 rounded-md border border-line bg-surface p-2.5" aria-hidden>
+              <div className="eyebrow">Card</div>
+              <div className="mt-1.5 h-3 w-20 rounded-xs bg-ink/80" />
               <div className="mt-2 h-1 overflow-hidden rounded-full bg-surface-3">
-                <div className="h-full w-[71%] rounded-full bg-brand" />
+                <div className="h-full w-2/3 rounded-full bg-brand" />
               </div>
             </div>
             <div className="flex flex-col gap-1.5">

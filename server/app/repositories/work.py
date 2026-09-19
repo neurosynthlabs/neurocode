@@ -6,7 +6,9 @@ in Python. Now they are one statement each, answered by the database with an ind
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import ColumnElement, Integer, cast, func, select
 
@@ -20,6 +22,7 @@ from ..models import (
     Project,
     Task,
     TaskAgent,
+    User,
 )
 from .base import Page, Repository
 
@@ -101,8 +104,8 @@ class ApprovalRepository(Repository[Approval]):
     async def by_ref(self, ref: str) -> Approval | None:
         return await self.one(Approval.ref == ref)
 
-    #: Newest first, and then by reference, newest first too. The seeded gates are written in one
-    #: transaction and share a timestamp, so without the second key the order was whatever Postgres
+    #: Newest first, and then by reference, newest first too. Gates written in one transaction share a
+    #: timestamp, so without the second key the order was whatever Postgres
     #: returned — and the full list and the pending list came back in different orders, which put a
     #: different gate under the first "Approve" button than the one a caller had just read.
     ORDER = (Approval.created_at.desc(),
@@ -134,6 +137,30 @@ class ActivityRepository(Repository[ActivityEvent]):
         where: list[ColumnElement[bool]] = [ActivityEvent.project_id == project_id] if project_id else []
         return await self.page(*where, order_by=ActivityEvent.seq.desc(), limit=limit, offset=offset)
 
+    async def summary(self, *, person: str, day_start: datetime, top: int = 20) -> dict[str, Any]:
+        """The log's figures over every row, counted in Postgres.
+
+        The feed a screen holds is the newest few hundred rows, so any count taken from it is a count of
+        that window, not of the log. `through` is the newest row these figures include, so a caller that
+        also follows the stream can add only what arrived after it, without counting a row twice.
+        """
+        e = ActivityEvent
+        totals = (await self.session.execute(select(
+            func.count(),
+            func.count().filter(e.at >= day_start),
+            func.count().filter(e.actor_kind == "human", e.actor == person),
+            func.coalesce(func.max(e.seq), 0),
+        ).select_from(e))).one()
+        kinds = (await self.session.execute(
+            select(e.actor_kind, func.count()).group_by(e.actor_kind))).all()
+        agents = (await self.session.execute(
+            select(e.actor, func.count().label("n")).where(e.actor_kind == "agent")
+            .group_by(e.actor).order_by(func.count().desc(), e.actor).limit(top))).all()
+        return {"total": int(totals[0]), "today": int(totals[1]), "mine": int(totals[2]),
+                "through": int(totals[3]),
+                "byKind": {str(kind): int(n) for kind, n in kinds},
+                "agents": [{"name": name, "events": int(n)} for name, n in agents]}
+
     async def since(self, at: datetime, *, limit: int | None = None) -> list[ActivityEvent]:
         return await self.list(ActivityEvent.at > at, order_by=ActivityEvent.seq, limit=limit)
 
@@ -160,6 +187,14 @@ class DecisionRepository(Repository[Decision]):
     async def already(self, key: str) -> bool:
         """A decision is final, so the first question is always whether one was already made."""
         return await self.exists(Decision.id == key)
+
+    async def names(self, decisions: Sequence[Decision]) -> dict[str, str]:
+        """user id → name, for whoever made these decisions. One statement for a whole list."""
+        ids = {d.by_user_id for d in decisions if d.by_user_id}
+        if not ids:
+            return {}
+        rows = await self.session.execute(select(User.id, User.name).where(User.id.in_(ids)))
+        return {uid: name for uid, name in rows.all()}
 
 
 class PrefRepository(Repository[Pref]):

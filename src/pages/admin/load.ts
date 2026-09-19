@@ -1,16 +1,9 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { ApiError, type RoleDoc } from '@/lib/api';
-import { useAuth } from '@/lib/auth';
-import { demoUsers, roles as seedRoles } from '@/mock/rbac';
 
-/* What the Admin screens share: loading from the API (or the demo data), making a change with the
-   server's reason shown on failure, and a few formatters. */
-
-/** The built-in roles as the API returns them, with the demo people counted in. */
-export const demoRoles: RoleDoc[] = seedRoles.map((r) => ({
-  ...r, builtin: true, members: demoUsers.filter((u) => u.roles.includes(r.id)).length,
-}));
+/* What the Admin screens share: loading from the API, making a change with the server's reason shown on
+   failure, and a few formatters. */
 
 export const reason = (e: unknown) => (e instanceof ApiError ? e.message : 'The local API did not answer. Is it still running?');
 
@@ -25,24 +18,28 @@ export async function attempt<T>(call: () => Promise<T>, failure: string): Promi
 }
 
 /**
- * One admin screen's data. Signed in, it comes from the API; `load` must be a stable function (a
- * module-level one). In the demo it is the demo data, and the screen is read-only.
+ * One admin screen's data, from the API. `load` must be a stable function (a module-level one). The
+ * shell only draws these screens for someone signed in, so there is nothing else to show while it loads.
  */
-export function useAdmin<T>(load: () => Promise<T>, demo: T) {
-  const live = useAuth().state === 'signed-in';
-  const [data, setData] = useState<T | null>(live ? null : demo);
+export function useAdmin<T>(load: () => Promise<T>) {
+  const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   useEffect(() => {
-    if (!live) return;
     let current = true;
     load().then(
       (d) => { if (current) { setData(d); setError(null); } },
       (e: unknown) => { if (current) setError(reason(e)); },
     );
     return () => { current = false; };
-  }, [live, load, version]);
-  return { data, setData, error, live, reload: () => setVersion((v) => v + 1) };
+  }, [load, version]);
+  return { data, setData, error, reload: () => setVersion((v) => v + 1) };
+}
+
+/** The built-in role a new person or a new role starts from: Engineer when the catalogue has it, else the
+ *  first built-in role that is not Owner — never a role id the workspace does not hold. */
+export function startingRole(roles: RoleDoc[]): string {
+  return (roles.find((r) => r.builtin && r.id === 'engineer') ?? roles.find((r) => r.builtin && r.id !== 'owner') ?? roles[0])?.id ?? '';
 }
 
 /** "11 Sep, 18:40" — or "never". */
@@ -58,8 +55,9 @@ export const initials = (name: string) =>
 
 const ALPHABET = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
-/** A temporary password: 14 characters, none that read alike (no l/1, O/0). */
-export function temporaryPassword() {
-  const bytes = crypto.getRandomValues(new Uint8Array(14));
+/** A temporary password, none of whose characters read alike (no l/1, O/0): 14 long, or the workspace's
+ *  minimum when that is longer. */
+export function temporaryPassword(minimum = 0) {
+  const bytes = crypto.getRandomValues(new Uint8Array(Math.max(14, minimum)));
   return Array.from(bytes, (b) => ALPHABET[b % ALPHABET.length]).join('');
 }

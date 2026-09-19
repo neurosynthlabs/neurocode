@@ -23,13 +23,14 @@ from .knowledge import (
     Chunk,
     MemoryConflict,
     MemoryFact,
+    MemoryHit,
     MemoryTag,
     ResearchAngle,
     ResearchCitation,
     ResearchReport,
     RetrievalRun,
 )
-from .platform import AiCall, Brainstorm, EvalCase, EvalResult, EvalRun, EvalSuite, McpServer, McpTool, PermissionRule
+from .platform import AiCall, Brainstorm, EvalCase, EvalResult, EvalRun, EvalSuite, McpServer, McpTool, ToolRule
 from .runtime import Chat, ChatMessage, Run, RunConflict, RunLog, RunStep, TestCoverage, TestFailure
 from .work import (
     ActivityEvent,
@@ -54,8 +55,8 @@ __all__ = [
     "ActivityEvent", "Agent", "AiCall", "Approval", "AuditEntry", "Brainstorm", "Chat", "ChatMessage",
     "ChecklistItem", "Chunk", "CodeEdge", "CodeFile", "CodeIndexRun", "CodeSymbol", "Decision",
     "EvalCase", "EvalResult", "EvalRun", "EvalSuite",
-    "LoginAttempt", "McpServer", "McpTool", "MemoryConflict", "MemoryFact", "MemoryTag",
-    "PermissionRule", "Plan",
+    "LoginAttempt", "McpServer", "McpTool", "MemoryConflict", "MemoryFact", "MemoryHit", "MemoryTag",
+    "Plan", "ToolRule",
     "PlanQuestion", "PlanStep", "Pref", "Project", "ResearchAngle", "ResearchCitation", "ResearchReport",
     "RetrievalRun", "Role", "RolePermission", "Run",
     "RunConflict", "RunLog", "RunStep", "Session", "Setting", "Task", "TaskAgent", "Team", "TeamMember",

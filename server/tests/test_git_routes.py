@@ -21,7 +21,7 @@ from app import models as m
 from app.agent.git import AUTHOR
 from app.api import deps
 from app.api.app import create_api
-from app.data.loader import load_seed, sync_roles
+from tests.fixtures.workspace import load_workspace
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
 VIEWER = {"email": "view@example.com", "name": "Viewer", "password": "another long passphrase", "roles": ["viewer"]}
@@ -38,9 +38,7 @@ def run_git(args: list[str], cwd: Path, *, agent: bool = False) -> str:
 
 @pytest_asyncio.fixture
 async def api(session: AsyncSession):
-    await load_seed(session)
-    await sync_roles(session)
-    await session.flush()
+    await load_workspace(session)
     app = create_api(db=None)
 
     async def use_the_test_session() -> AsyncIterator[AsyncSession]:
@@ -194,11 +192,11 @@ async def test_commits_say_which_run_made_them(client: AsyncClient, repo: Path):
     assert len((await client.get(f"/projects/{PID}/git/commits", params={"limit": 1})).json()["commits"]) == 1
 
 
-async def test_a_sample_project_answers_honestly_and_reading_needs_a_session(api, client: AsyncClient):
+async def test_a_project_with_no_code_answers_honestly_and_reading_needs_a_session(api, client: AsyncClient):
     body = (await client.get("/projects/erp/git")).json()
-    assert body["available"] is False and "sample project" in body["reason"] and body["worktrees"] == []
+    assert body["available"] is False and "no code on this machine" in body["reason"] and body["worktrees"] == []
     refused = await client.get("/projects/erp/git/commits")
-    assert refused.status_code == 409 and "sample project" in refused.json()["detail"]
+    assert refused.status_code == 409 and "no code on this machine" in refused.json()["detail"]
     assert (await client.get("/projects/nope/git")).status_code == 404
 
     await client.post("/admin/users", json=VIEWER)

@@ -1,4 +1,4 @@
-"""Signing in: first run, login, logout, who am I, and changing your own password.
+"""Signing in: first run, login, logout, who am I, changing your own password — and the catalogue.
 
 Same paths, same JSON, same cookie as before — the frontend cannot tell the difference. What changed
 is underneath: every rule now lives in the identity service, and this file only carries the request
@@ -12,7 +12,10 @@ from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..repositories import AuditRepository, WorkspaceRepository
+from ..repositories import AuditRepository, RoleRepository, WorkspaceRepository
+from ..repositories.usage import AgentRepository
+from ..services.admin import catalogue as permission_catalogue
+from ..services.admin import sorted_permissions
 from ..services.errors import Refused
 from ..services.identity import IdentityService, Person
 from ..settings import settings
@@ -111,6 +114,27 @@ async def logout(request: Request, response: Response,
 async def me(who: Person = Depends(current_person),
              open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     return await _me(open_session, who)
+
+
+@router.get("/catalogue", dependencies=[Depends(current_person)])
+async def catalogue(open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    """The names every screen needs to put words to an id: what each permission is called, what each
+    role is called and grants, and who each agent is.
+
+    Any signed-in person may read it, because anyone may be shown a role's name or be told which
+    permission a button needs — which is why it is here and not behind the admin routes, where the
+    same permissions are served with the roles screen. The roles are the workspace's, custom ones
+    included; the agents are the roster, identity only: what they have done is on `GET /agents`.
+    """
+    roles = RoleRepository(open_session)
+    found, _ = await roles.everything(roles.builtin_first)
+    agents = await AgentRepository(open_session).all_ordered()
+    return {
+        "permissions": permission_catalogue(),
+        "roles": [{"id": r.id, "name": r.name, "description": r.description, "builtin": r.builtin,
+                   "permissions": sorted_permissions(p.permission for p in r.permissions)} for r in found],
+        "agents": [{"id": a.id, "name": a.name, "role": a.role, "icon": a.icon} for a in agents],
+    }
 
 
 @router.post("/password")

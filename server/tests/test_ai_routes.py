@@ -1,9 +1,10 @@
 """The AI features on the new stack: ask memory, brainstorm, extract.
 
-No model is configured here, which is the path worth testing: every one of the three still answers,
-the answer says the offline rules wrote it, and a brainstorm is still a row that comes back in the
-shape the Brainstorm page reads. Nothing in this file reaches the network — the gateway is a real one
-with no ledger, no keys and no lane it is allowed to use.
+Mostly no model is configured here, which is the path worth testing for two of the three: asking and
+extracting still answer, and the answer says the offline rules wrote it. A brainstorm has no offline
+version — with no lane it is refused and nothing is kept — so its tests give the real gateway one lane
+whose provider call answers from a script (`tests/fixtures/lanes.py`). Nothing in this file reaches
+the network.
 """
 from __future__ import annotations
 
@@ -14,17 +15,21 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai import features
 from app.ai import gateway as gateway_module
-from app.ai.features import CATEGORIES
+from app.ai.features import CATEGORIES, HINTS
 from app.ai.gateway import Gateway, ProviderError
 from app.ai.ledger import MemoryLedger
 from app.api import deps
 from app.api.app import create_api
-from app.data.loader import load_seed, sync_roles
+from app.data.loader import sync_roles
 from app.models import Chunk, RetrievalRun
 from app.repositories.work import ActivityRepository
 from app.secrets import Secrets
+from app.services.errors import NO_MODEL
 from app.services.identity import IdentityService
+from tests.fixtures.lanes import BRIEF, LANE_MODEL, answering
+from tests.fixtures.workspace import load_workspace, rows
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
 HEADERS = {"X-NC-Client": "test"}
@@ -39,9 +44,7 @@ async def client(session: AsyncSession, monkeypatch, tmp_path: Path) -> AsyncIte
     # "rules" is what a laptop with no API key looks like to the router: no lane may answer, so
     # nothing here opens a socket to a provider.
     monkeypatch.setenv("NEUROCODE_COMPILER", "rules")
-    await load_seed(session)
-    await sync_roles(session)
-    await session.flush()
+    await load_workspace(session)
     api = create_api(db=None)
 
     async def use_the_test_session() -> AsyncIterator[AsyncSession]:
@@ -104,11 +107,12 @@ async def test_an_indexed_project_is_answered_from_what_retrieval_ranks(client: 
 
     body = (await client.post("/ai/ask", json={"question": "kaboom", "projectId": "erp"})).json()
     assert [c["ref"] for c in body["citations"]] == ["MEM-142"]
-    assert body["citations"][0]["title"] == "Architecture Decision #142 — TRANS table must not be " \
-                                            "directly modified"
+    assert body["citations"][0]["title"] == rows("memory", ref="MEM-142")[0]["title"]
 
 
-async def test_a_brainstorm_is_a_row_that_comes_back_as_the_brief_the_page_reads(client: AsyncClient):
+async def test_a_brainstorm_is_a_row_that_comes_back_as_the_brief_the_page_reads(client: AsyncClient,
+                                                                                  monkeypatch):
+    sent = answering(monkeypatch, BRIEF)
     made = await client.post("/ai/brainstorm", json={"idea": IDEA, "projectId": "hims"})
     assert made.status_code == 201, made.text
 
@@ -116,22 +120,35 @@ async def test_a_brainstorm_is_a_row_that_comes_back_as_the_brief_the_page_reads
     assert set(doc) == {"id", "ref", "idea", "projectId", "brief", "compiler", "by", "createdAt"}
     assert doc["ref"] == "IDEA-1" and doc["by"] == "Rajat" and doc["projectId"] == "hims"
     assert doc["idea"] == IDEA and doc["createdAt"]
-    assert doc["compiler"]["provider"] == "rules" and doc["compiler"]["model"]
+    assert doc["compiler"]["provider"] == "groq" and doc["compiler"]["model"] == LANE_MODEL
+    assert IDEA in sent[0][1]["content"]                      # the model was asked about this idea
 
     brief = doc["brief"]
     assert set(brief) == {"title", "problem", "audience", "value", "mvp", "risks", "metrics",
                           "questions", "roadmap"}
-    assert brief["title"] and IDEA in brief["problem"]        # your words are kept, not rewritten away
-    assert brief["audience"] and brief["value"]
-    assert brief["mvp"] and brief["risks"] and brief["metrics"] and brief["questions"]
-    assert brief["roadmap"] and all(set(p) == {"phase", "items"} and p["items"] for p in brief["roadmap"])
+    assert brief == BRIEF                                     # the model's brief, every section of it
 
     listed = (await client.get("/ai/brainstorms")).json()
     assert [b["ref"] for b in listed] == ["IDEA-1"]
     assert listed[0]["brief"] == brief                       # the row reassembles into the same brief
 
 
-async def test_the_next_reference_comes_from_the_database_not_from_counting(client: AsyncClient):
+async def test_with_no_model_a_brainstorm_is_refused_and_nothing_is_kept(client: AsyncClient):
+    refused = await client.post("/ai/brainstorm", json={"idea": IDEA, "projectId": "hims"})
+    assert refused.status_code == 409 and refused.json()["detail"] == NO_MODEL
+    assert (await client.get("/ai/brainstorms")).json() == []
+
+
+async def test_a_provider_that_fails_a_brainstorm_is_passed_through_with_its_reason(client: AsyncClient,
+                                                                                    monkeypatch):
+    answering(monkeypatch, ProviderError(503, "the lane is down"))
+    failed = await client.post("/ai/brainstorm", json={"idea": IDEA})
+    assert failed.status_code == 502 and "the lane is down" in failed.json()["detail"]
+    assert (await client.get("/ai/brainstorms")).json() == []
+
+
+async def test_the_next_reference_comes_from_the_database_not_from_counting(client: AsyncClient, monkeypatch):
+    answering(monkeypatch, BRIEF, BRIEF)
     first = await client.post("/ai/brainstorm", json={"idea": IDEA})
     second = await client.post("/ai/brainstorm", json={"idea": "Memory ko decay hona chahiye."})
     assert (first.json()["ref"], second.json()["ref"]) == ("IDEA-1", "IDEA-2")
@@ -157,7 +174,21 @@ async def test_extract_proposes_facts_and_remembers_nothing(client: AsyncClient)
     assert len((await client.get("/memory")).json()) == before      # proposed, never kept
 
 
-async def test_a_project_that_does_not_exist_is_refused_rather_than_left_dangling(client: AsyncClient):
+def test_the_offline_rules_know_no_one_business_s_words(tmp_path: Path, monkeypatch):
+    """The rules filed a sentence by the vocabulary of the sample workspace — tax, GST, invoices, its
+    TRANS_ and MST_ tables — so any other business's notes came out under the wrong heading."""
+    monkeypatch.setenv("NEUROCODE_COMPILER", "rules")
+    for word in ("tax", "GST", "invoice", "TRANS_INVOICE", "MST_TAX", "rounding", "price"):
+        assert not any(rx.search(f"the {word} here") for _, rx in HINTS), word
+
+    text = "Invoice tax should be rounded per line item. TRANS_INVOICE should keep every revision."
+    out = features.extract(Gateway(MemoryLedger(), Secrets(tmp_path / "secrets.json")), text, None).data
+    assert [f.category for f in out.facts] == ["project", "project"]
+
+
+async def test_a_project_that_does_not_exist_is_refused_rather_than_left_dangling(client: AsyncClient,
+                                                                                    monkeypatch):
+    answering(monkeypatch, BRIEF)
     missing = await client.post("/ai/brainstorm", json={"idea": IDEA, "projectId": "nope"})
     assert missing.status_code == 404 and "nope" in missing.json()["detail"]
     assert (await client.get("/ai/brainstorms")).json() == []
@@ -212,18 +243,20 @@ async def empty_client(session: AsyncSession, monkeypatch, tmp_path: Path) -> As
         yield c
 
 
-async def test_a_workspace_with_no_projects_can_still_ask(empty_client: AsyncClient):
+async def test_a_workspace_with_no_projects_can_still_ask(empty_client: AsyncClient, monkeypatch):
     """The feed entry used to be filed under a project id written into the source — `aios` — which is
     a foreign key now. Every workspace that had not been seeded crashed on its first question."""
-    for path, body in (("/ai/ask", {"question": "anything at all"}),
-                       ("/ai/brainstorm", {"idea": IDEA}),
-                       ("/ai/extract", {"text": NOTES})):
+    for path, body in (("/ai/ask", {"question": "anything at all"}), ("/ai/extract", {"text": NOTES})):
         answered = await empty_client.post(path, json=body)
-        assert answered.status_code in (200, 201), f"{path} -> {answered.status_code} {answered.text[:200]}"
+        assert answered.status_code == 200, f"{path} -> {answered.status_code} {answered.text[:200]}"
+    answering(monkeypatch, BRIEF)
+    made = await empty_client.post("/ai/brainstorm", json={"idea": IDEA})
+    assert made.status_code == 201, made.text[:200]
 
 
-async def test_a_brainstorm_id_cannot_collide_with_the_screens_examples(empty_client: AsyncClient):
-    """The Brainstorm page ships samples with ids b1..b6; `b1` opened the sample, not the real one."""
+async def test_a_brainstorm_id_is_never_a_bare_number(empty_client: AsyncClient, monkeypatch):
+    """A bare `b1` once opened a different brainstorm on the page; an id carries more than its number."""
+    answering(monkeypatch, BRIEF)
     made = (await empty_client.post("/ai/brainstorm", json={"idea": IDEA})).json()
     assert made["id"] not in {f"b{n}" for n in range(1, 10)}
     assert made["ref"].startswith("IDEA-")

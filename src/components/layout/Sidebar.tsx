@@ -15,7 +15,8 @@ import { cn } from '@/lib/utils';
 import { LogoMark, Wordmark } from '@/components/os/Logo';
 import { useTheme } from '@/lib/theme';
 import { inFlight, useData } from '@/lib/data';
-import { agents } from '@/mock/agents';
+import type { Catalogue, RunDoc } from '@/lib/api';
+import { useAccess } from '@/lib/access';
 
 /* ═══════════════════════════════════════════════════════════════
    SIDEBAR — a macOS source list. Quick actions on top, sections
@@ -34,7 +35,8 @@ const UKEY = 'nc.sidebar.subs';
 const RADIUS = 'calc(var(--radius) * 1.1)';
 
 type Glyph = ComponentType<{ className?: string; style?: CSSProperties; strokeWidth?: number }>;
-type Count = { n: number; alert?: boolean };
+/** `more`: the collection behind it reached the server's ceiling, so the count is a floor, shown as "n+". */
+type Count = { n: number; alert?: boolean; more?: boolean };
 
 /** Each section's tint for its icon tiles. Status tokens, so every theme repaints them. */
 const TONE: Record<NavSection, string> = {
@@ -47,6 +49,20 @@ const SUB_ICON: Record<string, Glyph> = {
 };
 
 type Block = { kind: 'item'; item: NavItem } | { kind: 'sub'; name: string; items: NavItem[] };
+
+/* Agents at work right now, counted the way GET /agents decides an agent is running: it owns a step that
+   is running, or — when several agents share a task — a whole run that is running between steps. Counted
+   per agent, not per run, so one agent on two runs is one. Runs name an agent by id or by name, so each is
+   folded to its roster id first — otherwise "backend" and "Backend Engineer" would count twice. */
+function agentsAtWork(runs: RunDoc[], roster: Catalogue['agents']): number {
+  const idOf = (agent: string) => roster.find((a) => a.id === agent || a.name === agent)?.id ?? agent;
+  const busy = new Set<string>();
+  for (const r of runs) {
+    for (const s of r.steps) if (s.status === 'running' && s.agent) busy.add(idOf(s.agent));
+    if (r.role === 'agent' && r.status === 'running' && r.agent) busy.add(idOf(r.agent));
+  }
+  return busy.size;
+}
 
 /** A section's items in order, only those the role may open, with one sub-section's items folded into a block. */
 function blocksOf(section: NavSection, canAny: (...perms: string[]) => boolean): Block[] {
@@ -85,7 +101,8 @@ export function Sidebar({ collapsed, onToggle, onSearch, variant = 'rail' }: {
   const loc = useLocation();
   const nav = useNavigate();
   const { rail } = useTheme();
-  const { tasks, plans, approvals, conflicts } = useData();
+  const { tasks, plans, runs, approvals, conflicts, capped } = useData();
+  const { agents } = useAccess();
   const { canAny } = useAuth();
   const blocks = useMemo(
     () => Object.fromEntries(NAV_SECTIONS.map((s) => [s, blocksOf(s, canAny)])) as Record<NavSection, Block[]>,
@@ -124,12 +141,14 @@ export function Sidebar({ collapsed, onToggle, onSearch, variant = 'rail' }: {
 
   // What is waiting behind each screen, so the sidebar says where to look next.
   const counts = useMemo<Record<string, Count>>(() => ({
-    '/tasks': { n: tasks.filter((t) => t.status === 'in_progress').length },
-    '/plans': { n: plans.filter((p) => !inFlight(p)).length },
-    '/agents': { n: agents.filter((a) => a.status === 'running').length },
+    '/tasks': { n: tasks.filter((t) => t.status === 'in_progress').length, more: capped.tasks },
+    '/plans': { n: plans.filter((p) => !inFlight(p)).length, more: capped.plans },
+    '/agents': { n: agentsAtWork(runs, agents) },
+    // Every pending gate is loaded whatever its age (see the store), so this one is a real count.
     '/permissions': { n: approvals.filter((a) => a.status === 'pending').length, alert: true },
-    '/memory': { n: conflicts.length, alert: true },
-  }), [tasks, plans, approvals, conflicts]);
+    // The store holds open conflicts only: a resolved one is dropped, even when it streams back.
+    '/memory': { n: conflicts.length, alert: true, more: capped.conflicts },
+  }), [tasks, plans, runs, approvals, conflicts, agents, capped]);
 
   const isActive = (to: string) => (to === '/' ? loc.pathname === '/' : loc.pathname === to || loc.pathname.startsWith(`${to}/`));
   const compose = () => nav('/', { state: { compose: Date.now() } });
@@ -317,16 +336,17 @@ function Tile({ icon: I, tone }: { icon: Glyph; tone: string }) {
   );
 }
 
-function Badge({ n = 0, alert }: { n?: number; alert?: boolean }) {
+function Badge({ n = 0, alert, more }: { n?: number; alert?: boolean; more?: boolean }) {
   if (!n) return null;
   return (
     <span
+      title={more ? 'At least this many: the list reached the server’s ceiling' : undefined}
       className="tnum min-w-5 shrink-0 rounded-full px-1.5 text-center text-[11px] leading-[18px] font-semibold"
       style={alert
         ? { background: 'color-mix(in srgb, var(--os-warn) 20%, transparent)', color: 'var(--os-warn)' }
         : { background: 'var(--rail-chip)', color: 'var(--rail-soft)' }}
     >
-      {n}
+      {n}{more ? '+' : ''}
     </span>
   );
 }
@@ -345,7 +365,7 @@ function Row({ item, tone, count }: { item: NavItem; tone: string; count?: Count
             style={{ color: isActive ? 'var(--rail-ink)' : 'var(--rail-item)' }}>
             {item.label}
           </span>
-          <Badge n={count?.n} alert={count?.alert} />
+          <Badge n={count?.n} alert={count?.alert} more={count?.more} />
         </>
       )}
     </NavLink>
@@ -358,6 +378,7 @@ function Sub({ name, items, tone, counts, open, active, onToggle }: {
 }) {
   const hidden = items.reduce((n, i) => n + (counts[i.to]?.n ?? 0), 0);
   const alert = items.some((i) => counts[i.to]?.alert && counts[i.to]?.n);
+  const more = items.some((i) => counts[i.to]?.more && counts[i.to]?.n);
   return (
     <div>
       <button
@@ -369,7 +390,7 @@ function Sub({ name, items, tone, counts, open, active, onToggle }: {
           style={{ color: active ? 'var(--rail-ink)' : 'var(--rail-item)' }}>
           {name}
         </span>
-        {!open && <Badge n={hidden} alert={alert} />}
+        {!open && <Badge n={hidden} alert={alert} more={more} />}
         <ChevronRight className={cn('size-3.5 shrink-0 transition-transform duration-200', open && 'rotate-90')}
           strokeWidth={2.2} style={{ color: 'var(--rail-dim)' }} />
       </button>
@@ -387,7 +408,7 @@ function Sub({ name, items, tone, counts, open, active, onToggle }: {
                     style={{ color: isActive ? 'var(--rail-ink)' : 'var(--rail-item)' }}>
                     {i.label}
                   </span>
-                  <Badge n={counts[i.to]?.n} alert={counts[i.to]?.alert} />
+                  <Badge n={counts[i.to]?.n} alert={counts[i.to]?.alert} more={counts[i.to]?.more} />
                 </>
               )}
             </NavLink>

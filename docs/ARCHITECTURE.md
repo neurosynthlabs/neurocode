@@ -7,8 +7,8 @@ and how every AI feature reaches a model.
 ## Shape
 
 ```
-Browser  ── React 19 + Vite, one store (src/lib/data.tsx), auth (src/lib/auth.tsx)
-   │  same-origin /api in dev (Vite proxy); VITE_API_URL in a build
+Browser  ── React 19 + Vite, one store (src/lib/data.tsx), auth (src/lib/auth.tsx), the catalogue (src/lib/access.ts)
+   │  same-origin /api (the Vite proxy in dev and preview); VITE_API_URL when the API lives elsewhere
    ▼
 FastAPI (server/app/api) ── routes → services → repositories → Postgres
    ├── Postgres 16: every table, related and typed, migrated by Alembic
@@ -22,8 +22,11 @@ FastAPI (server/app/api) ── routes → services → repositories → Postgre
                      every call written to the usage ledger
 ```
 
-The public demo (Vercel) is the same web app with no API. It runs on the seed data inside the tab,
-signed in as a demo owner, and never makes a request.
+The web app holds no data of its own. With no API it says **Not connected**, why, and the one command
+that starts one — there is no demo mode and no sample workspace to fall back on, so nothing on a screen
+was ever invented by the browser. A brand-new workspace is empty too, except for the product's
+catalogue — the permissions, the built-in roles and the agent roster, in `server/app/data/catalogue.json`,
+written again on every start. Everything else in it, someone made.
 
 ## Why these choices
 
@@ -44,15 +47,18 @@ signed in as a demo owner, and never makes a request.
   statement on its own, which meant a failure halfway through left half a change behind.
 - **One gateway for every model call.** Keys, routing, time-outs, the rejected-key breaker, the free-tier
   budgets and the fallback all live in one place. A feature never talks to a provider directly.
-- **Local first, honest always.** Every AI feature works with no key. Output made by rules, not a
-  model, is labelled as such in the UI.
+- **Local first, honest always.** Nothing is made up when no model can answer. Planning and
+  brainstorming refuse, and say which free key to add; asking memory quotes the matching facts,
+  extracting facts picks policy sentences, and a review reads the diff by rules — each labelled as
+  rules in the UI. A number appears on a screen only when something measured it.
 
 ## Backend layout
 
 ```
 server/app/
   settings.py      every knob, typed and validated once (NEUROCODE_*, server/.env)
-  data/            engine and pooling · the declarative Base · the seed loader · a readiness check
+  data/            engine and pooling · the declarative Base · catalogue.json and the roster · the loader
+                   the SQLite importer uses · a readiness check
   models/          43 tables in six files: identity · work · knowledge · code · runtime · platform
   repositories/    the questions the screens ask, answered in SQL; nothing here commits
   services/        the decisions: identity, work and its gates, plans, runs, chat, retrieval, testing,
@@ -61,7 +67,7 @@ server/app/
   api/             deps.py (session, who is asking, require(...)) · errors.py · app.py
                    routes_auth · _work · _plans · _knowledge · _platform · _sessions · _runs
                    routes_code · _ai · _system · _admin · _admin_system · _testing · _git · _extensions
-                   routes_workflows · _evals · _research · _ops · stream.py (SSE)
+                   routes_workflows · _evals · _research · _ops · _permissions · stream.py (SSE)
   agent/git.py     git as plain blocking functions: worktrees, safe paths, merges, tests
   agent/testparse  what a test runner printed, read into passed/failed/skipped and named failures
   agent/coverage   the coverage report a test step left on disk, summed by top-level folder
@@ -70,6 +76,7 @@ server/app/
   ai/ledger.py     the four things the gateway asks of a database, and who answers them
   ai/compiler.py   requirement → plan
   ai/features.py   ask memory, brainstorm, extract facts from text
+  services/mcp.py  a real MCP client: initialize and tools/list over stdio or HTTP, once, on request
   events.py        in-process fan-out to open tabs (Server-Sent Events)
   secrets.py       API keys on disk (0600), only ever reported masked
 server/alembic/    the migrations, and the only thing that creates a schema
@@ -82,17 +89,17 @@ append a line — implemented over a small blocking psycopg pool against the sam
 
 ## Data model
 
-43 tables, all related, all typed, in six groups. Every one is created by Alembic — the schema is never
+55 tables, all related, all typed, in six groups. Every one is created by Alembic — the schema is never
 written by hand, and a test that passes against a hand-made schema proves nothing.
 
 | Group | Tables | Holds |
 |---|---|---|
 | **identity** (11) | `workspace`, `users`, `roles`, `role_permissions`, `user_roles`, `teams`, `team_members`, `sessions`, `audit_log`, `login_attempts`, `settings` | who exists, what they may do, and every attempt to sign in |
-| **work** (12) | `projects`, `agents`, `tasks`, `task_checklist`, `task_agents`, `plans`, `plan_steps`, `plan_questions`, `approvals`, `decisions`, `prefs`, `activity` | the domain, and the log that streams to every open tab |
-| **knowledge** (5) | `memory_facts`, `memory_tags`, `memory_conflicts`, `chunks`, `retrieval_runs` | what is remembered, and what can be retrieved |
+| **work** (15) | `projects`, `agents`, `tasks`, `task_checklist`, `task_agents`, `plans`, `plan_steps`, `plan_questions`, `approvals`, `decisions`, `prefs`, `activity`, `test_expectations`, `workflow_definitions`, `workflow_steps` | the domain, the reusable workflows, and the log that streams to every open tab |
+| **knowledge** (9) | `memory_facts`, `memory_tags`, `memory_hits`, `memory_conflicts`, `chunks`, `retrieval_runs`, `research_reports`, `research_angles`, `research_citations` | what is remembered, each time it was used, what can be retrieved, and research built on it |
 | **code** (4) | `code_files`, `code_symbols`, `code_edges`, `code_index_runs` | the index: files, what they declare, what depends on what |
-| **runtime** (6) | `runs`, `run_steps`, `run_conflicts`, `run_logs`, `chats`, `chat_messages` | agent runs and sessions, turn by turn |
-| **platform** (5) | `mcp_servers`, `mcp_tools`, `permission_rules`, `brainstorms`, `ai_calls` | the tools it can reach, and the usage ledger behind every budget |
+| **runtime** (8) | `runs`, `run_steps`, `run_conflicts`, `run_logs`, `chats`, `chat_messages`, `test_failures`, `test_coverage` | agent runs and sessions, turn by turn, and what their tests found |
+| **platform** (8) | `mcp_servers`, `mcp_tools`, `brainstorms`, `eval_suites`, `eval_cases`, `eval_runs`, `eval_results`, `ai_calls` | the tools it can reach, the evals, and the usage ledger behind every budget |
 
 Types that do work, rather than being decoration:
 
@@ -142,8 +149,8 @@ notice and the data touched. Re-indexing replaces a project's rows in one transa
 
 ## Access control
 
-- **Permissions** are `resource:action` strings from one catalogue, `src/mock/rbac.ts`, which is also
-  exported to the API's seed. Examples: `plans:compile`, `approvals:decide`, `memory:write`,
+- **Permissions** are `resource:action` strings from one catalogue, `server/app/data/catalogue.json`,
+  served to anyone signed in at `GET /auth/catalogue` so every screen can name what a role lacks. Examples: `plans:compile`, `approvals:decide`, `memory:write`,
   `users:manage`, `workspace:admin`.
 - **Roles** are named sets of permissions. Built in: Owner, Admin, AI Project Manager, Engineer and
   Viewer. Admins can add custom roles. A user's permissions are the union of their roles.
@@ -193,12 +200,15 @@ TODOs, a diff with no test touched) and says it was read by rules, not a model.
 
 ## AI features
 
-| Feature | With a model | Offline (no key) |
+| Feature | With a model | With no model |
 |---|---|---|
-| Compile a requirement | full restatement, steps, risks, questions | keyword planner that keeps your wording |
-| Ask memory | answer written from the matching facts, cited | the matching facts, quoted and cited |
-| Brainstorm | problem, audience, MVP, risks, metrics, roadmap | the same structure as a guided template |
-| Extract facts | facts proposed from pasted text | policy sentences picked by rules |
+| Compile a requirement | restatement, steps, risks, questions, a confidence of its own | refused (409), with the free key to add; a provider's failure comes back as 502 with its reason |
+| Ask memory | answer written from the matching facts, cited | the matching facts, quoted and cited, labelled "memory search, no model" |
+| Brainstorm | problem, audience, MVP, risks, metrics, roadmap | refused (409), as compiling is |
+| Extract facts | facts proposed from pasted text | policy sentences picked by rules, labelled |
+
+Every time a fact is cited or handed to a model — an answer, a session's grounding, research, a
+compile — a row goes into `memory_hits`, so how much a fact is used is counted, not estimated.
 
 ## Retrieval: finding the few pieces that bear on a question
 
@@ -208,7 +218,7 @@ say where they came from (`pkg/tax.py#apply_gst:118`), instead of describing cod
 
 Two searches run over the same rows and are fused by reciprocal rank:
 
-- **lexical**, FTS5 over the text. No key, no model, no waiting. It finds what you can name.
+- **lexical**, Postgres full text over the text (`tsvector`, ranked by `ts_rank`). No key, no model, no waiting. It finds what you can name.
 - **semantic**, cosine over embeddings, when a lane makes them. It finds what you meant but could not
   name — "where is the interstate tax split" reaching `apply_gst_breakup`.
 
@@ -255,7 +265,8 @@ client.
 The router picks the lane: free first, the paid one only when the free ones are spent, the local model
 last — skipping any lane with no key, with its allowance spent for this minute or this day, that an
 admin switched off, or that refused the key it holds. A call that fails moves to the next lane instead
-of dropping to the offline rules, and only when every lane is spent do the rules answer and say so.
+of giving up, and only when every lane is spent does the feature say so: compiling and brainstorming
+refuse, and the features with an honest rule-based answer give that, labelled.
 
 Two things fall out of that. **Agents that work at the same time are spread across different lanes**,
 so four agents are four providers answering at once rather than four requests queued behind one
@@ -270,19 +281,21 @@ variable), one per lane, never in the database and never in a log line.
 
 ## API map
 
-117 routes. The running API describes every one at `/docs`; this is the map, with what each family needs.
+124 paths. The running API describes every one at `/docs`; this is the map, with what each family needs.
 
 | Prefix | Needs | What |
 |---|---|---|
 | `/auth` | public / session | status, setup, login, logout, me, change password |
 | `/admin` | `users:manage`, `roles:manage`, `teams:manage`, `audit:read`, `workspace:admin` | people, roles, teams, audit, workspace, AI providers, database, reset |
 | `/tasks`, `/plans`, `/approvals`, `/decisions`, `/prefs` | session + the action's permission | the work; deciding a run's gate resumes the run |
-| `/memory` | session + `memory:write` | facts, search, conflicts |
-| `/projects`, `/mcp` | session + the action's permission | the platform |
+| `/memory` | session + `memory:write` | facts, search, archive, recalls (`/memory/hits`), conflicts: record one, keep a side |
+| `/projects` | session + `projects:onboard` | the projects, and onboarding one |
+| `/mcp` | session; `mcp:manage` (+ `workspace:admin` to trust or check a stdio server) | registered servers, trust, and a real check: connect, list tools, record latency |
+| `/permissions/rules` | session | the standing rules the runtime applies: each project's answer to its first test run, and who gave it |
 | `/projects/{id}/code` | session; `projects:onboard` to re-index | summary, file tree, search, file detail, impact, module graph |
 | `/projects/{id}/code/retrieval` | session; `projects:onboard` to build | the chunks, the documents, and what bears on a question |
 | `/projects/{id}/git` | session | the checkout's branches, commits, worktrees, conflicts and diffs, read from git |
-| `/runs` | session; `runs:run` to stop or discard, `runs:merge` to merge | agent runs, their output, their diff, the merge |
+| `/runs` | session; `runs:run` to stop, discard or send back, `runs:merge` to merge | agent runs, their output, their diff, the merge, and rework: a new run told what to change |
 | `/testing`, `/projects/{id}/tests` | session; `runs:run` to run, `decisions:make` for expectations | each project's own test command, the failures it named, coverage it left |
 | `/workflows` | session; `workflows:write` to author; `plans:compile` + `plans:decide` to run | reusable step lists that become ordinary plans and runs |
 | `/evals` | session; `evals:write` to author, `ai:use` to run, `memory:write` for a lesson | suites of cases scored by stated checks against the real features |
@@ -290,25 +303,26 @@ variable), one per lane, never in the database and never in a log line.
 | `/extensions` | session | skills, commands, hooks and plugins read from disk — hooks are shown, never run |
 | `/sessions` | session; `sessions:chat` to ask | conversations, their turns, their tool calls |
 | `/ai` | `ai:use` | ask, brainstorm, extract |
-| `/agents`, `/models`, `/usage` | session (per-person usage for admins) | the roster from what runs did, the router and its lanes, the usage ledger |
+| `/agents`, `/models`, `/usage` | session (per-person usage for admins) | the roster from what runs did, the router and its lanes, the usage ledger priced per lane, by day, agent, project, and the costliest calls |
 | `/ops` | session; `workspace:admin` for secrets | this machine: services, checks, deliveries, logs, containers, which keys exist |
-| `/activity`, `/health` | session / public | the log, the live stream, liveness |
+| `/activity`, `/activity/summary`, `/health` | session / public | the log, the live stream, its figures over every row, liveness |
 
 ## Phases
 
-- **Done:** 40 screens on a calm UI; the Postgres back end — relational, migrated, 300 tests — with
+- **Done:** 39 screens on a calm UI; the Postgres back end — relational, migrated, 366 tests — with
   accounts, roles, an audit log the database keeps append-only, and the AI gateway routing across free
-  model lanes with an offline fallback; requirement → plan → questions → agents in parallel worktrees →
-  tests → a review from a different model → your signature → merge; memory, retrieval (words and
-  meaning, fused) and the code index; sessions that read the code; and, as of 2026-09-16, real back ends
-  behind every screen that used to show sample data: Testing (runner output parsed into named failures,
-  coverage, expectations that change the gate), Workflows, Evals, Research, Git, Knowledge, Skills,
-  Commands, Hooks, Plugins, Agents, Models and DevOps. ACP is an honest empty state: nothing on this
-  machine speaks it yet. The public demo still runs the sample data in the browser.
+  model lanes; requirement → plan → questions → agents in parallel worktrees → tests → a review from a
+  different model → your signature, or sent back with notes → merge; memory with recorded recalls,
+  retrieval (words and meaning, fused) and the code index; sessions that read the code; real back ends
+  behind every screen, and, as of 2026-09-16, **no sample data anywhere**: no demo mode, no seed, no
+  offline planner or brainstorm template, and no figure nothing measured. The ACP screen is gone, because
+  nothing on this machine speaks it, and so is the table of tool rules nothing enforced. The checks run on
+  the real stack — a throwaway Postgres, the API and a stub model (`scripts/stack.mjs`) — building their
+  own data: the end-to-end run from an empty workspace, and the smoke and layout lint on the tests' fixture.
 - **Decided, on purpose:** NeuroCode never executes a repository's hooks or a command's shell lines; a
   project's own tests run only after a person allows it, once per project.
-- **Waiting on you:** a model key (Admin → AI providers) for anything that has to write code — without
-  one, every feature says it answered from the offline rules; and the `workflow` scope on the GitHub
+- **Waiting on you:** a model key (Admin → AI providers) for planning, brainstorming and anything that
+  writes code — without one those refuse and say so; and the `workflow` scope on the GitHub
   token so CI can be pushed.
 - **Next:** grounding the compiler and the agents in retrieval the way sessions and research already
   are; MCP servers as tools a session can reach; pushing a branch and opening a pull request from the run

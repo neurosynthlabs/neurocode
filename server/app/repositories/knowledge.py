@@ -6,10 +6,14 @@ so it cannot fall behind — and ranking is `ts_rank` with pinned facts first, i
 """
 from __future__ import annotations
 
-from sqlalchemy import ColumnElement, Integer, cast, func, select
+from dataclasses import dataclass
+from datetime import datetime
 
-from ..models import MemoryConflict, MemoryFact
-from .base import Page, Repository
+from sqlalchemy import ColumnElement, and_, delete, func, or_, select
+
+from ..data.base import utcnow
+from ..models import Chunk, MemoryConflict, MemoryFact, MemoryHit
+from .base import Page, Repository, bounded
 from .words import Mode, tsquery
 
 
@@ -44,22 +48,129 @@ class MemoryRepository(Repository[MemoryFact]):
             stmt = stmt.where(MemoryFact.search.op("@@")(query)).order_by(
                 MemoryFact.pinned.desc(), func.ts_rank(MemoryFact.search, query).desc())
         else:
-            stmt = stmt.order_by(MemoryFact.pinned.desc(), MemoryFact.strength.desc())
+            stmt = stmt.order_by(MemoryFact.pinned.desc(), MemoryFact.last_used_at.desc().nulls_last(),
+                                 MemoryFact.created_at.desc())
         stmt = stmt.limit(min(limit or 200, 500))
         return list((await self.session.execute(stmt)).scalars().unique())
 
     async def next_ref(self, prefix: str = "MEM-") -> str:
         return await super().next_ref(MemoryFact.ref, prefix)
 
+    async def by_refs(self, refs: list[str]) -> list[MemoryFact]:
+        """The facts still held under these refs. An archived fact is kept as evidence, never recalled:
+        a ref that names one — from an index built before it was archived — finds nothing."""
+        if not refs:
+            return []
+        stmt = (select(MemoryFact).where(MemoryFact.ref.in_(refs), MemoryFact.archived.is_(False))
+                .limit(min(len(refs), 500)))
+        return list((await self.session.execute(stmt)).scalars().unique())
+
     async def archive(self, fact: MemoryFact) -> MemoryFact:
-        """Archived, never deleted: a fact that was wrong is still evidence of what was believed."""
-        fact.archived = True
+        """Archived, never deleted: a fact that was wrong is still evidence of what was believed.
+
+        Its retrieval chunk goes with it, in the same transaction. The index is otherwise rebuilt only
+        when a project is re-indexed, and until then the old chunk kept handing a superseded fact to
+        every model that asked a question near it."""
+        fact.archived, fact.archived_at = True, utcnow()
+        await self.session.execute(delete(Chunk).where(Chunk.kind == "memory", Chunk.ref == fact.ref,
+                                                       Chunk.project_id.is_(None)))
         await self.session.flush()
         return fact
+
+    async def stats(self, *, project: str | None = None, retired_days: int = 30) -> MemoryStats:
+        """Counted by the database, not from a page of rows: the facts held (in all, pinned, in the
+        workspace's own memory), each category's share with its recalls and last use, and how many facts
+        were archived within the last `retired_days` days.
+
+        `project` scopes it the way the screen scopes its list: "global" is the workspace's own facts, a
+        project id is that project's facts together with the workspace's, and None is everything."""
+        where: list[ColumnElement[bool]] = []
+        if project == "global":
+            where.append(MemoryFact.project_id.is_(None))
+        elif project:
+            where.append(or_(MemoryFact.project_id == project, MemoryFact.project_id.is_(None)))
+        held = MemoryFact.archived.is_(False)
+
+        rows = (await self.session.execute(
+            select(MemoryFact.category, func.count(), func.count().filter(MemoryFact.pinned.is_(True)),
+                   func.count().filter(MemoryFact.project_id.is_(None)), func.max(MemoryFact.last_used_at))
+            .where(held, *where).group_by(MemoryFact.category))).all()
+        recalled = dict((await self.session.execute(
+            select(MemoryFact.category, func.count(MemoryHit.id))
+            .join(MemoryFact, MemoryFact.id == MemoryHit.fact_id)
+            .where(held, *where, MemoryHit.at > func.now() - func.make_interval(0, 0, 0, 1))
+            .group_by(MemoryFact.category))).all())
+        retired = await self.session.scalar(
+            select(func.count()).select_from(MemoryFact).where(
+                MemoryFact.archived.is_(True), *where,
+                MemoryFact.archived_at >= func.now() - func.make_interval(0, 0, 0, retired_days)))
+
+        by_category = {str(category): CategoryCount(held=int(n), pinned=int(pinned),
+                                                    recalled_24h=int(recalled.get(category, 0)), last_used_at=last)
+                       for category, n, pinned, _workspace, last in rows}
+        return MemoryStats(held=sum(c.held for c in by_category.values()),
+                           pinned=sum(c.pinned for c in by_category.values()),
+                           workspace=sum(int(w) for *_rest, w, _last in rows),
+                           recalled_24h=sum(c.recalled_24h for c in by_category.values()),
+                           retired=int(retired or 0), by_category=by_category)
+
+
+@dataclass(slots=True)
+class CategoryCount:
+    held: int
+    pinned: int
+    recalled_24h: int
+    last_used_at: datetime | None
+
+
+@dataclass(slots=True)
+class MemoryStats:
+    held: int
+    pinned: int
+    #: Held facts that belong to no project: the workspace's own memory, recalled in every project.
+    workspace: int
+    recalled_24h: int
+    retired: int
+    by_category: dict[str, CategoryCount]
+
+
+#: The most recalls one list answer carries.
+HITS_CEILING = 200
+
+
+@dataclass(slots=True)
+class Recall:
+    ref: str
+    title: str
+    feature: str
+    context: str | None
+    at: datetime
+
+
+class MemoryHitRepository(Repository[MemoryHit]):
+    model = MemoryHit
+
+    async def record(self, facts: list[MemoryFact], *, feature: str, context: str | None) -> None:
+        """A row per fact. The caller has already made them distinct: one answer, one hit per fact."""
+        await self.add_all([MemoryHit(fact_id=f.id, feature=feature, ref=context) for f in facts])
+
+    async def recent(self, limit: int | None = None) -> list[Recall]:
+        size = min(bounded(limit), HITS_CEILING)
+        stmt = (select(MemoryFact.ref, MemoryFact.title, MemoryHit.feature, MemoryHit.ref, MemoryHit.at)
+                .join(MemoryFact, MemoryFact.id == MemoryHit.fact_id)
+                .order_by(MemoryHit.at.desc(), MemoryHit.id.desc()).limit(size))
+        return [Recall(ref, title, feature, context, at)
+                for ref, title, feature, context, at in (await self.session.execute(stmt)).all()]
 
 
 class ConflictRepository(Repository[MemoryConflict]):
     model = MemoryConflict
+
+    async def open_between(self, a: str, b: str) -> MemoryConflict | None:
+        """An open conflict over this pair of facts, whichever of them was filed first."""
+        return await self.one(MemoryConflict.status == "open",
+                              or_(and_(MemoryConflict.a == a, MemoryConflict.b == b),
+                                  and_(MemoryConflict.a == b, MemoryConflict.b == a)))
 
     async def open(self, *, limit: int | None = None, offset: int = 0) -> Page[MemoryConflict]:
         return await self.page(MemoryConflict.status == "open", order_by=MemoryConflict.detected_at,

@@ -10,6 +10,8 @@ import { useData } from '@/lib/data';
 import { useRemote } from '@/lib/remote';
 import { cn } from '@/lib/utils';
 import { ago } from '@/pages/code/format';
+import { SEVERITY_TONE, clock } from '@/lib/live/work';
+import { plural } from '@/lib/words';
 
 /* Live Runs, for real: every run is a git worktree on a branch of its own, and this is what it did. */
 
@@ -20,7 +22,6 @@ const LEVEL_MARK: Record<RunLog['level'], string> = { info: '·', ok: '✓', war
 const KIND_LABEL: Record<RunStep['kind'], string> = {
   edit: 'writes code', merge: 'brings a branch in', test: 'runs the tests', review: 'reads the diff', handoff: 'your signature',
 };
-const SEVERITY_TONE: Record<string, 'danger' | 'warn' | 'neutral'> = { HIGH: 'danger', MEDIUM: 'warn', LOW: 'neutral' };
 const done = (s: RunStep) => s.status === 'done' || s.status === 'skipped' || s.status === 'failed';
 const progress = (r: RunDoc) => Math.round((100 * r.steps.filter(done).length) / Math.max(1, r.steps.length));
 
@@ -37,9 +38,12 @@ export function LiveRuns() {
   const [showDiff, setShowDiff] = useState(false);
   const [follow, setFollow] = useState(true);
   const [busy, setBusy] = useState(false);
-  // Merging writes to your real repository, so it takes two clicks.
-  const [armed, setArmed] = useState(false);
-  const [mergeResult, setMergeResult] = useState<MergeResult | null>(null);
+  // Merging writes to your real repository, so it takes two clicks. The first click and the merge's
+  // answer each belong to one run: kept with its ref, so picking another run shows neither.
+  const [armedRef, setArmedRef] = useState<string | null>(null);
+  const [merged, setMerged] = useState<{ ref: string; result: MergeResult } | null>(null);
+  const armed = run !== null && armedRef === run.ref;
+  const mergeResult = run && merged?.ref === run.ref ? merged.result : null;
   const logBox = useRef<HTMLDivElement>(null);
   const diff = useRemote(showDiff && run ? `diff:${run.ref}:${run.diff.commits}` : null, () => api.runDiff(run?.ref ?? ''));
 
@@ -70,21 +74,22 @@ export function LiveRuns() {
   };
   const merge = async () => {
     if (!run) return;
-    if (!armed) { setArmed(true); return; }
-    setArmed(false);
+    const ref = run.ref;
+    if (!armed) { setArmedRef(ref); return; }
+    setArmedRef(null);
     setBusy(true);
-    const result = await mergeRun(run.ref);
+    const result = await mergeRun(ref);
     setBusy(false);
     if (!result) return;
-    setMergeResult(result);
+    setMerged({ ref, result });
     if (result.merged) toast.success(`Merged into ${result.into}`, { description: `${result.commit} · undo with ${result.undo}` });
     else toast.error(`${result.conflicts.length} files collide with ${result.into}`, { description: 'Nothing was merged.' });
   };
   useEffect(() => {
-    if (!armed) return;
-    const id = window.setTimeout(() => setArmed(false), 4000);
+    if (!armedRef) return;
+    const id = window.setTimeout(() => setArmedRef(null), 4000);
     return () => window.clearTimeout(id);
-  }, [armed]);
+  }, [armedRef]);
 
   if (!run) {
     return (
@@ -150,7 +155,7 @@ export function LiveRuns() {
                   </div>
                   <p className="mt-1 truncate text-[13px] text-ink">{r.projectName} · {r.branch.replace('neurocode/', '')}</p>
                   <p className="mt-1 truncate text-[11.5px] text-dim">
-                    {r.status === 'waiting' ? `waiting for you · ${r.waitingOn ?? ''}` : `${progress(r)}% · ${r.diff.files} files`}
+                    {r.status === 'waiting' ? `waiting for you · ${r.waitingOn ?? ''}` : `${progress(r)}% · ${plural(r.diff.files, 'file')}`}
                   </p>
                 </ListRow>
               ))}
@@ -158,12 +163,12 @@ export function LiveRuns() {
           </div>
 
           {/* the run */}
-          <div className="flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto">
+          <div className="flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto [&>*]:shrink-0">
             <StatGrid cols={4}>
-              <Stat label="Changed" value={`${stat.files} files`} sub={`+${stat.insertions} −${stat.deletions} · ${stat.commits} commits`} />
+              <Stat label="Changed" value={plural(stat.files, 'file')} sub={`+${stat.insertions} −${stat.deletions} · ${plural(stat.commits, 'commit')}`} />
               <Stat label="Tests" value={run.tests.status} tone={run.tests.status === 'passed' ? 'ok' : run.tests.status === 'failed' ? 'danger' : 'neutral'}
                 sub={run.tests.command ?? 'no test command found'} />
-              <Stat label="Review" value={run.review.findings.length || '—'} tone={run.review.findings.some((f) => f.severity === 'HIGH') ? 'danger' : 'neutral'}
+              <Stat label="Review" value={run.review.by ? plural(run.review.findings.length, 'finding') : 'not yet'} tone={run.review.findings.some((f) => f.severity === 'HIGH') ? 'danger' : 'neutral'}
                 sub={run.review.by ? `by ${run.review.by}` : 'not reviewed yet'} />
               <Stat label="Wrote with" value={run.model ?? 'no model'} tone={run.model ? 'brand' : 'warn'} sub={run.requestedBy} />
             </StatGrid>
@@ -178,6 +183,11 @@ export function LiveRuns() {
               <Panel className={run.status === 'done' ? 'accent-left' : 'border-warn/35'} eyebrow={`Run ${run.status}`}
                 title={run.status === 'done' ? 'Finished' : 'Stopped'}>
                 <p className="text-[13.5px] leading-relaxed text-ink-2">{run.note}</p>
+                {run.review.reworkedAs && (
+                  <button onClick={() => setPicked({ link: linked, ref: run.review.reworkedAs ?? '' })} className="mt-2 text-[13px] text-brand hover:underline">
+                    Open {run.review.reworkedAs} →
+                  </button>
+                )}
               </Panel>
             )}
 
@@ -195,7 +205,7 @@ export function LiveRuns() {
                           <span className="block truncate text-[13.5px] font-medium text-ink">{child.agent ?? child.ref}</span>
                           <span className="mt-0.5 block truncate font-mono text-[12px] text-dim">{child.branch}</span>
                         </span>
-                        <span className="tnum shrink-0 text-[12.5px] text-soft">{child.diff.files} files</span>
+                        <span className="tnum shrink-0 text-[12.5px] text-soft">{plural(child.diff.files, 'file')}</span>
                         <Mono>{child.ref}</Mono>
                       </button>
                     );
@@ -259,7 +269,7 @@ export function LiveRuns() {
                 {detail.loading && logs.length === 0 && <span className="text-dim">loading…</span>}
                 {logs.map((l) => (
                   <div key={l.id} className="flex gap-2.5">
-                    <span className="shrink-0 text-dim">{l.at.slice(11, 19)}</span>
+                    <span className="shrink-0 text-dim">{clock(l.at)}</span>
                     <span className={cn('w-2.5 shrink-0 text-center', LEVEL_TONE[l.level])}>{LEVEL_MARK[l.level]}</span>
                     <span className={cn('min-w-0 break-words whitespace-pre-wrap', LEVEL_TONE[l.level])}>{l.line}</span>
                   </div>

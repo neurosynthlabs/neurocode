@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { FileCode, GitBranchPlus, Loader2, Target } from 'lucide-react';
+import { FileCode, GitBranchPlus, Globe, Loader2, Scale, Target } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Empty, Mono, Page, PageBody, PageHeader, Panel, Segmented, Tag, Toolbar } from '@/components/os';
+import { Empty, ListRow, Mono, Page, PageBody, PageHeader, Panel, Segmented, Tag, Toolbar } from '@/components/os';
 import { api, type CodeGraph, type ImpactTarget } from '@/lib/api';
+import { useData } from '@/lib/data';
 import { useRemote } from '@/lib/remote';
+import { ago } from './format';
 import type { Project } from '@/types';
 import { NODE_COLOR } from './format';
 import { ImpactPanel } from './shared';
@@ -58,6 +60,40 @@ function layout(g: CodeGraph) {
   };
 }
 
+/** The decisions memory holds for this project and for the whole workspace: facts filed under Decisions. */
+function Decisions({ project }: { project: Project }) {
+  const nav = useNavigate();
+  const { memory } = useData();
+  const decisions = useMemo(
+    () => memory.filter((f) => f.category === 'decisions' && !f.archived && (f.projectId === project.id || f.projectId === null)),
+    [memory, project.id],
+  );
+  if (decisions.length === 0) {
+    return (
+      <Panel>
+        <Empty icon={<Scale className="size-6" />} title={`No decisions recorded for ${project.name} yet`}
+          hint="Facts filed under Decisions in Memory appear here — from Add from text, or from a plan's answered question."
+          action={<Button size="sm" variant="outline" onClick={() => nav('/memory')}>Open Memory</Button>} />
+      </Panel>
+    );
+  }
+  return (
+    <Panel flush eyebrow={`${decisions.length} in memory · this project and the workspace`} title="Decisions">
+      {decisions.map((f) => (
+        <ListRow key={f.id} onClick={() => nav(`/memory?ref=${encodeURIComponent(f.ref)}`)}>
+          <div className="flex items-center gap-2">
+            <Mono tone={f.pinned ? 'brand' : 'neutral'}>{f.ref}</Mono>
+            {f.projectId === null && <Tag tone="violet"><Globe className="size-3" />workspace</Tag>}
+            <span className="ml-auto text-[11.5px] text-dim">{ago(f.createdAt)}</span>
+          </div>
+          <p className="mt-1 text-[13.5px] font-medium text-ink">{f.title}</p>
+          <p className="mt-0.5 line-clamp-2 text-[12.5px] text-soft">{f.body}</p>
+        </ListRow>
+      ))}
+    </Panel>
+  );
+}
+
 const idOf = (t: ImpactTarget | null) => (!t ? null : 'module' in t ? `m:${t.module}` : 'object' in t ? `d:${t.object}` : null);
 const nameOf = (t: ImpactTarget) => ('path' in t ? t.path : 'module' in t ? t.module : t.object);
 
@@ -104,10 +140,7 @@ export function LiveGraph({ project }: { project: Project }) {
 
       <PageBody>
         {tab === 'decisions' ? (
-          <Panel>
-            <Empty title={`No decisions recorded for ${project.name} yet`}
-              hint="Architecture decision records arrive with the agent runtime. The sample projects show what they look like." />
-          </Panel>
+          <Decisions project={project} />
         ) : g.error ? (
           <Empty title="The graph did not load" hint={g.error} action={<Button size="sm" variant="outline" onClick={g.reload}>Try again</Button>} />
         ) : !g.data || !L ? (

@@ -1,21 +1,18 @@
 import { useState, type SyntheticEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { ArrowRight, Loader2, LockKeyhole, Mail, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Field, LogoMark, Tag } from '@/components/os';
+import { Field, LogoMark } from '@/components/os';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 
 const POINTS = [
   ['Everyone signs in as themselves', 'What each person can change follows their role, and the server enforces it.'],
   ['Every change is on the record', 'Sign-ins and changes to access, keys or settings land in the audit log.'],
-  ['It all stays on your machine', 'Source, secrets and customer data never leave it.'],
+  ['The workspace is yours', 'It lives in your own database. A model sees only what a step sends it.'],
 ] as const;
 
 export default function Login() {
-  const nav = useNavigate();
-  const { state, workspace, login } = useAuth();
-  const demo = state === 'demo';
+  const { workspace, login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -23,7 +20,6 @@ export default function Login() {
 
   const submit = async (e: SyntheticEvent) => {
     e.preventDefault();
-    if (demo) { nav('/'); return; }
     if (!email.trim() || !password || busy) return;
     setBusy(true);
     setError('');
@@ -80,20 +76,20 @@ export default function Login() {
           </div>
 
           <h2 className="text-[22px] font-semibold tracking-[-0.02em] text-ink">
-            {workspace && !demo ? `Sign in to ${workspace.name}` : 'Sign in'}
+            {workspace ? `Sign in to ${workspace.name}` : 'Sign in'}
           </h2>
           <p className="mt-1.5 text-[14px] text-soft">Use the account an Owner or Admin made for you.</p>
 
           <div className="mt-7 space-y-3.5">
-            <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="username" autoFocus={!demo}
-              icon={<Mail className="size-3.5" />} placeholder="you@company.com" disabled={demo} />
+            <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="username" autoFocus
+              icon={<Mail className="size-3.5" />} placeholder="you@company.com" />
             <Field label="Password" type="password" value={password} onChange={setPassword} autoComplete="current-password"
-              icon={<LockKeyhole className="size-3.5" />} disabled={demo} />
+              icon={<LockKeyhole className="size-3.5" />} />
             {error && <p role="alert" className="text-[13px] text-danger">{error}</p>}
-            <Button type="submit" size="lg" className="w-full" disabled={busy || (!demo && (!email.trim() || !password))}>
+            <Button type="submit" size="lg" className="w-full" disabled={busy || !email.trim() || !password}>
               {busy
                 ? <><Loader2 className="size-3.5 animate-spin" />Signing in…</>
-                : <>{demo ? 'Open the demo' : 'Sign in'}<ArrowRight className="size-3.5" /></>}
+                : <>Sign in<ArrowRight className="size-3.5" /></>}
             </Button>
           </div>
 
@@ -101,13 +97,6 @@ export default function Login() {
             Forgot your password? An Owner or Admin can set a new one for you in Admin → People.
           </p>
 
-          {demo && (
-            <div className="mt-6 rounded-xl border border-line bg-surface p-3.5 text-[12.5px] leading-relaxed text-soft">
-              <Tag tone="neutral" className="mb-1.5">Public demo</Tag>
-              <p>There is no server behind this demo, so there is nothing to sign in to. Run it locally with
-                <code className="mx-1 font-mono text-ink-2">npm run dev:start</code>for accounts, roles and the audit log.</p>
-            </div>
-          )}
         </form>
       </main>
     </div>

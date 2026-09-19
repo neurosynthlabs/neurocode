@@ -7,6 +7,7 @@ that never reaches the network.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -23,6 +24,7 @@ from app.ai.gateway import Provider, Result
 from app.api import deps
 from app.api.app import create_api
 from app.services import runs as runtime
+from tests.fixtures.lanes import LANE_MODEL, PLAN
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
 ENGINEER = {"email": "dev@example.com", "name": "Dev", "password": "another long passphrase",
@@ -40,7 +42,7 @@ TWO_AGENTS = {
 
 
 class FakeGateway:
-    """Lanes without providers: two lanes, one of them ready, and an offline compiler."""
+    """Lanes without providers: two lanes, one of them ready, and a model that writes one plan."""
 
     def spread(self, n: int, role: str | None = None) -> list[str | None]:
         return ["groq"] * n
@@ -48,8 +50,8 @@ class FakeGateway:
     def report(self) -> list[dict[str, Any]]:
         return [{"id": "groq", "ready": True}, {"id": "gemini", "ready": False}]
 
-    def run(self, messages: Any, parse: Any, fallback: Any, **kw: Any) -> Result[Any]:
-        return Result(fallback(), Provider("rules", "offline planner"), 0, fallback="no model in tests")
+    def ask(self, messages: Any, parse: Any, **kw: Any) -> Result[Any]:
+        return Result(parse(json.dumps(PLAN)), Provider("groq", LANE_MODEL), 0)
 
 
 def run_git(args: list[str], cwd: Path) -> None:
@@ -218,6 +220,7 @@ async def test_a_run_is_a_plan_with_the_workflows_steps_and_is_counted_from_its_
 
     plan = (await seeded.execute(select(m.Plan).where(m.Plan.ref == body["planRef"]))).scalar_one()
     assert plan.workflow_id == made["id"] and plan.status == "dispatched"
+    assert (await client.get(f"/plans/{plan.ref}")).json()["workflowId"] == made["id"]
     assert plan.raw_requirement == "Build a tax report end to end."
     assert [(s.label, s.agent) for s in plan.steps] == [("Add the endpoint", "Backend Engineer"),
                                                         ("Add the screen", "Frontend Engineer")]

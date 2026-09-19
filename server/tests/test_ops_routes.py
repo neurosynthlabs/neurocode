@@ -21,8 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models as m
 from app.api import deps
 from app.api.app import create_api
-from app.data.loader import load_seed, sync_roles
 from app.services import ops
+from tests.fixtures.workspace import load_workspace
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
 ENGINEER = {"email": "dev@example.com", "name": "Dev", "password": "another long passphrase",
@@ -32,9 +32,7 @@ HEADERS = {"X-NC-Client": "test"}
 
 @pytest_asyncio.fixture
 async def api(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
-    await load_seed(session)
-    await sync_roles(session)
-    await session.flush()
+    await load_workspace(session)
     monkeypatch.setattr(ops, "probe_http", lambda url: (False, 3, "ConnectionRefusedError"))
     app = create_api(db=None)
 
@@ -96,7 +94,8 @@ async def test_the_overview_is_this_machine_and_the_real_gate(client: AsyncClien
     assert {"db", "schema", "pg_dump", "backup", "disk", "secrets", "lanes", "keys", "embeddings", "web",
             "ollama", "worktrees", "silent", "failures"} <= set(checks)
     assert checks["db"]["status"] == "ok" and checks["schema"]["status"] == "ok"
-    assert all(c["env"] == "LOCAL" for c in body["checks"])
+    # Every check is of this machine, so none carries an environment label that could only ever say so.
+    assert all("env" not in c for c in body["checks"])
     assert {"Python", "PostgreSQL", "Routing", "AI calls today"} <= {r["k"] for r in body["runtime"]}
 
 
@@ -120,7 +119,7 @@ async def test_deliveries_are_runs_and_what_became_of_them(client: AsyncClient, 
     assert by_ref["RUN-801"]["note"] == "git reset --hard 7654321"
     assert by_ref["RUN-802"]["status"] == "discarded"
     assert by_ref["RUN-803"]["status"] == "failed" and by_ref["RUN-803"]["note"] == "tests would not start"
-    assert by_ref["RUN-804"]["status"] == "ready" and by_ref["RUN-804"]["env"] == "Legacy ERP"
+    assert by_ref["RUN-804"]["status"] == "ready" and by_ref["RUN-804"]["project"] == "Legacy ERP"
     stats = body["stats"]
     assert stats["mergedToday"] >= 1 and stats["merged"] >= 1 and stats["failed"] >= 1 and stats["discarded"] >= 1
     assert len((await client.get("/ops/deliveries", params={"limit": 2})).json()["items"]) == 2
@@ -270,8 +269,57 @@ async def test_secrets_are_names_and_need_workspace_admin(api: FastAPI, client: 
         assert (await stranger.get("/ops/overview")).status_code == 401
 
 
+async def test_a_saved_key_is_said_to_live_in_the_keys_file_this_gateway_writes(
+        api: FastAPI, client: AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The store used to read "server/secrets.json" whatever the gateway was really writing to, and
+    NEUROCODE_SECRETS_PATH moves that file."""
+    from app.ai import lanes
+    from app.ai.gateway import Gateway
+    from app.ai.ledger import MemoryLedger
+    from app.secrets import Secrets
+
+    for lane in lanes.LANES:
+        if lane.env:
+            monkeypatch.delenv(lane.env, raising=False)
+    elsewhere = tmp_path / "keys" / "held-here.json"
+    elsewhere.parent.mkdir()
+    gw = Gateway(MemoryLedger(), Secrets(elsewhere))
+    gw.secrets.set(lanes.BY_ID["groq"].secret, "gsk_not_a_real_key")
+    api.dependency_overrides[deps.gateway] = lambda: gw
+
+    by_id = {r["id"]: r for r in (await client.get("/ops/secrets")).json()}
+    assert by_id["groq"]["set"] is True and by_id["groq"]["store"] == str(elsewhere)
+    assert by_id["cerebras"]["set"] is False and by_id["cerebras"]["store"] == "not set"
+
+
 def test_ps_elapsed_time_is_read_in_seconds():
     assert ops._etime_seconds("05:03") == 303
     assert ops._etime_seconds("02:00:01") == 7201
     assert ops._etime_seconds("1-00:00:00") == 86400
     assert ops._etime_seconds("soon") is None
+
+
+async def test_devops_shows_the_folders_the_runtime_really_uses(client: AsyncClient,
+                                                                monkeypatch: pytest.MonkeyPatch):
+    """The screen read `repos_dir` and `worktrees_dir` while runs and onboarding kept their own paths, so
+    it named a folder nothing used and counted test leftovers as real worktrees."""
+    from app import onboarding
+    from app.services import runs
+    from app.settings import SERVER_DIR, Settings, settings
+
+    used = settings()
+    # The tests point both at a temporary folder (conftest), so nothing here lands in the server's own.
+    assert SERVER_DIR not in used.worktrees_dir.parents and SERVER_DIR not in used.repos_dir.parents
+    assert runs.worktrees_dir() == used.worktrees_dir
+    assert onboarding.source_root({"id": "p", "source": {"kind": "git", "repo": "x"}}) == used.repos_dir / "p"
+    assert onboarding.REPOS_DIR == used.repos_dir
+
+    runtime = {r["k"]: r["v"] for r in (await client.get("/ops/overview")).json()["runtime"]}
+    assert runtime["Repositories"] == str(used.repos_dir)
+    assert str(runtime["Worktrees"]).startswith(f"{used.worktrees_dir} · ")
+
+    # Unset, they are the folders clones and worktrees have always gone to: nobody's data moves.
+    monkeypatch.delenv("NEUROCODE_WORKTREES_DIR")
+    monkeypatch.delenv("NEUROCODE_REPOS_DIR")
+    defaults = Settings(_env_file=None)
+    assert defaults.repos_dir == SERVER_DIR / ".repos" and defaults.worktrees_dir == SERVER_DIR / ".worktrees"

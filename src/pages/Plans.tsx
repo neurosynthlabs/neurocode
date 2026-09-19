@@ -1,28 +1,26 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  ArrowDown, FileCode, Database, Boxes, HelpCircle, FlaskConical, CircleCheck,
-  CircleDot, Circle, CircleX, MinusCircle, Play, Cpu, RefreshCw, Check,
+  ArrowDown, FileCode, Database, Boxes, HelpCircle, FlaskConical, Play, Cpu, RefreshCw, Check, Workflow,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Page, PageHeader, PageBody, Panel, Tag, RiskPill, Mono, ListRow, Empty,
   BlockBar, SectionTitle, KV, Bar,
 } from '@/components/os';
-import { projectName } from '@/mock/projects';
 import { inFlight, useData } from '@/lib/data';
+import type { RunDoc } from '@/lib/api';
+import { workflowsApi } from '@/lib/live/workflows';
+import { projectLabel } from '@/lib/live/work';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
-import type { Plan, PlanStepState } from '@/types';
+import type { Plan } from '@/types';
 import { ago } from '@/lib/time';
 
-const STATE_ICON: Record<PlanStepState, { icon: typeof Circle; cls: string; mark: string }> = {
-  done:    { icon: CircleCheck, cls: 'text-ok',     mark: '✓' },
-  active:  { icon: CircleDot,   cls: 'text-brand',  mark: '●' },
-  todo:    { icon: Circle,      cls: 'text-dim',    mark: '○' },
-  failed:  { icon: CircleX,     cls: 'text-danger', mark: '✗' },
-  skipped: { icon: MinusCircle, cls: 'text-dim',    mark: '–' },
-};
+/* A plan's steps are what was agreed; how far the work got is its run's to say. The server moves a
+   plan step only once, at dispatch, so progress here is read from the newest run that carries the plan. */
+const FINISHED = ['done', 'skipped', 'failed'];
+const finished = (r: RunDoc) => r.steps.filter((s) => FINISHED.includes(s.status)).length;
 
 const STAGES = [
   { k: 'rawRequirement',       label: 'Raw requirement',      hint: 'what you actually typed' },
@@ -30,40 +28,62 @@ const STAGES = [
   { k: 'technicalRequirement', label: 'Technical requirement',hint: 'what has to change in the code' },
 ] as const;
 
-/** Which planner wrote a compiled plan. The rules planner is marked as such: it is not a model. */
-function CompiledBy({ p }: { p: Plan }) {
-  if (!p.compiler) return null;
-  const rules = p.compiler.provider === 'rules';
-  return (
-    <span title={rules ? 'Keyword rules, not a model. Set DEEPSEEK_API_KEY or run Ollama for a real compile.' : `Compiled by ${p.compiler.model}`}>
-      <Tag tone={rules ? 'warn' : 'brand'}>
-        <Cpu className="size-3" />{rules ? 'offline planner' : p.compiler.model} · {(p.compiler.ms / 1000).toFixed(1)}s
-      </Tag>
-    </span>
-  );
+/** Which model compiled a plan, or the workflow that wrote it. */
+function CompiledBy({ p, workflow }: { p: Plan; workflow: string | null }) {
+  if (p.compiler) {
+    return (
+      <span title={`Compiled by ${p.compiler.model}`}>
+        <Tag tone="brand"><Cpu className="size-3" />{p.compiler.model} · {(p.compiler.ms / 1000).toFixed(1)}s</Tag>
+      </span>
+    );
+  }
+  if (!p.workflowId) return null;
+  return <Tag tone="violet"><Workflow className="size-3" />From workflow {workflow ?? p.workflowId}</Tag>;
 }
 
 export default function Plans() {
   const nav = useNavigate();
-  const { plans, mode, settleQuestion, dispatchPlan, recompile } = useData();
+  const { plans, runs, projects, settleQuestion, dispatchPlan, recompile } = useData();
+  const [workflows, setWorkflows] = useState<Record<string, string>>({});
   const wanted = useSearchParams()[0].get('ref');
-  const [sel, setSel] = useState(wanted ?? plans[0]?.ref ?? '');
-  const [draft, setDraft] = useState<{ index: number; text: string } | null>(null);
+  // ?ref= (⌘K) opens a plan, also when this screen is already showing; a click picks another until the link changes.
+  const [picked, setPicked] = useState<{ link: string | null; ref: string } | null>(null);
+  const sel = (picked && picked.link === wanted ? picked.ref : null) ?? wanted ?? plans[0]?.ref ?? '';
+  // An answer being typed belongs to one plan's question, so opening another plan never shows it.
+  const [typing, setTyping] = useState<{ plan: string; index: number; text: string } | null>(null);
   const [working, setWorking] = useState<'dispatch' | 'recompile' | null>(null);
   const p = useMemo(() => plans.find((x) => x.ref === sel) ?? plans[0], [plans, sel]);
-  // ⌘K opens a plan with ?ref=, also when this screen is already showing
-  useEffect(() => { if (wanted) { setSel(wanted); setDraft(null); } }, [wanted]);
+  // Workflow names, only when a plan came from one: the plan keeps the id, the workflow keeps the name.
+  const fromWorkflow = plans.some((x) => x.workflowId);
+  useEffect(() => {
+    if (!fromWorkflow) return;
+    let live = true;
+    workflowsApi.list(null).then(
+      (found) => { if (live) setWorkflows(Object.fromEntries(found.map((w) => [w.id, w.name]))); },
+      (e: unknown) => { console.error('[NeuroCode] GET /workflows failed:', e); },
+    );
+    return () => { live = false; };
+  }, [fromWorkflow]);
+  // Runs arrive newest first, so the first lead run for a plan is its latest attempt.
+  const runOf = useMemo(() => {
+    const m = new Map<string, RunDoc>();
+    runs.forEach((r) => { if (r.planRef && !r.parent && !m.has(r.planRef)) m.set(r.planRef, r); });
+    return m;
+  }, [runs]);
 
   if (!p) {
     return (
       <Page>
         <PageHeader title="Plans" subtitle="The requirement compiler." />
-        <PageBody><Empty title="No plans yet" hint="Compile a requirement from the Command Center." /></PageBody>
+        <PageBody><Empty title="No plans yet" hint="Compile a requirement from the Command Center. If no project is onboarded, onboard one in Projects first." /></PageBody>
       </Page>
     );
   }
 
-  const doneSteps = p.steps.filter((s) => s.state === 'done').length;
+  const run = runOf.get(p.ref);
+  const draft = typing?.plan === p.ref ? typing : null;
+  const setDraft = (next: { index: number; text: string } | null) => setTyping(next && { plan: p.ref, ...next });
+  const workflow = p.workflowId ? workflows[p.workflowId] ?? null : null;
   const underway = inFlight(p);
   const open = p.openQuestions.length;
 
@@ -79,15 +99,11 @@ export default function Plans() {
     const ok = await dispatchPlan(p.ref);
     setWorking(null);
     if (!ok) return;
-    toast.success(`${p.ref} dispatched`, { description: `${p.taskRef} is in progress. ${p.steps[0]?.agent ?? 'The first agent'} starts.` });
+    toast.success(`${p.ref} dispatched`, { description: `${p.taskRef} is in progress. Its run, once one starts, is in Live runs.` });
     nav('/tasks');
   };
 
   const again = async () => {
-    if (mode !== 'live') {
-      toast('Re-compiling needs the local API', { description: 'This demo runs on sample data. Start it with npm run dev:start.' });
-      return;
-    }
     setWorking('recompile');
     const doc = await recompile(p.ref);
     setWorking(null);
@@ -106,21 +122,25 @@ export default function Plans() {
         {/* Plan list */}
         <div className="no-scrollbar w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[300px] overflow-y-auto border-b border-line md:border-b-0 md:border-r">
           {plans.map((x) => {
-            const d = x.steps.filter((s) => s.state === 'done').length;
+            const r = runOf.get(x.ref);
             return (
-              <ListRow key={x.ref} active={x.ref === p.ref} onClick={() => { setSel(x.ref); setDraft(null); }}>
+              <ListRow key={x.ref} active={x.ref === p.ref} onClick={() => setPicked({ link: wanted, ref: x.ref })}>
                 <div className="flex items-center gap-2">
                   <Mono tone={x.ref === p.ref ? 'brand' : 'neutral'}>{x.ref}</Mono>
                   {!inFlight(x) && <Tag tone="neutral">draft</Tag>}
                   <span className="ml-auto"><RiskPill risk={x.risk} bare /></span>
                 </div>
-                <p className="mt-1 line-clamp-2 text-[13px] text-ink">{x.technicalRequirement.split('.')[0]}.</p>
+                <p className="mt-1 line-clamp-2 text-[13px] text-ink">{(x.technicalRequirement || x.rawRequirement).split('.')[0]}.</p>
                 <div className="mt-1.5 flex items-center gap-2">
-                  <BlockBar pct={(d / x.steps.length) * 100} width={10} />
-                  <span className="tnum text-[11.5px] text-dim">{d}/{x.steps.length}</span>
-                  <span className="ml-auto text-[11.5px] text-dim">conf {x.confidence}%</span>
+                  {r ? (
+                    <>
+                      <BlockBar pct={(finished(r) / Math.max(1, r.steps.length)) * 100} width={10} />
+                      <span className="tnum text-[11.5px] text-dim">{finished(r)}/{r.steps.length}</span>
+                    </>
+                  ) : <span className="text-[11.5px] text-dim">{x.steps.length} steps</span>}
+                  <span className="ml-auto text-[11.5px] text-dim">{x.confidence === null ? 'not compiled' : `conf ${x.confidence}%`}</span>
                 </div>
-                <p className="mt-1 truncate text-[11px] text-dim">{x.taskRef} · {projectName(x.projectId)}</p>
+                <p className="mt-1 truncate text-[11px] text-dim">{x.taskRef} · {projectLabel(projects, x.projectId)}</p>
               </ListRow>
             );
           })}
@@ -131,15 +151,15 @@ export default function Plans() {
           <div className="mb-4 flex flex-wrap items-center gap-2">
             <Mono tone="brand">{p.ref}</Mono>
             <Mono>{p.taskRef}</Mono>
-            <Tag tone="neutral">{projectName(p.projectId)}</Tag>
+            <Tag tone="neutral">{projectLabel(projects, p.projectId)}</Tag>
             <RiskPill risk={p.risk} />
-            <CompiledBy p={p} />
-            <span className="ml-auto text-[12.5px] text-dim">compiled {ago(p.createdAt)}</span>
+            <CompiledBy p={p} workflow={workflow} />
+            <span className="ml-auto text-[12.5px] text-dim">{p.compiler ? 'compiled' : 'written'} {ago(p.createdAt)}</span>
           </div>
 
           {/* Compiler chain */}
           <div className="space-y-0">
-            {STAGES.map((s, i) => (
+            {STAGES.filter((s) => p[s.k]).map((s, i) => (
               <div key={s.k}>
                 <Panel eyebrow={s.hint} title={s.label} className={i === 0 ? 'border-brand/35' : undefined}>
                   <p className={cn('leading-relaxed', i === 0 ? 'text-[14px] text-ink' : 'text-[13.5px] text-ink-2')}>
@@ -176,50 +196,48 @@ export default function Plans() {
 
             <div className="flex justify-center py-1.5"><ArrowDown className="size-3.5 text-line-strong" /></div>
 
-            <Panel eyebrow="Architecture impact" title="What this changes structurally" className="border-warn/30">
-              <p className="text-[13.5px] leading-relaxed text-ink-2">{p.architectureImpact}</p>
-            </Panel>
-
-            <div className="flex justify-center py-1.5"><ArrowDown className="size-3.5 text-line-strong" /></div>
+            {p.architectureImpact && (
+              <>
+                <Panel eyebrow="Architecture impact" title="What this changes structurally" className="border-warn/30">
+                  <p className="text-[13.5px] leading-relaxed text-ink-2">{p.architectureImpact}</p>
+                </Panel>
+                <div className="flex justify-center py-1.5"><ArrowDown className="size-3.5 text-line-strong" /></div>
+              </>
+            )}
 
             {/* Steps */}
             <Panel
-              eyebrow="Implementation plan"
-              title={`${doneSteps} of ${p.steps.length} steps complete`}
-              actions={<span className="flex items-center gap-2"><BlockBar pct={(doneSteps / p.steps.length) * 100} width={14} /></span>}
+              eyebrow={run ? `${run.ref} · ${finished(run)} of ${run.steps.length} run steps finished` : 'Implementation plan'}
+              title={`${p.steps.length} step${p.steps.length === 1 ? '' : 's'}, as agreed`}
+              actions={run && (
+                <span className="flex items-center gap-2">
+                  <BlockBar pct={(finished(run) / Math.max(1, run.steps.length)) * 100} width={14} />
+                  <Button size="xs" variant="ghost" onClick={() => nav(`/runs?ref=${run.ref}`)}>Open run</Button>
+                </span>
+              )}
               flush
             >
               <div className="divide-y divide-line">
-                {p.steps.map((s) => {
-                  const S = STATE_ICON[s.state];
-                  const Icon = S.icon;
-                  return (
-                    <div key={s.id} className={cn('flex items-start gap-3 px-3.5 py-2.5', s.state === 'active' && 'bg-brand/5')}>
-                      <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[12px] text-dim">{s.n}</span>
-                      <Icon className={cn('mt-px size-3.5 shrink-0', S.cls)} />
-                      <span className="min-w-0 flex-1">
-                        <span className={cn('text-[13.5px]', s.state === 'todo' ? 'text-soft' : 'font-medium text-ink')}>{s.label}</span>
-                        <span className="block text-[12.5px] text-dim">{s.detail}</span>
-                      </span>
-                      <span className="shrink-0 text-right">
-                        <span className="block text-[12px] text-soft">{s.agent}</span>
-                        {s.durationS !== undefined && (
-                          <span className="tnum block font-mono text-[11.5px] text-dim">
-                            {s.durationS >= 60 ? `${Math.floor(s.durationS / 60)}m ${s.durationS % 60}s` : `${s.durationS}s`}
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                  );
-                })}
+                {p.steps.map((s) => (
+                  <div key={s.id} className="flex items-start gap-3 px-3.5 py-2.5">
+                    <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[12px] text-dim">{s.n}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="text-[13.5px] font-medium text-ink">{s.label}</span>
+                      {s.detail && <span className="block text-[12.5px] text-dim">{s.detail}</span>}
+                    </span>
+                    <span className="shrink-0 text-right text-[12px] text-soft">{s.agent}</span>
+                  </div>
+                ))}
               </div>
             </Panel>
           </div>
 
           {/* Confidence + questions */}
           <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <Panel eyebrow="How sure the OS is" title={`Confidence: ${p.confidence}%`}>
-              <Bar pct={p.confidence} tone={p.confidence >= 85 ? 'ok' : p.confidence >= 70 ? 'warn' : 'danger'} height="h-1.5" />
+            <Panel eyebrow="How sure the compiler said it is" title={p.confidence === null ? 'Confidence: not compiled' : `Confidence: ${p.confidence}%`}>
+              {p.confidence !== null && (
+                <Bar pct={p.confidence} tone={p.confidence >= 85 ? 'ok' : p.confidence >= 70 ? 'warn' : 'danger'} height="h-1.5" />
+              )}
               <SectionTitle className="mt-3 mb-1.5">Evidence</SectionTitle>
               <div className="space-y-1">
                 {p.compiler ? (
@@ -227,22 +245,19 @@ export default function Plans() {
                     <KV k="Memory consulted" v={p.cited?.length ? p.cited.join(' · ') : 'nothing matched'} />
                     <KV k="Files named" v={p.affectedFiles.length} />
                     <KV k="Database objects named" v={p.affectedDb.length} />
-                    <KV k="Compiled by" v={p.compiler.provider === 'rules' ? 'offline planner, not a model' : p.compiler.model} />
+                    <KV k="Compiled by" v={p.compiler.model} />
                   </>
                 ) : (
-                  <>
-                    <KV k="Source files read" v={p.affectedFiles.length + 5} />
-                    <KV k="Database objects mapped" v={p.affectedDb.length} />
-                    <KV k="Previous fixes reviewed" v={4} />
-                    <KV k="Decisions cited" v="ADR-47 · ADR-49 · MEM-142" />
-                  </>
+                  <p className="text-[12.5px] text-soft">
+                    Steps written by {workflow ? `the ${workflow} workflow` : 'a workflow'}, not compiled — nothing was read or weighed to write them.
+                  </p>
                 )}
               </div>
               <SectionTitle className="mt-3 mb-1.5">Unknown</SectionTitle>
-              <p className="text-[12.5px] text-warn">
+              <p className={cn('text-[12.5px]', open > 0 ? 'text-warn' : 'text-dim')}>
                 {open > 0
-                  ? `${open} business question${open > 1 ? 's' : ''} not documented anywhere in the codebase.`
-                  : 'Nothing material is unknown for this plan.'}
+                  ? `${open} open question${open > 1 ? 's' : ''} the compiler would not guess at.`
+                  : 'No question was left open.'}
               </p>
             </Panel>
 
@@ -297,6 +312,7 @@ export default function Plans() {
           </div>
 
           <Panel className="mt-3" eyebrow="Verification" title={<span className="flex items-center gap-1.5"><FlaskConical className="size-3.5 text-brand" />Test plan</span>} flush>
+            {p.testPlan.length === 0 && <p className="px-3.5 py-3 text-[13px] text-dim">No test plan was written for this plan.</p>}
             <div className="divide-y divide-line">
               {p.testPlan.map((t, i) => (
                 <div key={i} className="flex items-start gap-2.5 px-3.5 py-1.5">

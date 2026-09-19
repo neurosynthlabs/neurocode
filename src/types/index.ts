@@ -1,14 +1,13 @@
 /* ═══════════════════════════════════════════════════════════════
    NEUROCODE — domain types
-   Single source of truth for every screen's mock data.
+   The shapes the screens read. Where a document comes from the
+   API, its type here is what the API sends.
    ═══════════════════════════════════════════════════════════════ */
 
-export type Health = 'ok' | 'warn' | 'danger' | 'info' | 'idle';
 export type Risk = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 export type Confidence = 'LOW' | 'MEDIUM' | 'HIGH';
 
 /* ── Projects ─────────────────────────────────────────────────── */
-export interface ProjectStat { label: string; value: string }
 export interface Coverage { label: string; pct: number }
 
 export interface Project {
@@ -18,8 +17,8 @@ export interface Project {
   stack: string[];
   kind: 'legacy' | 'greenfield' | 'platform';
   status: 'active' | 'onboarding' | 'paused' | 'archived';
-  memoryPct: number;
-  understoodPct: number;
+  /** The share of the source files the onboarding scan found that the code index holds. Null until indexed. */
+  understoodPct: number | null;
   lines: string;
   modules: number;
   dbTables: number;
@@ -29,7 +28,7 @@ export interface Project {
   coverage: Coverage[];
   work: { tasks: number; running: number; review: number; blocked: number };
   description: string;
-  /** Set on projects onboarded from this app; the seeded ones have none. */
+  /** Where the code was onboarded from. */
   source?: { kind: 'git' | 'local'; repo: string; branch?: string };
   /** Rules chosen in the onboarding wizard. */
   rules?: { id: string; label: string; note: string }[];
@@ -40,29 +39,6 @@ export interface Project {
   codeIndex?: { files: number; symbols: number; edges: number; unresolved: number; ms: number; at: string };
   /** Glob patterns the onboarding wizard left out; re-indexing keeps leaving them out. */
   excluded?: string[];
-}
-
-/* ── Agents ───────────────────────────────────────────────────── */
-export type AgentStatus = 'running' | 'idle' | 'waiting' | 'blocked' | 'error' | 'disabled';
-
-export interface Agent {
-  id: string;
-  name: string;
-  role: string;
-  icon: string;
-  model: string;
-  fallbackModel?: string;
-  status: AgentStatus;
-  tools: string[];
-  skills: string[];
-  autonomy: 'supervised' | 'semi' | 'autonomous';
-  tasksDone: number;
-  successRate: number;
-  avgMinutes: number;
-  tokens24h: number;
-  cost24h: number;
-  systemPrompt: string;
-  guardrails: string[];
 }
 
 /* ── Tasks / Plans ────────────────────────────────────────────── */
@@ -117,40 +93,24 @@ export interface Plan {
   affectedDb: string[];
   architectureImpact: string;
   risk: Risk;
-  confidence: number;
+  /** What the compiler said of itself; null for a plan it did not compile (a workflow's). */
+  confidence: number | null;
   createdAt: string;
   steps: PlanStep[];
   testPlan: string[];
   openQuestions: string[];
-  /** Compiled plans: `draft` until dispatched. Seeded plans are read from their steps instead. */
+  /** `draft` until dispatched. */
   status?: 'draft' | 'dispatched';
+  /** The workflow that ran the plan, once one has. */
+  workflowId: string | null;
   answered?: { q: string; a: string }[];
   deferred?: string[];
   /** The memory facts the compiler was given. */
   cited?: string[];
-  compiler?: { provider: 'deepseek' | 'ollama' | 'rules'; model: string; ms: number };
-}
-
-/* ── Live runs (parallel agents) ──────────────────────────────── */
-export interface RunLogLine { t: string; level: 'info' | 'ok' | 'warn' | 'err' | 'tool'; text: string }
-export interface AgentRun {
-  id: string;
-  agentId: string;
-  agentName: string;
-  taskRef: string;
-  projectId: string;
-  status: AgentStatus;
-  progress: number;
-  step: string;
-  worktree: string;
-  model: string;
-  startedAt: string;
-  elapsed: string;
-  tokensIn: number;
-  tokensOut: number;
-  cost: number;
-  filesTouched: string[];
-  log: RunLogLine[];
+  /** The code and documents retrieval handed the compiler; empty for a plan compiled before that, or from a workflow. */
+  grounding?: { kind: string; ref: string; path: string }[];
+  /** Null for a plan a workflow wrote rather than the compiler. */
+  compiler?: { provider: string; model: string; ms: number } | null;
 }
 
 /* ── Memory ───────────────────────────────────────────────────── */
@@ -166,15 +126,42 @@ export interface MemoryFact {
   body: string;
   reason: string;
   source: string;
-  projectId: string | 'global';
+  /** Null for a fact that belongs to the workspace, and so to every project. */
+  projectId: string | null;
   confidence: Confidence;
-  strength: number;
-  hits: number;
+  /** Recalls in the last 24 hours: each time a feature cited the fact or handed it to a model. */
+  hits24h: number;
   createdAt: string;
-  lastUsed: string;
+  /** The latest recall; null when nothing has used it yet. */
+  lastUsedAt: string | null;
   evidence: string[];
   tags: string[];
   pinned: boolean;
+  archived: boolean;
+  archivedAt: string | null;
+}
+
+/** Two facts that cannot both be true. `a` and `b` are the facts' ids. */
+export interface MemoryConflict {
+  id: string;
+  topic: string;
+  a: string;
+  b: string;
+  detected: string;
+  detail: string;
+  suggestion: string;
+  severity: 'HIGH' | 'MEDIUM' | 'LOW';
+  /** A resolved conflict is kept, not deleted, so it still streams as a change — as `resolved`. */
+  status: 'open' | 'resolved';
+  /** Which side was kept, and by whom. Only once resolved. */
+  resolution?: ConflictResolution['resolution'];
+}
+
+/** What resolving a conflict answers: the conflict's id and its new state, not the whole document. */
+export interface ConflictResolution {
+  id: string;
+  status: 'resolved';
+  resolution: { keep: 'a' | 'b'; by: string };
 }
 
 /* ── Knowledge ────────────────────────────────────────────────── */
@@ -198,116 +185,6 @@ export interface KnowledgeDoc {
   linkedTo: string[];
 }
 
-/* ── Code intelligence ────────────────────────────────────────── */
-export interface CodeNode {
-  id: string;
-  name: string;
-  path: string;
-  kind: 'folder' | 'file' | 'class' | 'sproc' | 'table' | 'component';
-  lang?: string;
-  children?: CodeNode[];
-  loc?: number;
-  risk?: Risk;
-  lastChanged?: string;
-  owner?: string;
-}
-
-export interface SymbolDetail {
-  id: string;
-  name: string;
-  path: string;
-  kind: string;
-  loc: number;
-  complexity: number;
-  churn: number;
-  risk: Risk;
-  lastChanged: string;
-  summary: string;
-  dependencies: string[];
-  usedBy: string[];
-  database: string[];
-  storedProcedures: string[];
-  tests: string[];
-  knownBugs: string[];
-  decisions: string[];
-}
-
-/* ── Architecture / impact ────────────────────────────────────── */
-export interface GraphNode {
-  id: string;
-  label: string;
-  layer: 'ui' | 'api' | 'service' | 'repo' | 'sproc' | 'table' | 'external';
-  risk: Risk;
-  x: number;
-  y: number;
-}
-export interface GraphEdge { from: string; to: string; kind: 'calls' | 'reads' | 'writes' | 'depends' }
-
-export interface ImpactReport {
-  target: string;
-  risk: Risk;
-  confidence: number;
-  modules: number;
-  apis: number;
-  tests: number;
-  legacyDeps: number;
-  blastRadius: { label: string; items: string[] }[];
-  warnings: string[];
-  recommendation: string;
-}
-
-/* ── Testing ──────────────────────────────────────────────────── */
-export interface TestSuite {
-  id: string;
-  name: string;
-  kind: 'build' | 'lint' | 'unit' | 'integration' | 'api' | 'e2e' | 'security' | 'regression' | 'visual';
-  status: 'pass' | 'fail' | 'warn' | 'running' | 'skipped';
-  passed: number;
-  total: number;
-  durationS: number;
-  runner: string;
-}
-export interface FailedTest {
-  id: string;
-  name: string;
-  suite: string;
-  reason: string;
-  legacyExpected: boolean;
-  aiRecommendation: string;
-  file: string;
-  line: number;
-  diff?: string;
-}
-
-/* ── Review ───────────────────────────────────────────────────── */
-export interface ReviewCheck { id: string; label: string; status: 'pass' | 'fail' | 'warn'; note: string }
-export interface ReviewFinding {
-  id: string;
-  severity: 'blocker' | 'major' | 'minor' | 'nit';
-  file: string;
-  line: number;
-  rule: string;
-  message: string;
-  suggestion: string;
-  agent: string;
-}
-export interface Review {
-  id: string;
-  ref: string;
-  taskRef: string;
-  projectId: string;
-  reviewer: string;
-  verdict: 'approved' | 'changes_requested' | 'pending';
-  round: number;
-  createdAt: string;
-  checks: ReviewCheck[];
-  findings: ReviewFinding[];
-  reviewerNote: string;
-  filesChanged: number;
-  additions: number;
-  deletions: number;
-}
-
 /* ── Git / worktrees ──────────────────────────────────────────── */
 export interface Worktree {
   id: string;
@@ -326,7 +203,7 @@ export interface Worktree {
 }
 export interface Commit { sha: string; message: string; author: string; at: string; files: number; branch: string }
 
-/* ── MCP / tools / ACP ────────────────────────────────────────── */
+/* ── MCP ──────────────────────────────────────────────────────── */
 export interface McpServer {
   id: string;
   name: string;
@@ -334,56 +211,20 @@ export interface McpServer {
   status: 'connected' | 'disconnected' | 'error' | 'auth_required';
   scope: 'global' | 'project' | 'local';
   command: string;
+  /** What the last check found. Empty, and the numbers null, until a check has run. */
   tools: { name: string; description: string; risk: Risk }[];
-  resources: number;
-  prompts: number;
-  latencyMs: number;
-  calls24h: number;
-  errorRate: number;
-  /** Registered from this app: its output stays untrusted until you promote it. */
+  resources: number | null;
+  prompts: number | null;
+  /** The round trip of the check's tools/list request. */
+  latencyMs: number | null;
+  checkedAt: string | null;
+  /** Why the last check did not connect; empty when it did. */
+  lastError: string;
+  /** Registered from this app: untrusted until someone trusts it, and a stdio server's command is never launched until then. */
   untrusted?: boolean;
   defaultEffect?: 'ask' | 'allow-read' | 'deny';
   /** The config exactly as it was reviewed in the wizard. */
   config?: string;
-}
-
-export interface AcpClient {
-  id: string;
-  name: string;
-  editor: string;
-  version: string;
-  status: 'connected' | 'idle' | 'disconnected';
-  sessionId: string;
-  capabilities: string[];
-  permissionMode: string;
-  lastPing: string;
-  messages: number;
-}
-
-/* ── Models ───────────────────────────────────────────────────── */
-export interface ModelEntry {
-  id: string;
-  name: string;
-  vendor: string;
-  kind: 'reasoning' | 'coding' | 'vision' | 'small' | 'embedding' | 'reranker';
-  hosting: 'local' | 'remote';
-  contextK: number;
-  inPer1M: number;
-  outPer1M: number;
-  status: 'ready' | 'loading' | 'offline';
-  latencyMs: number;
-  quality: number;
-  calls24h: number;
-  cost24h: number;
-  notes: string;
-}
-export interface RoutingRule {
-  id: string;
-  when: string;
-  route: string;
-  fallback: string;
-  enabled: boolean;
-  hits24h: number;
 }
 
 /* ── Skills / commands / hooks / plugins ──────────────────────── */
@@ -417,24 +258,6 @@ export interface SlashCommand {
   enabled: boolean;
 }
 
-export type HookEvent =
-  | 'SessionStart' | 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse'
-  | 'Stop' | 'SubagentStop' | 'PreCompact' | 'Notification' | 'PreCommit' | 'PostDeploy';
-
-export interface Hook {
-  id: string;
-  event: HookEvent;
-  matcher: string;
-  command: string;
-  scope: 'global' | 'project';
-  enabled: boolean;
-  blocking: boolean;
-  fires24h: number;
-  lastFired: string;
-  lastResult: 'ok' | 'blocked' | 'error';
-  description: string;
-}
-
 export interface Plugin {
   id: string;
   name: string;
@@ -448,140 +271,24 @@ export interface Plugin {
   updatedAt: string;
 }
 
-/* ── Workflows (deterministic orchestration) ──────────────────── */
-export interface WorkflowPhase {
-  id: string;
-  title: string;
-  detail: string;
-  mode: 'parallel' | 'pipeline' | 'single' | 'loop';
-  agents: number;
-  state: PlanStepState;
-}
-export interface WorkflowDef {
-  id: string;
-  name: string;
-  description: string;
-  trigger: string;
-  phases: WorkflowPhase[];
-  runs: number;
-  avgAgents: number;
-  avgMinutes: number;
-  lastRun: string;
-  lastResult: 'success' | 'failed' | 'partial';
-  scope: 'global' | 'project';
-}
-
-/* ── DevOps ───────────────────────────────────────────────────── */
-export interface Environment {
-  id: string;
-  name: string;
-  kind: 'local' | 'staging' | 'production';
-  status: Health;
-  url: string;
-  version: string;
-  deployedAt: string;
-  uptime: string;
-  cpu: number;
-  mem: number;
-  requests: string;
-  errorRate: number;
-  requiresApproval: boolean;
-}
-export interface Deployment {
-  id: string;
-  env: string;
-  version: string;
-  status: 'success' | 'failed' | 'running' | 'rolled_back' | 'awaiting_approval';
-  by: string;
-  at: string;
-  durationS: number;
-  commit: string;
-}
-export interface Container { id: string; name: string; image: string; status: 'up' | 'down' | 'restarting'; cpu: number; mem: string; ports: string }
-
-/* ── Research / brainstorm ────────────────────────────────────── */
-export interface ResearchReport {
-  id: string;
-  ref: string;
-  question: string;
-  status: 'complete' | 'running' | 'queued';
-  createdAt: string;
-  durationS: number;
-  agents: number;
-  sources: { kind: string; count: number }[];
-  summary: string;
-  findings: string[];
-  alternatives: { name: string; pros: string[]; cons: string[]; verdict: string }[];
-  risks: string[];
-  recommendation: string;
-  citations: { label: string; url: string }[];
-  confidence: number;
-}
-
-export interface BrainstormNode { id: string; stage: string; title: string; items: string[] }
-export interface BrainstormSession {
-  id: string;
-  ref: string;
-  idea: string;
-  createdAt: string;
-  status: 'complete' | 'running';
-  nodes: BrainstormNode[];
-  devilsAdvocate: string[];
-  mvp: string[];
-  roadmap: { phase: string; weeks: string; items: string[] }[];
-  verdict: string;
-  score: number;
-}
-
 /* ── Activity ─────────────────────────────────────────────────── */
 export interface ActivityEvent {
   id: string;
+  /** The time of day, HH:MM:SS, for a feed row. */
   t: string;
+  /** When it happened, ISO 8601 at full precision: what grouping by day and ordering read. */
+  at: string;
   actor: string;
   actorKind: 'human' | 'agent' | 'system' | 'hook' | 'tool';
   action: string;
   detail: string;
-  projectId: string;
+  /** Null for what happened to the workspace rather than to one project. */
+  projectId: string | null;
   level: 'info' | 'ok' | 'warn' | 'err';
   taskRef?: string;
 }
 
-/* ── Sessions / checkpoints ───────────────────────────────────── */
-export interface Checkpoint {
-  id: string;
-  label: string;
-  at: string;
-  files: number;
-  tokens: number;
-  restorable: boolean;
-}
-export interface Session {
-  id: string;
-  ref: string;
-  title: string;
-  projectId: string;
-  startedAt: string;
-  duration: string;
-  status: 'active' | 'ended' | 'forked';
-  messages: number;
-  tokens: number;
-  cost: number;
-  agents: string[];
-  checkpoints: Checkpoint[];
-  summary: string;
-}
-
 /* ── Permissions ──────────────────────────────────────────────── */
-export interface PermissionRule {
-  id: string;
-  pattern: string;
-  tool: string;
-  effect: 'allow' | 'ask' | 'deny';
-  risk: Risk;
-  scope: 'global' | 'project';
-  hits24h: number;
-  note: string;
-}
 export interface ApprovalRequest {
   id: string;
   ref: string;
@@ -590,38 +297,16 @@ export interface ApprovalRequest {
   tool: string;
   risk: Risk;
   requestedAt: string;
-  projectId: string;
+  projectId: string | null;
   payload: string;
   reason: string;
   status: 'pending' | 'approved' | 'denied';
-}
-
-/* ── Cost ─────────────────────────────────────────────────────── */
-export interface CostBucket { label: string; tokensIn: number; tokensOut: number; cost: number; calls: number; share: number }
-export interface CostDay { day: string; cost: number; local: number; remote: number }
-
-/* ── Evals ────────────────────────────────────────────────────── */
-export interface EvalSuite {
-  id: string;
-  name: string;
-  target: string;
-  kind: 'regression' | 'capability' | 'safety' | 'cost';
-  cases: number;
-  passed: number;
-  score: number;
-  delta: number;
-  lastRun: string;
-  status: 'pass' | 'fail' | 'warn' | 'running';
-}
-export interface EvalCase {
-  id: string;
-  suite: string;
-  name: string;
-  expected: string;
-  got: string;
-  status: 'pass' | 'fail' | 'partial';
-  scoreDelta: number;
-  judge: string;
+  /** Set once decided. `decidedBy` is the person's id, and absent when no person closed it. */
+  decidedAt?: string;
+  decidedBy?: string;
+  /** The run stopped at this gate, and which of its steps. */
+  runRef?: string;
+  step?: number;
 }
 
 /* ── Global search ────────────────────────────────────────────── */
@@ -635,9 +320,3 @@ export interface SearchHit {
   meta?: string;
 }
 
-/* ── Settings ─────────────────────────────────────────────────── */
-export interface SettingGroup {
-  id: string;
-  name: string;
-  items: { id: string; label: string; description: string; kind: 'toggle' | 'select' | 'text' | 'secret'; value: string | boolean; options?: string[] }[];
-}

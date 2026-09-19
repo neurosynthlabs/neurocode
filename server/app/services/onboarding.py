@@ -4,7 +4,7 @@ The measuring itself is unchanged — `app/onboarding.py` walks the tree and rec
 proven without a parser, and the code index adds symbols and the dependency graph. What this service
 adds is the order of events and the honesty at each stage: every step lands in the activity log as it
 happens, a failure sets the project to `paused` with the reason instead of leaving it half-made, and
-the project record says plainly how far the pipeline actually got.
+the project record says plainly what was measured and what was not.
 
 The work runs in the background with database sessions of its own, so a clone that takes a minute
 never holds a request open.
@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import onboarding
 from ..ai.gateway import Gateway
+from ..data import roster
 from ..data.base import utcnow
 from ..data.engine import Database
 from ..models import Project
@@ -32,20 +33,13 @@ from .retrieval import RetrievalService
 
 @dataclass(slots=True)
 class Spec:
-    """What the wizard asked for. The flags decide how long the pipeline claims to be, nothing more."""
+    """What the wizard asked for."""
 
     source: str
     repo: str
     branch: str = "main"
     excluded: list[str] = field(default_factory=list)
-    connect_db: bool = True
-    mine_git: bool = True
-    ingest_docs: bool = True
     rules: list[dict[str, Any]] = field(default_factory=list)
-
-    @property
-    def steps(self) -> int:
-        return onboarding.step_count(self.connect_db, self.mine_git, self.ingest_docs)
 
 
 class OnboardingService:
@@ -81,7 +75,7 @@ class OnboardingService:
 async def _say(db: Database, project_id: str, name: str, action: str, detail: str,
                level: str = "ok") -> None:
     async with db.session() as s:
-        await ActivityRepository(s).record(actor="Architect", actor_kind="agent", action=action,
+        await ActivityRepository(s).record(actor=roster.ARCHITECT, actor_kind="agent", action=action,
                                            detail=f"{name} · {detail}", level=level,
                                            project_id=project_id)
 
@@ -115,7 +109,7 @@ async def onboard(db: Database, gateway: Gateway, project_id: str, spec: Spec) -
         await _say(db, project_id, name, "Onboarding failed", reason, "err")
         return
 
-    measured = onboarding.measured(found, spec.steps)
+    measured = onboarding.measured(found)
     async with db.session() as s:
         project = await ProjectRepository(s).get(project_id)
         if project is None:
@@ -126,7 +120,7 @@ async def onboard(db: Database, gateway: Gateway, project_id: str, spec: Spec) -
         project.stored_procs = found["storedProcs"]
         project.kind, project.status = measured["kind"], "active"
         project.coverage, project.description = measured["coverage"], measured["description"]
-        project.understood_pct, project.last_active_at = measured["understoodPct"], utcnow()
+        project.last_active_at = utcnow()
 
     langs = " · ".join(f"{lang['name']} {lang['pct']}%" for lang in found["languages"][:4])
     await _say(db, project_id, name, "Stack detected", langs or "no source files recognised")
@@ -149,9 +143,8 @@ async def onboard(db: Database, gateway: Gateway, project_id: str, spec: Spec) -
     async with db.session() as s:
         project = await ProjectRepository(s).get(project_id)
         if project is not None:
-            full = onboarding.measured(found, spec.steps, coverage=idx.coverage(), index=idx.stats())
+            full = onboarding.measured(found, coverage=idx.coverage(), index=idx.stats())
             project.coverage, project.description = full["coverage"], full["description"]
-            project.understood_pct = full["understoodPct"]
 
     try:
         async with db.session() as s:
@@ -164,5 +157,4 @@ async def onboard(db: Database, gateway: Gateway, project_id: str, spec: Spec) -
                f"{built['chunks']} chunks · "
                f"{'meaning and words' if built['semantic'] else 'words only, no embedding lane'}")
     await _say(db, project_id, name, "Onboarding paused",
-               f"step {onboarding.INDEXED_STEPS + 1} of {spec.steps}: business rules and test mapping "
-               "are not connected yet", "warn")
+               "business rules and test mapping are not connected yet", "warn")

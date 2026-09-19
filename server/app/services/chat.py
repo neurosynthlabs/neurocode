@@ -31,6 +31,7 @@ from ..repositories import ChatRepository, MemoryRepository, NotFound, ProjectRe
 from . import extensions
 from .errors import Refused
 from .extensions import SkillFile, Snapshot
+from .knowledge import MemoryService
 from .retrieval import RetrievalService
 
 MAX_STEPS = 6                 # tool calls in one answer, then it must answer with what it has
@@ -79,6 +80,8 @@ class Tools:
         self.skills = skills
         self.retrieval = RetrievalService(session, gateway)
         self.memory = MemoryRepository(session)
+        #: The facts this tool call put in front of the model, recorded as recalls once it has run.
+        self.recalled: list[str] = []
 
     def root(self) -> Path:
         found = onboarding.source_root({"id": self.project.id, "source": {
@@ -95,6 +98,7 @@ class Tools:
         if not found:
             return (f"Retrieval holds nothing about {q!r}. The project may not be indexed yet.",
                     f"{q} · nothing found")
+        self.recalled += [x["ref"] for x in found if x["kind"] == "memory"]
         body = "\n\n".join(f"[{x['kind']} · {x['ref']}]\n{x['text'][:700]}" for x in found)
         ways = ", ".join(sorted({x["how"] for x in found}))
         return f"{len(found)} pieces about {q!r}:\n\n{body}", f"{q} · {len(found)} pieces ({ways})"
@@ -173,6 +177,7 @@ class Tools:
         facts = await self.memory.search(q, limit=12)
         if not facts:
             return f"Memory holds nothing about {q!r}.", f"{q} · nothing remembered"
+        self.recalled += [f.ref for f in facts]
         body = "\n".join(f"{f.ref} · {f.title} — {f.body[:200]}" for f in facts)
         return f"{len(facts)} facts:\n{body}", f"{q} · {len(facts)} facts"
 
@@ -346,8 +351,11 @@ async def _wire(session: AsyncSession, chat: Chat, project_name: str,
 
 
 async def _tool_turn(session: AsyncSession, gateway: Gateway, chat: Chat, project: Project,
-                     turn: Turn, skills: Sequence[SkillFile] = ()) -> None:
-    """Run one tool and write what it found — a refusal is reported into the conversation, not raised."""
+                     turn: Turn, skills: Sequence[SkillFile] = (), recalled: set[str] | None = None) -> None:
+    """Run one tool and write what it found — a refusal is reported into the conversation, not raised.
+
+    `recalled` is the facts this answer has already been handed, so a fact two tools both return is
+    counted as one recall of it, not two."""
     tool = BY_NAME.get(turn.tool.strip())
     if tool is None:
         await ChatRepository(session).say(
@@ -355,14 +363,19 @@ async def _tool_turn(session: AsyncSession, gateway: Gateway, chat: Chat, projec
                                        f"{', '.join(BY_NAME)}.",
             tool=turn.tool.strip()[:40] or "?", arguments=turn.arguments or {}, detail="refused", ok=False)
         return
+    tools = Tools(session, gateway, project, skills)
     try:
-        observation, detail = await tool.run(Tools(session, gateway, project, skills), turn.arguments or {})
+        observation, detail = await tool.run(tools, turn.arguments or {})
         ok = True
     except Refused as refused:
         observation, detail, ok = str(refused), "refused", False
     except Exception as e:                       # a tool that breaks must not end the session
         observation, detail, ok = f"{type(e).__name__}: {e}", "failed", False
     chat.tool_calls += 1
+    seen = recalled if recalled is not None else set()
+    if ok and (fresh := [r for r in dict.fromkeys(tools.recalled) if r not in seen]):
+        seen.update(fresh)
+        await MemoryService(session).recall(fresh, via="chat", context=chat.ref)
     await ChatRepository(session).say(chat.id, role="tool", body=observation[:MAX_OBSERVATION],
                                       tool=tool.name, arguments=turn.arguments or {},
                                       why=turn.why[:160], detail=detail, ok=ok)
@@ -404,15 +417,18 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str) -> None:
 
     # Before the model is asked anything, retrieval answers the cheapest question: what do we already
     # hold about this? It is a turn like any other, so the model replays it and the person sees it.
+    recalled: set[str] = set()
     if asked:
         async with db.session() as s:
             try:
                 ground, pieces = await RetrievalService(s, gateway).grounding(chat.project_id, asked)
             except Exception:
-                ground, pieces = "", 0
+                ground, pieces = "", []
             if ground:
                 await ChatRepository(s).say(chat.id, role="tool", body=ground, tool="grounding",
-                                            detail=f"{pieces} pieces from the index", ok=True)
+                                            detail=f"{len(pieces)} pieces from the index", ok=True)
+                recalled.update(p["ref"] for p in pieces if p["kind"] == "memory")
+                await MemoryService(s).recall(recalled, via="retrieval", context=chat.ref)
 
     try:
         for step in range(MAX_STEPS + 1):
@@ -464,7 +480,7 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str) -> None:
                 fresh = await ChatRepository(s).by_ref(ref)
                 if fresh is None:
                     break
-                await _tool_turn(s, gateway, fresh, project, turn, found.skills)
+                await _tool_turn(s, gateway, fresh, project, turn, found.skills, recalled)
     finally:
         async with db.session() as s:
             fresh = await ChatRepository(s).by_ref(ref)

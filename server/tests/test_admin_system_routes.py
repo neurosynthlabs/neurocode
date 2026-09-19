@@ -23,12 +23,13 @@ from app.ai.ledger import MemoryLedger
 from app.api import deps
 from app.api.app import create_api
 from app.data.engine import Database
-from app.data.loader import load_seed, sync_roles
+from app.data.loader import sync_roles
 from app.repositories.identity import AuditRepository
 from app.secrets import Secrets
 from app.services.identity import IdentityService
 from app.services.maintenance import COLLECTIONS, find_pg_dump
 from app.settings import Settings
+from tests.fixtures.workspace import load_workspace
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
 VIEWER = {"email": "vik@example.com", "password": "another good password"}
@@ -56,9 +57,7 @@ async def api(session: AsyncSession, settings: Settings, tmp_path: Path, lane_ga
     for lane in lanes.LANES:
         if lane.env:
             monkeypatch.delenv(lane.env, raising=False)
-    await load_seed(session)
-    await sync_roles(session)
-    await session.flush()
+    await load_workspace(session)
 
     db = Database(url=settings.test_database_url)
     app = create_api(db=db)
@@ -135,9 +134,13 @@ async def test_the_database_report_counts_rows_rather_than_estimating_them(clien
     assert report["walLevel"] in ("minimal", "replica", "logical")
     assert report["sizeBytes"] > 0 and report["pageSize"] > 0 and report["pages"] > 0
     assert report["indexes"] == report["indexHealth"]["count"] > 0
+    # Counted in full, named only in part: the screen says how many, and a name list is capped.
+    health = report["indexHealth"]
+    assert health["unusedCount"] >= len(health["unused"]) and health["invalidCount"] >= len(health["invalid"])
+    assert health["invalidCount"] == 0 and isinstance(health["unusedCount"], int)
     assert report["backups"] == []                        # a temporary directory, nothing in it yet
 
-    # The seed is written but not committed, so the planner still believes the workspace is empty.
+    # The fixture is written but not committed, so the planner still believes the workspace is empty.
     # Anything reading n_live_tup would report zero tasks; this reports what is really there.
     tasks = next(t for t in report["tables"] if t["name"] == "tasks")
     assert tasks["rows"] == len((await client.get("/tasks")).json()) > 0
@@ -217,25 +220,96 @@ async def test_optimizing_runs_outside_the_request_and_says_what_it_did(live_adm
         assert step["ok"] is True, f"{step['step']} did not run: {step['detail']}"
 
 
-# ── back to the seed ─────────────────────────────────────────────
-async def test_a_reset_needs_the_header_and_puts_the_sample_work_back(client: AsyncClient,
-                                                                      session: AsyncSession):
+# ── emptying the workspace ───────────────────────────────────────
+async def test_a_reset_needs_the_header_and_empties_the_work_but_keeps_the_people(client: AsyncClient,
+                                                                                session: AsyncSession):
+    from sqlalchemy import func, select
+
+    from app import models as m
+    from app.data import catalogue
+
     unconfirmed = await client.post("/admin/reset")
     assert unconfirmed.status_code == 400 and "X-Confirm" in unconfirmed.json()["detail"]
+    assert "empties the workspace" in unconfirmed.json()["detail"]
 
-    waiting = next(t for t in (await client.get("/tasks")).json() if t["status"] == "backlog")
-    await client.patch(f"/tasks/{waiting['ref']}", json={"status": "in_progress"})
+    # Beside the fixture's projects, the rows that belong to no project — each of them has to go too.
+    session.add_all([
+        m.MemoryFact(id="m-ws", ref="MEM-9001", category="decisions", title="Workspace fact", body="Kept?"),
+        m.Chunk(project_id=None, kind="memory", ref="MEM-9001", path="decisions", title="t", body="b"),
+        m.Brainstorm(id="b-ws", ref="IDEA-9001", idea="An idea"),
+        m.Decision(id="release.9", subject="Release", verdict="ship"),
+        m.Pref(id="skills.rag", value=True),
+        m.WorkflowDefinition(id="wf-ws", name="Workspace flow", requirement_template="Do {input}"),
+        m.EvalSuite(id="es-ws", name="Workspace suite", target_kind="prompt"),
+        m.AiCall(feature="ask", lane="groq", model="m"),
+    ])
+    await session.flush()
+    # A call made for one of the fixture's projects: the project goes, what the call cost must not.
+    project_id = (await session.execute(select(m.Project.id).limit(1))).scalar_one()
+    session.add(m.AiCall(feature="agent", lane="groq", model="m", tokens_in=7, project_id=project_id))
+    await session.flush()
+    ledger_before = (await session.execute(select(func.count()).select_from(m.AiCall))).scalar_one()
+    people = (await session.execute(select(func.count()).select_from(m.User))).scalar_one()
+    audit_before = (await session.execute(select(func.count()).select_from(m.AuditEntry))).scalar_one()
 
     done = await client.post("/admin/reset", headers={"X-Confirm": "reset"})
     assert done.status_code == 200
     body = done.json()
-    assert body["ok"] is True and set(body["counts"]) == {name for name, _ in COLLECTIONS}
-    assert body["counts"]["tasks"] > 0 and body["counts"]["projects"] > 0
+    assert body["ok"] is True and body["emptied"] is True
+    assert set(body["counts"]) == {name for name, _ in COLLECTIONS}
+    assert {k: v for k, v in body["counts"].items() if k != "agents"} == dict.fromkeys(
+        (name for name, _ in COLLECTIONS if name != "agents"), 0)
+    assert body["counts"]["agents"] == len(catalogue.AGENTS)          # the roster is the product's
     assert body["compiler"]["provider"]
-    assert (await client.get(f"/tasks/{waiting['ref']}")).json()["status"] == "backlog"
+
+    async def left(model) -> int:
+        return (await session.execute(select(func.count()).select_from(model))).scalar_one()
+
+    for model in (m.Project, m.Task, m.Plan, m.Approval, m.MemoryFact, m.MemoryConflict, m.Chunk,
+                  m.ActivityEvent, m.McpServer, m.McpTool, m.Brainstorm, m.Decision,
+                  m.Pref, m.WorkflowDefinition, m.EvalSuite):
+        assert await left(model) == 0, model.__tablename__
+    assert await left(m.User) == people and people > 0                # accounts are kept
+    assert await left(m.Role) == len(catalogue.ROLES)                 # and the roles
+    assert await left(m.Agent) == len(catalogue.AGENTS)               # and the roster
+    assert (await client.get("/auth/me")).status_code == 200          # nobody was signed out
 
     recorded = (await AuditRepository(session).recent(action="data.reset")).items
-    assert len(recorded) == 1 and "backup" in recorded[0].detail
+    assert len(recorded) == 1 and "backup" in recorded[0].detail and recorded[0].target == "workspace emptied"
+    assert await left(m.AuditEntry) == audit_before + 1               # the log keeps everything before it
+    # The ledger is history: every line is still there, the project's line only without its project.
+    assert await left(m.AiCall) == ledger_before
+    orphaned = (await session.execute(select(m.AiCall.project_id).where(m.AiCall.tokens_in == 7))).scalar_one()
+    assert orphaned is None
+
+
+async def test_a_reset_forgets_every_projects_answer_so_a_new_project_of_the_same_name_is_asked(
+        client: AsyncClient, session: AsyncSession):
+    """A project's id is its repository's last path segment, and its standing answer to running tests
+    is a setting with no foreign key to it. Emptying kept the answer, so github.com/bob/erp onboarded
+    afterwards as 'erp' inherited github.com/alice/erp's "allowed" and ran its tests unasked."""
+    from sqlalchemy import select
+
+    from app import models as m
+    from app.repositories.runtime import ResultsRepository
+
+    session.add_all([
+        m.Setting(key="runtime.tests.erp", value="allowed"),
+        # Left behind by an emptying from before the rule: its project is already gone.
+        m.Setting(key="runtime.tests.gone", value="allowed"),
+        m.Setting(key="lanes.kept", value={"enabled": True}),          # the workspace's own: kept
+    ])
+    await session.flush()
+    assert (await ResultsRepository(session).answers(["erp"])) == {"erp": "allowed"}
+
+    assert (await client.post("/admin/reset", headers={"X-Confirm": "reset"})).status_code == 200
+
+    left = set((await session.execute(select(m.Setting.key))).scalars())
+    assert not {k for k in left if k.startswith("runtime.tests.")}
+    assert "lanes.kept" in left
+    session.add(m.Project(id="erp", name="Somebody else's ERP"))
+    await session.flush()
+    assert (await ResultsRepository(session).answers(["erp"])) == {}
 
 
 # ── the model lanes ──────────────────────────────────────────────

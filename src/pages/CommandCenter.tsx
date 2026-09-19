@@ -7,19 +7,19 @@ import {
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Page, PageBody, Panel, RiskPill, Dot, Mono, Empty, BlockBar } from '@/components/os';
-import type { AskAnswer } from '@/lib/api';
+import type { AskAnswer, RunDoc } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useProject } from '@/lib/project-context';
 import { useData } from '@/lib/data';
-import { agents } from '@/mock/agents';
-import { runs } from '@/mock/runs';
-import { budget } from '@/mock/cost';
-import { timeOf } from '@/mock/activity-extra';
+import { fetchModels, type ModelsReport } from '@/lib/live/models';
+import { clock } from '@/lib/live/work';
+import { ago } from '@/lib/time';
 import { cn } from '@/lib/utils';
 
 /* Home. One question in the middle of the screen, the way a good assistant opens, with the
    work that needs you laid out calmly underneath. The composer plans, asks memory or
-   brainstorms; all three answer with no key, and say which model (or rule) did. */
+   brainstorms. Planning and brainstorming need a model; asking memory answers without one, by
+   quoting the matching facts, and says so. */
 
 type Kind = 'plan' | 'ask' | 'idea';
 interface Mode { id: Kind; label: string; icon: LucideIcon; placeholder: string; action: string; verb: string; perm: string }
@@ -27,21 +27,18 @@ interface Suggestion { icon: LucideIcon; label: string; text: string }
 
 const MODES: Mode[] = [
   { id: 'plan', label: 'Plan', icon: GitBranchPlus, placeholder: 'Describe the change in English or Hinglish…', action: 'Compile Plan', verb: 'compile', perm: 'plans:compile' },
-  { id: 'ask', label: 'Ask', icon: MessagesSquare, placeholder: 'Ask what memory knows — “how is interstate GST split?”', action: 'Ask memory', verb: 'ask', perm: 'ai:use' },
+  { id: 'ask', label: 'Ask', icon: MessagesSquare, placeholder: 'Ask what memory knows about this project…', action: 'Ask memory', verb: 'ask', perm: 'ai:use' },
   { id: 'idea', label: 'Brainstorm', icon: Lightbulb, placeholder: 'Pitch an idea. It comes back as a brief that argues against itself.', action: 'Brainstorm', verb: 'brainstorm', perm: 'ai:use' },
 ];
 
-const SUGGESTIONS: Record<Kind, Suggestion[]> = {
+/* Shapes of a request, to start from. They name nothing in any codebase: a suggestion that mentioned a
+   class or a table would claim this workspace has it. What memory can be asked is built from memory. */
+const STARTERS: Record<'plan' | 'idea', Suggestion[]> = {
   plan: [
-    { icon: Bug, label: 'Fix a bug', text: 'Invoice mein tax galat aa raha hai — CGST/SGST interstate orders pe reverse ho raha hai. Fix karo.' },
-    { icon: Sparkles, label: 'Build a feature', text: 'Customers ko CSV se bulk upload karna hai, 50k rows tak, har galat row ka error ke saath.' },
-    { icon: WandSparkles, label: 'Refactor safely', text: 'BillingService mein rounding do jagah ho rahi hai. Ek jagah lao, behaviour bilkul same rehna chahiye.' },
-    { icon: ShieldCheck, label: 'Harden security', text: 'Login pe rate limiting aur account lockout lagao, har attempt audit log mein ho.' },
-  ],
-  ask: [
-    { icon: MessagesSquare, label: 'Interstate GST', text: 'How do we split CGST and SGST on interstate invoices?' },
-    { icon: MessagesSquare, label: 'Rounding', text: 'Where does invoice rounding happen, and why there?' },
-    { icon: MessagesSquare, label: 'Legacy tables', text: 'Which TRANS tables must never be modified directly?' },
+    { icon: Bug, label: 'Fix a bug', text: 'Fix a bug: what happens, what should happen instead, and where it shows up — ' },
+    { icon: Sparkles, label: 'Build a feature', text: 'Build a feature: who uses it, what they can do with it, and what must not change — ' },
+    { icon: WandSparkles, label: 'Refactor safely', text: 'Refactor, keeping the behaviour exactly the same: what to move, and why — ' },
+    { icon: ShieldCheck, label: 'Harden security', text: 'Harden security: what is exposed today, and what should be refused or logged — ' },
   ],
   idea: [
     { icon: Lightbulb, label: 'Vendor portal', text: 'A vendor portal where suppliers raise and track invoice disputes themselves.' },
@@ -49,6 +46,10 @@ const SUGGESTIONS: Record<Kind, Suggestion[]> = {
     { icon: Lightbulb, label: 'Offline orders', text: 'Field staff create orders offline, and they sync when the phone is back online.' },
   ],
 };
+
+/** How many of a run's steps are behind it, as a share of all of them. */
+const progress = (r: RunDoc) =>
+  Math.round((100 * r.steps.filter((s) => ['done', 'skipped', 'failed'].includes(s.status)).length) / Math.max(1, r.steps.length));
 
 function greeting() {
   const h = new Date().getHours();
@@ -60,7 +61,8 @@ export default function CommandCenter() {
   const loc = useLocation();
   const { project } = useProject();
   const { user, can } = useAuth();
-  const { tasks, approvals, activity, mode, health, runs: agentRuns, compile: compileRequirement, ask, brainstorm } = useData();
+  const { tasks, approvals, activity, memory, health, runs: agentRuns, compile: compileRequirement, ask, brainstorm } = useData();
+  const [models, setModels] = useState<ModelsReport | null>(null);
   const [kind, setKind] = useState<Kind>('plan');
   // Brainstorm's "Plan the MVP" lands here with the requirement drafted.
   const [req, setReq] = useState(() => (loc.state as { draft?: string } | null)?.draft ?? '');
@@ -74,38 +76,51 @@ export default function CommandCenter() {
   const compose = (loc.state as { compose?: number } | null)?.compose;
   useEffect(() => { if (compose) box.current?.focus(); }, [compose]);
 
-  const mine = useMemo(() => tasks.filter((t) => t.projectId === project.id), [tasks, project.id]);
+  // The day's spend is the gateway's own ledger. Without an answer the figure is left out, not guessed.
+  useEffect(() => {
+    let live = true;
+    fetchModels().then(
+      (report) => { if (live) setModels(report); },
+      (e: unknown) => { console.error('[NeuroCode] GET /models failed:', e); },
+    );
+    return () => { live = false; };
+  }, []);
+
+  const mine = useMemo(() => (project ? tasks.filter((t) => t.projectId === project.id) : []), [tasks, project]);
   const active = useMemo(() => mine.filter((t) => ['in_progress', 'review', 'blocked', 'planning'].includes(t.status)), [mine]);
   const pending = useMemo(() => approvals.filter((a) => a.status === 'pending'), [approvals]);
-  // Signed in, these are real worktrees; the demo shows the worked example.
-  const live = useMemo(() => (mode === 'live'
-    ? agentRuns.filter((r) => ['running', 'queued', 'waiting'].includes(r.status)).map((r) => ({
-      id: r.id, name: `${r.ref} · ${r.branch.replace('neurocode/', '')}`, state: r.status === 'waiting' ? 'waiting' : 'running',
-      step: r.status === 'waiting' ? `waiting for you · ${r.waitingOn ?? ''}` : r.steps.find((s) => s.status === 'running')?.label ?? 'starting…',
-      pct: Math.round((100 * r.steps.filter((s) => ['done', 'skipped', 'failed'].includes(s.status)).length) / Math.max(1, r.steps.length)),
-      to: `/runs?ref=${r.ref}`,
-    }))
-    : runs.filter((r) => r.status === 'running' || r.status === 'waiting').map((r) => ({
-      id: r.id, name: r.agentName, state: r.status, step: r.step, pct: r.progress, to: '/runs',
-    }))), [mode, agentRuns]);
+  const live = useMemo(() => agentRuns.filter((r) => ['running', 'queued', 'waiting'].includes(r.status)).map((r) => ({
+    id: r.id, name: `${r.ref} · ${r.branch.replace('neurocode/', '')}`, state: r.status === 'waiting' ? 'waiting' : 'running',
+    step: r.status === 'waiting' ? `waiting for you · ${r.waitingOn ?? ''}` : r.steps.find((s) => s.status === 'running')?.label ?? 'starting…',
+    pct: progress(r),
+    to: `/runs?ref=${r.ref}`,
+  })), [agentRuns]);
+  // A task's progress is how far its latest run got; a task no run has worked on shows no bar at all.
+  const latestRun = useMemo(() => {
+    const m = new Map<string, RunDoc>();
+    agentRuns.forEach((r) => { if (r.taskRef && !r.parent && !m.has(r.taskRef)) m.set(r.taskRef, r); });
+    return m;
+  }, [agentRuns]);
   const feed = useMemo(() => activity.slice(0, 6), [activity]);
   const running = mine.filter((t) => t.status === 'in_progress').length;
-  const agentsLive = agents.filter((a) => a.status === 'running').length;
+  const working = agentRuns.filter((r) => r.status === 'running').length;
+  const suggestions = useMemo<Suggestion[]>(() => {
+    if (kind !== 'ask') return STARTERS[kind];
+    const known = memory.filter((f) => !project || f.projectId === project.id || f.projectId === null || f.projectId === 'global');
+    return [...known.filter((f) => f.pinned), ...known.filter((f) => !f.pinned)].slice(0, 3).map((f) => ({
+      icon: MessagesSquare, label: f.title.length > 40 ? `${f.title.slice(0, 40)}…` : f.title, text: `What do we know about “${f.title}”?`,
+    }));
+  }, [kind, memory, project]);
 
   const compile = async (text: string) => {
-    if (mode !== 'live') {
-      // The public demo has no API: show where a compiled plan lands, using the sample plans.
-      toast('Demo: showing a compiled sample plan', { description: 'Run npm run dev:start to compile your own requirement.' });
-      nav('/plans');
-      return;
-    }
+    if (!project) return;
     setBusy(true);
     const plan = await compileRequirement(text, project.id);
     setBusy(false);
     if (!plan) return;
     setReq('');
     toast.success(`${plan.ref} compiled`, {
-      description: `${plan.steps.length} steps · ${plan.openQuestions.length} open questions · ${plan.compiler?.provider === 'rules' ? 'offline planner' : plan.compiler?.model}`,
+      description: `${plan.steps.length} steps · ${plan.openQuestions.length} open questions${plan.compiler ? ` · ${plan.compiler.model}` : ''}`,
     });
     nav('/plans');
   };
@@ -116,23 +131,24 @@ export default function CommandCenter() {
     if (kind === 'plan') { await compile(text); return; }
     setBusy(true);
     if (kind === 'ask') {
-      const a = await ask(text, project.id);
+      const a = await ask(text, project?.id);
       setBusy(false);
       if (a) setAnswer({ ...a, q: text });
       return;
     }
-    const doc = await brainstorm(text, project.id);
+    const doc = await brainstorm(text, project?.id);
     setBusy(false);
     if (!doc) return;
     setReq('');
-    toast.success(`${doc.ref} · ${doc.brief.title}`, {
-      description: doc.compiler.provider === 'rules' ? 'Brief written by the offline template.' : `Brief written by ${doc.compiler.model}.`,
-    });
+    toast.success(`${doc.ref} · ${doc.brief.title}`, { description: `Brief written by ${doc.compiler.model}.` });
     nav(`/brainstorm?ref=${doc.ref}`);
   };
 
-  const gateway = mode === 'live' ? health?.compiler : undefined;
-  const engine = !gateway ? 'Offline · demo' : gateway.provider !== 'rules' ? gateway.model : kind === 'plan' ? 'Offline planner' : 'Offline rules';
+  const gateway = health?.compiler;
+  const engine = !gateway ? 'Not connected' : gateway.provider !== 'rules' ? gateway.model : kind === 'ask' ? 'Memory search' : 'No model';
+  // Compiling is for a project: with none onboarded there is nothing to plan against.
+  const blocked = kind === 'plan' && !project;
+  const cost = models?.totals24h;
   const note = gateway?.note;
   const first = user?.name.split(/\s+/)[0] || 'there';
 
@@ -145,7 +161,9 @@ export default function CommandCenter() {
             {greeting()}, {first}
           </h1>
           <p className="mt-2.5 text-center text-[15px] text-soft">
-            What should we build in <span className="font-medium text-ink-2">{project.name}</span>?
+            {project
+              ? <>What should we build in <span className="font-medium text-ink-2">{project.name}</span>?</>
+              : <>Onboard a repository in <Link to="/projects" className="font-medium text-ink-2 underline-offset-4 hover:underline">Projects</Link> to start.</>}
           </p>
 
           <div className="composer mt-8 border border-line bg-surface p-2" style={{ borderRadius: 'calc(var(--radius) * 2.6)' }}>
@@ -180,9 +198,9 @@ export default function CommandCenter() {
               <span className="ml-auto hidden pr-2 text-[12px] text-dim md:inline">⌘↵ to {m.verb}</span>
               <button
                 onClick={() => void submit()}
-                disabled={!req.trim() || busy || !permitted}
+                disabled={!req.trim() || busy || !permitted || blocked}
                 aria-label={m.action}
-                title={permitted ? `${m.action} (⌘↵)` : 'Your role cannot do this'}
+                title={!permitted ? 'Your role cannot do this' : blocked ? 'Onboard a project first' : `${m.action} (⌘↵)`}
                 className="ml-auto grid size-9 shrink-0 place-items-center rounded-full bg-brand text-brand-ink transition-[opacity,transform] hover:scale-105 disabled:scale-100 disabled:opacity-30 md:ml-0"
               >
                 {busy ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-[18px]" strokeWidth={2.4} />}
@@ -225,7 +243,7 @@ export default function CommandCenter() {
           )}
 
           <div className="mt-4 flex flex-wrap justify-center gap-2">
-            {SUGGESTIONS[kind].map(({ icon: I, label, text }) => (
+            {suggestions.map(({ icon: I, label, text }) => (
               <button
                 key={label}
                 onClick={() => { setReq(text); box.current?.focus(); }}
@@ -238,9 +256,9 @@ export default function CommandCenter() {
 
           <p className="mt-7 text-center text-[13px] text-dim">
             <span className="text-ink-2">{running}</span> tasks running ·{' '}
-            <span className="text-ink-2">{agentsLive}</span> agents live ·{' '}
-            <span className={pending.length ? 'text-warn' : 'text-ink-2'}>{pending.length}</span> approvals waiting ·{' '}
-            <span className="text-ink-2">${budget.spent.toFixed(2)}</span> spent today
+            <span className="text-ink-2">{working}</span> runs working ·{' '}
+            <span className={pending.length ? 'text-warn' : 'text-ink-2'}>{pending.length}</span> approvals waiting
+            {cost && <>{' '}·{' '}{cost.costComplete ? '' : 'at least '}<span className="text-ink-2">${cost.costUsd.toFixed(2)}</span> spent in 24 h</>}
           </p>
         </section>
 
@@ -264,7 +282,7 @@ export default function CommandCenter() {
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-[14px] font-medium text-ink">{a.title}</span>
-                      <span className="mt-0.5 block truncate text-[12.5px] text-dim">{a.agent} · {a.requestedAt}</span>
+                      <span className="mt-0.5 block truncate text-[12.5px] text-dim">{a.agent} · {ago(a.requestedAt)}</span>
                     </span>
                     <RiskPill risk={a.risk} bare />
                     <ChevronRight className="size-4 shrink-0 text-dim" />
@@ -283,7 +301,9 @@ export default function CommandCenter() {
               <Empty title="Nothing in flight" hint="Describe a change above and it becomes a plan." />
             ) : (
               <div className="divide-y divide-line/60">
-                {active.slice(0, 5).map((t) => (
+                {active.slice(0, 5).map((t) => {
+                  const run = latestRun.get(t.ref);
+                  return (
                   <button key={t.id} onClick={() => nav(`/tasks?ref=${t.ref}`)}
                     className="flex w-full items-center gap-3.5 px-5 py-3.5 text-left transition-colors hover:bg-surface-2/60">
                     <Dot state={t.status} pulse={t.status === 'in_progress'} />
@@ -294,12 +314,15 @@ export default function CommandCenter() {
                         <span className="truncate capitalize">{t.status.replace('_', ' ')}</span>
                       </span>
                     </span>
-                    <span className="flex shrink-0 items-center gap-2.5">
-                      <BlockBar pct={t.progress} width={12} />
-                      <span className="tnum w-9 text-right text-[12.5px] text-soft">{t.progress}%</span>
-                    </span>
+                    {run && (
+                      <span className="flex shrink-0 items-center gap-2.5" title={`${run.ref}: steps finished`}>
+                        <BlockBar pct={progress(run)} width={12} />
+                        <span className="tnum w-9 text-right text-[12.5px] text-soft">{progress(run)}%</span>
+                      </span>
+                    )}
                   </button>
-                ))}
+                  );
+                })}
                 {active.length > 5 && (
                   <button onClick={() => nav('/tasks')} className="w-full px-5 py-3 text-left text-[13px] text-soft transition-colors hover:bg-surface-2/60 hover:text-ink">
                     {active.length - 5} more on the board →
@@ -341,10 +364,12 @@ export default function CommandCenter() {
             actions={<Button size="sm" variant="ghost" onClick={() => nav('/activity')}>All activity<ChevronRight className="size-3.5" /></Button>}
             flush
           >
-            <div className="divide-y divide-line/60">
+            {feed.length === 0 ? (
+              <Empty title="Nothing has happened yet" hint="Compiling a plan, onboarding a project or deciding an approval shows up here." />
+            ) : <div className="divide-y divide-line/60">
               {feed.map((e) => (
                 <div key={e.id} className="flex items-start gap-3.5 px-5 py-3">
-                  <span className="tnum mt-0.5 w-[62px] shrink-0 font-mono text-[12px] text-dim">{timeOf(e.t)}</span>
+                  <span className="tnum mt-0.5 w-[62px] shrink-0 font-mono text-[12px] text-dim">{clock(e.at)}</span>
                   <Dot state={e.level === 'err' ? 'error' : e.level} className="mt-1.5" />
                   <span className="min-w-0 flex-1">
                     <span className="block text-[13.5px] font-medium text-ink-2">{e.action}</span>
@@ -352,7 +377,7 @@ export default function CommandCenter() {
                   </span>
                 </div>
               ))}
-            </div>
+            </div>}
           </Panel>
         </section>
       </PageBody>

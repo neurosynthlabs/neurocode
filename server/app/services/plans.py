@@ -1,9 +1,9 @@
 """The requirement compiler, and what happens when a plan is dispatched.
 
 A requirement in English or Hinglish goes in; a plan, a task and — once nothing is left open — a run
-comes out. The compiler itself is unchanged and still lives in `ai/compiler.py`: it is handed the
-memory facts that match the requirement and records which ones, so a reader can check what the plan
-was based on. With no model, the keyword planner stands in and the plan says so.
+comes out. The compiler itself lives in `ai/compiler.py`: it is handed the memory facts that match the
+requirement and records which ones, so a reader can check what the plan was based on. With no model
+there is no plan — compiling is refused in words that say how to add one, and nothing is written.
 
 What this service adds is the part that must be true: a plan's questions are **rows**, so "nothing is
 left open" is a query rather than a promise, and dispatching refuses until they are settled.
@@ -15,8 +15,9 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..ai.compiler import AGENTS, Context, PlanOut, compile_plan
+from ..ai.compiler import Context, PlanOut, compile_plan
 from ..ai.gateway import Gateway, Result
+from ..data import roster
 from ..models import ChecklistItem, Plan, PlanQuestion, PlanStep, Project, Task, TaskAgent, WorkflowDefinition
 from ..repositories import (
     ActivityRepository,
@@ -26,7 +27,8 @@ from ..repositories import (
     ProjectRepository,
     TaskRepository,
 )
-from .errors import Refused
+from .errors import Refused, needs_a_model
+from .knowledge import MemoryService
 from .runs import RunService, _setup
 
 FACTS_FOR_CONTEXT = 6
@@ -55,17 +57,12 @@ class PlanService:
 
     async def _run_compiler(self, project: Project, requirement: str, answers: list[dict[str, str]],
                             actor: str | None) -> tuple[Result[PlanOut], list[str]]:
+        """Refused before anything is written when no model can answer, so a failed compile leaves no
+        task, no plan and no half-rewritten steps behind."""
         facts = await self._facts(requirement, project.id)
-        result, cited = await asyncio.to_thread(
-            compile_plan, self.gateway, requirement,
-            Context(project=_project_doc(project), facts=facts, answers=answers),
-            actor=actor, project=project.id)
-        if result.fallback:
-            await self.activity.record(
-                actor="AI Commander", actor_kind="agent", action="Compiler fell back",
-                detail=f"{result.fallback}. The offline planner stood in.", level="warn",
-                project_id=project.id)
-        return result, cited
+        context = Context(project=_project_doc(project), facts=facts, answers=answers)
+        return await asyncio.to_thread(needs_a_model, lambda: compile_plan(
+            self.gateway, requirement, context, actor=actor, project=project.id))
 
     # ── compiling ────────────────────────────────────────────────
     async def compile(self, project_id: str, requirement: str, *, by: str,
@@ -89,7 +86,7 @@ class PlanService:
         task = await self.tasks.add(Task(
             id=f"t{n}", ref=task_ref, title=out.title, project_id=project.id, status="planning",
             priority=out.priority, risk=out.risk, requirement=text,
-            layers=out.layers or ["Backend"], files=len(out.affectedFiles),
+            layers=list(out.layers), files=len(out.affectedFiles),
             checklist=[], assignees=[]))
         plan = await self.plans.add(Plan(
             id=f"p{n}", ref=f"PLAN-{n}", task_id=task.id, project_id=project.id, status="draft",
@@ -100,9 +97,10 @@ class PlanService:
             affected_modules=out.affectedModules, affected_files=out.affectedFiles,
             affected_db=out.affectedDb, test_plan=out.testPlan, cited=cited, compiler=result.meta()))
         await self._write_steps(plan, task, out)
+        await MemoryService(self.session).recall(cited, via="compile", context=plan.ref)
 
         await self.activity.record(
-            actor="AI Commander", actor_kind="agent", action="Requirement compiled",
+            actor=roster.COMMANDER, actor_kind="agent", action="Requirement compiled",
             detail=f"{plan.ref} · {len(out.steps)} steps · {len(out.openQuestions)} open questions · "
                    f"{result.provider.model}, {result.ms / 1000:.1f}s",
             level="ok", project_id=project.id, task_ref=task.ref)
@@ -122,7 +120,7 @@ class PlanService:
         if task is not None:
             for i, (label, _, _) in enumerate(steps, 1):
                 task.checklist.append(ChecklistItem(id=f"{task.id}-c{i}", n=i - 1, label=label, done=False))
-            for name in dict.fromkeys(agent for _, agent, _ in steps if agent != "AI Commander"):
+            for name in dict.fromkeys(agent for _, agent, _ in steps if agent != roster.COMMANDER):
                 task.assignees.append(TaskAgent(agent=name))
         await self.session.flush()
 
@@ -188,6 +186,7 @@ class PlanService:
         plan.affected_modules, plan.affected_files = out.affectedModules, out.affectedFiles
         plan.affected_db, plan.test_plan = out.affectedDb, out.testPlan
         plan.cited, plan.compiler = cited, result.meta()
+        await MemoryService(self.session).recall(cited, via="compile", context=plan.ref)
 
         for i, step in enumerate(out.steps, 1):
             plan.steps.append(PlanStep(id=f"{plan.id}-s{i}", n=i, label=step.label, agent=step.agent,
@@ -238,7 +237,7 @@ class PlanService:
         try:
             made = await RunService(self.session, self.gateway).plan_runs(plan, task, project, by)
         except Refused as refused:      # no code here, no git, nothing to branch from: say so, don't fail
-            await self.activity.record(actor="Orchestrator", actor_kind="agent", action="No run started",
+            await self.activity.record(actor=roster.ORCHESTRATOR, actor_kind="agent", action="No run started",
                                        detail=str(refused), level="warn", project_id=plan.project_id)
             return plan, []
         lead = made[-1]

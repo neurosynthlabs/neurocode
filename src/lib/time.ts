@@ -4,8 +4,8 @@
  * the screens have always read like a person talking: "2 min ago", "3 h ago". This is the one place
  * that turns one into the other.
  *
- * It passes anything that is not a timestamp straight through, which is what lets the same component
- * render the live API and the seed data the public demo runs on without knowing which it is holding.
+ * It passes anything that is not a timestamp straight through — a field the server already words, such
+ * as "never" — so a caller need not check which kind of value it holds.
  */
 
 const MINUTE = 60_000;

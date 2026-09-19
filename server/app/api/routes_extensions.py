@@ -4,6 +4,9 @@ Every route here reads. What is found comes off disk on each request (in a threa
 minute ago shows up without anything being imported; the switches themselves are prefs, written through
 `PUT /prefs/{key}` like every other screen setting. A key the screen sends back is looked up among what
 discovery found — it is never turned into a path.
+
+`projectId` may be left out. A new workspace has no project, and the Claude home on this machine is real
+before one exists, so without it the screens read that home alone and count no session.
 """
 from __future__ import annotations
 
@@ -17,32 +20,32 @@ from .deps import current_person, session
 
 router = APIRouter(prefix="/extensions", dependencies=[Depends(current_person)])
 
-PROJECT = Query(alias="projectId", min_length=1, max_length=80)
+PROJECT = Query(default=None, alias="projectId", min_length=1, max_length=80)
 
 
 @router.get("/skills")
-async def skills(project_id: str = PROJECT, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+async def skills(project_id: str | None = PROJECT, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     """Every skill this project's sessions can see, with the loads sessions really made."""
     return await ExtensionService(open_session).skills(project_id)
 
 
 @router.get("/skills/detail")
-async def skill(project_id: str = PROJECT, key: str = Query(min_length=1, max_length=400),
+async def skill(project_id: str | None = PROJECT, key: str = Query(min_length=1, max_length=400),
                 open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     return await ExtensionService(open_session).skill(project_id, key)
 
 
 @router.get("/commands")
-async def commands(project_id: str = PROJECT, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+async def commands(project_id: str | None = PROJECT, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     return await ExtensionService(open_session).commands(project_id)
 
 
 @router.get("/hooks")
-async def hooks(project_id: str = PROJECT, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+async def hooks(project_id: str | None = PROJECT, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     """The hooks Claude Code would run here, with anything that looks like a secret taken out."""
     return await ExtensionService(open_session).hooks(project_id)
 
 
 @router.get("/plugins")
-async def plugins(project_id: str = PROJECT, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+async def plugins(project_id: str | None = PROJECT, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     return await ExtensionService(open_session).plugins(project_id)

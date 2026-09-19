@@ -85,10 +85,17 @@ class Run(Base, Mixin):
     tests_sha: Mapped[str] = mapped_column(String(64), nullable=False, server_default="")
     #: Which parser read the output: pytest | jest | vitest | go | dotnet, or '' when none did.
     tests_runner: Mapped[str] = mapped_column(String(20), nullable=False, server_default="")
+    #: Which try this is when a goal is set — the first run is 1, each automatic rework adds one — and
+    #: how many tries the person allowed. goal_budget is null for a run with no goal.
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    goal_budget: Mapped[int | None] = mapped_column(Integer)
 
     #: The review's findings and verdict, and the merge once it happened.
     review: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     merged: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    #: The run's branch as last pushed to the project's own remote — `{remote, branch, sha, at, by,
+    #: compareUrl}` — or None while it lives only on this machine.
+    pushed: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     targets: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
 
     # A step points at this run twice: the run it belongs to, and — for a merge step — the agent run
@@ -230,6 +237,9 @@ class Chat(Base, Mixin):
     model: Mapped[str | None] = mapped_column(String(120))
     lane: Mapped[str | None] = mapped_column(String(40))
     note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    #: The prompt tokens the provider counted on the session's last model call: what the context meter
+    #: shows against the lane's window. Null until a model has answered.
+    context_tokens: Mapped[int | None] = mapped_column(Integer)
 
     messages: Mapped[list[ChatMessage]] = relationship(back_populates="chat", cascade="all, delete-orphan",
                                                        order_by="ChatMessage.id")
@@ -259,5 +269,11 @@ class ChatMessage(Base):
     why: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     detail: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     ok: Mapped[bool | None] = mapped_column()
+    #: What the model reasoned before it answered, when the lane returns it — shown folded, never sent
+    #: back to the model as part of the conversation.
+    reasoning: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    #: Set on turns a compaction has folded into a 'summary' message: kept for the person to read,
+    #: left out of what the model is sent.
+    compacted: Mapped[bool] = mapped_column(nullable=False, server_default="false")
 
     chat: Mapped[Chat] = relationship(back_populates="messages")

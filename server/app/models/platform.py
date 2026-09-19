@@ -42,12 +42,16 @@ class McpServer(Base, Mixin):
     status: Mapped[str] = mapped_column(McpStatus, nullable=False, server_default="disconnected")
     scope: Mapped[str] = mapped_column(Scope, nullable=False, server_default="global")
     command: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
-    resources: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    prompts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    calls_24h: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    error_rate: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, server_default="0")
-    #: Registered from this app: its output stays untrusted until a person promotes it.
+    #: Everything below is what the last check measured, and null until a check has run: a server
+    #: nobody has connected to has no latency, not a latency of zero.
+    resources: Mapped[int | None] = mapped_column(Integer)
+    prompts: Mapped[int | None] = mapped_column(Integer)
+    #: The round trip of the check's `tools/list` request, once the server was up and initialised.
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    #: Registered from this app: its output stays untrusted until a person promotes it — and while it is
+    #: untrusted a stdio server's command is never launched, not even to check it.
     untrusted: Mapped[bool] = mapped_column(nullable=False, server_default="false")
     default_effect: Mapped[str] = mapped_column(String(20), nullable=False, server_default="ask")
     #: The config exactly as it was reviewed in the wizard.
@@ -68,19 +72,29 @@ class McpTool(Base):
     server: Mapped[McpServer] = relationship(back_populates="tools")
 
 
-class PermissionRule(Base, Mixin):
-    """What a tool may do without asking. `ask` is the default, and the honest one."""
+class ToolRule(Base, Mixin):
+    """What an agent or a session may do without asking: allow, ask or deny, for a tool and a pattern.
 
-    __tablename__ = "permission_rules"
+    Tools are the things the runtime really does — `edit` (a path an agent writes), `command` (a command
+    line run in a worktree), `read` (a path a session reads), `web_fetch` (a URL), `web_search`, and
+    `mcp` (`server/tool`). A rule with no project is the workspace's; a project's rule is more specific
+    and wins. Every rule is one a person wrote: nothing is allowed by default that asked before.
+    """
 
-    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    __tablename__ = "tool_rules"
+    __table_args__ = (
+        CheckConstraint("action IN ('allow', 'ask', 'deny')", name="action"),
+        CheckConstraint("tool IN ('edit', 'command', 'read', 'web_fetch', 'web_search', 'mcp')", name="tool"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    tool: Mapped[str] = mapped_column(String(20), nullable=False)
+    #: A glob over the subject: `src/**`, `npm test*`, `*.example.com/*`, `github/*`.
     pattern: Mapped[str] = mapped_column(Text, nullable=False)
-    tool: Mapped[str] = mapped_column(String(120), nullable=False, server_default="")
-    effect: Mapped[str] = mapped_column(String(20), nullable=False, server_default="ask")
-    risk: Mapped[str] = mapped_column(Risk, nullable=False, server_default="LOW")
-    scope: Mapped[str] = mapped_column(Scope, nullable=False, server_default="global")
-    hits_24h: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    action: Mapped[str] = mapped_column(String(10), nullable=False)
     note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
 
 class Brainstorm(Base, Mixin):
@@ -127,12 +141,19 @@ class AiCall(Base):
     ms: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     tokens_in: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     tokens_out: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    #: Of tokens_in, how many the provider served from its prompt cache, and of tokens_out, how many were
+    #: reasoning — both only ever what the provider reported (0 when it reports nothing), because a
+    #: cache hit is priced differently and a reasoning token is paid for but never shown as the answer.
+    tokens_cached: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    tokens_reasoning: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     #: The agent that asked for it, when one did — plain text, because the roster is editable and an
     #: entry in the ledger must outlive the agent it describes. Without it there was no honest answer
     #: to "what has this agent spent", so the screen showed a zero that looked like a measurement.
     agent: Mapped[str] = mapped_column(String(60), nullable=False, server_default="")
     user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    #: SET NULL, not CASCADE: the ledger is history. Emptying a workspace or removing a project must not
+    #: erase what its model calls cost — that record is exactly what someone reaches for afterwards.
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"))
     #: The agent run the call was made for, so a run's tokens are a sum over its own lines rather than a
     #: guess by agent and time window. SET NULL: the ledger outlives the run, as it outlives users.
     run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id", ondelete="SET NULL"))

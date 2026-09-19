@@ -1,18 +1,21 @@
 import { useState, type SyntheticEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Check, KeyRound, Loader2, Sparkles } from 'lucide-react';
-import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Field, LogoMark, Tag } from '@/components/os';
-import { ApiError, api } from '@/lib/api';
+import { Field, LogoMark, SelectField } from '@/components/os';
+import { ApiError, api, type LaneId } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 
 /* First run. The workspace has nobody yet, so the first person to arrive names it and becomes its
-   Owner. AI is offered last and can wait: every feature already works on its offline rules. */
+   Owner. AI is offered last and can wait: planning and brainstorming need a model, and a free key is
+   enough; asking memory works without one. */
 
 const STEPS = ['Workspace', 'Your account', 'AI'];
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+/** The free lanes a first key is most likely to be for. The rest are in Admin → AI providers. */
+const FREE_LANES: { value: LaneId; label: string }[] = [
+  { value: 'groq', label: 'Groq' }, { value: 'cerebras', label: 'Cerebras' }, { value: 'gemini', label: 'Gemini' },
+];
 const FEATURES = [
   ['Requirement compiler', 'turns a requirement into a plan with steps, risks and questions'],
   ['Ask memory', 'answers from what the workspace has learned, with its sources'],
@@ -27,10 +30,9 @@ function strength(p: string) {
 }
 
 export default function Setup() {
-  const nav = useNavigate();
-  const { state, refresh } = useAuth();
-  const demo = state === 'demo';
+  const { refresh } = useAuth();
   const [step, setStep] = useState(0);
+  const [lane, setLane] = useState<LaneId>('groq');
   const [workspace, setWorkspace] = useState('');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -45,11 +47,6 @@ export default function Setup() {
 
   const create = async () => {
     setError('');
-    if (demo) {
-      toast('Demo: nothing was saved', { description: 'Run NeuroCode locally to create a real workspace.' });
-      setStep(2);
-      return;
-    }
     setBusy(true);
     try {
       await api.setup({ workspace: workspace.trim(), name: name.trim(), email: email.trim(), password });
@@ -62,10 +59,9 @@ export default function Setup() {
 
   const finish = async (saveKey: boolean) => {
     setError('');
-    if (demo) { nav('/'); return; }
     setBusy(true);
     try {
-      if (saveKey && key.trim()) await api.admin.updateAi({ deepseekKey: key.trim() });
+      if (saveKey && key.trim()) await api.admin.updateAi({ lane, key: key.trim() });
       await refresh();  // the Owner is signed in already; this opens the workspace
     } catch (e) {
       fail(e);
@@ -88,9 +84,8 @@ export default function Setup() {
           <LogoMark size={48} />
           <h1 className="mt-5 text-[26px] leading-tight font-semibold tracking-[-0.025em] text-ink">Welcome to NeuroCode</h1>
           <p className="mt-2 max-w-sm text-[14.5px] leading-relaxed text-soft">
-            Three short steps and your workspace is ready. Everything stays on this machine.
+            Three short steps and your workspace is ready. It lives in your own database; a model sees only what a step sends it.
           </p>
-          {demo && <Tag className="mt-3" tone="neutral">Demo preview · nothing is saved</Tag>}
         </div>
 
         <ol className="mt-8 flex flex-wrap items-center justify-center gap-2" aria-label="Setup steps">
@@ -144,8 +139,8 @@ export default function Setup() {
             <>
               <h2 className="text-[16px] font-semibold text-ink">AI, now or later</h2>
               <p className="mt-1 text-[13.5px] leading-relaxed text-soft">
-                Every AI feature works already. With no key, offline rules answer and say so. Add a DeepSeek key now for
-                model answers, or any time in Admin → AI providers.
+                Planning and brainstorming need a model; asking memory works without one, by quoting the facts that match.
+                A free key from Groq, Cerebras or Gemini takes a minute — add it now, or any time in Admin → AI providers.
               </p>
               <ul className="mt-4 space-y-2">
                 {FEATURES.map(([title, text]) => (
@@ -155,9 +150,10 @@ export default function Setup() {
                   </li>
                 ))}
               </ul>
+              <SelectField className="mt-5" label="Provider" value={lane} onChange={(v) => setLane(v as LaneId)} options={FREE_LANES} />
               <Field
-                className="mt-5" label="DeepSeek API key (optional)" type="password" mono value={key} onChange={setKey}
-                icon={<KeyRound className="size-3.5" />} placeholder="sk-…" autoComplete="off"
+                className="mt-3" label="API key (optional)" type="password" mono value={key} onChange={setKey}
+                icon={<KeyRound className="size-3.5" />} autoComplete="off"
                 hint="Kept on this machine, readable only by the account that runs NeuroCode. Never shown again in full."
               />
               <div className="mt-6 flex items-center justify-between gap-2">

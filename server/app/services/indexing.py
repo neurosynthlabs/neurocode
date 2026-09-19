@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import codeindex
 from ..data.base import utcnow
-from ..models import CodeEdge, CodeFile, CodeIndexRun, CodeSymbol
+from ..models import CodeEdge, CodeFile, CodeIndexRun, CodeSymbol, Project
 
 
 def _moment(value: str | datetime | None) -> datetime | None:
@@ -65,6 +65,14 @@ async def save_index(session: AsyncSession, project_id: str, root: str, idx: cod
     run.files, run.symbols, run.edges = stats["files"], stats["symbols"], stats["edges"]
     run.unresolved, run.parsers = idx.unresolved, idx.parsers
     session.add(run)
+
+    # How much of the project the index understands: the files it holds, out of the source files the
+    # onboarding scan found. Measured here, where both numbers are known, and nowhere else — a
+    # project that was never scanned has nothing to be a share of, and says so with no number.
+    project = await session.get(Project, project_id)
+    if project is not None:
+        project.understood_pct = (min(100, round(100 * len(idx.files) / project.files_count))
+                                  if project.files_count else None)
     await session.flush()
 
 

@@ -1,22 +1,25 @@
-"""Filling the schema: the sample workspace, and the roles every install starts with.
+"""Filling the schema: the catalogue every workspace starts with, and documents carried in from elsewhere.
 
-This is where the document store's shapes meet the relational one, so it is also the honest test of
-the schema — if something in `seed.json` has nowhere to go, it shows up here rather than in a screen
-that quietly renders nothing.
+Two jobs, and they are kept apart on purpose. `sync_roles` and `sync_agents` write the product's own
+catalogue — the built-in roles and the agent roster — on every start, and are the only rows a new
+workspace holds. `load_seed` turns documents in the old document store's shapes into rows: the SQLite
+importer hands it a running workspace, and the tests hand it their fixture. It is never given anything
+by default, so nothing reaches a real workspace that someone did not bring.
 
-Loading is a reset: the seeded tables are emptied and written again inside one transaction, so a
-half-written workspace is never visible. What people made themselves — accounts, keys, audit — is
-never touched.
+It is also where the document store's shapes meet the relational one, so it is the honest test of the
+schema — a field with nowhere to go shows up here rather than in a screen that quietly renders nothing.
+
+Loading replaces: the tables it writes are emptied and written again inside one transaction, so a
+half-written workspace is never visible. What people made themselves — accounts, keys, audit — and
+the catalogue are never touched.
 """
 from __future__ import annotations
 
-import json
 import re
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import (
@@ -29,25 +32,21 @@ from ..models import (
     MemoryConflict,
     MemoryFact,
     MemoryTag,
-    PermissionRule,
     Plan,
     PlanQuestion,
     PlanStep,
     Project,
     Role,
     RolePermission,
-    Setting,
     Task,
     TaskAgent,
 )
+from .catalogue import AGENTS, ROLES
 
-#: The settings row that says a workspace has already been given (or declined) the sample work.
-SAMPLE_OFFERED = "workspace.seeded"
-SEED_PATH = Path(__file__).resolve().parent.parent.parent / "seed" / "seed.json"
-
-#: Emptied and rewritten by a seed load, child rows first. Accounts, sessions, audit and keys are not here.
-SEEDED = (MemoryTag, MemoryFact, MemoryConflict, ChecklistItem, TaskAgent, Task, PlanStep, PlanQuestion,
-          Plan, Approval, ActivityEvent, McpTool, McpServer, PermissionRule, Agent, Project)
+#: Emptied and rewritten by a load, child rows first. Accounts, sessions, audit, keys and the catalogue
+#: are not here.
+LOADED = (MemoryTag, MemoryFact, MemoryConflict, ChecklistItem, TaskAgent, Task, PlanStep, PlanQuestion,
+          Plan, Approval, ActivityEvent, McpTool, McpServer, Project)
 
 SIZES = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
 
@@ -68,8 +67,8 @@ def count(value: Any) -> int:
     return int(n * SIZES.get((m.group(2) or "").lower(), 1))
 
 
-#: "2 min ago", "3 h ago", "6 d ago" — how the seed was written, back when these were display strings
-#: kept in a document and never compared to anything.
+#: "2 min ago", "3 h ago", "6 d ago" — how the old document store wrote times, back when these were
+#: display strings kept in a document and never compared to anything.
 AGO = re.compile(r"^\s*(\d+)\s*(min|minute|minutes|h|hour|hours|d|day|days|w|week|weeks)\s+ago\s*$", re.I)
 AGO_UNITS = {"min": "minutes", "minute": "minutes", "minutes": "minutes", "h": "hours", "hour": "hours",
              "hours": "hours", "d": "days", "day": "days", "days": "days", "w": "weeks",
@@ -79,11 +78,11 @@ AGO_UNITS = {"min": "minutes", "minute": "minutes", "minutes": "minutes", "h": "
 def when(value: Any) -> datetime | None:
     """A real timestamp, or nothing.
 
-    The seed still says "2 min ago", because in the old store these were strings a screen printed and
-    nothing ever sorted or filtered by. Dropping them — which is what returning None did — left every
-    project with no last-active date and all 47 facts with no last-used date, so the columns existed
-    and were empty. They are read relative to now instead: approximate, and true enough to sort by,
-    which is the whole reason the column is there.
+    An old workspace still says "2 min ago", because in the old store these were strings a screen
+    printed and nothing ever sorted or filtered by. Dropping them — which is what returning None did —
+    left every imported project with no last-active date and every fact with no last-used date, so the
+    columns existed and were empty. They are read relative to now instead: approximate, and true enough
+    to sort by, which is the whole reason the column is there.
     """
     if not isinstance(value, str) or not value.strip():
         return None
@@ -100,18 +99,17 @@ def when(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
-def load_seed_file() -> dict[str, Any]:
-    return json.loads(SEED_PATH.read_text())
-
-
 async def clear(session: AsyncSession) -> None:
-    for model in SEEDED:
+    for model in LOADED:
         await session.execute(delete(model))
 
 
-async def load_seed(session: AsyncSession, data: dict[str, Any] | None = None) -> dict[str, int]:
-    """Write the sample workspace. Returns what it wrote, so a caller can say so out loud."""
-    data = data or load_seed_file()
+async def load_seed(session: AsyncSession, data: dict[str, Any]) -> dict[str, int]:
+    """Write these documents as the workspace. Returns what it wrote, so a caller can say so out loud.
+
+    There is no default. It used to fall back to the sample file when handed nothing, so an old SQLite
+    file with none of the document tables in it imported the sample as though it were that workspace.
+    """
     await clear(session)
     written: dict[str, int] = {}
 
@@ -122,8 +120,7 @@ async def load_seed(session: AsyncSession, data: dict[str, Any] | None = None) -
             status=row.get("status", "active"), description=row.get("description", ""), repo=row.get("repo", ""),
             lines_count=count(row.get("lines")), files_count=count(row.get("files")),
             modules=count(row.get("modules")), db_tables=count(row.get("dbTables")),
-            stored_procs=count(row.get("storedProcs")), memory_pct=count(row.get("memoryPct")),
-            understood_pct=count(row.get("understoodPct")), last_active_at=when(row.get("lastActive")),
+            stored_procs=count(row.get("storedProcs")), last_active_at=when(row.get("lastActive")),
             source_kind=source.get("kind"), source_repo=source.get("repo", ""),
             source_branch=source.get("branch", ""),
             languages=row.get("languages", []), coverage=row.get("coverage", []), rules=row.get("rules", []),
@@ -132,18 +129,6 @@ async def load_seed(session: AsyncSession, data: dict[str, Any] | None = None) -
     written["projects"] = len(data.get("projects", []))
     # Parents before children, group by group: almost everything below points at a project, and a
     # flush per level puts any failure on the row that caused it instead of at the end of the load.
-    await session.flush()
-
-    for row in data.get("agents", []):
-        session.add(Agent(
-            id=row["id"], name=row["name"], role=row.get("role", ""), icon=row.get("icon", ""),
-            model=row.get("model", ""), fallback_model=row.get("fallbackModel", ""),
-            status=row.get("status", "idle"), autonomy=row.get("autonomy", "supervised"),
-            system_prompt=row.get("systemPrompt", ""), tasks_done=count(row.get("tasksDone")),
-            success_rate=count(row.get("successRate")), avg_minutes=count(row.get("avgMinutes")),
-            tools=row.get("tools", []), skills=row.get("skills", []), guardrails=row.get("guardrails", []),
-        ))
-    written["agents"] = len(data.get("agents", []))
     await session.flush()
 
     #: A plan names its task by reference, not by id; the tasks are loaded first, so this is the map.
@@ -158,7 +143,7 @@ async def load_seed(session: AsyncSession, data: dict[str, Any] | None = None) -
             layers=row.get("layers", []),
         ))
         for n, item in enumerate(row.get("checklist", [])):
-            # c1, c2, c3 repeat from task to task in the seed: they are positions within a task, not
+            # c1, c2, c3 repeat from task to task in the documents: they are positions within a task, not
             # keys. Namespacing with the task makes them the keys the schema needs.
             session.add(ChecklistItem(id=f"{row['id']}-{item.get('id') or n}", task_id=row["id"], n=n,
                                       label=item.get("label", ""), done=bool(item.get("done"))))
@@ -172,11 +157,11 @@ async def load_seed(session: AsyncSession, data: dict[str, Any] | None = None) -
         deferred = set(row.get("deferred", []))
         session.add(Plan(
             id=row["id"], ref=row["ref"], project_id=row["projectId"],
-            # Every seeded plan names the task it came from, and the column for it was simply never
-            # filled — so the relationship resolved to None and a plan looked unattached to its work.
+            # Every plan document names the task it came from, and the column for it was once simply
+            # never filled — so the relationship resolved to None and a plan looked unattached to its work.
             task_id=task_ids.get(row.get("taskRef", "")),
             status=row.get("status", "draft"), risk=row.get("risk", "LOW"),
-            confidence=count(row.get("confidence")), raw_requirement=row.get("rawRequirement", ""),
+            confidence=row.get("confidence"), raw_requirement=row.get("rawRequirement", ""),
             business_requirement=row.get("businessRequirement", ""),
             technical_requirement=row.get("technicalRequirement", ""),
             architecture_impact=row.get("architectureImpact", ""),
@@ -211,9 +196,9 @@ async def load_seed(session: AsyncSession, data: dict[str, Any] | None = None) -
             id=row["id"], ref=row["ref"], category=row.get("category", "project"), title=row["title"],
             body=row.get("body", ""), reason=row.get("reason", ""), source=row.get("source", ""),
             project_id=None if project in (None, "", "global") else project,
-            confidence=row.get("confidence", "MEDIUM"), strength=count(row.get("strength")),
-            hits=count(row.get("hits")), last_used_at=when(row.get("lastUsed")),
+            confidence=row.get("confidence", "MEDIUM"), last_used_at=when(row.get("lastUsed")),
             pinned=bool(row.get("pinned")), archived=bool(row.get("archived")),
+            archived_at=when(row.get("archivedAt")),
             evidence=row.get("evidence", []),
         ))
         for tag in dict.fromkeys(row.get("tags", [])):
@@ -234,24 +219,13 @@ async def load_seed(session: AsyncSession, data: dict[str, Any] | None = None) -
         session.add(McpServer(
             id=row["id"], name=row["name"], transport=row.get("transport", "stdio"),
             status=row.get("status", "disconnected"), scope=row.get("scope", "global"),
-            command=row.get("command", ""), resources=count(row.get("resources")),
-            prompts=count(row.get("prompts")), latency_ms=count(row.get("latencyMs")),
-            calls_24h=count(row.get("calls24h")), error_rate=row.get("errorRate", 0) or 0,
-            untrusted=bool(row.get("untrusted")), default_effect=row.get("defaultEffect", "ask"),
+            command=row.get("command", ""), untrusted=bool(row.get("untrusted")), default_effect=row.get("defaultEffect", "ask"),
             config=row.get("config", "") or "",
         ))
         for tool in row.get("tools", []):
             session.add(McpTool(server_id=row["id"], name=tool.get("name", ""),
                                 description=tool.get("description", ""), risk=tool.get("risk", "LOW")))
     written["mcp"] = len(data.get("mcp", []))
-
-    for row in data.get("permissionRules", []):
-        session.add(PermissionRule(
-            id=row["id"], pattern=row.get("pattern", ""), tool=row.get("tool", ""),
-            effect=row.get("effect", "ask"), risk=row.get("risk", "LOW"), scope=row.get("scope", "global"),
-            hits_24h=count(row.get("hits24h")), note=row.get("note", ""),
-        ))
-    written["permissionRules"] = len(data.get("permissionRules", []))
 
     for row in data.get("activity", []):
         session.add(ActivityEvent(
@@ -265,47 +239,42 @@ async def load_seed(session: AsyncSession, data: dict[str, Any] | None = None) -
     return written
 
 
-async def seed_once(session: AsyncSession) -> bool:
-    """Open a brand-new workspace on the sample work, exactly once in its life.
-
-    The old store seeded every empty table on every start, which is what a first run looked like: the
-    wizard, then a workspace with something in it to try. The new stack never seeded at all, so a fresh
-    install opened on nothing — no task to tick, no approval to decide, no fact to search — and every
-    screen built around them had nothing to show. That is not an empty state, it is a broken first hour.
-
-    Once, though, not on every start. A marker records that this workspace has been looked at, so a
-    person who deliberately clears the sample away does not find it back after a restart. An existing
-    workspace — one imported, or one that has been used — is marked without being touched.
-    """
-    if await session.get(Setting, SAMPLE_OFFERED) is not None:
-        return False
-    worked = (await session.execute(select(func.count()).select_from(Project))).scalar_one() \
-        or (await session.execute(select(func.count()).select_from(Task))).scalar_one()
-    if not worked:
-        await load_seed(session)
-    session.add(Setting(key=SAMPLE_OFFERED, value={"sample": not worked}))
-    await session.flush()
-    return not worked
-
-
-async def sync_roles(session: AsyncSession, data: dict[str, Any] | None = None) -> int:
+async def sync_roles(session: AsyncSession) -> int:
     """Built-in roles, re-read from the catalogue on every start, so a new permission lands on upgrade.
     A custom role someone made is left exactly as it is."""
-    rbac = (data or load_seed_file()).get("rbac", {})
-    roles = rbac.get("roles", [])
-    for n, row in enumerate(roles):
-        role = await session.get(Role, row["id"])
+    for n, row in enumerate(ROLES):
+        role = await session.get(Role, row.id)
         if role is None:
-            role = Role(id=row["id"])
+            role = Role(id=row.id)
             session.add(role)
-        role.name, role.description, role.builtin = row["name"], row.get("description", ""), True
+        role.name, role.description, role.builtin = row.name, row.description, True
         # The catalogue's order is the ladder the access screen shows, so it is carried rather than
         # re-derived: written in one transaction, these rows all share a timestamp and cannot be
         # ordered by when they arrived.
         role.rank = n
         await session.flush()
         await session.execute(delete(RolePermission).where(RolePermission.role_id == role.id))
-        for permission in dict.fromkeys(row.get("permissions", [])):
+        for permission in dict.fromkeys(row.permissions):
             session.add(RolePermission(role_id=role.id, permission=permission))
     await session.flush()
-    return len(roles)
+    return len(ROLES)
+
+
+async def sync_agents(session: AsyncSession) -> int:
+    """The roster, re-read from the catalogue on every start, the way the built-in roles are.
+
+    Only what the catalogue declares is written: who the agent is and what it says of itself. Its
+    status is left alone, because `disabled` is the one a person sets; everything else about an agent
+    — its record, its spend, the lane it works through — is derived and never stored on the row.
+    Nothing is deleted: a run or a task that names an agent still names it after an upgrade.
+    """
+    for row in AGENTS:
+        agent = await session.get(Agent, row.id)
+        if agent is None:
+            agent = Agent(id=row.id)
+            session.add(agent)
+        agent.name, agent.role, agent.icon = row.name, row.role, row.icon
+        agent.autonomy, agent.system_prompt = row.autonomy, row.system_prompt
+        agent.tools, agent.skills, agent.guardrails = list(row.tools), list(row.skills), list(row.guardrails)
+    await session.flush()
+    return len(AGENTS)

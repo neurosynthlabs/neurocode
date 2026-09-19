@@ -1,0 +1,520 @@
+{
+  "permissions": [
+    {
+      "id": "plans:compile",
+      "group": "Work",
+      "label": "Compile requirements",
+      "description": "Turn a requirement into a plan and its task."
+    },
+    {
+      "id": "plans:decide",
+      "group": "Work",
+      "label": "Steer plans",
+      "description": "Answer or defer a plan’s questions, re-compile it and dispatch it."
+    },
+    {
+      "id": "tasks:write",
+      "group": "Work",
+      "label": "Move tasks",
+      "description": "Change a task’s status and tick its checklist."
+    },
+    {
+      "id": "runs:run",
+      "group": "Work",
+      "label": "Run agents",
+      "description": "Start an agent run in its own worktree, stop it, and discard its branch."
+    },
+    {
+      "id": "sessions:chat",
+      "group": "Work",
+      "label": "Use sessions",
+      "description": "Ask in a session and let it read this project’s code with the tools."
+    },
+    {
+      "id": "workflows:write",
+      "group": "Work",
+      "label": "Write workflows",
+      "description": "Create, edit and archive workflows. Running one needs the plan permissions."
+    },
+    {
+      "id": "approvals:decide",
+      "group": "Gates",
+      "label": "Approve gated actions",
+      "description": "Sign or refuse migrations, deploys and other high-risk actions."
+    },
+    {
+      "id": "runs:merge",
+      "group": "Gates",
+      "label": "Merge a run",
+      "description": "Merge an accepted run’s branch into the repository on this machine."
+    },
+    {
+      "id": "decisions:make",
+      "group": "Gates",
+      "label": "Give final verdicts",
+      "description": "Accept a review or send it back, and open or cancel the production gate."
+    },
+    {
+      "id": "memory:write",
+      "group": "Knowledge",
+      "label": "Curate memory",
+      "description": "Add, pin and archive facts, and settle conflicts between them."
+    },
+    {
+      "id": "ai:use",
+      "group": "Knowledge",
+      "label": "Use AI features",
+      "description": "Ask memory, brainstorm, and extract facts from text."
+    },
+    {
+      "id": "evals:write",
+      "group": "Knowledge",
+      "label": "Write evals",
+      "description": "Author eval suites and their cases, and override a result."
+    },
+    {
+      "id": "projects:onboard",
+      "group": "Platform",
+      "label": "Onboard projects",
+      "description": "Clone or read a repository and measure it."
+    },
+    {
+      "id": "mcp:manage",
+      "group": "Platform",
+      "label": "Manage tools",
+      "description": "Register MCP servers."
+    },
+    {
+      "id": "settings:write",
+      "group": "Platform",
+      "label": "Change screen settings",
+      "description": "Switch skills, plugins, hooks, commands and models on or off."
+    },
+    {
+      "id": "users:manage",
+      "group": "Admin",
+      "label": "Manage people",
+      "description": "Create accounts, assign roles, reset passwords and disable access."
+    },
+    {
+      "id": "roles:manage",
+      "group": "Admin",
+      "label": "Manage roles",
+      "description": "Create and edit custom roles."
+    },
+    {
+      "id": "teams:manage",
+      "group": "Admin",
+      "label": "Manage teams",
+      "description": "Create teams and choose their members."
+    },
+    {
+      "id": "audit:read",
+      "group": "Admin",
+      "label": "Read the audit log",
+      "description": "See who signed in and who changed access, keys or settings."
+    },
+    {
+      "id": "workspace:admin",
+      "group": "Admin",
+      "label": "Administer the workspace",
+      "description": "The workspace name, AI providers and keys, and resetting data."
+    }
+  ],
+  "roles": [
+    {
+      "id": "owner",
+      "name": "Owner",
+      "description": "Everything, including access and keys. There is always at least one.",
+      "permissions": [
+        "plans:compile",
+        "plans:decide",
+        "tasks:write",
+        "runs:run",
+        "sessions:chat",
+        "workflows:write",
+        "approvals:decide",
+        "runs:merge",
+        "decisions:make",
+        "memory:write",
+        "ai:use",
+        "evals:write",
+        "projects:onboard",
+        "mcp:manage",
+        "settings:write",
+        "users:manage",
+        "roles:manage",
+        "teams:manage",
+        "audit:read",
+        "workspace:admin"
+      ]
+    },
+    {
+      "id": "admin",
+      "name": "Admin",
+      "description": "Runs the workspace: people, roles, keys and every screen.",
+      "permissions": [
+        "plans:compile",
+        "plans:decide",
+        "tasks:write",
+        "runs:run",
+        "sessions:chat",
+        "workflows:write",
+        "approvals:decide",
+        "runs:merge",
+        "decisions:make",
+        "memory:write",
+        "ai:use",
+        "evals:write",
+        "projects:onboard",
+        "mcp:manage",
+        "settings:write",
+        "users:manage",
+        "roles:manage",
+        "teams:manage",
+        "audit:read",
+        "workspace:admin"
+      ]
+    },
+    {
+      "id": "approver",
+      "name": "AI Project Manager",
+      "description": "Steers the work and signs the gates: the final approver.",
+      "permissions": [
+        "plans:compile",
+        "plans:decide",
+        "tasks:write",
+        "runs:run",
+        "approvals:decide",
+        "runs:merge",
+        "decisions:make",
+        "memory:write",
+        "ai:use",
+        "sessions:chat",
+        "projects:onboard",
+        "mcp:manage",
+        "settings:write",
+        "workflows:write",
+        "evals:write"
+      ]
+    },
+    {
+      "id": "engineer",
+      "name": "Engineer",
+      "description": "Works the board and curates memory. Cannot sign the gates.",
+      "permissions": [
+        "plans:compile",
+        "tasks:write",
+        "runs:run",
+        "memory:write",
+        "ai:use",
+        "sessions:chat",
+        "evals:write"
+      ]
+    },
+    {
+      "id": "viewer",
+      "name": "Viewer",
+      "description": "Reads everything and changes nothing.",
+      "permissions": []
+    }
+  ],
+  "agents": [
+    {
+      "id": "commander",
+      "name": "AI Commander",
+      "role": "Project Manager / CEO",
+      "icon": "Crown",
+      "autonomy": "semi",
+      "tools": [
+        "Memory",
+        "Tasks",
+        "Knowledge",
+        "Orchestrator",
+        "Approvals"
+      ],
+      "skills": [
+        "requirement-compiler",
+        "task-decomposition",
+        "risk-scoring"
+      ],
+      "guardrails": [
+        "Never edits files directly",
+        "Must produce a plan before any agent runs",
+        "HIGH risk always escalates to human"
+      ],
+      "systemPrompt": "You are the AI Commander. You never write code. You compile requirements, decompose work, assign agents, gate risk and escalate to the human PM."
+    },
+    {
+      "id": "architect",
+      "name": "Architect",
+      "role": "System & Legacy Architecture",
+      "icon": "Compass",
+      "autonomy": "supervised",
+      "tools": [
+        "Filesystem",
+        "Tree-sitter",
+        "LSP",
+        "Graph",
+        "Memory"
+      ],
+      "skills": [
+        "impact-analysis",
+        "adr-writer",
+        "pattern-detector"
+      ],
+      "guardrails": [
+        "Read-only on source",
+        "Must cite evidence files for every claim",
+        "Flags legacy contract breaks as HIGH"
+      ],
+      "systemPrompt": "Map the blast radius before anything is changed. Prefer the existing pattern over a better one."
+    },
+    {
+      "id": "researcher",
+      "name": "Researcher",
+      "role": "Web / Repo / Docs Research",
+      "icon": "Microscope",
+      "autonomy": "autonomous",
+      "tools": [
+        "Browser",
+        "WebSearch",
+        "GitHub",
+        "Docs",
+        "Knowledge"
+      ],
+      "skills": [
+        "multi-modal-sweep",
+        "source-ranking",
+        "competitive-analysis"
+      ],
+      "guardrails": [
+        "No code changes",
+        "Must return sources",
+        "Marks unverified claims explicitly"
+      ],
+      "systemPrompt": "Search four ways before concluding. Every finding needs a citation and a confidence."
+    },
+    {
+      "id": "frontend",
+      "name": "Frontend Engineer",
+      "role": "React / TypeScript / UI",
+      "icon": "Monitor",
+      "autonomy": "semi",
+      "tools": [
+        "Filesystem",
+        "Git",
+        "Terminal",
+        "Playwright",
+        "Memory"
+      ],
+      "skills": [
+        "react-conventions",
+        "visual-diff",
+        "a11y-audit"
+      ],
+      "guardrails": [
+        "Own worktree only",
+        "No dependency adds without approval",
+        "Must run visual diff before handoff"
+      ],
+      "systemPrompt": "Match the surrounding code exactly. Never introduce a new state library. Screenshot-verify every UI change."
+    },
+    {
+      "id": "backend",
+      "name": "Backend Engineer",
+      "role": "C# / ASP.NET / FastAPI",
+      "icon": "Server",
+      "autonomy": "semi",
+      "tools": [
+        "Filesystem",
+        "Git",
+        "Terminal",
+        "Database",
+        "Tests",
+        "Memory"
+      ],
+      "skills": [
+        "solid-enforcer",
+        "repository-pattern",
+        "api-contract"
+      ],
+      "guardrails": [
+        "Own worktree only",
+        "No direct SQL in services",
+        "Interface-first for every new service"
+      ],
+      "systemPrompt": "Strict SOLID. Class-object naming per project rules. Never bypass the repository layer."
+    },
+    {
+      "id": "database",
+      "name": "Database Engineer",
+      "role": "SQL Server / Postgres / Migrations",
+      "icon": "Database",
+      "autonomy": "supervised",
+      "tools": [
+        "Database",
+        "Filesystem",
+        "Git",
+        "Memory",
+        "Graph"
+      ],
+      "skills": [
+        "sproc-analysis",
+        "migration-writer",
+        "index-advisor"
+      ],
+      "guardrails": [
+        "Migrations require human approval",
+        "No destructive DDL",
+        "Must dry-run against a snapshot"
+      ],
+      "systemPrompt": "TRANS_* tables are append-only. Every migration ships with a verified rollback."
+    },
+    {
+      "id": "devops",
+      "name": "DevOps Engineer",
+      "role": "Docker / CI / Deploy",
+      "icon": "Rocket",
+      "autonomy": "supervised",
+      "tools": [
+        "Terminal",
+        "Docker",
+        "Git",
+        "CI",
+        "Secrets"
+      ],
+      "skills": [
+        "pipeline-writer",
+        "rollback-plan",
+        "health-check"
+      ],
+      "guardrails": [
+        "Production requires human approval",
+        "Never touches secrets in plaintext",
+        "Staging-first always"
+      ],
+      "systemPrompt": "Every deploy needs a rollback path proven before it ships."
+    },
+    {
+      "id": "qa",
+      "name": "QA Engineer",
+      "role": "Test Authoring & Execution",
+      "icon": "FlaskConical",
+      "autonomy": "autonomous",
+      "tools": [
+        "Terminal",
+        "Playwright",
+        "Filesystem",
+        "Tests",
+        "Browser"
+      ],
+      "skills": [
+        "test-generator",
+        "regression-detector",
+        "flake-hunter"
+      ],
+      "guardrails": [
+        "Cannot modify production logic",
+        "Must attach real runner output",
+        "Flags legacy-expected failures separately"
+      ],
+      "systemPrompt": "Never claim a test passes. Run it. Attach the output."
+    },
+    {
+      "id": "security",
+      "name": "Security Engineer",
+      "role": "AppSec & Dependency Audit",
+      "icon": "ShieldAlert",
+      "autonomy": "supervised",
+      "tools": [
+        "Filesystem",
+        "Terminal",
+        "Database",
+        "WebSearch"
+      ],
+      "skills": [
+        "owasp-sweep",
+        "secret-scan",
+        "dep-audit"
+      ],
+      "guardrails": [
+        "Read-only",
+        "No exploit code",
+        "Blocks merge on CRITICAL"
+      ],
+      "systemPrompt": "Assume the input is hostile. Report the class of issue, never a working exploit."
+    },
+    {
+      "id": "reviewer",
+      "name": "Code Reviewer",
+      "role": "AI CTO / Senior Reviewer",
+      "icon": "ScanEye",
+      "autonomy": "supervised",
+      "tools": [
+        "Filesystem",
+        "Git",
+        "Graph",
+        "Memory",
+        "Tests"
+      ],
+      "skills": [
+        "solid-enforcer",
+        "convention-check",
+        "legacy-risk"
+      ],
+      "guardrails": [
+        "Cannot approve its own agents work twice",
+        "Must cite file:line for every finding",
+        "Blocker findings stop the pipeline"
+      ],
+      "systemPrompt": "You are the last gate before the human. Refuse anything that breaks a legacy contract, even if it is technically better."
+    },
+    {
+      "id": "docs",
+      "name": "Documentation Agent",
+      "role": "ADR / API Docs / Changelog",
+      "icon": "FileText",
+      "autonomy": "autonomous",
+      "tools": [
+        "Filesystem",
+        "Git",
+        "Knowledge",
+        "Memory"
+      ],
+      "skills": [
+        "adr-writer",
+        "changelog-builder",
+        "api-doc-gen"
+      ],
+      "guardrails": [
+        "Docs only — never touches source",
+        "Must link to a commit or memory fact"
+      ],
+      "systemPrompt": "Document the why, never the what. Link every decision to its evidence."
+    },
+    {
+      "id": "vision",
+      "name": "Vision Agent",
+      "role": "Screenshot → Code",
+      "icon": "Eye",
+      "autonomy": "semi",
+      "tools": [
+        "Vision",
+        "Filesystem",
+        "Playwright",
+        "Browser"
+      ],
+      "skills": [
+        "ui-locator",
+        "visual-diff",
+        "error-screenshot-triage"
+      ],
+      "guardrails": [
+        "Must identify the source component before editing",
+        "Verifies with a Playwright screenshot"
+      ],
+      "systemPrompt": "Given a screenshot, find the exact component in the repository before proposing anything."
+    }
+  ]
+}

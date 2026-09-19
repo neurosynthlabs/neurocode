@@ -1,8 +1,9 @@
 """The AI features over HTTP: ask memory, brainstorm an idea, pull facts out of pasted text.
 
-Same paths and same JSON as before, and the same promise underneath: all three answer with no API key
-configured. The offline rules write the answer and the answer says so — `provider` is `rules` and the
-model is named — so nobody mistakes a template for a model.
+Every answer names the model that wrote it. Asking and extracting answer with no API key configured:
+the offline rules write the answer and say so — `provider` is `rules` and the model is named. A
+brainstorm has no honest offline version, so with no lane it is refused: 409 with the words that say
+how to add a key, or 502 with the provider's own reason when the lanes that tried all failed.
 
 What the routes no longer do is think. Which facts a question is answered from, whether a project
 exists, and how a brief becomes a row all live in the service, where they can be read without a web
@@ -65,7 +66,7 @@ async def brainstorms(project: str | None = None, limit: int | None = None, offs
 async def brainstorm(body: IdeaIn, who: Person = Depends(require("ai:use")),
                      open_session: AsyncSession = Depends(session),
                      gw: Gateway = Depends(gateway)) -> dict[str, Any]:
-    """An idea comes back as a brief that argues against itself, and is kept."""
+    """An idea comes back as a brief that argues against itself, and is kept. Needs a model."""
     made = await AiFeatureService(open_session, gw).brainstorm(body.idea.strip(), body.projectId,
                                                                by=who.name, by_id=who.id)
     return brainstorm_json(made)

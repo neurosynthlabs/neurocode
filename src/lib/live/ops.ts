@@ -1,6 +1,4 @@
 import { request } from '@/lib/api';
-import type { Container, Deployment } from '@/types';
-import type { HealthCheck, LogLine, PipelineStage } from '@/mock/devops';
 
 /* The DevOps screen's live data: GET /ops/*. It shows this machine, because NeuroCode deploys nothing
    anywhere else — the API process, Postgres, the web dev server, Ollama; checks probed when asked; the
@@ -40,7 +38,17 @@ export interface OpsGateItem {
   undo: string;
 }
 
-export type OpsCheck = Omit<HealthCheck, 'latencyMs'> & { latencyMs: number | null };
+/** One probe of this machine, run when the overview is asked for. `latencyMs` is null when nothing was timed. */
+export interface OpsCheck {
+  id: string;
+  name: string;
+  target: string;
+  status: ServiceStatus;
+  latencyMs: number | null;
+  /** ISO: when it was probed. */
+  lastRun: string;
+  note: string;
+}
 
 export interface OpsOverview {
   services: LocalService[];
@@ -50,12 +58,25 @@ export interface OpsOverview {
   at: string;
 }
 
-export type OpsDelivery = Omit<Deployment, 'status'> & {
-  status: Exclude<Deployment['status'], 'rolled_back'> | 'ready' | 'cancelled' | 'discarded';
+/** A solo or integration run, and what became of it. Nothing records a rollback, so there is no such status. */
+export interface OpsDelivery {
+  /** The run's ref. */
+  id: string;
+  /** The project's name. */
+  project: string;
+  /** The run's branch. */
+  branch: string;
+  status: 'success' | 'failed' | 'running' | 'awaiting_approval' | 'ready' | 'cancelled' | 'discarded';
+  by: string;
+  at: string;
+  /** 0 while it has not finished. */
+  durationS: number;
+  /** The merge commit once merged, the base it branched from before. */
+  commit: string;
   note: string;
   projectId: string;
   role: 'solo' | 'integration';
-};
+}
 export interface OpsDeliveries {
   items: OpsDelivery[];
   stats: { mergedToday: number; merged: number; failed: number; discarded: number; blockedOnYou: number };
@@ -63,12 +84,29 @@ export interface OpsDeliveries {
 
 export interface OpsPipeline {
   run: { ref: string; status: string; trigger: string; by: string; runner: string; branch: string; startedAt: string; elapsedS: number } | null;
-  stages: (Omit<PipelineStage, 'state'> & { state: PipelineStage['state'] | 'waiting'; kind: string })[];
+  stages: PipelineStage[];
   workflow: { path: string; present: boolean; steps: string[]; tracked: boolean; upstream: string | null; pushed: boolean | null; note: string };
 }
 
+/** One step of a run, as a pipeline stage. */
+export interface PipelineStage {
+  id: string;
+  name: string;
+  state: 'pass' | 'fail' | 'running' | 'queued' | 'skipped' | 'waiting';
+  durationS: number;
+  detail: string;
+  kind: string;
+}
+
+/** The levels a log line is written at, in the order the filter lists them. */
+export const LOG_LEVELS = ['info', 'ok', 'warn', 'err', 'debug'] as const;
+export type LogLevel = (typeof LOG_LEVELS)[number];
+export interface LogLine { id: string; t: string; level: LogLevel; source: string; text: string }
+
 /** `next` is an opaque cursor — the last line's exact time and id — to pass back as `before`. */
 export interface OpsLogs { lines: LogLine[]; next: string | null }
+/** A container Docker reports on this machine; `cpu` is a percentage and `mem` Docker's own wording. */
+export interface Container { id: string; name: string; image: string; status: 'up' | 'down' | 'restarting'; cpu: number; mem: string; ports: string }
 export interface OpsContainers { available: boolean; reason: string; containers: Container[] }
 
 export interface OpsSecret {
@@ -84,8 +122,6 @@ export interface OpsSecret {
   usedBy: string;
   note: string;
 }
-
-export type LogLevel = LogLine['level'];
 
 export const fetchOverview = () => request<OpsOverview>('/ops/overview', { signal: AbortSignal.timeout(20_000) });
 export const fetchDeliveries = () => request<OpsDeliveries>('/ops/deliveries?limit=50');

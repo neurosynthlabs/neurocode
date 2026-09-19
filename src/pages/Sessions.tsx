@@ -19,23 +19,34 @@ const TOOL_LABEL: Record<string, string> = {
   impact: 'traced the blast radius', search_memory: 'searched memory', project_summary: 'looked at the project',
 };
 
+function toggled(all: ReadonlySet<string>, ref: string, on: boolean): ReadonlySet<string> {
+  if (all.has(ref) === on) return all;
+  const next = new Set(all);
+  if (on) next.add(ref); else next.delete(ref);
+  return next;
+}
+
 export default function Sessions() {
-  const { projects, mode, onChat } = useData();
+  const { projects, onChat } = useData();
   const { can } = useAuth();
   const linked = useSearchParams()[0].get('ref');
   const [picked, setPicked] = useState<string | null>(null);
   const [list, setList] = useState<SessionDoc[] | null>(null);
   const [live, setLive] = useState<Record<string, ChatMessage[]>>({});
   const [draft, setDraft] = useState('');
-  const [thinking, setThinking] = useState(false);
+  // Which sessions are waiting on an answer. Kept per session, not as one flag, so switching to
+  // another session while one is answering neither hides that wait nor locks the other's Ask.
+  const [waiting, setWaiting] = useState<ReadonlySet<string>>(() => new Set());
   const [choosing, setChoosing] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
   const box = useRef<HTMLDivElement>(null);
 
-  const remote = useRemote(mode === 'live' ? 'sessions' : null, () => api.sessions());
+  const remote = useRemote('sessions', () => api.sessions());
   const sessions = list ?? remote.data ?? [];      // what we know locally wins: it is never older
   const ref = picked ?? linked ?? sessions[0]?.ref ?? null;
   const session = sessions.find((s) => s.ref === ref) ?? null;
+  const thinking = ref !== null && waiting.has(ref);
+  const wait = (sessionRef: string, on: boolean) => setWaiting((all) => toggled(all, sessionRef, on));
 
   const detail = useRemote(ref, () => api.session(ref ?? ''));
 
@@ -46,12 +57,12 @@ export default function Sessions() {
       const mine = all[m.sessionRef] ?? [];
       return mine.some((x) => x.id === m.id) ? all : { ...all, [m.sessionRef]: [...mine, m] };
     });
-    if (m.sessionRef !== ref) return;
+    // An answer ends that session's wait whichever session is on screen now.
     if (m.role === 'assistant' || m.role === 'note') {
-      setThinking(false);
-      void api.sessions().then(setList).catch(() => undefined);
+      setWaiting((all) => toggled(all, m.sessionRef, false));
+      api.sessions().then(setList, (e: unknown) => console.error('[NeuroCode] GET /sessions failed:', e));
     }
-  }), [onChat, ref]);
+  }), [onChat]);
 
   const messages = useMemo(() => {
     const seen = new Set<number>();
@@ -77,7 +88,7 @@ export default function Sessions() {
     const text = draft.trim();
     if (!text || !session || thinking) return;
     setDraft('');
-    setThinking(true);
+    wait(session.ref, true);
     try {
       const { message } = await api.askSession(session.ref, text);
       setLive((all) => {
@@ -85,7 +96,7 @@ export default function Sessions() {
         return mine.some((x) => x.id === message.id) ? all : { ...all, [session.ref]: [...mine, message] };
       });
     } catch (e) {
-      setThinking(false);
+      wait(session.ref, false);
       setDraft(text);
       toast.error('Not asked', { description: e instanceof Error ? e.message : 'The API refused.' });
     }
@@ -95,17 +106,6 @@ export default function Sessions() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
   };
 
-  if (mode !== 'live') {
-    return (
-      <Page>
-        <PageHeader title="Sessions" subtitle="A conversation that can read this project's code, and never loses a turn." />
-        <PageBody>
-          <Empty icon={<Bot className="size-6" />} title="Sessions need the local API"
-            hint="Start it with ./scripts/dev.sh start. Every question, every tool call and every answer is then written to the database as it happens." />
-        </PageBody>
-      </Page>
-    );
-  }
 
   return (
     <Page>
@@ -127,7 +127,7 @@ export default function Sessions() {
                 ? projects.map((p) => (
                   <ListRow key={p.id} onClick={() => void begin(p.id, p.name)}>
                     <p className="truncate text-[13.5px] text-ink">{p.name}</p>
-                    <p className="mt-0.5 truncate text-[11.5px] text-dim">{p.stack ?? p.id}</p>
+                    <p className="mt-0.5 truncate text-[11.5px] text-dim">{p.stack.length ? p.stack.join(' · ') : p.id}</p>
                   </ListRow>
                 ))
                 : sessions.map((s) => (

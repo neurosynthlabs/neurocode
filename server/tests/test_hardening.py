@@ -21,7 +21,7 @@ from app.agent.git import Refused as PathRefused
 from app.agent.git import safe_path
 from app.api import deps
 from app.api.app import create_api
-from app.data.loader import load_seed, sync_roles, when
+from app.data.loader import sync_roles, when
 from app.models import ActivityEvent, AuditEntry, MemoryConflict, MemoryFact, Plan, Project
 from app.services.knowledge import MemoryService
 
@@ -42,10 +42,10 @@ async def client(seeded: AsyncSession) -> AsyncIterator[AsyncClient]:
         yield c
 
 
-# ── the seed's own dates ─────────────────────────────────────────
+# ── an imported workspace's dates ───────────────────────────────
 
-def test_a_relative_date_in_the_seed_becomes_a_real_one():
-    """"2 min ago" used to parse to None, so every seeded project had no last-active date at all."""
+def test_a_relative_date_in_an_old_document_becomes_a_real_one():
+    """"2 min ago" used to parse to None, so every imported project had no last-active date at all."""
     assert when("just now") is not None
     recent, older = when("2 min ago"), when("6 d ago")
     assert recent is not None and older is not None and older < recent
@@ -53,7 +53,7 @@ def test_a_relative_date_in_the_seed_becomes_a_real_one():
     assert when("sometime on Tuesday") is None          # still nothing rather than a guess
 
 
-async def test_every_seeded_fact_and_project_carries_a_date(seeded: AsyncSession):
+async def test_every_loaded_fact_and_project_carries_a_date(seeded: AsyncSession):
     undated = (await seeded.execute(
         select(MemoryFact.ref).where(MemoryFact.last_used_at.is_(None)))).scalars().all()
     assert not undated, f"{len(undated)} facts came in with no last-used date"
@@ -61,7 +61,7 @@ async def test_every_seeded_fact_and_project_carries_a_date(seeded: AsyncSession
         select(Project.id).where(Project.last_active_at.is_(None)))).scalars().all()
 
 
-async def test_a_seeded_plan_knows_which_task_it_came_from(seeded: AsyncSession):
+async def test_a_loaded_plan_knows_which_task_it_came_from(seeded: AsyncSession):
     """The column existed and was never filled, so every plan looked unattached to its work."""
     plans = (await seeded.execute(select(Plan.ref, Plan.task_id))).all()
     assert plans and all(task_id for _, task_id in plans)
@@ -164,6 +164,49 @@ async def test_the_built_in_roles_are_reconciled_on_every_start(seeded: AsyncSes
     back = (await seeded.execute(text(
         "SELECT count(*) FROM role_permissions WHERE role_id = 'owner'"))).scalar_one()
     assert back > 0
+
+
+async def test_a_brand_new_workspace_holds_the_catalogue_and_nothing_else(session: AsyncSession):
+    """It used to open on a sample: five projects, their tasks and gates, forty-seven facts, sixteen MCP
+    servers — shown on every screen as though somebody had done that work. What start-up writes now
+    is the product's own catalogue, and a new workspace holds nothing else until someone makes it.
+
+    A new database is what the migrations leave, so every table is emptied first — inside this test's
+    transaction, which rolls it all back — and then start-up runs exactly as the API runs it."""
+    from app.api.app import start_up_chores
+    from app.data import catalogue
+
+    tables = (await session.execute(text(
+        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'alembic_version' "
+        "ORDER BY tablename"))).scalars().all()
+    await session.execute(text(f"TRUNCATE {', '.join(tables)} CASCADE"))
+
+    await start_up_chores(session)
+    await session.flush()
+
+    held = {}
+    for table in tables:
+        n = (await session.execute(text(f'SELECT count(*) FROM "{table}"'))).scalar_one()
+        if n:
+            held[table] = n
+    assert held == {"roles": len(catalogue.ROLES), "agents": len(catalogue.AGENTS),
+                    "role_permissions": sum(len(r.permissions) for r in catalogue.ROLES)}
+    names = (await session.execute(text("SELECT id, name FROM agents"))).all()
+    assert dict(names) == {a.id: a.name for a in catalogue.AGENTS}
+
+
+async def test_an_agent_a_person_switched_off_stays_off_across_a_restart(catalogued: AsyncSession):
+    """The roster is re-written on every start — but only what the catalogue declares. The one status a
+    person sets is theirs, and a restart that switched an agent back on would undo them."""
+    from app.data.loader import sync_agents
+    from app.models import Agent
+
+    agent = await catalogued.get(Agent, "vision")
+    agent.status, agent.name = "disabled", "Renamed by hand"
+    await catalogued.flush()
+    await sync_agents(catalogued)
+    await catalogued.refresh(agent)
+    assert agent.status == "disabled" and agent.name == "Vision Agent"
 
 
 async def test_health_says_what_the_screens_read(client: AsyncClient):
@@ -317,7 +360,7 @@ async def test_a_gate_with_no_run_behind_it_resumes_nothing(client: AsyncClient,
 
 
 async def test_every_list_of_gates_comes_back_in_the_same_order(client: AsyncClient):
-    """Seeded in one transaction, the gates share a timestamp. With no second key the full list and the
+    """Loaded in one transaction, the gates share a timestamp. With no second key the full list and the
     pending list came back in different orders, so the first Approve button was a different gate."""
     pending = [a["ref"] for a in (await client.get("/approvals", params={"status": "pending"})).json()]
     everything = [a["ref"] for a in (await client.get("/approvals")).json() if a["status"] == "pending"]
@@ -347,6 +390,27 @@ async def test_a_git_repository_indexes_with_its_history(seeded: AsyncSession, t
     changed = (await seeded.execute(select(CodeFile.changed_at).where(CodeFile.project_id == "erp",
                                                                      CodeFile.path == "pkg/core.py"))).scalar_one()
     assert changed is not None and changed.tzinfo is not None
+
+
+async def test_how_much_is_understood_is_the_share_of_the_scanned_files_the_index_holds(seeded: AsyncSession,
+                                                                                     tmp_path: Path):
+    """It was a step count — 2 of 15, then 4 of 15 — dressed as a percentage of understanding. Now it is
+    measured: of the source files the onboarding scan found, how many the code index holds. A project
+    whose files were never counted has no share to speak of."""
+    from app.services.indexing import build_index
+
+    repo = tmp_path / "half"
+    (repo / "pkg").mkdir(parents=True)
+    (repo / "pkg" / "core.py").write_text("def total(x):\n    return x\n")
+    project = Project(id="half", name="Half", files_count=4)
+    seeded.add_all([project, Project(id="uncounted", name="Uncounted")])
+    await seeded.flush()
+    assert project.understood_pct is None                                # not indexed: nothing to say
+
+    await build_index(seeded, "half", repo, [])
+    assert project.understood_pct == 25                                  # one file of the four scanned
+    await build_index(seeded, "uncounted", repo, [])
+    assert (await seeded.get(Project, "uncounted")).understood_pct is None
 
 
 # ── a question is not a search-box query ─────────────────────────

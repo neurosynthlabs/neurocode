@@ -13,12 +13,30 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from ..settings import Settings, settings
 from . import changes  # noqa: F401  — importing it is what registers the change listeners
 
 log = logging.getLogger(__name__)
+
+#: The zone every connection this application opens works in. It decides what a *day* is wherever the
+#: database cuts time into days — `date_trunc('day', at)` for the spending chart, "today" for a lane's
+#: free allowance — and the screens count days in UTC. Left to the server's default the database
+#: answered in its own zone (Asia/Kolkata on the machine it was built on): for five and a half hours
+#: every night today's calls were filed under a date the chart did not draw, and every day was off by
+#: one against it. Stored times are unaffected; `timestamptz` is an instant whatever the zone.
+TIMEZONE = "UTC"
+
+
+def utc_connect_args(url: str) -> dict[str, Any]:
+    """What to hand the driver so a new connection's session zone is `TIMEZONE`, for the async engine,
+    the gateway's blocking pool and Alembic alike: asyncpg takes server settings, libpq (psycopg) takes
+    an options string."""
+    if make_url(url).get_driver_name() == "asyncpg":
+        return {"server_settings": {"timezone": TIMEZONE}}
+    return {"options": f"-c timezone={TIMEZONE}"}
 
 
 class Database:
@@ -38,6 +56,7 @@ class Database:
             max_overflow=cfg.pool_overflow,
             pool_recycle=cfg.pool_recycle_seconds,
             pool_pre_ping=True,          # a laptop that slept hands back live connections, not dead ones
+            connect_args=utc_connect_args(self.url),
             future=True,
         )
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False, autoflush=False)

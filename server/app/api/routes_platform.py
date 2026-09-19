@@ -19,12 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..ai.gateway import Gateway
 from ..data.engine import Database
 from ..models import McpServer
-from ..repositories import ActivityRepository, NotFound, ProjectRepository, Repository
+from ..repositories import ActivityRepository, NotFound, ProjectRepository
 from ..repositories.code import CodeIndexRepository
+from ..repositories.platform import McpRepository
 from ..schemas import project_json
 from ..schemas.platform import mcp_json
 from ..services.errors import Refused
 from ..services.identity import Person
+from ..services.mcp import McpService
 from ..services.onboarding import OnboardingService, Spec, onboard
 from .deps import current_person, database, gateway, hand_off, require, session
 
@@ -44,9 +46,6 @@ class ProjectIn(BaseModel):
     repo: str = Field(min_length=1, max_length=500)
     branch: str = Field(default="main", max_length=100)
     excluded: list[str] = Field(default_factory=list, max_length=50)
-    connectDb: bool = True
-    mineGit: bool = True
-    ingestDocs: bool = True
     rules: list[RuleIn] = Field(default_factory=list, max_length=20)
 
 
@@ -65,11 +64,8 @@ class McpIn(BaseModel):
         return v
 
 
-class McpRepository(Repository[McpServer]):
-    model = McpServer
-
-    async def all_ordered(self) -> list[McpServer]:
-        return await self.list(order_by=McpServer.name, limit=200)
+class TrustIn(BaseModel):
+    trusted: bool
 
 
 @router.get("/projects", dependencies=[Depends(current_person)])
@@ -99,7 +95,6 @@ async def create_project(body: ProjectIn, jobs: BackgroundTasks,
                          gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Onboard a repository. The row is written now; cloning, measuring and indexing run after."""
     spec = Spec(source=body.source, repo=body.repo, branch=body.branch, excluded=body.excluded,
-                connect_db=body.connectDb, mine_git=body.mineGit, ingest_docs=body.ingestDocs,
                 rules=[r.model_dump() for r in body.rules])
     project = await OnboardingService(open_session).create(spec, who.name)
     await hand_off(open_session, jobs, onboard, db, gw, project.id, spec)
@@ -124,9 +119,26 @@ async def register_mcp(body: McpIn, who: Person = Depends(require("mcp:manage"))
         default_effect=body.defaultEffect, config=body.config,
         # Given up front so the collection exists: reading it on a brand-new object would otherwise
         # be a lazy load, and a lazy load inside async code raises instead of returning nothing.
+        # Nothing about it is measured yet; a check fills that in.
         tools=[]))
     await ActivityRepository(open_session).record(
         actor=who.name, actor_kind="human", action="MCP server registered",
         detail=f"{server.id} · {body.transport} · {body.scope} scope · tools default to {body.defaultEffect}",
         project_id=None)
     return mcp_json(server)
+
+
+@router.post("/mcp/servers/{server_id}/trust")
+async def trust_mcp(server_id: str, body: TrustIn, who: Person = Depends(require("mcp:manage")),
+                    open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    """Trusting a stdio server is what allows its command to be launched; the service asks for the
+    permission that takes, on top of managing the registry."""
+    return mcp_json(await McpService(open_session).trust(server_id, body.trusted, who))
+
+
+@router.post("/mcp/servers/{server_id}/check")
+async def check_mcp(server_id: str, who: Person = Depends(require("mcp:manage")),
+                    open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    """Connect once and record what happened. A failed check is still a 200: the server's status and
+    reason are the answer. Refused only when the check may not run at all."""
+    return mcp_json(await McpService(open_session).check(server_id, who))

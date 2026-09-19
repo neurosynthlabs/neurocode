@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..ai import lanes
 from ..ai.gateway import Gateway
 from ..ai.lanes import REVIEW, WRITE
+from ..data.base import utcnow
 from ..models import ActivityEvent
 from ..repositories.base import MAX_LIMIT
 from ..repositories.usage import AgentRepository, InFlight, UsageRepository
@@ -135,6 +136,20 @@ async def activity(limit: int = 200, offset: int = 0,
     events = await ActivityRepository(open_session).list(
         order_by=ActivityEvent.seq.desc(), limit=max(1, min(limit, FEED_CAP)), offset=offset)
     return [activity_json(event) for event in events]
+
+
+@router.get("/activity/summary")
+async def activity_summary(who: Person = Depends(current_person),
+                           open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    """The log's figures over every row, not over the newest page a screen holds.
+
+    "Today" is the UTC day, the same for everyone who asks. `through` is the newest event counted, so a
+    screen following the stream adds only events after it.
+    """
+    now = utcnow()
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    figures = await ActivityRepository(open_session).summary(person=who.name, day_start=day_start)
+    return {**figures, "dayStart": day_start.isoformat()}
 
 
 @router.get("/usage")

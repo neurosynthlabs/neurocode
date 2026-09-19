@@ -16,10 +16,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-REPOS_DIR = Path(__file__).resolve().parent.parent / ".repos"
-TOTAL_STEPS = 15      # the pipeline the wizard shows (src/mock/modules.ts → onboardingSteps)
-MEASURED_STEPS = 2    # clone & detect the stack, map the repository tree
-INDEXED_STEPS = 4     # and, once the code index has run: syntax & symbols, the dependency graph
+from .settings import settings
+
 MAX_FILES = 60_000
 MAX_BYTES = 2_000_000
 SKIP_DIRS = {"node_modules", "bin", "obj", "dist", "build", "out", "target", "vendor", "packages", "coverage",
@@ -33,6 +31,22 @@ LANGS = {
     ".css": "CSS", ".scss": "CSS", ".ps1": "PowerShell", ".sh": "Shell", ".yml": "YAML", ".yaml": "YAML",
 }
 GIT_URL = re.compile(r"^(?:(?:https?|ssh|git)://[^\s/@]+(?:@[^\s/]+)?/\S+|[\w.-]+@[\w.-]+:[\w./~-]+)$")
+
+
+def repos_dir() -> Path:
+    """Where git projects are cloned: `settings().repos_dir`, so the folder DevOps shows is the one used,
+    and tests and the e2e stack can clone somewhere of their own."""
+    return settings().repos_dir
+
+
+def __getattr__(name: str) -> Any:
+    # `onboarding.REPOS_DIR` is read by the onboarding job and its tests. Answered from the settings on
+    # every read, so it can never become a second, stale copy of the path.
+    if name == "REPOS_DIR":
+        return repos_dir()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 BRANCH = re.compile(r"^(?!-)(?!.*\.\.)[\w./-]{1,100}$")
 USERINFO = re.compile(r"(://)[^/@\s]+@")
 TABLE = re.compile(rb"\bcreate\s+table\b", re.I)
@@ -40,11 +54,18 @@ PROC = re.compile(rb"\bcreate\s+(?:or\s+alter\s+)?proc(?:edure)?\b", re.I)
 
 
 def source_root(project: dict[str, Any]) -> Path | None:
-    """Where an onboarded project's code lives on this machine. Sample projects have none."""
+    """Where an onboarded project's code lives on this machine. A project with no source has none.
+
+    A source with no kind, or a local one with no path, is no source either: `Path("")` is the current
+    directory, so a project that was never onboarded used to answer with the API's own folder — and its
+    test command with the API's own tests.
+    """
     src = project.get("source")
-    if not src:
+    if not src or not src.get("kind"):
         return None
-    return REPOS_DIR / project["id"] if src["kind"] == "git" else Path(os.path.expanduser(src["repo"]))
+    if src["kind"] == "git":
+        return repos_dir() / project["id"]
+    return Path(os.path.expanduser(src["repo"])) if (src.get("repo") or "").strip() else None
 
 
 def redact(text: str) -> str:
@@ -73,10 +94,6 @@ def slug(repo: str) -> str:
 
 def title(project_slug: str) -> str:
     return " ".join(w.upper() if len(w) <= 3 else w.capitalize() for w in project_slug.split("-") if w)
-
-
-def step_count(connect_db: bool, mine_git: bool, ingest_docs: bool) -> int:
-    return TOTAL_STEPS - (0 if connect_db else 4) - (0 if mine_git else 1) - (0 if ingest_docs else 1)
 
 
 def clone(repo: str, branch: str, dest: Path) -> None:
@@ -163,25 +180,24 @@ def fmt_lines(n: int) -> str:
     return f"{n / 1_000_000:.1f}M"
 
 
-def measured(found: dict[str, Any], steps_total: int, coverage: dict[str, int] | None = None,
+def measured(found: dict[str, Any], coverage: dict[str, int] | None = None,
              index: dict[str, Any] | None = None) -> dict[str, Any]:
-    """The project fields a scan (and, when given, the code index) can honestly fill in."""
+    """The project fields a scan (and, when given, the code index) can honestly fill in.
+
+    Coverage is only what the index measured. Rows for what a scan cannot fail at — every file it read
+    was read — and for what nothing reads yet, business rules, used to sit beside them at a fixed 100
+    and a fixed 0, drawn exactly like the numbers that were measured.
+    """
     names = [lang["name"] for lang in found["languages"]]
     legacy = any(n in names for n in ("VB.NET", "ASP.NET WebForms")) or (
         ("C#" in names or "T-SQL" in names) and found["lines"] > 50_000)
     capped = " (stopped at the file cap)" if found["truncated"] else ""
-    cov = coverage or {}
     indexed = (f"{index['symbols']:,} symbols and {index['edges']:,} dependencies indexed; business rules and test "
                "mapping are not connected yet.") if index else "The code index has not run yet."
     return {
         "stack": names[:4], "languages": found["languages"], "files": found["files"], "lines": fmt_lines(found["lines"]),
         "modules": found["modules"], "dbTables": found["dbTables"], "storedProcs": found["storedProcs"],
-        "kind": "legacy" if legacy else "greenfield", "status": "active", "lastActive": "just now",
-        "understoodPct": round(100 * (INDEXED_STEPS if index else MEASURED_STEPS) / steps_total),
-        "coverage": [{"label": "Files & languages", "pct": 100}, {"label": "Repository tree", "pct": 100},
-                     {"label": "Syntax & symbols", "pct": cov.get("Syntax & symbols", 0)},
-                     {"label": "Dependency graph", "pct": cov.get("Dependency graph", 0)},
-                     {"label": "Database links", "pct": cov.get("Database links", 0)},
-                     {"label": "Business rules", "pct": 0}],
+        "kind": "legacy" if legacy else "greenfield", "status": "active",
+        "coverage": [{"label": label, "pct": pct} for label, pct in (coverage or {}).items()],
         "description": f"{found['files']:,} files and {fmt_lines(found['lines'])} lines measured{capped}. {indexed}",
     }

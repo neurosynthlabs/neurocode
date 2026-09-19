@@ -3,6 +3,14 @@
 The session dependency is the transaction. Everything a request does happens inside it and commits
 together at the end; a request that raises rolls back whole, so a failure cannot leave half a change
 behind. That used to be impossible — the old store committed each statement on its own.
+
+"At the end" means before the response leaves, not after. FastAPI closes an ordinary yield dependency
+only once the response has been sent, so a screen that wrote and then read straight back — empty the
+workspace and reload it, open a session and ask it something — could read the state from before its
+own write, and a commit that failed reached the screen as a 2xx for data that was never stored. The
+transaction is therefore held in the *function* scope, which FastAPI closes as soon as the route has
+returned and its answer is serialised: the commit is done, or has failed as a 500, before a byte of
+the answer is sent. It is also why the live stream holds no connection while it streams.
 """
 from __future__ import annotations
 
@@ -30,10 +38,20 @@ def gateway(request: Request) -> Gateway:
     return request.app.state.gateway
 
 
-async def session(db: Database = Depends(database)) -> AsyncIterator[AsyncSession]:
-    """One transaction per request: it commits when the route returns, and rolls back when it raises."""
+async def _unit_of_work(db: Database = Depends(database)) -> AsyncIterator[AsyncSession]:
     async with db.session() as open_session:
         yield open_session
+
+
+async def session(open_session: AsyncSession = Depends(_unit_of_work, scope="function")) -> AsyncSession:
+    """One transaction per request: it commits when the route returns, and rolls back when it raises.
+
+    The scope is set once, here, rather than at the hundred-odd places a route asks for a session: a
+    scope is part of FastAPI's cache key, so a route that said it at one place and not another would
+    be handed two sessions in two transactions. Everything depends on this plain function, which
+    returns the one session the function-scoped unit of work opened.
+    """
+    return open_session
 
 
 async def identity_service(open_session: AsyncSession = Depends(session)) -> IdentityService:
@@ -65,10 +83,12 @@ async def hand_off(open_session: AsyncSession, jobs: BackgroundTasks, job: Calla
     """Commit what this request wrote, then queue the job that will read it.
 
     The one place a route commits, and why: a background job runs in a transaction of its own, and
-    FastAPI starts it *before* this request's session is closed and committed. So a job that went to
-    fetch the project, the plan or the question the request had just written found nothing — and
-    returned quietly. Onboarding stayed "onboarding" forever, a session's question was never answered,
-    a dispatched plan never ran. Every route that hands work to a job does it through here.
+    once FastAPI started it *before* this request's session was closed and committed. So a job that
+    went to fetch the project, the plan or the question the request had just written found nothing —
+    and returned quietly. Onboarding stayed "onboarding" forever, a session's question was never
+    answered, a dispatched plan never ran. The session now commits before the response (see `session`),
+    which is before any job starts; this commit stays so the guarantee does not rest on the order
+    FastAPI happens to close things in. Every route that hands work to a job does it through here.
     """
     await open_session.commit()
     jobs.add_task(job, *args)

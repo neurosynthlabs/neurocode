@@ -10,16 +10,29 @@ The older tests build their own SQLite app and are untouched by this file: nothi
 """
 from __future__ import annotations
 
+import atexit
+import os
+import shutil
+import tempfile
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
-import pytest
-import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
+# Before anything imports the app: runs make worktrees and onboarding clones under these two folders,
+# and a test run must never leave its projects in the server's own `.worktrees` / `.repos`, where
+# DevOps counts them as real. setdefault, so a run that names its own folders keeps them.
+_SCRATCH = tempfile.mkdtemp(prefix="neurocode-tests-")
+os.environ.setdefault("NEUROCODE_WORKTREES_DIR", os.path.join(_SCRATCH, "worktrees"))
+os.environ.setdefault("NEUROCODE_REPOS_DIR", os.path.join(_SCRATCH, "repos"))
+atexit.register(shutil.rmtree, _SCRATCH, ignore_errors=True)
 
-from app.data.loader import load_seed, sync_roles
-from app.settings import Settings
+import pytest  # noqa: E402 — the environment above must be in place first
+import pytest_asyncio  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
+from sqlalchemy.pool import NullPool  # noqa: E402
+
+from app.data.loader import sync_agents, sync_roles  # noqa: E402
+from app.settings import Settings  # noqa: E402
+from tests.fixtures.workspace import load_workspace  # noqa: E402
 
 SERVER_DIR = Path(__file__).resolve().parent.parent
 
@@ -64,9 +77,17 @@ async def session(engine) -> AsyncIterator[AsyncSession]:
 
 
 @pytest_asyncio.fixture
-async def seeded(session: AsyncSession) -> AsyncSession:
-    """The sample workspace and the built-in roles, inside this test's transaction."""
-    await load_seed(session)
+async def catalogued(session: AsyncSession) -> AsyncSession:
+    """What a brand-new workspace holds — the built-in roles and the agent roster — and nothing else."""
     await sync_roles(session)
+    await sync_agents(session)
     await session.flush()
+    return session
+
+
+@pytest_asyncio.fixture
+async def seeded(session: AsyncSession) -> AsyncSession:
+    """The tests' own workspace (`tests/fixtures/workspace.json`) and the catalogue, inside this
+    test's transaction."""
+    await load_workspace(session)
     return session

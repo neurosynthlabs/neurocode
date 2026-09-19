@@ -16,7 +16,7 @@ export interface NavItem {
 export const NAV: NavItem[] = [
   { section: 'Home', to: '/',            label: 'Command Center',    icon: 'LayoutDashboard', keywords: 'home requirement prompt start plan active work ask' },
   { section: 'Home', to: '/activity',    label: 'Activity',          icon: 'ScrollText',      keywords: 'brain log timeline events' },
-  { section: 'Home', to: '/projects',    label: 'Projects',          icon: 'FolderKanban',    keywords: 'repos erp taxi fifa switch onboard' },
+  { section: 'Home', to: '/projects',    label: 'Projects',          icon: 'FolderKanban',    keywords: 'repos repository switch onboard clone measure' },
 
   { section: 'Build', sub: 'Planning',   to: '/plans',     label: 'Plans',           icon: 'GitBranchPlus', keywords: 'requirement compiler plan steps decomposition' },
   { section: 'Build', sub: 'Planning',   to: '/tasks',     label: 'Tasks',           icon: 'ListChecks',    keywords: 'kanban backlog epic breakdown board' },
@@ -41,11 +41,10 @@ export const NAV: NavItem[] = [
   { section: 'Platform', sub: 'Extensions',  to: '/hooks',    label: 'Hooks',           icon: 'Webhook',     keywords: 'pretooluse posttooluse events automation guard' },
   { section: 'Platform', sub: 'Extensions',  to: '/plugins',  label: 'Plugins',         icon: 'Blocks',      keywords: 'marketplace install packs extensions' },
   { section: 'Platform', sub: 'Connections', to: '/mcp',      label: 'MCP & Tools',     icon: 'Plug',        keywords: 'model context protocol servers filesystem sql playwright' },
-  { section: 'Platform', sub: 'Connections', to: '/acp',      label: 'ACP Bridge',      icon: 'Cable',       keywords: 'agent client protocol editor zed neovim ide' },
-  { section: 'Platform', sub: 'Connections', to: '/models',   label: 'Models & Router', icon: 'Cpu',         keywords: 'qwen kimi deepseek routing fallback local ollama' },
+  { section: 'Platform', sub: 'Connections', to: '/models',   label: 'Models & Router', icon: 'Cpu',         keywords: 'lanes groq cerebras gemini deepseek routing keys local ollama' },
 
   { section: 'Governance', to: '/permissions', label: 'Permissions',  icon: 'ShieldCheck', keywords: 'approval gates allow deny risk sandbox' },
-  { section: 'Governance', to: '/cost',        label: 'Cost & Usage', icon: 'Coins',       keywords: 'tokens spend budget savings local remote' },
+  { section: 'Governance', to: '/cost',        label: 'Cost & Usage', icon: 'Coins',       keywords: 'tokens spend ledger price agent project lane' },
   { section: 'Governance', to: '/sessions',    label: 'Sessions',     icon: 'History',     keywords: 'checkpoints rewind resume fork transcript' },
   { section: 'Governance', to: '/settings',    label: 'Settings',     icon: 'Settings',    keywords: 'general appearance notifications preferences' },
 
@@ -55,7 +54,7 @@ export const NAV: NavItem[] = [
   { section: 'Admin', to: '/admin/ai',        label: 'AI providers',        icon: 'BrainCircuit', perm: ['workspace:admin'],              keywords: 'deepseek ollama api key model routing offline test connection' },
   { section: 'Admin', to: '/admin/audit',     label: 'Audit log',           icon: 'FileClock',    perm: ['audit:read'],                   keywords: 'security sign in history who changed access' },
   { section: 'Admin', to: '/admin/workspace', label: 'Workspace',           icon: 'Building2',    perm: ['workspace:admin'],              keywords: 'name organisation reset data' },
-  { section: 'Admin', to: '/admin/database',  label: 'Database',            icon: 'Database',     perm: ['workspace:admin'],              keywords: 'sqlite backup integrity check migrations optimize tables' },
+  { section: 'Admin', to: '/admin/database',  label: 'Database',            icon: 'Database',     perm: ['workspace:admin'],              keywords: 'postgres backup integrity check migrations optimize tables' },
 ];
 
 export const NAV_SECTIONS: NavSection[] = ['Home', 'Build', 'Knowledge', 'Platform', 'Governance', 'Admin'];

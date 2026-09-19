@@ -16,15 +16,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import ColumnElement, and_, case, func, literal, select, text
+from sqlalchemy import ColumnElement, Float, and_, case, cast, func, literal, null, select, text
 
-from ..models import Agent, AiCall, Run, RunStep, Task, TaskAgent, User
+from ..data import roster
+from ..models import Agent, AiCall, Project, Run, RunStep, Task, TaskAgent, User
 from .base import MAX_LIMIT, Repository, bounded
 
 #: The lane that answers from rules alone. Every other lane went to a model.
 OFFLINE = "rules"
 #: How many calls the screen's "recent" strip shows.
 RECENT = 25
+#: How many calls the "costliest" list holds.
+COSTLIEST = 10
 #: The run statuses that are a verdict on the agent. One still going says nothing about it yet, and
 #: one a person cancelled says something about the person.
 DECIDED = ("done", "failed")
@@ -50,6 +53,50 @@ def _ms(value: object) -> int:
     return round(float(value or 0))
 
 
+def _cost() -> ColumnElement[float | None]:
+    """What one ledger line cost in US dollars, worked out by the database, or NULL when its lane
+    declares no price, or declares one for a model other than the one the call ran on.
+
+    The prices are the lanes' own (`lanes.price_of`), and "known" is `lanes.priced_call` — the same two
+    `spend_24h` asks — written into the statement as a CASE, so a month of calls is summed and sorted
+    in Postgres rather than carried back here a row at a time. The model is in the condition because a
+    lane's price is its catalogue model's: a free lane an admin pointed at a paid model must not sum
+    to $0. Built on every call rather than once, because the catalogue is Python and a test that
+    changes a price must see it.
+    """
+    from ..ai.lanes import IDS, price_of, priced, priced_models
+
+    per_million = cast(literal(1e6), Float)
+    whens = []
+    for lane in (*IDS, OFFLINE):
+        if priced(lane):
+            per_in, per_out = price_of(lane)
+            models = priced_models(lane)
+            which = AiCall.lane == lane if models is None else and_(AiCall.lane == lane, AiCall.model.in_(models))
+            whens.append((which,
+                          (cast(AiCall.tokens_in, Float) * literal(per_in, Float)
+                           + cast(AiCall.tokens_out, Float) * literal(per_out, Float)) / per_million))
+    # A call that used no tokens — refused, rate-limited, timed out before an answer — cost nothing on any
+    # lane, so it is priced at zero rather than leaving the day's total unknown.
+    return case((AiCall.tokens_in + AiCall.tokens_out == 0, literal(0.0, Float)), *whens, else_=null())
+
+
+def _dollars(total: object, calls: int, unpriced: int) -> float | None:
+    """A sum of known costs. When every call in it ran on an unpriced lane nothing is known, and the
+    answer is None rather than a zero that would read as "free"; when only some did, it is a floor,
+    and `unpriced` is what says so."""
+    if calls and unpriced >= calls:
+        return None
+    return round(float(total or 0), 4)
+
+
+def _agent_key() -> ColumnElement[str]:
+    """The ledger names an agent by name where a run had one and by id otherwise, so both spellings
+    are folded onto the roster id inside the statement. A name the roster does not know stays as it
+    was written: the ledger outlives a rename."""
+    return case(roster.IDS_BY_NAME, value=AiCall.agent, else_=AiCall.agent)
+
+
 # ── what a ledger question answers with ──────────────────────────
 @dataclass(slots=True)
 class Totals:
@@ -60,6 +107,9 @@ class Totals:
     tokens_in: int
     tokens_out: int
     avg_ms: int
+    cost_usd: float | None
+    #: How many calls ran on a lane with no declared price. Any at all makes `cost_usd` a floor.
+    unpriced: int
 
 
 @dataclass(slots=True)
@@ -69,6 +119,43 @@ class DayLine:
     model: int
     offline: int
     tokens: int
+    cost_usd: float | None
+    unpriced: int
+
+
+@dataclass(slots=True)
+class AgentSpend:
+    agent: str
+    calls: int
+    tokens_in: int
+    tokens_out: int
+    cost_usd: float | None
+    unpriced: int
+
+
+@dataclass(slots=True)
+class ProjectSpend:
+    project_id: str | None      # None: the call belonged to the workspace, not to one project
+    project_name: str | None
+    calls: int
+    tokens_in: int
+    tokens_out: int
+    cost_usd: float | None
+    unpriced: int
+
+
+@dataclass(slots=True)
+class CostlyCall:
+    at: datetime
+    lane: str
+    model: str
+    feature: str
+    agent: str | None
+    tokens_in: int
+    tokens_out: int
+    cost_usd: float | None
+    run_ref: str | None
+    task_ref: str | None
 
 
 @dataclass(slots=True)
@@ -168,6 +255,9 @@ class Usage:
     by_lane: list[LaneLine]
     recent: list[CallLine]
     by_person: list[PersonLine] | None
+    by_agent: list[AgentSpend]
+    by_project: list[ProjectSpend]
+    costliest: list[CostlyCall]
 
 
 class UsageRepository(Repository[AiCall]):
@@ -184,6 +274,7 @@ class UsageRepository(Repository[AiCall]):
 
     # ── the aggregates, one statement each ───────────────────────
     async def totals(self, days: int) -> Totals:
+        cost = _cost()
         stmt = select(
             func.count(),
             func.count().filter(AiCall.lane != OFFLINE),
@@ -192,25 +283,80 @@ class UsageRepository(Repository[AiCall]):
             func.coalesce(func.sum(AiCall.tokens_in), 0),
             func.coalesce(func.sum(AiCall.tokens_out), 0),
             func.coalesce(func.avg(AiCall.ms), 0),
+            func.sum(cost),
+            func.count().filter(cost.is_(None)),
         ).where(self._within(days))
-        calls, model_calls, offline, failures, tokens_in, tokens_out, ms = (
+        calls, model_calls, offline, failures, tokens_in, tokens_out, ms, dollars, unpriced = (
             await self.session.execute(stmt)).one()
         return Totals(calls=_int(calls), model_calls=_int(model_calls), offline=_int(offline),
                       failures=_int(failures), tokens_in=_int(tokens_in), tokens_out=_int(tokens_out),
-                      avg_ms=_ms(ms))
+                      avg_ms=_ms(ms), cost_usd=_dollars(dollars, _int(calls), _int(unpriced)),
+                      unpriced=_int(unpriced))
 
     async def by_day(self, days: int) -> list[DayLine]:
-        day = func.date_trunc("day", AiCall.at)
+        day, cost = func.date_trunc("day", AiCall.at), _cost()
         stmt = (select(func.to_char(day, "YYYY-MM-DD"), func.count(),
                        func.count().filter(AiCall.lane != OFFLINE),
                        func.count().filter(AiCall.lane == OFFLINE),
-                       func.coalesce(func.sum(AiCall.tokens_in + AiCall.tokens_out), 0))
+                       func.coalesce(func.sum(AiCall.tokens_in + AiCall.tokens_out), 0),
+                       func.sum(cost), func.count().filter(cost.is_(None)))
                 # Newest first, then turned back around: ordered ascending and capped, the row that
                 # fell off the end was *today* whenever the window held a day more than `days`.
                 .where(self._within(days)).group_by(day).order_by(day.desc()).limit(bounded(days)))
         rows = (await self.session.execute(stmt)).all()
-        return [DayLine(day=d, calls=_int(c), model=_int(m), offline=_int(o), tokens=_int(t))
-                for d, c, m, o, t in reversed(rows)]
+        return [DayLine(day=d, calls=_int(c), model=_int(m), offline=_int(o), tokens=_int(t),
+                        cost_usd=_dollars(usd, _int(c), _int(u)), unpriced=_int(u))
+                for d, c, m, o, t, usd, u in reversed(rows)]
+
+    async def by_agent(self, days: int) -> list[AgentSpend]:
+        """What each agent's calls cost. Only calls an agent asked for: a person compiling or asking
+        memory is on `by_person`, and folding them in here under "nobody" would hide the agents."""
+        key, cost, calls = _agent_key(), _cost(), func.count()
+        stmt = (select(key, calls, func.coalesce(func.sum(AiCall.tokens_in), 0),
+                       func.coalesce(func.sum(AiCall.tokens_out), 0),
+                       func.sum(cost), func.count().filter(cost.is_(None)))
+                .where(self._within(days), AiCall.agent != "")
+                .group_by(key).order_by(calls.desc(), key).limit(MAX_LIMIT))
+        return [AgentSpend(agent=a, calls=_int(c), tokens_in=_int(ti), tokens_out=_int(to),
+                           cost_usd=_dollars(usd, _int(c), _int(u)), unpriced=_int(u))
+                for a, c, ti, to, usd, u in (await self.session.execute(stmt)).all()]
+
+    async def by_project(self, days: int) -> list[ProjectSpend]:
+        """What each project's calls cost, with the calls that belonged to no project as one line of
+        their own. A removed project's calls are already on that line: the ledger's foreign key is
+        SET NULL, because the history outlives the project."""
+        cost, calls = _cost(), func.count()
+        stmt = (select(AiCall.project_id, Project.name, calls,
+                       func.coalesce(func.sum(AiCall.tokens_in), 0),
+                       func.coalesce(func.sum(AiCall.tokens_out), 0),
+                       func.sum(cost), func.count().filter(cost.is_(None)))
+                .join(Project, Project.id == AiCall.project_id, isouter=True)
+                .where(self._within(days)).group_by(AiCall.project_id, Project.name)
+                .order_by(calls.desc(), Project.name.nulls_last()).limit(MAX_LIMIT))
+        return [ProjectSpend(project_id=pid, project_name=name, calls=_int(c), tokens_in=_int(ti),
+                             tokens_out=_int(to), cost_usd=_dollars(usd, _int(c), _int(u)), unpriced=_int(u))
+                for pid, name, c, ti, to, usd, u in (await self.session.execute(stmt)).all()]
+
+    async def costliest(self, days: int, *, limit: int = COSTLIEST) -> list[CostlyCall]:
+        """The window's most expensive calls, with the run and task each was made for.
+
+        A call on an unpriced lane has no cost to rank, so it comes after every priced one rather than
+        being guessed into place; among equal costs — every free lane's is zero — the bigger call first.
+        """
+        cost, key = _cost(), _agent_key()
+        stmt = (select(AiCall.at, AiCall.lane, AiCall.model, AiCall.feature, key, AiCall.tokens_in,
+                       AiCall.tokens_out, cost, Run.ref, Task.ref)
+                .join(Run, Run.id == AiCall.run_id, isouter=True)
+                .join(Task, Task.id == Run.task_id, isouter=True)
+                .where(self._within(days))
+                .order_by(cost.desc().nulls_last(), (AiCall.tokens_in + AiCall.tokens_out).desc(),
+                          AiCall.id.desc())
+                .limit(bounded(limit)))
+        return [CostlyCall(at=at, lane=lane, model=model, feature=f, agent=a or None, tokens_in=_int(ti),
+                           tokens_out=_int(to), cost_usd=None if usd is None else round(float(usd), 6),
+                           run_ref=run_ref, task_ref=task_ref)
+                for at, lane, model, f, a, ti, to, usd, run_ref, task_ref
+                in (await self.session.execute(stmt)).all()]
 
     async def by_feature(self, days: int) -> list[FeatureLine]:
         calls = func.count()
@@ -275,19 +421,20 @@ class UsageRepository(Repository[AiCall]):
         """
         since = func.now() - text("interval '24 hours'")
         tokens = func.coalesce(func.sum(AiCall.tokens_in + AiCall.tokens_out), 0)
-        stmt = (select(AiCall.agent, AiCall.lane,
+        stmt = (select(AiCall.agent, AiCall.lane, AiCall.model,
                        func.coalesce(func.sum(AiCall.tokens_in), 0),
                        func.coalesce(func.sum(AiCall.tokens_out), 0), tokens)
                 .where(AiCall.at >= since, AiCall.agent != "")
-                .group_by(AiCall.agent, AiCall.lane).limit(MAX_LIMIT))
+                .group_by(AiCall.agent, AiCall.lane, AiCall.model).limit(MAX_LIMIT))
 
-        from ..ai.lanes import price_of, priced
+        from ..ai.lanes import price_of, priced_call
         out: dict[str, tuple[int, float | None]] = {}
-        for who, lane, tin, tout, total in (await self.session.execute(stmt)).all():
+        for who, lane, model, tin, tout, total in (await self.session.execute(stmt)).all():
             spent, cost = out.get(who, (0, 0.0))
             per_in, per_out = price_of(lane)
-            # One call to a lane with no declared price makes the whole figure unknown, not smaller.
-            cost = None if cost is None or not priced(lane) else \
+            # One call to a lane with no declared price — or on a model its price is not for — makes the
+            # whole figure unknown, not smaller.
+            cost = None if cost is None or (_int(total) and not priced_call(lane, model)) else \
                 cost + _int(tin) / 1e6 * per_in + _int(tout) / 1e6 * per_out
             out[who] = (spent + _int(total), cost)
         return {who: (n, None if cost is None else round(cost, 4)) for who, (n, cost) in out.items()}
@@ -322,7 +469,9 @@ class UsageRepository(Repository[AiCall]):
         return Usage(days=days, totals=await self.totals(days), by_day=await self.by_day(days),
                      by_feature=await self.by_feature(days), by_lane=await self.by_lane(days),
                      recent=await self.recent_calls(),
-                     by_person=await self.by_person(days) if admin else None)
+                     by_person=await self.by_person(days) if admin else None,
+                     by_agent=await self.by_agent(days), by_project=await self.by_project(days),
+                     costliest=await self.costliest(days))
 
 
 class AgentRepository(Repository[Agent]):
@@ -338,9 +487,9 @@ class AgentRepository(Repository[Agent]):
     async def tasks_finished(self) -> dict[str, int]:
         """agent id → how many finished tasks carry it. One GROUP BY for the whole roster.
 
-        A task names its agents the way the plan that made it did — "Backend Engineer" — while the
-        sample workspace names them by id. Both spellings are really in that column, so both are
-        matched and the answer is keyed by the agent instead.
+        A task names its agents the way the plan that made it did — "Backend Engineer" — while a
+        workspace imported from the old store names them by id. Both spellings can be in that column,
+        so both are matched and the answer is keyed by the agent instead.
         """
         stmt = (select(Agent.id, func.count())
                 .select_from(Agent)

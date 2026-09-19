@@ -64,6 +64,36 @@ export interface GitConflict {
   resolvedBy: string;
 }
 
+/** A run's step, or git's merge preview, read as a check on a review. */
+export interface GitReviewCheck {
+  id: string;
+  name: string;
+  status: 'pass' | 'fail' | 'running' | 'skipped' | 'warn';
+  detail: string;
+  durationS: number;
+}
+
+/** A solo or integration run read as a review: its branch, its diff, its steps as checks, and where its gate stands.
+ *  Built on the screen from GET /runs and GET /projects/{pid}/git; NeuroCode opens no hosted pull request. */
+export interface GitReview {
+  id: string;
+  ref: string;
+  title: string;
+  branch: string;
+  base: string;
+  /** Who wrote it, as the run's own steps name them, and who asked for it. */
+  author: string;
+  state: 'draft' | 'open' | 'awaiting_human' | 'merged' | 'blocked';
+  files: number;
+  additions: number;
+  deletions: number;
+  commits: number;
+  openedAt: string;
+  reviewers: string[];
+  checks: GitReviewCheck[];
+  body: string;
+}
+
 /** `at` is ISO. */
 export interface GitCommits { shallow: boolean; commits: Commit[] }
 

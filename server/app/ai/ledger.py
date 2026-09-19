@@ -20,6 +20,8 @@ from typing import Any, Protocol, runtime_checkable
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
+from ..data.engine import utc_connect_args
+
 
 @runtime_checkable
 class Ledger(Protocol):
@@ -45,9 +47,11 @@ class PostgresLedger:
     """
 
     def __init__(self, url: str, *, echo: bool = False) -> None:
+        # The same zone as every other connection the app opens (see `data.engine.TIMEZONE`), so this
+        # pool's "today" is the day the screens and the rest of the API mean.
         self.engine: Engine = create_engine(
             url, echo=echo, pool_size=2, max_overflow=3, pool_pre_ping=True, pool_recycle=900,
-            future=True)
+            connect_args=utc_connect_args(url), future=True)
 
     # ── settings ─────────────────────────────────────────────────
     def setting(self, key: str, default: Any = None) -> Any:
@@ -67,9 +71,9 @@ class PostgresLedger:
     def calls_today(self, lane_id: str) -> int:
         """What this lane has spent against its daily free-tier allowance, counted in the database.
 
-        Counted by the *server's* day, not this machine's: `at` is stored with its zone, so the
-        comparison is against `current_date` at the database's timezone and two processes in different
-        zones agree on when the allowance resets.
+        Counted by the database's day, not this machine's: `at` is stored with its zone and the
+        session's zone is UTC on every connection, so two processes in different zones agree on when
+        the allowance resets — at midnight UTC.
         """
         with self.engine.connect() as conn:
             n = conn.execute(text(

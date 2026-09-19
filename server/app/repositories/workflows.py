@@ -50,6 +50,8 @@ class Spend:
     feature: str
     tokens_in: int
     tokens_out: int
+    #: A lane's price is for the model its catalogue names; a line under another model has no known price.
+    model: str = ""
 
 
 def _lead() -> ColumnElement[bool]:
@@ -195,22 +197,22 @@ class WorkflowRepository(Repository[WorkflowDefinition]):
         """run id → its ledger lines, summed per lane and feature. A run with no lines is absent."""
         if not run_ids:
             return {}
-        stmt = (select(AiCall.run_id, AiCall.lane, AiCall.feature,
+        stmt = (select(AiCall.run_id, AiCall.lane, AiCall.feature, AiCall.model,
                        func.coalesce(func.sum(AiCall.tokens_in), 0), func.coalesce(func.sum(AiCall.tokens_out), 0))
                 .where(AiCall.run_id.in_(run_ids))
-                .group_by(AiCall.run_id, AiCall.lane, AiCall.feature).limit(MAX_LIMIT))
+                .group_by(AiCall.run_id, AiCall.lane, AiCall.feature, AiCall.model).limit(MAX_LIMIT))
         out: dict[str, list[Spend]] = {}
-        for rid, lane, feature, tin, tout in (await self.session.execute(stmt)).all():
+        for rid, lane, feature, model, tin, tout in (await self.session.execute(stmt)).all():
             out.setdefault(rid, []).append(Spend(lane=lane, feature=feature, tokens_in=_int(tin),
-                                                 tokens_out=_int(tout)))
+                                                 tokens_out=_int(tout), model=model))
         return out
 
     async def spend_today(self) -> list[Spend]:
         """What agents and reviewers have spent since midnight, by the database's clock."""
-        stmt = (select(AiCall.lane, AiCall.feature, func.coalesce(func.sum(AiCall.tokens_in), 0),
+        stmt = (select(AiCall.lane, AiCall.feature, AiCall.model, func.coalesce(func.sum(AiCall.tokens_in), 0),
                        func.coalesce(func.sum(AiCall.tokens_out), 0))
                 .where(AiCall.feature.in_(("agent", "review")),
                        AiCall.at >= func.date_trunc("day", func.now()))
-                .group_by(AiCall.lane, AiCall.feature).limit(MAX_LIMIT))
-        return [Spend(lane=lane, feature=feature, tokens_in=_int(tin), tokens_out=_int(tout))
-                for lane, feature, tin, tout in (await self.session.execute(stmt)).all()]
+                .group_by(AiCall.lane, AiCall.feature, AiCall.model).limit(MAX_LIMIT))
+        return [Spend(lane=lane, feature=feature, tokens_in=_int(tin), tokens_out=_int(tout), model=model)
+                for lane, feature, model, tin, tout in (await self.session.execute(stmt)).all()]

@@ -49,12 +49,17 @@ def audit_json(entry: AuditEntry, *, user: str | None = None) -> dict[str, Any]:
     }
 
 
-def workspace_json(workspace: Workspace | None, *, people: int, roles: int,
-                   teams: int) -> dict[str, Any]:
+def workspace_json(workspace: Workspace | None, *, people: int, roles: int, builtin_roles: int,
+                   teams: int, security: dict[str, int]) -> dict[str, Any]:
     """No workspace row at all is a real state — it is what makes the app show its setup wizard — so
-    it answers with the placeholder name rather than a 404 the screens have no branch for."""
+    it answers with the placeholder name rather than a 404 the screens have no branch for.
+
+    `security` is the rules sign-in really enforces, handed in by the caller from the settings and the
+    constant the identity service reads, so the screen cannot describe a rule other than the one applied.
+    """
     return {
         "name": workspace.name if workspace else UNNAMED,
         "createdAt": when(workspace.created_at) if workspace else None,
-        "people": people, "roles": roles, "teams": teams,
+        "people": people, "roles": roles, "builtinRoles": builtin_roles, "teams": teams,
+        "security": security,
     }

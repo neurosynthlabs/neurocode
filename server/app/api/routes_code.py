@@ -21,7 +21,7 @@ from ..services import code as code_jobs
 from ..services.code import INDEXING, CodeService, checkout
 from ..services.errors import Refused
 from ..services.identity import Person
-from ..services.retrieval import RetrievalService
+from ..services.retrieval import BUILDING, RetrievalService
 from .deps import current_person, database, gateway, hand_off, require, session
 
 router = APIRouter(prefix="/projects/{pid}/code")
@@ -106,11 +106,25 @@ async def build_retrieval(pid: str, jobs: BackgroundTasks,
                           db: Database = Depends(database),
                           gw: Gateway = Depends(gateway)) -> dict[str, bool]:
     project = await CodeService(open_session).project(pid)
+    if pid in BUILDING:
+        raise Refused(f"Retrieval for {project.name} is being built already")
     await ActivityRepository(open_session).record(
         actor=who.name, actor_kind="human", action="Building retrieval",
         detail=f"{project.name} · chunking, then embedding what it can", project_id=pid)
-    await hand_off(open_session, jobs, code_jobs.build_retrieval, db, gw, pid)
+    # Marked before the answer, not when the job starts: a screen that asks the moment it hears 202
+    # must already be told a build is running, or it stops waiting before the build begins.
+    BUILDING.add(pid)
+    await hand_off(open_session, jobs, _build_retrieval, db, gw, pid)
     return {"ok": True}
+
+
+async def _build_retrieval(db: Database, gw: Gateway, pid: str) -> None:
+    """The build, and the mark taken off however it ends — including a job that fails before it reaches
+    the build itself."""
+    try:
+        await code_jobs.build_retrieval(db, gw, pid)
+    finally:
+        BUILDING.discard(pid)
 
 
 @router.post("/reindex", status_code=202)
@@ -121,8 +135,7 @@ async def reindex(pid: str, jobs: BackgroundTasks, who: Person = Depends(require
     project = await CodeService(open_session).project(pid)
     root = checkout(project)
     if root is None:
-        raise Refused(f"{project.name} is a sample project with no code on this machine. "
-                      "Onboard a repository to index one.")
+        raise Refused(f"{project.name} has no code on this machine. Onboard a repository to index one.")
     if not await asyncio.to_thread(root.is_dir):
         raise Refused(f"The code for {project.name} is no longer at {onboarding.redact(str(root))}")
     if pid in INDEXING:

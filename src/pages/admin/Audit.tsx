@@ -3,29 +3,31 @@ import { FileClock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Cell, DataTable, Empty, Page, PageBody, PageHeader, Panel, Row, Segmented, Tag, type Tone } from '@/components/os';
 import { api, type AuditEntry } from '@/lib/api';
-import { demoAudit } from '@/mock/rbac';
 import { attempt, useAdmin, when } from './load';
-import { DemoNote, LoadError, Loading } from './kit';
+import { LoadError, Loading } from './kit';
 
-type Filter = 'all' | 'auth' | 'access' | 'system';
+type Filter = 'all' | 'auth' | 'access' | 'work' | 'system';
 
 const PAGE = 100;
-const DEMO: AuditEntry[] = demoAudit;
 const loadAudit = () => api.admin.audit();
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'Everything' }, { id: 'auth', label: 'Sign-ins' }, { id: 'access', label: 'People & roles' },
-  { id: 'system', label: 'AI & workspace' },
+  { id: 'work', label: 'Merges & tests' }, { id: 'system', label: 'AI & workspace' },
 ];
+/* Every action the API writes to the log (each `AuditRepository.record` call on the server). One it
+   writes that is not named here shows as its own action string, which is still exactly what happened. */
 const LABEL: Record<string, string> = {
-  'workspace.setup': 'Workspace created', 'workspace.update': 'Workspace renamed', 'data.reset': 'Work data reset',
+  'workspace.setup': 'Workspace created', 'workspace.update': 'Workspace renamed', 'data.reset': 'Workspace emptied',
   'auth.login': 'Signed in', 'auth.login_failed': 'Sign-in refused', 'auth.password': 'Changed own password',
   'user.create': 'Person added', 'user.update': 'Person changed', 'user.password_reset': 'Password set by an admin',
   'role.create': 'Role created', 'role.update': 'Role changed', 'role.delete': 'Role deleted',
   'team.create': 'Team created', 'team.update': 'Team changed', 'team.delete': 'Team deleted',
   'ai.update': 'AI providers changed', 'database.backup': 'Database backed up', 'database.optimize': 'Database optimized',
+  'run.merge': 'Run merged', 'test.expect': 'Test failure expected', 'test.expect.remove': 'Test expectation removed',
 };
 const kind = (action: string): Filter =>
-  action.startsWith('auth.') ? 'auth' : /^(user|role|team)\./.test(action) ? 'access' : 'system';
+  action.startsWith('auth.') ? 'auth' : /^(user|role|team)\./.test(action) ? 'access'
+    : /^(run|test)\./.test(action) ? 'work' : 'system';
 const tone = (action: string): Tone =>
   action === 'auth.login_failed' ? 'danger' : action.endsWith('.delete') || action === 'data.reset' ? 'warn'
     : action.startsWith('auth.') ? 'neutral' : 'info';
@@ -34,7 +36,7 @@ const describe = (detail: Record<string, unknown>) => Object.entries(detail)
   .join(' · ');
 
 export default function Audit() {
-  const { data, error, live, reload } = useAdmin(loadAudit, DEMO);
+  const { data, error, reload } = useAdmin<AuditEntry[]>(loadAudit);
   const [older, setOlder] = useState<AuditEntry[]>([]);
   const [end, setEnd] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
@@ -54,12 +56,11 @@ export default function Audit() {
     <Page>
       <PageHeader
         title="Audit log"
-        subtitle="Who signed in, and who changed access, keys or the workspace, with when and from where. Nothing here can be edited or deleted."
+        subtitle="Who signed in, who changed access, keys or the workspace, and who merged a run or marked a failing test as expected, with when and from where. Nothing here can be edited or deleted."
       >
         <div className="pb-3"><Segmented options={FILTERS} value={filter} onChange={setFilter} /></div>
       </PageHeader>
       <PageBody>
-        {!live && <DemoNote what="The real audit trail" />}
         {error ? <LoadError error={error} onRetry={reload} /> : !data ? <Loading /> : shown.length === 0 ? (
           <Empty icon={<FileClock className="size-6" />} title="Nothing recorded yet" hint="Entries appear here as people sign in and change access." />
         ) : (
@@ -76,7 +77,7 @@ export default function Audit() {
                 </Row>
               ))}
             </DataTable>
-            {live && !end && all.length >= PAGE && (
+            {!end && all.length >= PAGE && (
               <div className="border-t border-line/60 px-5 py-3">
                 <Button size="sm" variant="ghost" onClick={() => void more()}>Load older entries</Button>
               </div>

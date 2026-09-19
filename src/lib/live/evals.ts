@@ -1,11 +1,10 @@
 import { request } from "@/lib/api";
-import type { EvalSuite } from "@/types";
 
 /* The Evals screen against the local API. Every score here is a run that happened: a case's answer came
    from a real call to the compiler, ask memory, retrieval or a lane, and its verdict from the checks the
    case states, a judge that is a labelled model call of its own, or a person who overrode it. */
 
-export type EvalKind = EvalSuite["kind"];
+export type EvalKind = "regression" | "capability" | "safety" | "cost";
 export type EvalTarget = "compile" | "ask" | "retrieval" | "review" | "prompt";
 export type EvalRunStatus =
   | "queued"
@@ -27,6 +26,39 @@ export type CheckKind =
   | "free_lane"
   | "not_offline"
   | "judge";
+
+/** The kinds a suite is filed under, in the order the screen offers them. */
+export const EVAL_KINDS: { id: EvalKind; label: string }[] = [
+  { id: "capability", label: "Capability" },
+  { id: "regression", label: "Regression" },
+  { id: "safety", label: "Safety" },
+  { id: "cost", label: "Cost" },
+];
+
+/** What a suite can point at: each is a call this app really makes. */
+export const EVAL_TARGETS: { value: EvalTarget; label: string }[] = [
+  { value: "compile", label: "Requirement compiler" },
+  { value: "ask", label: "Ask memory" },
+  { value: "retrieval", label: "Retrieval" },
+  { value: "review", label: "Reviewer prompt" },
+  { value: "prompt", label: "Lane prompt" },
+];
+
+/** Every check the API scores an answer with, as a person reads it. */
+export const CHECK_LABEL: Record<CheckKind, string> = {
+  exact: "Exactly equals",
+  contains: "Contains",
+  not_contains: "Never contains",
+  regex: "Matches a pattern",
+  json_equals: "JSON path equals",
+  json_contains: "JSON path has",
+  cites: "Cites a fact",
+  retrieves: "Retrieves a ref",
+  max_ms: "Answers within",
+  free_lane: "On a free lane",
+  not_offline: "A model answered",
+  judge: "LLM judge",
+};
 
 export interface EvalCheck {
   kind: CheckKind;

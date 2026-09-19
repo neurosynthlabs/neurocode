@@ -1,12 +1,12 @@
-import type { MemoryConflict } from '@/mock/memory';
 import type {
-  ActivityEvent, ApprovalRequest, Confidence, McpServer, MemoryCategory, MemoryFact, Plan, Project, Risk, Task, TaskStatus,
+  ActivityEvent, ApprovalRequest, Confidence, ConflictResolution, McpServer, MemoryCategory, MemoryConflict, MemoryFact, Plan,
+  Project, Risk, Task, TaskStatus,
 } from '@/types';
 
-/* Where the local API lives. In dev every call goes through Vite's /api proxy (scripts/dev.sh starts
-   both servers). A production build talks to an API only when VITE_API_URL is set at build time — the
-   public demo has none, never makes a request, and runs on the seed data. */
-export const API_BASE: string = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? '/api' : '');
+/* Where the API lives. The same in every build: /api on this origin (Vite proxies it in dev, and a
+   deployment serves the API beside the app), unless VITE_API_URL names another place at build time.
+   There is no build without an API — when it cannot be reached, the app says so and offers a retry. */
+export const API_BASE: string = import.meta.env.VITE_API_URL ?? '/api';
 
 /** Fired on window when the server says the session is gone: expired, signed out elsewhere, disabled. */
 export const SIGNED_OUT = 'nc:signed-out';
@@ -47,9 +47,6 @@ export interface ProjectInput {
   repo: string;
   branch: string;
   excluded: string[];
-  connectDb: boolean;
-  mineGit: boolean;
-  ingestDocs: boolean;
   rules: { id: string; label: string; note: string }[];
 }
 
@@ -76,12 +73,23 @@ export interface Person {
   lastLoginAt: string | null; createdAt: string;
 }
 export interface PermissionDef { id: string; label: string; group: string; description: string }
+/** The product's own catalogue: what exists before anyone has made anything. */
+export interface Catalogue {
+  permissions: PermissionDef[];
+  roles: { id: string; name: string; description: string; builtin: boolean; permissions: string[] }[];
+  /** The agent roster's identity only: status, record and model are derived, and come from GET /agents. */
+  agents: { id: string; name: string; role: string; icon: string }[];
+}
 export interface RoleDoc { id: string; name: string; description: string; builtin: boolean; permissions: string[]; members: number }
 export interface TeamDoc { id: string; name: string; description: string; members: string[]; createdAt: string }
 export interface AuditEntry {
   seq: number; at: string; user: string | null; action: string; target: string; detail: Record<string, unknown>; ip?: string;
 }
-export interface WorkspaceInfo { name: string; createdAt: string | null; people: number; roles: number; teams: number }
+export interface WorkspaceInfo {
+  name: string; createdAt: string | null; people: number; roles: number; builtinRoles: number; teams: number;
+  /** The sign-in rules the API enforces, read from its settings rather than restated. */
+  security: { sessionDays: number; minPassword: number; loginAttempts: number; lockoutSeconds: number };
+}
 
 /** A lane is a provider and a model together. Several answer at once; free ones come first. */
 export type LaneId = 'groq' | 'cerebras' | 'gemini' | 'mistral' | 'openrouter' | 'github' | 'deepseek' | 'ollama';
@@ -161,7 +169,7 @@ export interface CodeSummary {
   indexed: boolean;
   /** An index is being built right now. */
   indexing: boolean;
-  /** The project's code is on this machine (onboarded, not a sample). */
+  /** The project's code is on this machine, so it can be indexed. */
   canIndex: boolean;
   run?: { files: number; symbols: number; edges: number; unresolved: number; ms: number; finishedAt: string; parsers: Record<string, string> };
   languages?: { name: string; files: number; lines: number }[];
@@ -231,7 +239,8 @@ export interface RunDoc {
   targets: string[];
   steps: RunStep[];
   tests: { command: string | null; argv: string[] | null; status: string; summary: string };
-  review: { findings: { severity: string; file: string; note: string }[]; verdict: string; by: string };
+  /** `reworkedAs`: the run that does this one's work again, once it was sent back for changes. */
+  review: { findings: { severity: string; file: string; note: string }[]; verdict: string; by: string; reworkedAs?: string };
   diff: { files: number; insertions: number; deletions: number; commits: number };
   model: string | null;
   note: string;
@@ -248,6 +257,8 @@ export interface RunDoc {
   conflicts: { branch: string; agent: string; files: string[] }[];
   /** Set once the branch is merged into the repository on this machine. */
   merged: { into: string; commit: string; at: string; by: string; undo: string } | null;
+  /** The branch as last pushed to the project's own remote; null while it lives only on this machine. */
+  pushed: { remote: string; branch: string; sha: string; at: string; by: string; compareUrl: string | null } | null;
   /** The approval this run is stopped at. */
   waitingOn?: string;
 }
@@ -290,7 +301,11 @@ export interface UsageReport {
   byPerson?: { name: string; calls: number; tokens: number }[];
 }
 export interface BackupInfo { name: string; bytes: number; at: string }
-export interface IndexHealth { count: number; unused: number; invalid: number }
+/** `unused` and `invalid` name at most twenty indexes; the counts cover all of them. */
+export interface IndexHealth {
+  count: number; bytes: number; scans: number; statsSince: string | null;
+  unused: string[]; unusedCount: number; invalid: string[]; invalidCount: number;
+}
 export interface DatabaseInfo {
   /** Which database is answering, as `host:port/name`. */
   path: string;
@@ -307,6 +322,8 @@ export interface DatabaseInfo {
   backups: BackupInfo[];
   backupDir: string | null;
 }
+/** What emptying the workspace did: the copy taken first (null where pg_dump is missing), and what each collection holds afterwards. */
+export interface ResetResult { ok: boolean; backup: string | null; counts: Record<string, number>; compiler: CompilerInfo }
 export interface DatabaseCheck { ok: boolean; integrity: string[]; foreignKeyProblems: number; at: string }
 export interface DatabaseOptimized { beforeBytes: number; afterBytes: number; ms: number }
 
@@ -317,6 +334,17 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.status = status;
   }
+}
+
+/** Why a request never got a usable answer, said so a person knows where to look. */
+export function unreachable(e: unknown, path: string): string {
+  if (e instanceof ApiError) {
+    // In development a stopped API still answers — Vite's proxy replies 5xx with no body of its own.
+    const words = e.message === `HTTP ${e.status}` ? '' : `: ${e.message}`;
+    return `${API_BASE}${path} answered HTTP ${e.status}${words}.`;
+  }
+  if (e instanceof DOMException && e.name === 'TimeoutError') return `${API_BASE}${path} did not answer in time.`;
+  return `Nothing answered at ${API_BASE}${path}.`;
 }
 
 export interface RequestOpts { method?: string; json?: unknown; headers?: Record<string, string>; signal?: AbortSignal }
@@ -351,6 +379,48 @@ export async function request<T>(path: string, { method = 'GET', json, headers, 
 }
 
 const seg = encodeURIComponent;
+
+/** A collection as the store loads it: the rows, and whether the load stopped at a ceiling rather than at the end. */
+export interface Loaded<T> {
+  items: T[];
+  /** True when the server's ceiling was reached, so there may be rows the store does not hold. No total is guessed. */
+  capped: boolean;
+}
+
+/* The server's ceilings, as server/app/repositories/base.py sets them. A paged list answers at most
+   MAX_LIMIT rows a page, and the most a whole walk goes to is EVERYTHING_CAP — the same line the server
+   draws for its own admin lists. A list asked for with no limit answers only the first 100, newest
+   first, and nothing in the answer says it stopped: that silently hid every older task, plan and gate. */
+export const PAGE_MAX = 500;
+export const LOAD_CAP = 5_000;
+
+/**
+ * Every page of a paged list, until a short page says there is no more, or the ceiling. Paging by offset
+ * over a table that is being written can repeat a row when one is added between two pages, so rows are
+ * kept once each, in the order they came.
+ */
+async function everyPage<T extends { id: string }>(path: string, params: Record<string, string> = {}): Promise<Loaded<T>> {
+  const found = new Map<string, T>();
+  const page = (offset: number, limit: number) =>
+    request<T[]>(`${path}?${new URLSearchParams({ ...params, limit: String(limit), offset: String(offset) })}`,
+      { signal: AbortSignal.timeout(15_000) });
+  for (let offset = 0; offset < LOAD_CAP; offset += PAGE_MAX) {
+    const rows = await page(offset, PAGE_MAX);
+    rows.forEach((r) => { if (!found.has(r.id)) found.set(r.id, r); });
+    if (rows.length < PAGE_MAX) return { items: [...found.values()], capped: false };
+  }
+  // A last page that was exactly full proves nothing: one row past the ceiling says whether any is left.
+  return { items: [...found.values()], capped: (await page(LOAD_CAP, 1)).length > 0 };
+}
+
+/** A list the server answers in one go, up to a fixed ceiling of its own: reaching it may mean more rows exist. */
+const upTo = (ceiling: number) => <T,>(items: T[]): Loaded<T> => ({ items, capped: items.length >= ceiling });
+
+/** How the change stream is doing. `reconnecting`: it dropped, and what changed meanwhile is not replayed. */
+export type StreamState = 'open' | 'reconnecting';
+/* After the connection closes for good (the stream answered with an error status, which EventSource
+   hides), it is opened again after this long — unless the session turns out to be gone. */
+const REOPEN_MS = 5_000;
 // A model can take a while to answer; the server gives it up to two minutes.
 const modelTimeout = () => AbortSignal.timeout(180_000);
 const POST = (json?: unknown) => ({ method: 'POST', json });
@@ -366,6 +436,8 @@ export const api = {
     request<SignedIn>('/auth/login', { ...POST({ email, password }), signal: AbortSignal.timeout(10_000) }),
   logout: () => request<{ ok: boolean }>('/auth/logout', POST()),
   changePassword: (current: string, next: string) => request<{ ok: boolean }>('/auth/password', POST({ current, new: next })),
+  /** Permissions, roles and agents by name, for anyone signed in: a Viewer's screens need the labels too. */
+  catalogue: () => request<Catalogue>('/auth/catalogue'),
 
   /* administration */
   admin: {
@@ -415,7 +487,7 @@ export const api = {
   },
 
   /* agent runs: a worktree of their own, and everything they did in it */
-  runs: () => request<RunDoc[]>('/runs'),
+  runs: () => everyPage<RunDoc>('/runs'),
   run: (ref: string, after = 0) => request<RunDetail>(`/runs/${seg(ref)}?after=${after}`),
   runDiff: (ref: string) => request<RunDiff>(`/runs/${seg(ref)}/diff`, { signal: AbortSignal.timeout(15_000) }),
   cancelRun: (ref: string) => request<RunDoc>(`/runs/${seg(ref)}/cancel`, POST()),
@@ -435,24 +507,26 @@ export const api = {
 
   /* AI features */
   ask: (question: string, projectId?: string) => request<AskAnswer>('/ai/ask', { ...POST({ question, projectId }), signal: modelTimeout() }),
-  brainstorms: () => request<BrainstormDoc[]>('/ai/brainstorms'),
+  brainstorms: () => everyPage<BrainstormDoc>('/ai/brainstorms'),
   brainstorm: (idea: string, projectId?: string) =>
     request<BrainstormDoc>('/ai/brainstorm', { ...POST({ idea, projectId }), signal: modelTimeout() }),
   extract: (text: string, projectId?: string) => request<Extracted>('/ai/extract', { ...POST({ text, projectId }), signal: modelTimeout() }),
 
   /* the work */
-  projects: () => request<Project[]>('/projects'),
+  /** The server lists at most 200 projects (ProjectRepository.all_ordered). */
+  projects: () => request<Project[]>('/projects').then(upTo(200)),
   createProject: (input: ProjectInput) => request<Project>('/projects', POST(input)),
 
-  approvals: () => request<ApprovalRequest[]>('/approvals'),
+  /** Newest first. `pending` asks for only the gates still waiting, however old. */
+  approvals: (status?: 'pending') => everyPage<ApprovalRequest>('/approvals', status ? { status } : {}),
   decide: (ref: string, decision: 'approve' | 'deny') => request<ApprovalRequest>(`/approvals/${seg(ref)}/${decision}`, POST()),
 
-  tasks: () => request<Task[]>('/tasks'),
+  tasks: () => everyPage<Task>('/tasks'),
   moveTask: (ref: string, status: TaskStatus) => request<Task>(`/tasks/${seg(ref)}`, PATCH({ status })),
   check: (ref: string, itemId: string, done: boolean) =>
     request<Task>(`/tasks/${seg(ref)}/checklist/${seg(itemId)}`, POST({ done })),
 
-  plans: () => request<Plan[]>('/plans'),
+  plans: () => everyPage<Plan>('/plans'),
   compile: (requirement: string, projectId: string) =>
     request<Plan>('/plans/compile', { ...POST({ requirement, projectId }), signal: modelTimeout() }),
   recompile: (ref: string) => request<Plan>(`/plans/${seg(ref)}/recompile`, { ...POST(), signal: modelTimeout() }),
@@ -460,40 +534,107 @@ export const api = {
     request<Plan>(`/plans/${seg(ref)}/questions/${index}`, POST(body)),
   dispatch: (ref: string) => request<Plan>(`/plans/${seg(ref)}/dispatch`, POST()),
 
-  /** Full-text search is FTS5 on the server: every word must match as a prefix, best match first. */
+  /** Postgres full-text search on the server, best match first. */
   memory: (q = '', signal?: AbortSignal) => request<MemoryFact[]>(`/memory?${new URLSearchParams({ q })}`, { signal }),
-  addFacts: (projectId: string, facts: FactCandidate[]) => request<MemoryFact[]>('/memory/facts', POST({ projectId, facts })),
+  /** Every live fact, for the store: the list has no paging, and stops at 200 (MemoryFactRepository.search). */
+  facts: () => request<MemoryFact[]>('/memory', { signal: AbortSignal.timeout(15_000) }).then(upTo(200)),
+  /** `projectId: null` files the facts under the workspace rather than one project. */
+  addFacts: (projectId: string | null, facts: FactCandidate[]) =>
+    request<MemoryFact[]>('/memory/facts', POST({ ...(projectId ? { projectId } : {}), facts })),
   pin: (ref: string, pinned: boolean) => request<MemoryFact>(`/memory/${seg(ref)}/pin`, POST({ pinned })),
   archive: (ref: string) => request<MemoryFact>(`/memory/${seg(ref)}/archive`, POST()),
-  conflicts: () => request<MemoryConflict[]>('/memory/conflicts'),
-  resolveConflict: (id: string, keep: 'a' | 'b' | 'adr') =>
-    request<MemoryConflict>(`/memory/conflicts/${seg(id)}/resolve`, POST({ keep })),
+  /** Only the open ones, oldest first, and no more than the server's default page of 100. */
+  conflicts: () => request<MemoryConflict[]>('/memory/conflicts').then(upTo(100)),
+  /** The answer is the conflict's new state only; the whole document arrives on the stream. */
+  resolveConflict: (id: string, keep: 'a' | 'b') =>
+    request<ConflictResolution>(`/memory/conflicts/${seg(id)}/resolve`, POST({ keep })),
 
-  mcp: () => request<McpServer[]>('/mcp/servers'),
+  /** At most 200 (McpRepository.all_ordered). */
+  mcp: () => request<McpServer[]>('/mcp/servers').then(upTo(200)),
   registerMcp: (input: McpInput) => request<McpServer>('/mcp/servers', POST(input)),
 
-  prefs: () => request<Pref[]>('/prefs'),
+  /** At most 500 (PrefRepository.all_ordered). */
+  prefs: () => request<Pref[]>('/prefs').then(upTo(500)),
   setPref: (key: string, value: unknown, detail?: string) =>
     request<Pref>(`/prefs/${seg(key)}`, { method: 'PUT', json: { value, detail: detail ?? '' } }),
-  decisions: () => request<DecisionDoc[]>('/decisions'),
-  recordDecision: (key: string, body: { value: string; action: string; detail: string; projectId: string; level: string }) =>
-    request<DecisionDoc>(`/decisions/${seg(key)}`, POST(body)),
+  /** At most 200 (DecisionRepository.all_ordered). */
+  decisions: () => request<DecisionDoc[]>('/decisions').then(upTo(200)),
+  /** A null projectId leaves the field out: the decision belongs to the workspace. */
+  recordDecision: (key: string, { projectId, ...body }: { value: string; action: string; detail: string; projectId: string | null; level: string }) =>
+    request<DecisionDoc>(`/decisions/${seg(key)}`, POST({ ...body, ...(projectId ? { projectId } : {}) })),
 
-  activity: () => request<ActivityEvent[]>('/activity?limit=500'),   // the server's own ceiling; ask for more and it quietly gives you this
-  reset: () => request<Health>('/admin/reset', { method: 'POST', headers: { 'X-Confirm': 'reset' } }),
+  /** The newest 500 lines: the feed's own ceiling (FEED_CAP), and a feed never needed the whole history. */
+  activity: () => request<ActivityEvent[]>(`/activity?limit=${PAGE_MAX}`).then(upTo(PAGE_MAX)),
+  /** Empties the workspace: every project and what it holds. People, roles, the roster, keys and the audit log stay. */
+  reset: () => request<ResetResult>('/admin/reset', { method: 'POST', headers: { 'X-Confirm': 'reset' }, signal: AbortSignal.timeout(120_000) }),
 
-  /** Server-Sent Events: each log line, each document that changed, and an agent run's output. */
+  /**
+   * Server-Sent Events: each log line, each document that changed, and an agent run's output.
+   *
+   * The server keeps no replay of changes, so a stream that drops has missed whatever changed while it
+   * was away. EventSource reconnects on its own after a network drop; this says so through `state`, and
+   * when it is back, asks for a `resync` — the caller loads the workspace again. A stream refused
+   * outright (an error status, most often a 401 once the session has ended) is closed for good by the
+   * browser, which never says why: the session is asked about, and a person no longer signed in is
+   * signed out; otherwise the stream is opened again a little later. The server's `reset` event (the
+   * workspace was emptied, which no per-document change can describe) is a resync too.
+   */
   stream(on: {
     activity: (e: ActivityEvent) => void;
     change: (c: Change) => void;
     log?: (l: RunLogEvent) => void;
     chat?: (m: ChatEvent) => void;
+    state?: (s: StreamState) => void;
+    resync?: (why: 'reopened' | 'reset') => void;
   }): () => void {
-    const es = new EventSource(`${API_BASE}/activity/stream`, { withCredentials: true });
-    es.addEventListener('activity', (m) => on.activity(JSON.parse((m as MessageEvent<string>).data) as ActivityEvent));
-    es.addEventListener('change', (m) => on.change(JSON.parse((m as MessageEvent<string>).data) as Change));
-    es.addEventListener('run', (m) => on.log?.(JSON.parse((m as MessageEvent<string>).data) as RunLogEvent));
-    es.addEventListener('chat', (m) => on.chat?.(JSON.parse((m as MessageEvent<string>).data) as ChatEvent));
-    return () => es.close();
+    let es: EventSource | null = null;
+    let stopped = false;
+    let dropped = false;
+    let reopen: number | undefined;
+    const data = <T,>(m: Event) => JSON.parse((m as MessageEvent<string>).data) as T;
+
+    const later = () => {
+      if (!stopped) reopen = window.setTimeout(connect, REOPEN_MS);
+    };
+    function connect() {
+      const source = new EventSource(`${API_BASE}/activity/stream`, { withCredentials: true });
+      es = source;
+      source.addEventListener('activity', (m) => on.activity(data<ActivityEvent>(m)));
+      source.addEventListener('change', (m) => on.change(data<Change>(m)));
+      source.addEventListener('run', (m) => on.log?.(data<RunLogEvent>(m)));
+      source.addEventListener('chat', (m) => on.chat?.(data<ChatEvent>(m)));
+      source.addEventListener('reset', () => on.resync?.('reset'));
+      source.addEventListener('open', () => {
+        on.state?.('open');
+        if (dropped) {
+          dropped = false;
+          on.resync?.('reopened');
+        }
+      });
+      source.addEventListener('error', () => {
+        if (stopped) return;
+        dropped = true;
+        on.state?.('reconnecting');
+        // Still CONNECTING: the browser is retrying by itself, at the pace the server asked for.
+        if (source.readyState !== EventSource.CLOSED) return;
+        source.close();
+        // /auth/status answers even with no session (user: null), so it can tell a 401 from an API that is down.
+        request<AuthStatus>('/auth/status', { signal: AbortSignal.timeout(5000) }).then(
+          (s) => {
+            if (stopped) return;
+            if (!s.user) window.dispatchEvent(new Event(SIGNED_OUT));
+            else later();
+          },
+          later,
+        );
+      });
+    }
+
+    connect();
+    return () => {
+      stopped = true;
+      window.clearTimeout(reopen);
+      es?.close();
+    };
   },
 };

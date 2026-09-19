@@ -21,6 +21,7 @@ from alembic import context
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.data.base import Base  # noqa: E402
+from app.data.engine import utc_connect_args  # noqa: E402
 from app.models import *  # noqa: E402, F401, F403  — importing them fills Base.metadata
 from app.settings import settings  # noqa: E402
 
@@ -69,8 +70,11 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
+    # In UTC like every other connection the application opens, so a migration that cuts time into
+    # days cuts the same days the API does.
     connectable = async_engine_from_config(config.get_section(config.config_ini_section, {}),
-                                           prefix="sqlalchemy.", poolclass=pool.NullPool)
+                                           prefix="sqlalchemy.", poolclass=pool.NullPool,
+                                           connect_args=utc_connect_args(config.get_main_option("sqlalchemy.url")))
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()

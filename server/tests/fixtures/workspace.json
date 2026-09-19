@@ -1,0 +1,2317 @@
+{
+  "projects": [
+    {
+      "id": "erp",
+      "name": "Legacy ERP",
+      "codename": "CAREWORKS-ERP",
+      "stack": [
+        "React 18",
+        "ASP.NET Core 8",
+        "SQL Server 2019",
+        "IIS"
+      ],
+      "kind": "legacy",
+      "status": "active",
+      "lines": "2.4M",
+      "modules": 47,
+      "dbTables": 382,
+      "storedProcs": 1148,
+      "repo": "git@github.com:sofscript/careworks-erp.git",
+      "lastActive": "2026-09-01T09:00:00+00:00",
+      "coverage": [
+        {
+          "label": "Architecture",
+          "pct": 91
+        },
+        {
+          "label": "Legacy Knowledge",
+          "pct": 87
+        },
+        {
+          "label": "Database Knowledge",
+          "pct": 94
+        },
+        {
+          "label": "Business Rules",
+          "pct": 72
+        },
+        {
+          "label": "Test Coverage",
+          "pct": 68
+        },
+        {
+          "label": "DevOps",
+          "pct": 61
+        }
+      ],
+      "work": {
+        "tasks": 12,
+        "running": 4,
+        "review": 5,
+        "blocked": 3
+      },
+      "description": "Module-by-module renewal of a 14-year-old accounting + inventory ERP. Strict SOLID, class-object naming, no direct TRANS_* writes."
+    },
+    {
+      "id": "hims",
+      "name": "HIMS v3",
+      "codename": "HIMS-PMI",
+      "stack": [
+        "React 19",
+        "ASP.NET Core 8",
+        "SQL Server",
+        "Redis"
+      ],
+      "kind": "legacy",
+      "status": "active",
+      "lines": "1.1M",
+      "modules": 31,
+      "dbTables": 214,
+      "storedProcs": 640,
+      "repo": "git@github.com:sofscript/hims-v3.git",
+      "lastActive": "2026-09-01T08:00:00+00:00",
+      "coverage": [
+        {
+          "label": "Architecture",
+          "pct": 84
+        },
+        {
+          "label": "Legacy Knowledge",
+          "pct": 74
+        },
+        {
+          "label": "Database Knowledge",
+          "pct": 88
+        },
+        {
+          "label": "Business Rules",
+          "pct": 66
+        },
+        {
+          "label": "Test Coverage",
+          "pct": 54
+        },
+        {
+          "label": "DevOps",
+          "pct": 70
+        }
+      ],
+      "work": {
+        "tasks": 9,
+        "running": 2,
+        "review": 3,
+        "blocked": 1
+      },
+      "description": "Hospital information system — OPD/IPD/billing. Renewal in progress with a strict compatibility contract against the legacy PMI schema."
+    }
+  ],
+  "tasks": [
+    {
+      "id": "t492",
+      "ref": "TASK-492",
+      "title": "Fix invoice tax calculation",
+      "projectId": "erp",
+      "status": "in_progress",
+      "priority": "HIGH",
+      "risk": "MEDIUM",
+      "epic": "Billing Accuracy",
+      "layers": [
+        "Frontend",
+        "Backend",
+        "Database"
+      ],
+      "agents": [
+        "backend",
+        "database",
+        "qa",
+        "reviewer"
+      ],
+      "files": 7,
+      "tests": 18,
+      "progress": 62,
+      "createdAt": "2026-09-10 09:12",
+      "requirement": "Invoice mein tax galat aa raha hai — CGST/SGST split interstate orders pe reverse ho raha hai. Fix karo.",
+      "worktree": "task/invoice-tax-backend",
+      "checklist": [
+        {
+          "id": "c1",
+          "label": "Reproduce with INV-2026-08812",
+          "done": true
+        },
+        {
+          "id": "c2",
+          "label": "Trace SP_CalculateTax branch for state mismatch",
+          "done": true
+        },
+        {
+          "id": "c3",
+          "label": "Patch TaxService.ResolveJurisdiction",
+          "done": true
+        },
+        {
+          "id": "c4",
+          "label": "Backfill migration for 41 affected invoices",
+          "done": false
+        },
+        {
+          "id": "c5",
+          "label": "Regression: legacy rounding must stay unchanged",
+          "done": false
+        }
+      ]
+    },
+    {
+      "id": "t488",
+      "ref": "TASK-488",
+      "title": "Customer bulk upload (CSV, 50k rows)",
+      "projectId": "erp",
+      "status": "in_progress",
+      "priority": "NORMAL",
+      "risk": "MEDIUM",
+      "epic": "Customer Master",
+      "layers": [
+        "Frontend",
+        "Backend",
+        "Database"
+      ],
+      "agents": [
+        "frontend",
+        "backend",
+        "database",
+        "qa"
+      ],
+      "files": 11,
+      "tests": 24,
+      "progress": 44,
+      "createdAt": "2026-09-09 16:40",
+      "requirement": "Customer bulk upload chahiye — CSV se, validation ke saath, progress dikhe, partial failure pe rollback.",
+      "worktree": "task/bulk-upload-frontend",
+      "checklist": [
+        {
+          "id": "c1",
+          "label": "Staging table + transaction boundary",
+          "done": true
+        },
+        {
+          "id": "c2",
+          "label": "Chunked upload endpoint",
+          "done": true
+        },
+        {
+          "id": "c3",
+          "label": "Drag-drop UI with row-level errors",
+          "done": false
+        },
+        {
+          "id": "c4",
+          "label": "E2E: 50k row happy path",
+          "done": false
+        }
+      ]
+    },
+    {
+      "id": "t501",
+      "ref": "TASK-501",
+      "title": "Authentication session drops after 20 min",
+      "projectId": "erp",
+      "status": "blocked",
+      "priority": "URGENT",
+      "risk": "HIGH",
+      "epic": "Platform Stability",
+      "layers": [
+        "Backend",
+        "DevOps"
+      ],
+      "agents": [
+        "backend",
+        "devops",
+        "security"
+      ],
+      "files": 4,
+      "tests": 6,
+      "progress": 30,
+      "createdAt": "2026-09-10 08:02",
+      "requirement": "Users randomly logged out ho rahe hain ~20 min ke baad. Production issue, priority.",
+      "blockedReason": "Needs production IIS session-state config — HIGH risk gate, awaiting human approval (APPR-118).",
+      "worktree": "task/auth-session",
+      "checklist": [
+        {
+          "id": "c1",
+          "label": "Correlate logout events with app-pool recycles",
+          "done": true
+        },
+        {
+          "id": "c2",
+          "label": "Confirm in-proc session state on 3 nodes",
+          "done": true
+        },
+        {
+          "id": "c3",
+          "label": "Move to Redis-backed session store",
+          "done": false
+        }
+      ]
+    },
+    {
+      "id": "t479",
+      "ref": "TASK-479",
+      "title": "Migrate Reports module to new grid",
+      "projectId": "erp",
+      "status": "review",
+      "priority": "NORMAL",
+      "risk": "LOW",
+      "epic": "UI Renewal",
+      "layers": [
+        "Frontend"
+      ],
+      "agents": [
+        "frontend",
+        "qa",
+        "reviewer"
+      ],
+      "files": 9,
+      "tests": 14,
+      "progress": 100,
+      "createdAt": "2026-09-08 11:15",
+      "requirement": "Reports module ka purana grid replace karo new DataGrid se, same columns aur export.",
+      "worktree": "task/reports-grid",
+      "checklist": [
+        {
+          "id": "c1",
+          "label": "Column parity with legacy grid",
+          "done": true
+        },
+        {
+          "id": "c2",
+          "label": "CSV + XLSX export parity",
+          "done": true
+        },
+        {
+          "id": "c3",
+          "label": "Visual diff vs baseline",
+          "done": true
+        }
+      ]
+    },
+    {
+      "id": "t495",
+      "ref": "TASK-495",
+      "title": "Stored procedure audit: SP_CalculateTax family",
+      "projectId": "erp",
+      "status": "review",
+      "priority": "HIGH",
+      "risk": "HIGH",
+      "epic": "Billing Accuracy",
+      "layers": [
+        "Database"
+      ],
+      "agents": [
+        "database",
+        "architect",
+        "reviewer"
+      ],
+      "files": 3,
+      "tests": 9,
+      "progress": 100,
+      "createdAt": "2026-09-09 10:30",
+      "requirement": "Tax se related saare stored procedures audit karo, kaunse deprecated hain aur kaun call kar raha hai.",
+      "worktree": "task/sproc-audit",
+      "checklist": [
+        {
+          "id": "c1",
+          "label": "Map all 11 SP_*Tax* procedures",
+          "done": true
+        },
+        {
+          "id": "c2",
+          "label": "Identify 3 dead procedures",
+          "done": true
+        },
+        {
+          "id": "c3",
+          "label": "ADR-51 for deprecation policy",
+          "done": true
+        }
+      ]
+    },
+    {
+      "id": "t503",
+      "ref": "TASK-503",
+      "title": "OPD billing rounding mismatch",
+      "projectId": "hims",
+      "status": "in_progress",
+      "priority": "HIGH",
+      "risk": "MEDIUM",
+      "epic": "Billing",
+      "layers": [
+        "Backend",
+        "Database"
+      ],
+      "agents": [
+        "backend",
+        "database",
+        "qa"
+      ],
+      "files": 5,
+      "tests": 12,
+      "progress": 55,
+      "createdAt": "2026-09-10 10:05",
+      "requirement": "OPD bill mein 1 rupee ka difference aa raha hai receipt aur ledger ke beech.",
+      "worktree": "task/opd-rounding",
+      "checklist": [
+        {
+          "id": "c1",
+          "label": "Locate both rounding sites",
+          "done": true
+        },
+        {
+          "id": "c2",
+          "label": "Single source of truth for money rounding",
+          "done": false
+        }
+      ]
+    },
+    {
+      "id": "t512",
+      "ref": "TASK-512",
+      "title": "Inventory reorder point recalculation",
+      "projectId": "erp",
+      "status": "backlog",
+      "priority": "NORMAL",
+      "risk": "MEDIUM",
+      "epic": "Inventory",
+      "layers": [
+        "Backend",
+        "Database"
+      ],
+      "agents": [],
+      "files": 0,
+      "tests": 0,
+      "progress": 0,
+      "createdAt": "2026-09-10 12:15",
+      "requirement": "Reorder point ka calculation purane fixed formula se hat ke consumption-based hona chahiye.",
+      "checklist": []
+    },
+    {
+      "id": "t513",
+      "ref": "TASK-513",
+      "title": "Excel export timeout on 100k+ rows",
+      "projectId": "erp",
+      "status": "backlog",
+      "priority": "HIGH",
+      "risk": "LOW",
+      "epic": "Reporting",
+      "layers": [
+        "Backend"
+      ],
+      "agents": [],
+      "files": 0,
+      "tests": 0,
+      "progress": 0,
+      "createdAt": "2026-09-10 12:20",
+      "requirement": "Bade reports ka Excel export timeout ho raha hai, streaming karna padega.",
+      "checklist": []
+    },
+    {
+      "id": "t514",
+      "ref": "TASK-514",
+      "title": "Deprecate 3 dead tax procedures",
+      "projectId": "erp",
+      "status": "backlog",
+      "priority": "LOW",
+      "risk": "MEDIUM",
+      "epic": "Billing Accuracy",
+      "layers": [
+        "Database"
+      ],
+      "agents": [],
+      "files": 0,
+      "tests": 0,
+      "progress": 0,
+      "createdAt": "2026-09-10 12:41",
+      "requirement": "ADR-51 ke hisaab se 3 dead stored procedures ko deprecate karo.",
+      "checklist": []
+    },
+    {
+      "id": "t461",
+      "ref": "TASK-461",
+      "title": "Invoice PDF template refresh",
+      "projectId": "erp",
+      "status": "done",
+      "priority": "LOW",
+      "risk": "LOW",
+      "epic": "UI Renewal",
+      "layers": [
+        "Frontend"
+      ],
+      "agents": [
+        "frontend",
+        "qa",
+        "reviewer"
+      ],
+      "files": 4,
+      "tests": 7,
+      "progress": 100,
+      "createdAt": "2026-09-05 09:00",
+      "requirement": "Invoice PDF ka layout naye branding ke hisaab se update karo.",
+      "checklist": []
+    },
+    {
+      "id": "t455",
+      "ref": "TASK-455",
+      "title": "Login rate limiting",
+      "projectId": "erp",
+      "status": "done",
+      "priority": "HIGH",
+      "risk": "MEDIUM",
+      "epic": "Platform Stability",
+      "layers": [
+        "Backend",
+        "DevOps"
+      ],
+      "agents": [
+        "backend",
+        "security",
+        "devops"
+      ],
+      "files": 6,
+      "tests": 13,
+      "progress": 100,
+      "createdAt": "2026-09-04 15:30",
+      "requirement": "Login pe brute force protection chahiye.",
+      "checklist": []
+    },
+    {
+      "id": "t517",
+      "ref": "TASK-517",
+      "title": "Pathology report auto-attach to IPD file",
+      "projectId": "hims",
+      "status": "backlog",
+      "priority": "NORMAL",
+      "risk": "MEDIUM",
+      "epic": "Diagnostics",
+      "layers": [
+        "Backend",
+        "Database"
+      ],
+      "agents": [],
+      "files": 0,
+      "tests": 0,
+      "progress": 0,
+      "createdAt": "2026-09-10 13:02",
+      "requirement": "Lab report finalize hote hi automatically IPD file mein attach ho jaye.",
+      "checklist": []
+    },
+    {
+      "id": "t519",
+      "ref": "TASK-519",
+      "title": "Discharge summary template variants",
+      "projectId": "hims",
+      "status": "review",
+      "priority": "LOW",
+      "risk": "LOW",
+      "epic": "Documents",
+      "layers": [
+        "Frontend"
+      ],
+      "agents": [
+        "frontend",
+        "reviewer"
+      ],
+      "files": 5,
+      "tests": 8,
+      "progress": 100,
+      "createdAt": "2026-09-09 09:45",
+      "requirement": "Discharge summary ke department-wise templates chahiye.",
+      "checklist": []
+    }
+  ],
+  "plans": [
+    {
+      "id": "p492",
+      "ref": "PLAN-492",
+      "taskRef": "TASK-492",
+      "projectId": "erp",
+      "rawRequirement": "Invoice mein tax galat aa raha hai — CGST/SGST interstate orders pe reverse ho raha hai. Fix karo, aur purane invoices bhi theek karne padenge shayad.",
+      "businessRequirement": "For an interstate sale the invoice must charge IGST against the place of supply. Today the system charges CGST+SGST against the billing state, so 41 invoices raised since 12 Aug carry the wrong tax heads and the wrong total.",
+      "technicalRequirement": "Resolve tax jurisdiction once, in TaxService.ResolveJurisdiction, from the place-of-supply on the sales order — not from MST_CUSTOMER.state_code. SP_CalculateTax must consume the resolved jurisdiction instead of re-deriving it from the billing address at L288. Existing rounding behaviour is a contract and must not move.",
+      "affectedModules": [
+        "Billing",
+        "Tax",
+        "Sales Order",
+        "Reports",
+        "GL",
+        "Dispatch",
+        "Customer Master"
+      ],
+      "affectedFiles": [
+        "server/Careworks.Erp.Billing/Services/InvoiceService.cs",
+        "server/Careworks.Erp.Tax/Services/TaxService.cs",
+        "server/Careworks.Erp.Tax/Contracts/ITaxJurisdictionResolver.cs",
+        "server/Careworks.Erp.Billing/Mappers/InvoiceLineMapper.cs",
+        "web/src/modules/invoice/InvoiceTaxSummary.tsx",
+        "db/procedures/SP_CalculateTax.sql",
+        "db/migrations/0042_backfill_tax_jurisdiction.sql"
+      ],
+      "affectedDb": [
+        "MST_TAX",
+        "MST_TAX_SLAB",
+        "MST_STATE",
+        "TRANS_INVOICE",
+        "TRANS_INVOICE_LINE",
+        "MST_TAX_LINE"
+      ],
+      "architectureImpact": "Introduces ITaxJurisdictionResolver as the single source of jurisdiction. SP_CalculateTax loses a derivation branch and gains a required parameter — a signature change on a procedure with 11 callers, so every caller is updated in the same worktree. TRANS_INVOICE is never written directly (MEM-142); the backfill goes through SP_CommitTaxCorrection.",
+      "risk": "MEDIUM",
+      "confidence": 87,
+      "createdAt": "today 13:52",
+      "steps": [
+        {
+          "id": "s1",
+          "n": 1,
+          "label": "Research existing tax logic",
+          "agent": "Researcher",
+          "state": "done",
+          "detail": "Read 12 source files, 3 procedures, 4 previous tax fixes and ADR-47.",
+          "durationS": 184
+        },
+        {
+          "id": "s2",
+          "n": 2,
+          "label": "Analyse InvoiceService",
+          "agent": "Architect",
+          "state": "done",
+          "detail": "Call graph: InvoiceController → InvoiceService → TaxService → SP_CalculateTax → MST_TAX.",
+          "durationS": 96
+        },
+        {
+          "id": "s3",
+          "n": 3,
+          "label": "Analyse SP_CalculateTax",
+          "agent": "Database Engineer",
+          "state": "done",
+          "detail": "412 lines. Jurisdiction derived twice — L288 from billing address, L341 from the order. They disagree for SEZ.",
+          "durationS": 142
+        },
+        {
+          "id": "s4",
+          "n": 4,
+          "label": "Update backend",
+          "agent": "Backend Engineer",
+          "state": "active",
+          "detail": "ITaxJurisdictionResolver + TaxService.ResolveJurisdiction; 11 callers migrated.",
+          "durationS": 1120
+        },
+        {
+          "id": "s5",
+          "n": 5,
+          "label": "Update frontend",
+          "agent": "Frontend Engineer",
+          "state": "todo",
+          "detail": "InvoiceTaxSummary must show IGST as a single head, not a CGST/SGST pair."
+        },
+        {
+          "id": "s6",
+          "n": 6,
+          "label": "Add tests",
+          "agent": "QA Engineer",
+          "state": "todo",
+          "detail": "Interstate matrix: intra, inter, SEZ, export, union territory."
+        },
+        {
+          "id": "s7",
+          "n": 7,
+          "label": "Run regression",
+          "agent": "QA Engineer",
+          "state": "todo",
+          "detail": "Full tax surface + the legacy rounding suite that must stay red for the documented reason."
+        },
+        {
+          "id": "s8",
+          "n": 8,
+          "label": "Code review",
+          "agent": "Code Reviewer",
+          "state": "todo",
+          "detail": "SOLID, naming, repository pattern, legacy contract, migration rollback."
+        }
+      ],
+      "testPlan": [
+        "Unit — ResolveJurisdiction returns IGST when supply state ≠ seller state",
+        "Unit — SEZ supply resolves to IGST at 0% with the SEZ flag set",
+        "Unit — union territory resolves to CGST+UTGST, not CGST+SGST",
+        "Integration — SP_CalculateTax honours the passed jurisdiction and stops re-deriving",
+        "Integration — invoice total is byte-identical for intrastate orders (no regression)",
+        "Regression — legacy half-away-from-zero rounding is unchanged on 2,400 historical invoices",
+        "Migration — dry-run 0042 against the nightly snapshot: exactly 41 rows, 0 collateral",
+        "E2E — raise an interstate invoice in the UI and assert a single IGST line"
+      ],
+      "openQuestions": [
+        "The 41 mis-taxed invoices — issue credit notes and re-raise, or amend in place? Amending TRANS_INVOICE contradicts MEM-142.",
+        "Two of the 41 are already reconciled in the GL for August. Do we reopen the period or book the difference in September?",
+        "Is the SEZ flag on the sales order authoritative, or should it be re-derived from the customer GSTIN? No business rule is documented either way."
+      ]
+    },
+    {
+      "id": "p488",
+      "ref": "PLAN-488",
+      "taskRef": "TASK-488",
+      "projectId": "erp",
+      "rawRequirement": "Customer bulk upload chahiye — CSV se, validation ke saath, progress dikhe, aur agar beech mein fail ho to poora rollback ho jaye.",
+      "businessRequirement": "An operator can import up to 50,000 customer records from a CSV, see per-row validation errors before committing, watch progress, and be guaranteed that a failure part-way through leaves the master data untouched.",
+      "technicalRequirement": "Chunked upload to a staging table (ADR-49), server-side validation producing a row-indexed error envelope, and a single commit procedure that moves staging → MST_CUSTOMER inside one transaction. No direct write to MST_CUSTOMER from the service layer.",
+      "affectedModules": [
+        "Customer Master",
+        "Reports",
+        "Audit"
+      ],
+      "affectedFiles": [
+        "server/Careworks.Erp.Customer/Services/CustomerImportService.cs",
+        "server/Careworks.Erp.Customer/Contracts/ICustomerImportService.cs",
+        "server/Careworks.Erp.Customer/Controllers/CustomerBulkController.cs",
+        "web/src/modules/customer/BulkUploadDialog.tsx",
+        "web/src/modules/customer/UploadErrorDialog.tsx",
+        "db/migrations/0043_stg_customer_import.sql"
+      ],
+      "affectedDb": [
+        "MST_CUSTOMER",
+        "STG_CUSTOMER_IMPORT",
+        "TRANS_AUDIT"
+      ],
+      "architectureImpact": "Adds the first staging-table import in the ERP. The pattern becomes the template for the four other pending bulk imports, so the contract is documented as an ADR before it ships.",
+      "risk": "MEDIUM",
+      "confidence": 79,
+      "createdAt": "yesterday 16:40",
+      "steps": [
+        {
+          "id": "b1",
+          "n": 1,
+          "label": "Research existing import paths",
+          "agent": "Researcher",
+          "state": "done",
+          "detail": "Found 3 ad-hoc importers, none transactional. All bypass the repository.",
+          "durationS": 210
+        },
+        {
+          "id": "b2",
+          "n": 2,
+          "label": "Design staging contract",
+          "agent": "Architect",
+          "state": "done",
+          "detail": "ADR-49 — staging table + all-or-nothing commit procedure.",
+          "durationS": 160
+        },
+        {
+          "id": "b3",
+          "n": 3,
+          "label": "Staging table + commit procedure",
+          "agent": "Database Engineer",
+          "state": "done",
+          "detail": "STG_CUSTOMER_IMPORT + SP_CommitCustomerImport with a rollback path.",
+          "durationS": 480
+        },
+        {
+          "id": "b4",
+          "n": 4,
+          "label": "Chunked upload endpoint",
+          "agent": "Backend Engineer",
+          "state": "done",
+          "detail": "2 MB chunks, idempotency key per batch, resumable.",
+          "durationS": 940
+        },
+        {
+          "id": "b5",
+          "n": 5,
+          "label": "Drag-drop UI + row errors",
+          "agent": "Frontend Engineer",
+          "state": "active",
+          "detail": "Blocked behind APPR-120 (papaparse) — hand-rolled parser rejected by the reviewer.",
+          "durationS": 620
+        },
+        {
+          "id": "b6",
+          "n": 6,
+          "label": "Validation matrix tests",
+          "agent": "QA Engineer",
+          "state": "todo",
+          "detail": "Duplicate GSTIN, malformed state code, 64-char name overflow, CSV formula injection."
+        },
+        {
+          "id": "b7",
+          "n": 7,
+          "label": "E2E 50k happy path",
+          "agent": "QA Engineer",
+          "state": "todo",
+          "detail": "Must complete under 90s and hold memory flat."
+        },
+        {
+          "id": "b8",
+          "n": 8,
+          "label": "Security review",
+          "agent": "Security Engineer",
+          "state": "todo",
+          "detail": "Upload size cap, formula injection, staging table isolation per operator."
+        },
+        {
+          "id": "b9",
+          "n": 9,
+          "label": "Code review",
+          "agent": "Code Reviewer",
+          "state": "todo",
+          "detail": "Repository pattern, interface-first, error envelope shape."
+        }
+      ],
+      "testPlan": [
+        "Unit — validator rejects duplicate GSTIN within the same file",
+        "Unit — CSV cells beginning with = + - @ are neutralised",
+        "Integration — a failure on row 31,204 leaves MST_CUSTOMER byte-identical",
+        "Integration — a resumed upload does not duplicate an already-accepted chunk",
+        "E2E — 50,000 rows complete under 90s with progress visible throughout",
+        "Load — memory stays flat across the whole import (no full-file buffering)"
+      ],
+      "openQuestions": [
+        "On partial validation failure: reject the whole file, or import the valid rows and hand back a rejects CSV? The operator asked for the second, ADR-49 implies the first.",
+        "papaparse@5.4.1 is waiting on APPR-120. If denied, the fallback is a hand-rolled streaming parser — roughly two extra days and a reviewer objection on reinventing a solved problem."
+      ]
+    },
+    {
+      "id": "p501",
+      "ref": "PLAN-501",
+      "taskRef": "TASK-501",
+      "projectId": "erp",
+      "rawRequirement": "Users randomly logout ho rahe hain 20 minute ke baad. Production issue hai, urgent dekho.",
+      "businessRequirement": "A signed-in user must stay signed in for the full 8-hour working day unless they sign out or are idle past the configured timeout.",
+      "technicalRequirement": "Session state is in-proc across three IIS nodes with no affinity, so every app-pool recycle silently drops every session on that node. Move to a Redis-backed session provider with a rolling restart and a proven revert.",
+      "affectedModules": [
+        "Auth",
+        "Notifications",
+        "Audit"
+      ],
+      "affectedFiles": [
+        "server/Careworks.Erp.Auth/SessionProvider.cs",
+        "server/Careworks.Erp.Web/web.config",
+        "deploy/iis/apppool-recycle.ps1",
+        "deploy/docker/redis.yml"
+      ],
+      "affectedDb": [],
+      "architectureImpact": "Introduces Redis as a hard runtime dependency for authentication. A Redis outage becomes an auth outage, so the provider needs a documented degradation path before this ships.",
+      "risk": "HIGH",
+      "confidence": 71,
+      "createdAt": "today 08:02",
+      "steps": [
+        {
+          "id": "a1",
+          "n": 1,
+          "label": "Correlate logouts with recycles",
+          "agent": "DevOps Engineer",
+          "state": "done",
+          "detail": "All 214 forced logouts land within 4s of an app-pool recycle on the same node.",
+          "durationS": 300
+        },
+        {
+          "id": "a2",
+          "n": 2,
+          "label": "Confirm in-proc session on all nodes",
+          "agent": "Backend Engineer",
+          "state": "done",
+          "detail": "web.config mode=\"InProc\" on 3 of 3 nodes. No affinity at the F5.",
+          "durationS": 120
+        },
+        {
+          "id": "a3",
+          "n": 3,
+          "label": "Stage the Redis provider",
+          "agent": "DevOps Engineer",
+          "state": "done",
+          "detail": "Staging held 400 sessions across a forced recycle with zero drops.",
+          "durationS": 1800
+        },
+        {
+          "id": "a4",
+          "n": 4,
+          "label": "Production change",
+          "agent": "DevOps Engineer",
+          "state": "failed",
+          "detail": "Blocked — APPR-118 pending. Production is a human signature, never an agent decision."
+        },
+        {
+          "id": "a5",
+          "n": 5,
+          "label": "Degradation path for a Redis outage",
+          "agent": "Architect",
+          "state": "todo",
+          "detail": "Undecided: fail closed (everyone logged out) or fall back to in-proc."
+        },
+        {
+          "id": "a6",
+          "n": 6,
+          "label": "Security review",
+          "agent": "Security Engineer",
+          "state": "todo",
+          "detail": "Session fixation, cookie flags, Redis auth and network isolation."
+        }
+      ],
+      "testPlan": [
+        "Staging — 400 concurrent sessions survive a forced recycle on every node",
+        "Staging — failover of the Redis primary loses no session",
+        "Security — session id is regenerated on privilege change",
+        "Rollback — reverting web.config restores service within one recycle cycle"
+      ],
+      "openQuestions": [
+        "If Redis is unreachable, do we fail closed (all users logged out, loud) or fall back to in-proc (silent, and we are back to this bug)?",
+        "Redis is a new production dependency. Who owns its monitoring and its on-call?"
+      ]
+    },
+    {
+      "id": "p503",
+      "ref": "PLAN-503",
+      "taskRef": "TASK-503",
+      "projectId": "hims",
+      "rawRequirement": "OPD bill mein 1 rupee ka difference aa raha hai — receipt aur ledger match nahi kar rahe.",
+      "businessRequirement": "The printed receipt total and the ledger posting for the same OPD bill must be identical, to the paisa, always.",
+      "technicalRequirement": "Money is rounded in two independent places: BillingService.ComputeTotal (banker's rounding) and SP_PostOpdLedger (half-away-from-zero). Consolidate on the documented ledger behaviour and delete the second site.",
+      "affectedModules": [
+        "OPD Billing",
+        "Ledger",
+        "Receipts"
+      ],
+      "affectedFiles": [
+        "server/Hims.Billing/Services/BillingService.cs",
+        "server/Hims.Billing/Money.cs",
+        "db/procedures/SP_PostOpdLedger.sql"
+      ],
+      "affectedDb": [
+        "TRANS_OPD_BILL",
+        "TRANS_LEDGER"
+      ],
+      "architectureImpact": "Creates a single Money type as the only place rounding is allowed to happen. Every other call site becomes a compile error until it is migrated — deliberate.",
+      "risk": "MEDIUM",
+      "confidence": 83,
+      "createdAt": "today 10:05",
+      "steps": [
+        {
+          "id": "h1",
+          "n": 1,
+          "label": "Locate both rounding sites",
+          "agent": "Architect",
+          "state": "done",
+          "detail": "C# uses MidpointRounding.ToEven; T-SQL ROUND() is half-away-from-zero. They diverge on exact .005.",
+          "durationS": 240
+        },
+        {
+          "id": "h2",
+          "n": 2,
+          "label": "Single Money type",
+          "agent": "Backend Engineer",
+          "state": "active",
+          "detail": "Money struct with one rounding policy; 34 call sites to migrate.",
+          "durationS": 900
+        },
+        {
+          "id": "h3",
+          "n": 3,
+          "label": "Reconcile historical bills",
+          "agent": "Database Engineer",
+          "state": "todo",
+          "detail": "Quantify how many of the 1.4M historical bills are affected before choosing a policy."
+        },
+        {
+          "id": "h4",
+          "n": 4,
+          "label": "Regression on 90 days of bills",
+          "agent": "QA Engineer",
+          "state": "todo",
+          "detail": "Receipt total must equal ledger posting for every bill in the window."
+        }
+      ],
+      "testPlan": [
+        "Unit — Money rounds half-away-from-zero at 2 dp, matching the ledger",
+        "Property — receipt total equals the sum of ledger lines for 10,000 generated bills",
+        "Regression — 90 days of historical bills reproduce their stored totals exactly"
+      ],
+      "openQuestions": [
+        "Historical bills already carry the divergent totals. Do we leave them, or reconcile? Reconciling touches audited ledgers."
+      ]
+    },
+    {
+      "id": "p519",
+      "ref": "PLAN-519",
+      "taskRef": "TASK-519",
+      "projectId": "hims",
+      "rawRequirement": "Discharge summary ke department-wise templates chahiye — cardiology ka alag, ortho ka alag.",
+      "businessRequirement": "Each department can maintain its own discharge summary layout without a developer, while the clinical fields that every summary must carry stay mandatory.",
+      "technicalRequirement": "A template registry keyed by department with a shared mandatory-field core, rendered through one printer so pagination and signatures stay identical across departments.",
+      "affectedModules": [
+        "Documents",
+        "IPD"
+      ],
+      "affectedFiles": [
+        "web/src/modules/discharge/TemplateRegistry.ts",
+        "web/src/modules/discharge/DischargeSummary.tsx",
+        "server/Hims.Documents/Services/TemplateService.cs"
+      ],
+      "affectedDb": [
+        "MST_DISCHARGE_TEMPLATE",
+        "MST_DEPARTMENT"
+      ],
+      "architectureImpact": "Templates become data rather than code. The mandatory core must be enforced server-side, or a department can quietly drop a clinically required field.",
+      "risk": "LOW",
+      "confidence": 88,
+      "createdAt": "yesterday 09:45",
+      "steps": [
+        {
+          "id": "d1",
+          "n": 1,
+          "label": "Extract the mandatory core",
+          "agent": "Architect",
+          "state": "done",
+          "detail": "11 fields every summary must carry, sourced from the existing printed forms.",
+          "durationS": 260
+        },
+        {
+          "id": "d2",
+          "n": 2,
+          "label": "Template registry",
+          "agent": "Frontend Engineer",
+          "state": "done",
+          "detail": "Six department layouts over one printer.",
+          "durationS": 720
+        },
+        {
+          "id": "d3",
+          "n": 3,
+          "label": "Server-side core enforcement",
+          "agent": "Backend Engineer",
+          "state": "done",
+          "detail": "A template missing a mandatory field is rejected at save, not at print.",
+          "durationS": 400
+        },
+        {
+          "id": "d4",
+          "n": 4,
+          "label": "Code review",
+          "agent": "Code Reviewer",
+          "state": "active",
+          "detail": "Round 1 — checking that print pagination is genuinely shared.",
+          "durationS": 180
+        }
+      ],
+      "testPlan": [
+        "Unit — a template missing any mandatory field is rejected at save",
+        "Snapshot — all six department layouts paginate identically at A4",
+        "E2E — a cardiology discharge prints with the cardiology layout and the full core"
+      ],
+      "openQuestions": []
+    }
+  ],
+  "approvals": [
+    {
+      "id": "ap1",
+      "ref": "APPR-118",
+      "title": "Move ERP session state to Redis on production IIS",
+      "agent": "DevOps Engineer",
+      "tool": "Deploy(production)",
+      "risk": "CRITICAL",
+      "requestedAt": "1 h ago",
+      "projectId": "erp",
+      "status": "pending",
+      "payload": "web.config → <sessionState mode=\"Custom\" customProvider=\"RedisSessionProvider\" />\nAffects 3 nodes · rolling restart required",
+      "reason": "TASK-501 — users are dropped after ~20 min because in-proc session dies with each app-pool recycle. Rollback: revert web.config, recycle. Verified on staging at 14:02."
+    },
+    {
+      "id": "ap2",
+      "ref": "APPR-119",
+      "title": "Backfill migration for 41 mis-taxed invoices",
+      "agent": "Database Engineer",
+      "tool": "Migration(0042)",
+      "risk": "HIGH",
+      "requestedAt": "22 min ago",
+      "projectId": "erp",
+      "status": "pending",
+      "payload": "0042_backfill_tax_jurisdiction.sql · UPDATE 41 rows in MST_TAX_LINE\nDry-run against snapshot: 41 matched, 0 collateral",
+      "reason": "TASK-492 — interstate invoices carry the billing state instead of place-of-supply. Rollback script generated and dry-run verified."
+    },
+    {
+      "id": "ap3",
+      "ref": "APPR-120",
+      "title": "Add papaparse@5.4.1 to the ERP frontend",
+      "agent": "Frontend Engineer",
+      "tool": "Bash(npm install)",
+      "risk": "MEDIUM",
+      "requestedAt": "8 min ago",
+      "projectId": "erp",
+      "status": "pending",
+      "payload": "papaparse@5.4.1 · MIT · 0 known advisories · 42 kB gzipped · 0 transitive deps",
+      "reason": "TASK-488 — streaming CSV parse for the 50k-row bulk upload. Alternative (hand-rolled parser) rejected by Reviewer as reinventing a solved problem."
+    },
+    {
+      "id": "ap4",
+      "ref": "APPR-121",
+      "title": "Create Jira issue for the legacy rounding contract",
+      "agent": "AI Commander",
+      "tool": "MCP(jira.create_issue)",
+      "risk": "MEDIUM",
+      "requestedAt": "4 min ago",
+      "projectId": "hims",
+      "status": "pending",
+      "payload": "Project HIMS · Type: Tech Debt · Title: \"Unify money rounding between receipt and ledger\"",
+      "reason": "TASK-503 uncovered two independent rounding sites. Out of scope for the current fix; needs its own ticket so the contract change is deliberate."
+    },
+    {
+      "id": "ap5",
+      "ref": "APPR-117",
+      "title": "Migration 0041 — tax jurisdiction column",
+      "agent": "Database Engineer",
+      "tool": "Migration(0041)",
+      "risk": "HIGH",
+      "requestedAt": "2 h ago",
+      "projectId": "erp",
+      "status": "approved",
+      "payload": "ALTER TABLE MST_TAX ADD place_of_supply CHAR(2) NULL",
+      "reason": "Additive, nullable, no lock on a 2.1M-row table. Approved by human PM at 14:09."
+    },
+    {
+      "id": "ap6",
+      "ref": "APPR-116",
+      "title": "Delete 3 deprecated stored procedures",
+      "agent": "Database Engineer",
+      "tool": "SQL(DROP)",
+      "risk": "CRITICAL",
+      "requestedAt": "3 h ago",
+      "projectId": "erp",
+      "status": "denied",
+      "payload": "DROP PROCEDURE SP_CalcTaxOld, SP_TaxLegacy, SP_TaxV2",
+      "reason": "Denied — hard rule p10 blocks DROP outright. Converted to TASK-514: rename with a zz_deprecated_ prefix, observe for one quarter, then remove by hand."
+    }
+  ],
+  "memory": [
+    {
+      "id": "m142",
+      "ref": "MEM-142",
+      "category": "architecture",
+      "title": "Architecture Decision #142 — TRANS table must not be directly modified",
+      "body": "No service, script or agent may INSERT / UPDATE / DELETE on any TRANS_* table directly. All writes go through SP_PostTransaction, which stamps the audit trio (POSTED_BY, POSTED_ON, POSTED_MACHINE) and writes the paired row into TRANS_LEDGER. Direct writes leave the ledger unbalanced and the month-end close silently reports a wrong figure.",
+      "reason": "Legacy accounting integration.",
+      "source": "Production incident #38",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2024-11-06",
+      "lastUsed": "2026-09-01T09:00:00+00:00",
+      "evidence": [
+        "docs/adr/ADR-52-transaction-boundary.md",
+        "db/procs/SP_PostTransaction.sql",
+        "incidents/INC-38-ledger-drift.md",
+        "src/Services/InvoiceService.cs:214"
+      ],
+      "tags": [
+        "TRANS_INVOICE",
+        "ADR-52",
+        "accounting",
+        "hard-rule"
+      ],
+      "pinned": true
+    },
+    {
+      "id": "m151",
+      "ref": "MEM-151",
+      "category": "architecture",
+      "title": "Repository layer is the only place raw SQL is allowed",
+      "body": "Services take an I<Name>Repository via constructor injection. A service that opens a SqlConnection is an automatic review rejection. Reviewer agent greps for \"new SqlConnection\" outside src/Data/ on every diff.",
+      "reason": "Two 2023 incidents traced back to ad-hoc SQL inside services bypassing the retry policy.",
+      "source": "ADR-19 + Code Reviewer rejection pattern (14 occurrences)",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2024-12-02",
+      "lastUsed": "2026-09-01T08:00:00+00:00",
+      "evidence": [
+        "docs/adr/ADR-19-data-access.md",
+        "src/Data/InvoiceRepository.cs",
+        "src/Services/TaxService.cs:41"
+      ],
+      "tags": [
+        "SOLID",
+        "repository",
+        "review-rule"
+      ],
+      "pinned": true
+    },
+    {
+      "id": "m167",
+      "ref": "MEM-167",
+      "category": "architecture",
+      "title": "HIMS billing talks to ERP only over the PMI compatibility contract",
+      "body": "HIMS v3 never reads CAREWORKS tables directly. Everything crosses through the PMI contract views (VW_PMI_PATIENT, VW_PMI_CHARGE). The views are versioned; breaking one requires a dual-write window of at least one billing cycle.",
+      "reason": "Both systems are live at the same hospitals during the renewal.",
+      "source": "ADR-31 + migration runbook 2026-03",
+      "projectId": "hims",
+      "confidence": "HIGH",
+      "createdAt": "2025-03-18",
+      "lastUsed": "2026-09-01T07:00:00+00:00",
+      "evidence": [
+        "docs/adr/ADR-31-pmi-contract.md",
+        "db/views/VW_PMI_CHARGE.sql"
+      ],
+      "tags": [
+        "PMI",
+        "contract",
+        "dual-write"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m203",
+      "ref": "MEM-203",
+      "category": "architecture",
+      "title": "Frontend state: no new state library, ever",
+      "body": "React Context + useReducer for cross-screen state, local useState for everything else. TanStack Query only for server cache. A PR that adds Zustand/Redux/Jotai gets closed without review.",
+      "reason": "Four state libraries already died in this codebase between 2013 and 2021; the migration cost each time was measured in months.",
+      "source": "PM instruction, 2025-01-09 (Hinglish: \"naya state library mat lana, jo hai usi mein karo\")",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2025-01-09",
+      "lastUsed": "2026-09-01T06:00:00+00:00",
+      "evidence": [
+        "docs/adr/ADR-27-frontend-state.md",
+        "src/app/store/legacy-reducer.ts"
+      ],
+      "tags": [
+        "frontend",
+        "hard-rule",
+        "dependencies"
+      ],
+      "pinned": true
+    },
+    {
+      "id": "m118",
+      "ref": "MEM-118",
+      "category": "business_rules",
+      "title": "Interstate supply is CGST/SGST only when supplier state == place of supply",
+      "body": "If MST_CUSTOMER.STATE_CODE != MST_BRANCH.STATE_CODE the invoice is IGST at the full slab. Same-state is split CGST + SGST at half the slab each. The exception is SEZ customers (MST_CUSTOMER.SEZ_FLAG = 1) — always IGST, zero-rated, regardless of state.",
+      "reason": "Section 7/8 IGST Act; the SEZ carve-out has burned the team twice.",
+      "source": "CA sign-off note 2025-06-20 + BUG-883 root cause",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2025-06-20",
+      "lastUsed": "2026-09-01T04:00:00+00:00",
+      "evidence": [
+        "db/procs/SP_CalculateTax.sql:188",
+        "src/Services/TaxService.cs:96",
+        "docs/tax/gst-slabs-2026.md"
+      ],
+      "tags": [
+        "GST",
+        "TASK-492",
+        "BUG-883",
+        "MST_TAX"
+      ],
+      "pinned": true
+    },
+    {
+      "id": "m124",
+      "ref": "MEM-124",
+      "category": "business_rules",
+      "title": "Tax rounding is per line item, then invoice total — never the reverse",
+      "body": "Each line rounds to 2 decimals with MidpointRounding.AwayFromZero, then lines sum to the invoice total. Rounding the total instead of the lines shifts ₹0.01–₹0.04 per invoice and the reconciliation job flags it.",
+      "reason": "The legacy VB6 module rounded this way and 11 years of posted invoices depend on it matching.",
+      "source": "Legacy analysis of TaxCalc.bas (2011)",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2025-02-11",
+      "lastUsed": "2026-09-01T03:00:00+00:00",
+      "evidence": [
+        "legacy/TaxCalc.bas:340",
+        "src/Services/TaxService.cs:158",
+        "tests/Tax/RoundingParityTests.cs"
+      ],
+      "tags": [
+        "rounding",
+        "legacy-parity",
+        "TaxService.cs"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m131",
+      "ref": "MEM-131",
+      "category": "business_rules",
+      "title": "Credit note cannot exceed the original invoice net of prior credit notes",
+      "body": "SP_CreateCreditNote checks SUM(CN.AMOUNT) + new amount <= TRANS_INVOICE.NET_AMOUNT. Over-credit is a hard failure, not a warning — finance treats it as fraud surface.",
+      "reason": "Statutory audit finding FY2023-24.",
+      "source": "Audit remediation ticket ERP-4471",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2025-04-02",
+      "lastUsed": "2026-09-01T02:00:00+00:00",
+      "evidence": [
+        "db/procs/SP_CreateCreditNote.sql:64",
+        "docs/finance/audit-FY24-remediation.md"
+      ],
+      "tags": [
+        "credit-note",
+        "audit",
+        "hard-fail"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m176",
+      "ref": "MEM-176",
+      "category": "business_rules",
+      "title": "IPD bill freezes at discharge; only the pharmacy return window stays open 24 h",
+      "body": "After DISCHARGE_STATUS = 2, charges are read-only except PHARM_RETURN lines posted within 24 hours. Anything later needs a supervisor override with a reason code, stored in TRANS_OVERRIDE.",
+      "reason": "Insurance TPAs reject bills whose totals change after the discharge summary is issued.",
+      "source": "HIMS billing SOP v4, section 6.2",
+      "projectId": "hims",
+      "confidence": "MEDIUM",
+      "createdAt": "2025-08-27",
+      "lastUsed": "2026-09-01T01:00:00+00:00",
+      "evidence": [
+        "docs/hims/billing-sop-v4.pdf#p12",
+        "db/procs/SP_FreezeIPDBill.sql"
+      ],
+      "tags": [
+        "IPD",
+        "TPA",
+        "discharge"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m209",
+      "ref": "MEM-209",
+      "category": "database",
+      "title": "MST_TAX is slab-versioned by effective date, not overwritten",
+      "body": "Rate changes insert a new row with EFFECTIVE_FROM; the old row gets EFFECTIVE_TO. Any query that forgets the date predicate picks up 2019 slabs. SP_CalculateTax joins on @InvoiceDate BETWEEN EFFECTIVE_FROM AND ISNULL(EFFECTIVE_TO, \"9999-12-31\").",
+      "reason": "Historical invoices must reprint with the rate that was live on their date.",
+      "source": "Schema archaeology, MST_TAX (382-table sweep)",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2025-01-22",
+      "lastUsed": "2026-08-31T23:00:00+00:00",
+      "evidence": [
+        "db/tables/MST_TAX.sql",
+        "db/procs/SP_CalculateTax.sql:41",
+        "docs/legacy/slab-versioning.md"
+      ],
+      "tags": [
+        "MST_TAX",
+        "temporal",
+        "SP_CalculateTax"
+      ],
+      "pinned": true
+    },
+    {
+      "id": "m214",
+      "ref": "MEM-214",
+      "category": "database",
+      "title": "TRANS_INVOICE has no FK to MST_CUSTOMER — it is enforced in code only",
+      "body": "The FK was dropped in 2016 during a bulk-import project and never restored. 1,148 stored procs assume it is absent. Adding it back fails on 4,207 orphan rows from the 2014 migration.",
+      "reason": "Legacy data quality; restoring the constraint is a project, not a task.",
+      "source": "Legacy scan + attempted migration 2025-09 (rolled back)",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2025-09-14",
+      "lastUsed": "2026-08-31T22:00:00+00:00",
+      "evidence": [
+        "db/migrations/2025-09-11-fk-restore.sql (rolled back)",
+        "reports/orphan-customers-4207.csv"
+      ],
+      "tags": [
+        "TRANS_INVOICE",
+        "MST_CUSTOMER",
+        "data-quality"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m221",
+      "ref": "MEM-221",
+      "category": "database",
+      "title": "Never add a non-filtered index to TRANS_INVOICE during business hours",
+      "body": "The table is 41 GB / 96 M rows. An online index build still pushed CPU to 94 % and the invoice screen timed out for 8 minutes on 2025-11-30. Index work is a 01:00–03:30 IST window only, with SORT_IN_TEMPDB = ON.",
+      "reason": "Production incident #52.",
+      "source": "Production incident #52",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2025-12-01",
+      "lastUsed": "2026-08-31T21:00:00+00:00",
+      "evidence": [
+        "incidents/INC-52-index-build.md",
+        "db/maintenance/index-window.md"
+      ],
+      "tags": [
+        "index",
+        "maintenance-window",
+        "TRANS_INVOICE"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m233",
+      "ref": "MEM-233",
+      "category": "database",
+      "title": "PMI patient identity is (HOSP_CODE, MR_NO) — MR_NO alone is not unique",
+      "body": "Three hospitals share the schema and each restarted MR numbering in 2019. Any join on MR_NO without HOSP_CODE mixes patients across sites.",
+      "reason": "Discovered during the OPD dedup task; 1,900 false merges were prevented.",
+      "source": "HIMS legacy analysis, 2025-10-08",
+      "projectId": "hims",
+      "confidence": "HIGH",
+      "createdAt": "2025-10-08",
+      "lastUsed": "2026-08-31T20:00:00+00:00",
+      "evidence": [
+        "db/tables/MST_PATIENT.sql",
+        "reports/mr-collision-1900.csv"
+      ],
+      "tags": [
+        "PMI",
+        "identity",
+        "dedup"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m247",
+      "ref": "MEM-247",
+      "category": "database",
+      "title": "SP_CalculateTax is called from 23 places, 6 of them outside the invoice module",
+      "body": "Callers include SP_PostTransaction, SP_CreateCreditNote, the Crystal report RPT_TaxSummary, the nightly SSIS package PKG_TaxRecon, and two Excel-linked views used by finance. Any signature change is a 23-point blast radius.",
+      "reason": "Impact analysis for TASK-492 — a parameter add was rejected because of this.",
+      "source": "Architect impact scan, 2026-09-10",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2026-09-10",
+      "lastUsed": "2026-08-31T19:00:00+00:00",
+      "evidence": [
+        "reports/impact/SP_CalculateTax-callers.md",
+        "ssis/PKG_TaxRecon.dtsx",
+        "reports/RPT_TaxSummary.rpt"
+      ],
+      "tags": [
+        "SP_CalculateTax",
+        "TASK-492",
+        "blast-radius"
+      ],
+      "pinned": true
+    },
+    {
+      "id": "m301",
+      "ref": "MEM-301",
+      "category": "legacy",
+      "title": "The 2011 VB6 tax module is still the source of truth for rounding parity",
+      "body": "legacy/TaxCalc.bas was ported line-by-line into TaxService.cs in 2018. Where the C# looks wrong, check the .bas first — the \"bug\" is usually intentional parity with 11 years of posted data.",
+      "reason": "Two rewrites were reverted for breaking historical reprints.",
+      "source": "Legacy analysis agent, module sweep 03/47",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2025-02-04",
+      "lastUsed": "2026-08-31T18:00:00+00:00",
+      "evidence": [
+        "legacy/TaxCalc.bas",
+        "src/Services/TaxService.cs",
+        "docs/legacy/port-notes-taxcalc.md"
+      ],
+      "tags": [
+        "VB6",
+        "parity",
+        "TaxService.cs"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m309",
+      "ref": "MEM-309",
+      "category": "legacy",
+      "title": "Module 17 (Excise) is dead code but cannot be deleted",
+      "body": "Excise was replaced by GST in 2017. The screens are hidden but SP_PostTransaction still writes TRANS_EXCISE rows with zeros because a statutory archive job reads them until FY2029.",
+      "reason": "Statutory retention.",
+      "source": "Compliance note 2017 + confirmed with finance 2025-07-19",
+      "projectId": "erp",
+      "confidence": "MEDIUM",
+      "createdAt": "2025-07-19",
+      "lastUsed": "2026-08-31T17:00:00+00:00",
+      "evidence": [
+        "docs/compliance/excise-retention.md",
+        "db/procs/SP_PostTransaction.sql:410"
+      ],
+      "tags": [
+        "dead-code",
+        "retention",
+        "module-17"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m316",
+      "ref": "MEM-316",
+      "category": "legacy",
+      "title": "Crystal Reports still renders 61 of 88 ERP reports",
+      "body": "Report changes need the CR runtime on the build agent and a .rpt round-trip through the Windows designer. Agents cannot edit .rpt files — they open a task for the human with the exact field list.",
+      "reason": "Binary format, no CI story.",
+      "source": "DevOps capability audit, 2026-01-16",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2026-01-16",
+      "lastUsed": "2026-08-31T16:00:00+00:00",
+      "evidence": [
+        "docs/devops/crystal-runtime.md",
+        "reports/RPT_TaxSummary.rpt"
+      ],
+      "tags": [
+        "crystal",
+        "human-only",
+        "reports"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m324",
+      "ref": "MEM-324",
+      "category": "legacy",
+      "title": "Session state lives in IIS in-process memory across 3 nodes with no affinity",
+      "body": "The load balancer round-robins without sticky sessions, so a user whose next request lands on another node loses their session. This is the root cause behind TASK-501, not the 20-minute timeout everyone assumed.",
+      "reason": "Never migrated to SQL session state after the 2019 scale-out.",
+      "source": "Production incident #61 investigation",
+      "projectId": "erp",
+      "confidence": "MEDIUM",
+      "createdAt": "2026-09-10",
+      "lastUsed": "2026-08-31T15:00:00+00:00",
+      "evidence": [
+        "incidents/INC-61-session-drop.md",
+        "iis/web.config:sessionState",
+        "src/Web/Startup.cs:88"
+      ],
+      "tags": [
+        "TASK-501",
+        "IIS",
+        "session"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m402",
+      "ref": "MEM-402",
+      "category": "bugs",
+      "title": "BUG-883 — CGST/SGST reversed on interstate orders after branch transfer",
+      "body": "TaxService.ResolveJurisdiction compared MST_CUSTOMER.STATE_CODE against the *login* branch instead of the invoice branch. After the Pune branch transfer in August, 41 invoices split as CGST/SGST when they should have been IGST. Fix is one line plus a backfill migration.",
+      "reason": "Wrong comparison operand; the login branch is only correct when the user never switches branch.",
+      "source": "Reproduced with INV-2026-08812",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2026-09-10",
+      "lastUsed": "2026-08-31T14:00:00+00:00",
+      "evidence": [
+        "src/Services/TaxService.cs:96",
+        "db/procs/SP_CalculateTax.sql:188",
+        "tests/Tax/InterstateSplitTests.cs",
+        "reports/affected-invoices-41.csv"
+      ],
+      "tags": [
+        "BUG-883",
+        "TASK-492",
+        "InvoiceService.cs"
+      ],
+      "pinned": true
+    },
+    {
+      "id": "m411",
+      "ref": "MEM-411",
+      "category": "bugs",
+      "title": "Bulk upload times out above ~28k rows on the shared staging server",
+      "body": "The chunked endpoint holds one transaction per chunk; at 28k rows tempdb spills and the request exceeds the 120 s IIS limit. Chunk size 2,000 with a per-chunk commit clears it.",
+      "reason": "tempdb on staging is 8 GB versus 96 GB in production, so the ceiling only shows up in QA.",
+      "source": "QA run #4417 on TASK-488",
+      "projectId": "erp",
+      "confidence": "MEDIUM",
+      "createdAt": "2026-09-08",
+      "lastUsed": "2026-08-31T13:00:00+00:00",
+      "evidence": [
+        "runs/qa-4417.log",
+        "src/Web/Controllers/BulkUploadController.cs:132"
+      ],
+      "tags": [
+        "TASK-488",
+        "staging",
+        "timeout"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m418",
+      "ref": "MEM-418",
+      "category": "bugs",
+      "title": "Date pickers send local time; the API assumes UTC — off-by-one on invoices posted after 18:30 IST",
+      "body": "The React date picker serialises with toISOString(), shifting IST dates back a day after 18:30. Fixed in 6 screens, still open in RPT filters and the ageing report.",
+      "reason": "No shared date serialisation helper existed until 2026-04.",
+      "source": "BUG-812, BUG-857, BUG-901 (same root cause)",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2026-04-11",
+      "lastUsed": "2026-08-31T12:00:00+00:00",
+      "evidence": [
+        "src/web/lib/date.ts",
+        "src/web/screens/AgeingReport.tsx:64"
+      ],
+      "tags": [
+        "timezone",
+        "recurring",
+        "frontend"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m426",
+      "ref": "MEM-426",
+      "category": "bugs",
+      "title": "HIMS OPD queue duplicates a token when the print job fails",
+      "body": "The token number increments before the print acknowledgement, so a paper jam creates a gap and the retry issues a second live token for the same patient. Reception works around it manually at 3 sites.",
+      "reason": "Print acknowledgement is fire-and-forget.",
+      "source": "Support ticket cluster HIMS-2291 (11 reports)",
+      "projectId": "hims",
+      "confidence": "MEDIUM",
+      "createdAt": "2026-06-19",
+      "lastUsed": "2026-08-31T11:00:00+00:00",
+      "evidence": [
+        "tickets/HIMS-2291.md",
+        "src/OPD/TokenService.cs:57"
+      ],
+      "tags": [
+        "OPD",
+        "printing",
+        "workaround"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m503",
+      "ref": "MEM-503",
+      "category": "decisions",
+      "title": "ADR-52 — every transaction write goes through SP_PostTransaction",
+      "body": "Accepted 2024-11-06, superseding the 2019 \"direct write with audit trigger\" approach. The trigger version double-counted on multi-row inserts. Status: accepted, no supersession pending.",
+      "reason": "Auditability and a single place to stamp the ledger.",
+      "source": "docs/adr/ADR-52-transaction-boundary.md",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2024-11-06",
+      "lastUsed": "2026-08-31T10:00:00+00:00",
+      "evidence": [
+        "docs/adr/ADR-52-transaction-boundary.md",
+        "docs/adr/ADR-11-audit-trigger.md (superseded)"
+      ],
+      "tags": [
+        "ADR-52",
+        "TRANS_INVOICE",
+        "accepted"
+      ],
+      "pinned": true
+    },
+    {
+      "id": "m601",
+      "ref": "MEM-601",
+      "category": "incidents",
+      "title": "Production incident #38 — ledger drift of ₹18.4 L across 2,106 invoices",
+      "body": "A 2024 data-fix script updated TRANS_INVOICE.NET_AMOUNT directly to correct a discount error. TRANS_LEDGER was never touched, so the trial balance drifted for 6 weeks before month-end caught it. Recovery took 9 days of manual reconciliation with the auditors.",
+      "reason": "Direct TRANS write bypassed SP_PostTransaction.",
+      "source": "Production incident #38",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2024-10-30",
+      "lastUsed": "2026-08-31T06:00:00+00:00",
+      "evidence": [
+        "incidents/INC-38-ledger-drift.md",
+        "scripts/2024-10-22-discount-fix.sql",
+        "docs/adr/ADR-52-transaction-boundary.md"
+      ],
+      "tags": [
+        "INC-38",
+        "ledger",
+        "origin-of-ADR-52"
+      ],
+      "pinned": true
+    },
+    {
+      "id": "m608",
+      "ref": "MEM-608",
+      "category": "incidents",
+      "title": "Production incident #47 — deploy at 17:40 IST collided with the GST return window",
+      "body": "A backend deploy recycled the app pool while 60+ users were filing GSTR-1. Deploys are now blocked between 09:00 and 20:00 IST on the 1st–11th of each month, enforced in the pipeline, not by memory.",
+      "reason": "Statutory filing window.",
+      "source": "Production incident #47",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2025-05-09",
+      "lastUsed": "2026-08-31T05:00:00+00:00",
+      "evidence": [
+        "incidents/INC-47-deploy-window.md",
+        ".github/workflows/deploy.yml:41"
+      ],
+      "tags": [
+        "deploy-window",
+        "GSTR-1",
+        "pipeline-gate"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m615",
+      "ref": "MEM-615",
+      "category": "incidents",
+      "title": "Production incident #52 — index build spiked CPU to 94 % for 8 minutes",
+      "body": "An \"online\" index build on TRANS_INVOICE during business hours starved the invoice screen. Trigger for the 01:00–03:30 maintenance window rule.",
+      "reason": "41 GB table on a shared instance; ONLINE = ON is not free.",
+      "source": "Production incident #52",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2025-11-30",
+      "lastUsed": "2026-08-31T04:00:00+00:00",
+      "evidence": [
+        "incidents/INC-52-index-build.md",
+        "db/maintenance/index-window.md"
+      ],
+      "tags": [
+        "INC-52",
+        "index",
+        "CPU"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m702",
+      "ref": "MEM-702",
+      "category": "code",
+      "title": "InvoiceService.cs is 2,914 lines and owns 7 responsibilities",
+      "body": "Tax, discount, dispatch note, e-way bill, credit note, print and export all live in one class. The team decided against splitting it during TASK-492 — the split is its own epic with its own regression budget.",
+      "reason": "PM rule: no unrequested refactor inside a bug-fix task.",
+      "source": "Architect scan + PM decision 2026-09-10",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2026-09-10",
+      "lastUsed": "2026-08-31T03:00:00+00:00",
+      "evidence": [
+        "src/Services/InvoiceService.cs",
+        "reports/complexity/erp-top-20.md"
+      ],
+      "tags": [
+        "InvoiceService.cs",
+        "tech-debt",
+        "no-refactor"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m709",
+      "ref": "MEM-709",
+      "category": "code",
+      "title": "C# naming here is class-object style: InvoiceService invoiceService = new()",
+      "body": "Variables mirror the type name in camelCase. Not _svc, not svc, not invSvc. The reviewer agent flags abbreviations as a style rejection.",
+      "reason": "PM standard applied across all C# in every project.",
+      "source": "PM instruction, repeated on 9 reviews",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2025-01-05",
+      "lastUsed": "2026-08-31T02:00:00+00:00",
+      "evidence": [
+        "docs/standards/csharp-naming.md",
+        "src/Services/InvoiceService.cs:41"
+      ],
+      "tags": [
+        "naming",
+        "review-rule",
+        "C#"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m716",
+      "ref": "MEM-716",
+      "category": "code",
+      "title": "Tests live beside the module: tests/<Module>/<Class>Tests.cs, xUnit + FluentAssertions",
+      "body": "No NUnit, no MSTest, no Moq — the codebase uses hand-written fakes because Moq broke on the 2022 sealed-class sweep. Test method names read Should_Split_IGST_When_Interstate.",
+      "reason": "Consistency with 3,100 existing tests.",
+      "source": "Repo convention scan",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2025-03-30",
+      "lastUsed": "2026-08-31T01:00:00+00:00",
+      "evidence": [
+        "tests/Tax/InterstateSplitTests.cs",
+        "docs/standards/testing.md"
+      ],
+      "tags": [
+        "xUnit",
+        "testing",
+        "convention"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m801",
+      "ref": "MEM-801",
+      "category": "project",
+      "title": "ERP renewal is module-by-module; 12 of 47 modules are on the new stack",
+      "body": "Old and new run side by side behind the same IIS site. A module is \"done\" only when its Crystal reports are ported or explicitly deferred. Billing is the current module; inventory is next.",
+      "reason": "Big-bang rewrite was rejected in 2023 after the HIMS v2 attempt.",
+      "source": "Renewal roadmap, revised 2026-08-01",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2026-08-01",
+      "lastUsed": "2026-08-30T23:00:00+00:00",
+      "evidence": [
+        "docs/roadmap/erp-renewal-2026.md",
+        "reports/module-status-47.md"
+      ],
+      "tags": [
+        "roadmap",
+        "renewal",
+        "modules"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m808",
+      "ref": "MEM-808",
+      "category": "project",
+      "title": "Release train is Tuesday 21:30 IST; hotfixes need a named approver",
+      "body": "Anything merged after Monday 18:00 waits for the next train. Hotfix path exists but requires the human PM to approve in the Approvals queue with a one-line justification.",
+      "reason": "Support staff are only available Tue/Wed morning for fallout.",
+      "source": "DevOps runbook + APPR history",
+      "projectId": "erp",
+      "confidence": "HIGH",
+      "createdAt": "2025-10-14",
+      "lastUsed": "2026-08-30T22:00:00+00:00",
+      "evidence": [
+        "docs/devops/release-runbook.md",
+        "approvals/APPR-118.md"
+      ],
+      "tags": [
+        "release",
+        "approval",
+        "hotfix"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m902",
+      "ref": "MEM-902",
+      "category": "preferences",
+      "title": "Show the plan before touching a file — every time, no exceptions",
+      "body": "Agents post a numbered plan with file paths and expected diff size, wait for the approve click, then run. Even for a one-line fix. The PM reads plans faster than diffs.",
+      "reason": "Explicit standing instruction; violated twice in June and both runs were reverted.",
+      "source": "PM instruction, 2026-06-03 (\"pehle plan dikhao, phir touch karo\")",
+      "projectId": "global",
+      "confidence": "HIGH",
+      "createdAt": "2026-06-03",
+      "lastUsed": "2026-08-30T20:00:00+00:00",
+      "evidence": [
+        "approvals/APPR-101.md",
+        "runs/2026-06-14-reverted.md"
+      ],
+      "tags": [
+        "workflow",
+        "approval",
+        "standing-order"
+      ],
+      "pinned": true
+    },
+    {
+      "id": "m909",
+      "ref": "MEM-909",
+      "category": "preferences",
+      "title": "Terminal-dense UI, no marketing dashboards",
+      "body": "Small type, tight rows, flat surfaces, one accent colour. Gradients, glass, big shadows and hero cards get rejected on sight. Numbers are tabular; IDs and paths are monospace.",
+      "reason": "The PM lives in this UI 9 hours a day and wants density over decoration.",
+      "source": "PM instruction, 2026-05-21",
+      "projectId": "global",
+      "confidence": "HIGH",
+      "createdAt": "2026-05-21",
+      "lastUsed": "2026-08-30T19:00:00+00:00",
+      "evidence": [
+        "docs/DESIGN_SYSTEM.md"
+      ],
+      "tags": [
+        "ui",
+        "taste",
+        "standing-order"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m916",
+      "ref": "MEM-916",
+      "category": "preferences",
+      "title": "Cost ceiling: ₹4,000/day across all agents; local models first",
+      "body": "Qwen3-Coder-Next and Qwen3-Next-80B run on the local box at zero marginal cost. Paid models are for reasoning and review only. Crossing 80 % of the ceiling pauses autonomous agents.",
+      "reason": "Single-operator business, no funding.",
+      "source": "PM budget rule, 2026-02-01",
+      "projectId": "global",
+      "confidence": "HIGH",
+      "createdAt": "2026-02-01",
+      "lastUsed": "2026-08-30T18:00:00+00:00",
+      "evidence": [
+        "docs/ops/cost-policy.md",
+        "runs/cost-daily.json"
+      ],
+      "tags": [
+        "cost",
+        "local-models",
+        "budget"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m001",
+      "ref": "MEM-001",
+      "category": "human",
+      "title": "The PM writes requirements in Hinglish — never ask him to rewrite them in English",
+      "body": "\"Invoice mein tax galat aa raha hai — CGST/SGST split interstate orders pe reverse ho raha hai. Fix karo.\" That is a complete requirement. The Commander compiles it; the PM does not translate. Asking for a formal spec is treated as friction.",
+      "reason": "He thinks in Hinglish and types fast; forcing English costs him time and loses nuance.",
+      "source": "312 requirements observed, 297 in Hinglish",
+      "projectId": "global",
+      "confidence": "HIGH",
+      "createdAt": "2025-01-02",
+      "lastUsed": "2026-08-30T17:00:00+00:00",
+      "evidence": [
+        "tasks/TASK-492.md",
+        "tasks/TASK-488.md",
+        "runs/requirement-corpus-312.md"
+      ],
+      "tags": [
+        "human",
+        "hinglish",
+        "requirements"
+      ],
+      "pinned": true
+    },
+    {
+      "id": "m008",
+      "ref": "MEM-008",
+      "category": "human",
+      "title": "Strict SOLID — he will reject working code that violates it",
+      "body": "Single responsibility and interface-first are non-negotiable for new C#. He has sent back a passing PR because a service did two things. Existing violations stay until their own task; new ones never ship.",
+      "reason": "14 years of maintaining a codebase where nobody enforced it.",
+      "source": "Review history: 23 rejections citing SRP or DIP",
+      "projectId": "global",
+      "confidence": "HIGH",
+      "createdAt": "2025-01-05",
+      "lastUsed": "2026-08-30T16:00:00+00:00",
+      "evidence": [
+        "reviews/REV-2291.md",
+        "reviews/REV-2410.md",
+        "docs/standards/csharp-naming.md"
+      ],
+      "tags": [
+        "human",
+        "SOLID",
+        "review"
+      ],
+      "pinned": true
+    },
+    {
+      "id": "m015",
+      "ref": "MEM-015",
+      "category": "human",
+      "title": "He hates unrequested refactors — fix the bug, nothing else",
+      "body": "A diff that also renames variables, reorders methods or \"cleans up\" nearby code gets reverted whole, even when the fix inside it is correct. If a refactor is needed, open a separate task and let him schedule it.",
+      "reason": "Review time is his bottleneck; a 400-line diff for a 3-line fix is unreviewable.",
+      "source": "PM instruction repeated 7 times + 4 full reverts",
+      "projectId": "global",
+      "confidence": "HIGH",
+      "createdAt": "2025-02-18",
+      "lastUsed": "2026-08-30T15:00:00+00:00",
+      "evidence": [
+        "runs/2026-07-08-revert.md",
+        "reviews/REV-2502.md",
+        "tasks/TASK-492.md"
+      ],
+      "tags": [
+        "human",
+        "scope",
+        "hard-rule"
+      ],
+      "pinned": true
+    },
+    {
+      "id": "m022",
+      "ref": "MEM-022",
+      "category": "human",
+      "title": "Prefers the existing pattern over a better one",
+      "body": "If the codebase already does X in an ugly way in 40 places, the 41st does it the same way. \"Consistency beats correctness\" is a direct quote. New patterns need an ADR and his sign-off first.",
+      "reason": "He is the only maintainer; two patterns means twice the context to hold.",
+      "source": "PM instruction, 2025-04-22 (\"jo pattern already hai wahi use karo\")",
+      "projectId": "global",
+      "confidence": "HIGH",
+      "createdAt": "2025-04-22",
+      "lastUsed": "2026-08-30T14:00:00+00:00",
+      "evidence": [
+        "docs/adr/ADR-27-frontend-state.md",
+        "reviews/REV-2188.md"
+      ],
+      "tags": [
+        "human",
+        "consistency",
+        "patterns"
+      ],
+      "pinned": true
+    },
+    {
+      "id": "m029",
+      "ref": "MEM-029",
+      "category": "human",
+      "title": "Tests must actually be run — \"tests likhe hain\" is not enough",
+      "body": "Every handoff needs pasted runner output: the command, pass/fail counts and the duration. Claiming coverage without a run is the fastest way to lose his trust; he has caught it three times.",
+      "reason": "Two agents in 2025 reported green on tests that never executed.",
+      "source": "PM instruction + QA gate added 2026-01-11",
+      "projectId": "global",
+      "confidence": "HIGH",
+      "createdAt": "2025-11-02",
+      "lastUsed": "2026-08-30T13:00:00+00:00",
+      "evidence": [
+        "runs/qa-4417.log",
+        "docs/standards/testing.md",
+        "runs/2025-12-04-false-green.md"
+      ],
+      "tags": [
+        "human",
+        "testing",
+        "trust"
+      ],
+      "pinned": true
+    },
+    {
+      "id": "m036",
+      "ref": "MEM-036",
+      "category": "human",
+      "title": "Works 10:30–02:00 IST; approvals stall between 03:00 and 10:00",
+      "body": "Queue HIGH-risk gates before 01:00 or they sit until late morning. He answers Telegram faster than the in-app queue between 22:00 and 01:00.",
+      "reason": "Observed across 6 months of approval timestamps.",
+      "source": "Approval latency analysis, 2026-08-30",
+      "projectId": "global",
+      "confidence": "MEDIUM",
+      "createdAt": "2026-08-30",
+      "lastUsed": "2026-08-30T12:00:00+00:00",
+      "evidence": [
+        "reports/approval-latency-6mo.md"
+      ],
+      "tags": [
+        "human",
+        "schedule",
+        "approvals"
+      ],
+      "pinned": false
+    },
+    {
+      "id": "m043",
+      "ref": "MEM-043",
+      "category": "human",
+      "title": "Reads the diff, not the summary — keep PR bodies short and file lists exact",
+      "body": "Three lines of why, then the file list. Long agent-written PR descriptions get skimmed and the actual review happens in the diff view. Never bury a schema change in prose.",
+      "reason": "Stated preference, confirmed by review-time telemetry (median 9 s on the body, 4 min in the diff).",
+      "source": "PM instruction, 2026-03-05",
+      "projectId": "global",
+      "confidence": "MEDIUM",
+      "createdAt": "2026-03-05",
+      "lastUsed": "2026-08-30T11:00:00+00:00",
+      "evidence": [
+        "reviews/REV-2502.md",
+        "reports/review-telemetry.md"
+      ],
+      "tags": [
+        "human",
+        "review",
+        "communication"
+      ],
+      "pinned": false
+    }
+  ],
+  "conflicts": [
+    {
+      "id": "cf-1",
+      "topic": "Session state storage",
+      "a": "m324",
+      "b": "m808",
+      "detected": "1 h ago",
+      "detail": "MEM-324 says session state is IIS in-process across 3 nodes with no affinity. The DevOps runbook fact behind MEM-808 claims sticky sessions were enabled at the load balancer in 2025-10. Both cannot be true — TASK-501 depends on which one is.",
+      "suggestion": "Ask DevOps agent to read the live F5 pool config, then retire the loser.",
+      "severity": "HIGH"
+    },
+    {
+      "id": "cf-2",
+      "topic": "Tax rounding order",
+      "a": "m124",
+      "b": "m118",
+      "detected": "2 d ago",
+      "detail": "MEM-124 pins rounding at line level for legacy parity. The GST slab note attached to MEM-118 (CA sign-off, 2025-06-20) says the statutory method rounds the invoice total. Legacy parity and the statute disagree by ₹0.01–₹0.04 per invoice.",
+      "suggestion": "Escalate to human PM — this is a finance decision, not an engineering one.",
+      "severity": "MEDIUM"
+    },
+    {
+      "id": "cf-3",
+      "topic": "Excise module status",
+      "a": "m309",
+      "b": "m801",
+      "detected": "9 d ago",
+      "detail": "MEM-309 keeps module 17 alive until FY2029 for statutory archiving. The 2026-08 renewal roadmap behind MEM-801 lists module 17 as deleted in the billing sweep. If the roadmap wins, the archive job breaks silently.",
+      "suggestion": "Confirm with finance, then mark one fact superseded with a date.",
+      "severity": "MEDIUM"
+    }
+  ],
+  "mcp": [
+    {
+      "id": "filesystem",
+      "name": "filesystem",
+      "transport": "stdio",
+      "status": "disconnected",
+      "scope": "global",
+      "command": "npx -y @modelcontextprotocol/server-filesystem /Users/rajat/work/careworks-erp",
+      "tools": [
+        {
+          "name": "read_text_file",
+          "description": "Read a file under the allowed roots, optional head/tail line window",
+          "risk": "LOW"
+        },
+        {
+          "name": "read_multiple_files",
+          "description": "Batch read — used by Architect for impact analysis sweeps",
+          "risk": "LOW"
+        },
+        {
+          "name": "write_file",
+          "description": "Overwrite a file inside the agent worktree only",
+          "risk": "HIGH"
+        },
+        {
+          "name": "edit_file",
+          "description": "Line-based patch with dry-run diff preview",
+          "risk": "MEDIUM"
+        },
+        {
+          "name": "create_directory",
+          "description": "mkdir -p under an allowed root",
+          "risk": "LOW"
+        },
+        {
+          "name": "move_file",
+          "description": "Rename or relocate; refuses to cross root boundary",
+          "risk": "MEDIUM"
+        },
+        {
+          "name": "directory_tree",
+          "description": "Recursive JSON tree, depth-capped at 6",
+          "risk": "LOW"
+        },
+        {
+          "name": "search_files",
+          "description": "Glob + content grep across roots",
+          "risk": "LOW"
+        }
+      ]
+    },
+    {
+      "id": "git",
+      "name": "git",
+      "transport": "stdio",
+      "status": "disconnected",
+      "scope": "project",
+      "command": "uvx mcp-server-git --repository /Users/rajat/work/careworks-erp",
+      "tools": [
+        {
+          "name": "git_status",
+          "description": "Working tree status for the active worktree",
+          "risk": "LOW"
+        },
+        {
+          "name": "git_diff_unstaged",
+          "description": "Unified diff of uncommitted changes",
+          "risk": "LOW"
+        },
+        {
+          "name": "git_log",
+          "description": "Commit history with author + file counts",
+          "risk": "LOW"
+        },
+        {
+          "name": "git_commit",
+          "description": "Commit staged files — gated behind approval rule PR-04",
+          "risk": "MEDIUM"
+        },
+        {
+          "name": "git_create_branch",
+          "description": "Branch from origin/main into task/*",
+          "risk": "LOW"
+        },
+        {
+          "name": "git_reset",
+          "description": "Unstage; hard reset is blocked by policy",
+          "risk": "HIGH"
+        }
+      ]
+    },
+    {
+      "id": "github",
+      "name": "github",
+      "transport": "http",
+      "status": "disconnected",
+      "scope": "global",
+      "command": "https://api.githubcopilot.com/mcp/  (PAT: gho_••••7f2a, repo+read:org)",
+      "tools": [
+        {
+          "name": "create_pull_request",
+          "description": "Open PR from task/* into main",
+          "risk": "HIGH"
+        },
+        {
+          "name": "get_pull_request_diff",
+          "description": "Fetch PR patch for Reviewer agent",
+          "risk": "LOW"
+        },
+        {
+          "name": "add_issue_comment",
+          "description": "Post a comment — output is remote user text",
+          "risk": "MEDIUM"
+        },
+        {
+          "name": "search_code",
+          "description": "Org-wide code search, 30 req/min",
+          "risk": "LOW"
+        },
+        {
+          "name": "list_workflow_runs",
+          "description": "CI run status for the branch",
+          "risk": "LOW"
+        },
+        {
+          "name": "merge_pull_request",
+          "description": "Squash-merge — human approval always required",
+          "risk": "CRITICAL"
+        }
+      ]
+    }
+  ],
+  "activity": [
+    {
+      "id": "a38",
+      "t": "14:21:05",
+      "actor": "Orchestrator",
+      "actorKind": "system",
+      "action": "Awaiting human",
+      "detail": "TASK-492 ready for final PM approval before merge",
+      "projectId": "erp",
+      "level": "warn",
+      "taskRef": "TASK-492"
+    },
+    {
+      "id": "a37",
+      "t": "14:20:11",
+      "actor": "Code Reviewer",
+      "actorKind": "agent",
+      "action": "Round 2 passed",
+      "detail": "All findings resolved · verdict: approved",
+      "projectId": "erp",
+      "level": "ok",
+      "taskRef": "TASK-492"
+    },
+    {
+      "id": "a36",
+      "t": "14:18:30",
+      "actor": "Cost Guard",
+      "actorKind": "system",
+      "action": "Budget checkpoint",
+      "detail": "Daily spend $6.31 of $25.00 · 71% served by local models",
+      "projectId": "erp",
+      "level": "info"
+    },
+    {
+      "id": "a31",
+      "t": "14:10:15",
+      "actor": "Workflow",
+      "actorKind": "system",
+      "action": "Workflow launched",
+      "detail": "wf-legacy-audit · 4 phases · 9 agents",
+      "projectId": "hims",
+      "level": "info"
+    },
+    {
+      "id": "a30",
+      "t": "14:09:03",
+      "actor": "You",
+      "actorKind": "human",
+      "action": "Approved",
+      "detail": "APPR-117 migration approved with rollback verified",
+      "projectId": "erp",
+      "level": "ok"
+    },
+    {
+      "id": "a29",
+      "t": "14:08:20",
+      "actor": "Documentation Agent",
+      "actorKind": "agent",
+      "action": "ADR drafted",
+      "detail": "ADR-52 — single jurisdiction resolver",
+      "projectId": "erp",
+      "level": "info",
+      "taskRef": "TASK-492"
+    },
+    {
+      "id": "a28",
+      "t": "14:07:44",
+      "actor": "Memory Brain",
+      "actorKind": "system",
+      "action": "Fact written",
+      "detail": "MEM-311: interstate orders use place-of-supply, not billing state",
+      "projectId": "erp",
+      "level": "ok"
+    },
+    {
+      "id": "a27",
+      "t": "14:06:18",
+      "actor": "MCP: sqlserver",
+      "actorKind": "tool",
+      "action": "Query executed",
+      "detail": "SELECT ... FROM MST_TAX WHERE state_code IS NULL → 41 rows",
+      "projectId": "erp",
+      "level": "info"
+    },
+    {
+      "id": "a26",
+      "t": "14:05:02",
+      "actor": "Security Engineer",
+      "actorKind": "agent",
+      "action": "Blocked merge",
+      "detail": "TASK-501 needs prod session config — HIGH gate",
+      "projectId": "erp",
+      "level": "err",
+      "taskRef": "TASK-501"
+    },
+    {
+      "id": "a25",
+      "t": "14:03:41",
+      "actor": "Vision Agent",
+      "actorKind": "agent",
+      "action": "Screenshot analysed",
+      "detail": "error-modal.png → matched to UploadErrorDialog.tsx (conf 0.91)",
+      "projectId": "erp",
+      "level": "ok",
+      "taskRef": "TASK-488"
+    },
+    {
+      "id": "a24",
+      "t": "14:02:30",
+      "actor": "Frontend Engineer",
+      "actorKind": "agent",
+      "action": "Agent started",
+      "detail": "Bulk upload drag-drop UI",
+      "projectId": "erp",
+      "level": "ok",
+      "taskRef": "TASK-488"
+    },
+    {
+      "id": "a23",
+      "t": "14:01:12",
+      "actor": "Backend Engineer",
+      "actorKind": "agent",
+      "action": "Fixing findings",
+      "detail": "Applying reviewer round 1 feedback",
+      "projectId": "erp",
+      "level": "info",
+      "taskRef": "TASK-492"
+    }
+  ]
+}

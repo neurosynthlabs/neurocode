@@ -1,5 +1,5 @@
-"""Agent runs over HTTP: what they did, their output, the real diff, and stopping, merging or
-discarding one.
+"""Agent runs over HTTP: what they did, their output, the real diff, and stopping, merging, discarding
+or sending one back for changes.
 
 Same paths and same JSON as before. What changed underneath: a run's steps, logs, children and
 collisions are rows now, so this file reads them in a fixed number of queries however many runs are
@@ -9,19 +9,26 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai.gateway import Gateway
+from ..data.engine import Database
 from ..models import Plan, Project, Run, Task
 from ..repositories import AuditRepository, NotFound, RunLogRepository, RunRepository
 from ..schemas import run_json, run_log_json
 from ..services.identity import Person
+from ..services import runs as runtime
 from ..services.runs import RunService
-from .deps import current_person, gateway, require, session
+from .deps import current_person, database, gateway, hand_off, require, session
 
 router = APIRouter(prefix="/runs")
+
+
+class ReworkIn(BaseModel):
+    notes: str = Field(min_length=1, max_length=4000)
 
 
 async def _context(open_session: AsyncSession, runs: list[Run]) -> dict[str, dict[str, Any]]:
@@ -105,3 +112,19 @@ async def discard(ref: str, who: Person = Depends(require("runs:run")),
     """Remove the worktree and the branch. Only once the run has stopped."""
     removed = await RunService(open_session, gw).discard(ref, who.name)
     return _one(removed, await _context(open_session, [removed]))
+
+
+@router.post("/{ref}/rework")
+async def rework(ref: str, body: ReworkIn, jobs: BackgroundTasks, who: Person = Depends(require("runs:run")),
+                 open_session: AsyncSession = Depends(session), db: Database = Depends(database),
+                 gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """Send it back: the same plan, done again as a new run that is told your notes and the review's
+    findings. The old run's worktree and branch go, and a signature it was waiting for is refused. The
+    new run is made here and starts after the response; what comes back is the new run."""
+    made = await RunService(open_session, gw).rework(ref, body.notes, by=who.name, by_id=who.id,
+                                                    may_decide=who.can("approvals:decide"))
+    lead = made[-1]
+    answer = _one(lead, await _context(open_session, [lead]))
+    starter = runtime.execute_batch if len(made) > 1 else runtime.execute
+    await hand_off(open_session, jobs, starter, db, gw, lead.ref)
+    return answer

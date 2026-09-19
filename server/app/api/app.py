@@ -35,6 +35,7 @@ from . import (
     routes_git,
     routes_knowledge,
     routes_ops,
+    routes_permissions,
     routes_plans,
     routes_platform,
     routes_research,
@@ -55,7 +56,7 @@ ROUTERS = (routes_auth.router, routes_work.router, routes_plans.router, routes_k
            routes_platform.router, routes_sessions.router, routes_runs.router, routes_code.router,
            routes_ai.router, routes_system.router, routes_admin.router, routes_admin_system.router,
            routes_testing.router, routes_git.router, routes_extensions.router, routes_workflows.router,
-           routes_evals.router, routes_research.router, routes_ops.router,
+           routes_evals.router, routes_research.router, routes_ops.router, routes_permissions.router,
            stream.router)
 
 #: What a row that was in flight when the process died says about itself afterwards.
@@ -97,29 +98,38 @@ async def reconcile_interrupted(open_session: AsyncSession) -> dict[str, int]:
     return {"runs": len(runs), "evals": len(evals), "research": len(research)}
 
 
-async def _on_start(app: FastAPI) -> None:
-    """The chores that have to happen before the first request, and could not happen anywhere else.
+async def start_up_chores(open_session: AsyncSession) -> tuple[int, dict[str, int]]:
+    """What has to happen before the first request, and could not happen anywhere else.
 
-    Reconciling the built-in roles is what makes a new permission arrive on upgrade: the catalogue is
-    the application's, not the database's, so an installation that has been running for months still
-    gains whatever was added to it. A role someone made themselves is left exactly as it is.
+    Reconciling the catalogue is what makes a new permission, or a new agent, arrive on upgrade: the
+    built-in roles and the roster are the application's, not the database's, so an installation that
+    has been running for months still gains whatever was added to them. A role someone made
+    themselves is left exactly as it is, and so is an agent a person switched off.
+
+    That is all a new workspace is given. Everything else in it, somebody makes.
 
     Reconciling interrupted work belongs here for the same reason: only before the first request is it
-    certain that nothing in this process is running yet.
-
-    Neither is allowed to stop the API. A database that is not there yet is a thing to say plainly
-    at the first request — `/health` answers that — not a process that refuses to boot.
+    certain that nothing in this process is running yet. Returns the expired sessions removed and the
+    interrupted work marked failed, so the caller can say so.
     """
-    from ..data.loader import seed_once, sync_roles
+    from ..data.loader import sync_agents, sync_roles
     from ..repositories.identity import SessionRepository
 
+    await sync_roles(open_session)
+    await sync_agents(open_session)
+    gone = await SessionRepository(open_session).purge_expired()
+    return gone, await reconcile_interrupted(open_session)
+
+
+async def _on_start(app: FastAPI) -> None:
+    """The start-up chores, in a transaction of their own.
+
+    None of them is allowed to stop the API. A database that is not there yet is a thing to say
+    plainly at the first request — `/health` answers that — not a process that refuses to boot.
+    """
     try:
         async with app.state.db.session() as open_session:
-            await sync_roles(open_session)
-            if await seed_once(open_session):
-                log.info("a new workspace: opened on the sample work")
-            gone = await SessionRepository(open_session).purge_expired()
-            interrupted = await reconcile_interrupted(open_session)
+            gone, interrupted = await start_up_chores(open_session)
     except Exception as e:                       # noqa: BLE001 — start-up must survive a cold database
         log.warning("start-up chores skipped: %s", e)
         return
@@ -128,6 +138,7 @@ async def _on_start(app: FastAPI) -> None:
     for what, n in interrupted.items():
         if n:
             log.info("marked %d interrupted %s failed", n, what)
+
 
 def create_api(db: Database | None = None, *, config: Settings | None = None) -> FastAPI:
     cfg = config or get_settings()
@@ -141,8 +152,13 @@ def create_api(db: Database | None = None, *, config: Settings | None = None) ->
         if owned:                                   # an engine this app made is an engine it closes
             await app.state.db.close()
 
-    #: In-process fan-out to every open tab. One process, one workspace, so no broker is needed.
-    feed = Bus()
+    #: In-process fan-out to every open tab. One process, one workspace, so no broker is needed. A
+    #: database handed in without a bus of its own is given this one: the stream subscribes to
+    #: `app.state.bus`, and a database announcing its changes to a different bus — or to none — left
+    #: every open tab hearing nothing at all.
+    feed = db.bus if db is not None and db.bus is not None else Bus()
+    if db is not None:
+        db.bus = feed
     app = FastAPI(title="NeuroCode API", version="0.4.0", lifespan=lifespan)
     app.state.db = db or Database(config=cfg, bus=feed)
     app.state.settings = cfg

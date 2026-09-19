@@ -569,7 +569,8 @@ class OpsService:
             check("secrets", "Keys file is private", str(cfg.secrets_path), secrets_status, secrets_note, at=now),
             check("lanes", "Model lanes", "gateway", "ok" if ready_lanes else "warn",
                   f"{len(ready_lanes)} of {len(report)} can answer now" if ready_lanes
-                  else "No lane can answer: the offline rules write every answer.", at=now),
+                  else "No lane can answer: compiling and brainstorming refuse, and agent steps write nothing.",
+                  at=now),
             check("keys", "Keys accepted", "gateway", "warn" if rejected else "ok",
                   f"Refused by the provider: {', '.join(rejected)}" if rejected
                   else f"No provider refused a key ({sum(1 for x in needs_key if x.get('hasKey'))} set).", at=now),
@@ -662,7 +663,8 @@ class OpsService:
                 continue
             spec = lanes.BY_ID.get(lane["id"])
             source = lane.get("keySource")
-            store = ("server/secrets.json" if source == "workspace"
+            # The keys file this gateway really writes, which NEUROCODE_SECRETS_PATH can move.
+            store = (str(self.gateway.secrets.path) if source == "workspace"
                      else f"environment {spec.env}" if source == "environment" and spec else "not set")
             keys = [f"{lane['id']}.key", *(["deepseekKey"] if lane["id"] == "deepseek" else [])]
             out.append({"id": lane["id"], "name": (spec.secret if spec else "") or (spec.env if spec else lane["id"]),

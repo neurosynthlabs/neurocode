@@ -48,6 +48,7 @@ def run_json(run: Run, *, project_name: str = "", children: Sequence[Run] = (),
         "conflicts": [{"branch": c.branch, "agent": c.agent, "files": c.files or []}
                       for c in run.conflicts],
         "merged": run.merged,
+        "pushed": run.pushed,
         **({"waitingOn": run.waiting_on} if run.waiting_on else {}),
     }
 

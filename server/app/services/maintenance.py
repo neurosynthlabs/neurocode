@@ -1,5 +1,5 @@
 """The database chores an administrator can ask for: a picture of it, a copy of it, a check of it,
-the housekeeping Postgres wants now and then, and putting the sample workspace back.
+the housekeeping Postgres wants now and then, and emptying the workspace.
 
 All of it was written for SQLite, where the whole database is one file: its size was that file's
 size, a check was `PRAGMA integrity_check`, and compacting it was `VACUUM` on the single connection
@@ -27,18 +27,19 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import delete, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from ..data.loader import load_seed
 from ..models import (
     ActivityEvent,
     Agent,
     Approval,
     Brainstorm,
+    Chunk,
     Decision,
+    EvalSuite,
     McpServer,
     MemoryConflict,
     MemoryFact,
@@ -46,8 +47,11 @@ from ..models import (
     Pref,
     Project,
     Run,
+    Setting,
     Task,
+    WorkflowDefinition,
 )
+from ..data.changes import announce
 from ..settings import SERVER_DIR, Settings, settings as get_settings
 from .errors import Refused
 
@@ -66,14 +70,29 @@ BLOAT_FLOOR = 1_000
 LOCK_WAIT = "2s"
 BACKUP_TIMEOUT = 600
 
-#: The collections the seed owns, under the names the screens have always counted them by. The
-#: left-hand side is the old document store's vocabulary; the right is where those rows live now.
+#: What a workspace holds, under the names the screens have always counted it by. The left-hand side
+#: is the old document store's vocabulary; the right is where those rows live now.
 COLLECTIONS: tuple[tuple[str, Any], ...] = (
     ("projects", Project), ("agents", Agent), ("tasks", Task), ("approvals", Approval),
     ("memory", MemoryFact), ("plans", Plan), ("conflicts", MemoryConflict), ("mcp", McpServer),
     ("prefs", Pref), ("decisions", Decision), ("brainstorms", Brainstorm), ("runs", Run),
     ("activity", ActivityEvent),
 )
+
+
+#: What emptying the workspace deletes, in this order. Projects go first, and every row a project owns
+#: goes with it through its foreign key — tasks, plans, runs, the code index, sessions, research, and
+#: the facts, chunks, workflows and suites filed under it. What is left are the rows that belong to no
+#: project. Kept: accounts, sessions, roles, teams, the agent roster, keys, the workspace's settings,
+#: the audit log, and the usage ledger, which is history rather than work.
+EMPTIED: tuple[Any, ...] = (Project, MemoryFact, Chunk, ActivityEvent, Approval, Decision, Pref, Brainstorm,
+                            McpServer, WorkflowDefinition, EvalSuite)
+#: Settings that belong to one project, keyed `<prefix><project id>`. They have no foreign key to the
+#: project, so they do not go with it on their own — and a project id is only the last segment of its
+#: repository's path, so a different repository onboarded later under the same name got the old one's
+#: standing "allowed" and ran its test command without anyone being asked. Emptying the workspace is
+#: the only thing that deletes a project, and it takes every one of these with it.
+PER_PROJECT_SETTINGS: tuple[str, ...] = ("runtime.tests.",)
 
 
 def _ms(since: float) -> int:
@@ -179,13 +198,8 @@ class MaintenanceService:
 
     # ── the picture ──────────────────────────────────────────────
     async def stats(self) -> dict[str, Any]:
-        """Everything the Database screen shows: how big, how many rows, how the indexes are, and
-        when a copy was last taken.
-
-        `sqlite` and `journalMode` keep their names and lose their meanings: the screen still reads
-        them, so they carry the Postgres answers to the same two questions — which engine version is
-        serving, and how it keeps writes durable. They go when the screen is cut over.
-        """
+        """Everything the Database screen shows: which server, how big, how many rows, how the indexes
+        are, which migrations it has had, and when a copy was last taken."""
         about = (await self.session.execute(text(
             "SELECT current_setting('block_size')::int AS block, "
             "       current_setting('server_version') AS version, "
@@ -246,11 +260,15 @@ class MaintenanceService:
             {"cap": MAX_INDEXES})).mappings().all()
         since = await self._scalar(
             "SELECT stats_reset FROM pg_stat_database WHERE datname = current_database()")
+        invalid = [r["name"] for r in rows if not r["valid"]]
+        unused = [r["name"] for r in rows if r["scans"] == 0]
+        # The names are capped for the screen; the counts are not, so "41 never used" stays true when
+        # only twenty of them are named.
         return {
             "count": len(rows), "bytes": sum(int(r["bytes"]) for r in rows),
             "scans": sum(int(r["scans"]) for r in rows),
-            "invalid": [r["name"] for r in rows if not r["valid"]][:MAX_NAMES],
-            "unused": [r["name"] for r in rows if r["scans"] == 0][:MAX_NAMES],
+            "invalid": invalid[:MAX_NAMES], "invalidCount": len(invalid),
+            "unused": unused[:MAX_NAMES], "unusedCount": len(unused),
             "statsSince": since.isoformat(timespec="seconds") if since else None,
         }
 
@@ -454,19 +472,28 @@ class MaintenanceService:
                 await conn.execute(text("RESET lock_timeout"))
         return {"beforeBytes": before, "afterBytes": await self.size(), "ms": _ms(started), "did": did}
 
-    # ── back to the seed ─────────────────────────────────────────
-    async def reset(self) -> dict[str, int]:
-        """The sample workspace, written again over whatever the seeded tables hold now.
+    # ── emptying the workspace ───────────────────────────────────
+    async def empty(self) -> dict[str, int]:
+        """Delete the work, keep the people. Returns what is left, counted for real.
 
-        Inside the request's transaction, so a reset that fails half way leaves nothing behind. What
-        people made themselves — accounts, roles, teams, keys, the audit log — is not touched.
+        Inside the request's transaction, so an emptying that fails half way leaves nothing behind.
+        A fact's tags and the conflicts naming it go with the fact; a server's tools with the server.
+        Every project's own settings go too — all of them, not only those of projects still here, so
+        an answer left behind by an emptying from before this rule existed goes as well.
+
+        Every open tab is told with one `reset` event once this commits: bulk deletes pass no
+        document through the unit of work, so there is nothing to announce one by one.
         """
-        await load_seed(self.session)
+        for prefix in PER_PROJECT_SETTINGS:
+            await self.session.execute(delete(Setting).where(Setting.key.startswith(prefix, autoescape=True)))
+        for model in EMPTIED:
+            await self.session.execute(delete(model))
+        announce(self.session, "reset", {"at": _now()})
         return await self.counts()
 
     async def counts(self) -> dict[str, int]:
-        """What the workspace holds, counted for real: this is read straight after a reset, when the
-        planner's estimates are still describing the workspace that was just replaced."""
+        """What the workspace holds, counted for real: this is read straight after emptying it, when the
+        planner's estimates are still describing the workspace that was just deleted."""
         counted: dict[str, int] = {}
         for name, model in COLLECTIONS:
             counted[name] = int(await self._scalar(

@@ -1,4 +1,4 @@
-"""The platform's own rows — for now, the ideas this workspace has argued with itself.
+"""The platform's own rows: the ideas this workspace has argued with itself, and the MCP servers it knows.
 
 A brainstorm used to be one JSON document with the whole brief inside it, so "the newest ideas" was a
 sort in Python and a new reference was a count of the rows. Here it is a row whose stages, case
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from sqlalchemy import ColumnElement, Integer, cast, func, select
 
-from ..models import Brainstorm
+from ..models import Brainstorm, McpServer
 from .base import Page, Repository
 
 
@@ -31,3 +31,10 @@ class BrainstormRepository(Repository[Brainstorm]):
         digits = func.nullif(func.regexp_replace(Brainstorm.ref, r"\D", "", "g"), "")
         stmt = select(func.coalesce(func.max(cast(digits, Integer)), 0))
         return f"{prefix}{int((await self.session.execute(stmt)).scalar_one()) + 1}"
+
+
+class McpRepository(Repository[McpServer]):
+    model = McpServer
+
+    async def all_ordered(self) -> list[McpServer]:
+        return await self.list(order_by=McpServer.name, limit=200)

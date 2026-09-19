@@ -24,11 +24,11 @@ from app.ai.gateway import Provider, Result
 from app.api import deps
 from app.api.app import create_api
 from app.data.engine import Database
-from app.data.loader import load_seed, sync_roles
 from app.repositories.research import ResearchRepository
 from app.schemas.research import UNSEARCHABLE, report_json
 from app.services import research as research_jobs
 from app.services.research import coverage_notes, investigate, split_question
+from tests.fixtures.workspace import load_workspace
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
 VIEWER = {"email": "viewer@example.com", "name": "Neha", "password": "another long passphrase",
@@ -40,9 +40,7 @@ PROJECT = "research-test-project"
 # ── the routes ───────────────────────────────────────────────────
 @pytest_asyncio.fixture
 async def api(session: AsyncSession) -> FastAPI:
-    await load_seed(session)
-    await sync_roles(session)
-    await session.flush()
+    await load_workspace(session)
     app = create_api(db=None)
 
     async def use_the_test_session() -> AsyncIterator[AsyncSession]:
@@ -82,7 +80,7 @@ async def test_a_research_is_queued_listed_and_handed_to_the_job(client: AsyncCl
     assert body["ref"].startswith("RES-") and body["status"] == "queued"
     assert body["agents"] == 0 and body["confidence"] == 0 and body["durationS"] == 0
     assert body["projectId"] == "erp" and body["requestedBy"] == "Rajat"
-    assert body["id"] not in {f"r{n}" for n in range(1, 10)}          # never one of the sample ids
+    assert body["id"] not in {f"r{n}" for n in range(1, 10)}          # never a bare number
     assert handed == [body["ref"]]
 
     listed = (await client.get("/research", params={"project": "erp"})).json()
@@ -299,6 +297,11 @@ async def test_an_unindexed_project_says_so_and_still_searches_memory(live: Data
     assert any("code is not indexed" in g for g in report["gaps"])
     memory = [c for c in report["citations"] if c["url"] == "RTMEM-1"]
     assert memory and memory[0]["via"] == "memory"
+    # Cited, so recalled — once for the research, however many angles cited it.
+    async with live.read() as s:
+        recalled = (await s.execute(select(m.MemoryHit.feature, m.MemoryHit.ref).where(
+            m.MemoryHit.fact_id == "rt-mem-1"))).all()
+    assert [tuple(r) for r in recalled] == [("research", ref)]
 
 
 async def test_an_angle_nothing_bore_on_is_a_gap_not_a_finding(live: Database):
