@@ -4,7 +4,19 @@ One small VM runs everything: Postgres with pgvector, the API, and Caddy serving
 domain. Only ports 80 and 443 face the internet. Oracle's Always Free Ampere A1 shape (up to 4 cores and 24 GB of
 memory) is plenty.
 
-## 1. The server (Oracle Cloud console)
+## 1. The server
+
+Either by hand in the console (below), or in one command with the OCI CLI — `brew install oci-cli`, an API
+key added under **Profile → My profile → API keys**, and then:
+
+```bash
+deploy/oci-create.sh          # the network, ports 22/80/443, and an Ampere VM (4 cores, 24 GB) on Ubuntu 24.04
+```
+
+It reuses whatever it already made, so it is safe to run again, and when the region has no Ampere capacity
+(common, and nothing to do with your account) it keeps asking every minute instead of giving up.
+
+### By hand (Oracle Cloud console)
 
 1. Sign in to the Oracle Cloud account you mean to keep (the new one). Pick the home region nearest your users —
    it cannot be changed later.
