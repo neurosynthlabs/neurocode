@@ -28,25 +28,43 @@ whose role is 'reference' is read for grounding from its own checkout and never 
 from __future__ import annotations
 
 import asyncio
+import functools
+import hashlib
 import json
 import logging
 import os
+import random
 import re
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import agent, onboarding
 from ..agent import coverage as coverage_reports
 from ..agent import testparse
 from ..agent.testparse import all_expected
-from ..agent.git import LEFTOVERS, SECRETS, TODO
+from ..agent.git import LEFTOVERS, SECRETS, TODO, branch_exists, commits_since, keep_partial, reopen_worktree
+from ..agent.git import (
+    FORGE_TOOL,
+    FORGES,
+    default_branch,
+    forge_noun,
+    forge_of,
+    forge_reach,
+    no_way_to_open,
+    remote_url,
+)
+# Aliased: the service has methods of these names, and reading `forge_open(...)` inside one of them is
+# plainer than a bare name that looks like it might be `self`'s.
+from ..agent.git import open_pull_request as forge_open
+from ..agent.git import pull_request_state as forge_state
 from ..agent.review import brief as review_brief
 from ..ai.gateway import REVIEW, WRITE, Gateway, NoModel, extract_json
 from ..data import roster
@@ -65,8 +83,9 @@ from ..repositories import (
 )
 from ..repositories.runtime import ResultsRepository
 from ..schemas.work import gate_kind
+from ..secrets import FORGE_SECRETS, Secrets, forge_token, forge_token_source
 from ..settings import settings
-from . import diagnostics, instructions
+from . import diagnostics, instructions, sandbox
 from .taste import Applied, TasteService, applied_for
 from .code import roots, writable
 from .custom_agents import CustomAgentService
@@ -376,6 +395,22 @@ def _cleanup(run: Run) -> None:
         kept.unlink(missing_ok=True)
 
 
+#: How many times a step of each kind is tried when nothing says otherwise, and the ceiling on what a
+#: workflow may ask for. A step that writes or reads is tried twice, because the one failure worth
+#: trying again is a model that answered with prose instead of JSON. A step that runs a command, merges
+#: a branch or waits for a person is tried once: none of those fail for a reason a second go would fix.
+DEFAULT_TRIES = {"edit": 2, "review": 2, "test": 1, "merge": 1, "handoff": 1}
+MAX_TRIES = 3
+
+
+def _tries(policy: dict[str, Any] | None, kind: str) -> int:
+    """How many times a step may be tried: what its policy says, bounded, or its kind's default."""
+    asked = (policy or {}).get("maxAttempts")
+    if isinstance(asked, int) and not isinstance(asked, bool) and 1 <= asked <= MAX_TRIES:
+        return asked
+    return DEFAULT_TRIES.get(kind, 1)
+
+
 def _by_agent(plan_steps: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     """The plan's work, grouped by the agent that owns it. A gate belongs to no agent: you are the gate."""
     groups: dict[str, list[dict[str, Any]]] = {}
@@ -385,6 +420,211 @@ def _by_agent(plan_steps: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]
             continue
         groups.setdefault(step.get("agent") or roster.UNNAMED, []).append(step)
     return groups
+
+
+# ── carrying an interrupted run on ───────────────────────────────
+#: Where the files a step had written but never committed are kept. Nothing reads this ref back — it
+#: exists so the work is recoverable by hand, and so the run's own branch never gains a commit a person
+#: did not see in the diff they signed.
+PARTIAL_REFS = "refs/neurocode/partial"
+
+
+def _partial_ref(ref: str, n: int) -> str:
+    return f"{PARTIAL_REFS}/{ref.lower()}/{n}"
+
+
+def _run_lock(run_id: str) -> int:
+    """One advisory-lock number per run, so two workers cannot carry the same worktree on at once."""
+    return int.from_bytes(hashlib.sha1(f"run:{run_id}".encode()).digest()[:8], "big", signed=True)
+
+
+@dataclass(slots=True)
+class PartAt:
+    """Where one of a run's worktrees actually stands, against where its record says it should."""
+
+    label: str
+    #: The commit the worktree (or, when the worktree is gone, the branch) stands on. '' when neither is there.
+    here: str
+    #: The commit the last finished step left here, read from `review.commits` exactly as a revert reads it.
+    checkpoint: str
+    dirty: bool = False
+    #: A commit beyond the checkpoint that carries this run's own trailer: the interrupted step's work.
+    adopt: str = ""
+    #: A commit beyond the checkpoint that this run did not make. One of these refuses the whole thing.
+    foreign: str = ""
+    #: The worktree directory is gone and would have to be opened again on the branch.
+    opened: bool = False
+    gone: bool = False
+
+    @property
+    def target(self) -> str:
+        """Where the worktree is taken to before the run goes on: the adopted commit, or the checkpoint."""
+        return self.adopt or self.checkpoint
+
+
+@dataclass(slots=True)
+class Survey:
+    """What was measured about an interrupted run, and what carrying it on would therefore do."""
+
+    last_good: int
+    #: The step that was interrupted — the first one that did not finish. 0 when every step ran.
+    at: int
+    resume_from: int
+    parts: dict[str, PartAt]
+    #: label → the commit of this run's own to adopt as the interrupted step's.
+    adopt: dict[str, str]
+    reason: str = ""
+
+
+def _checkpoints(run: Run, parts: list[Part], last_good: int) -> dict[str, str] | str:
+    """The commit each part stood on when step `last_good` finished, or the sentence that says why the
+    run cannot say. Derived exactly as `revert` derives "after step n", because it is the same fact."""
+    commits: dict[str, dict[str, str]] = (run.review or {}).get("commits") or {}
+    old = [x.n for x in run.steps
+           if x.kind == "edit" and x.n <= last_good and x.status == "done" and str(x.n) not in commits]
+    if old:
+        return (f"Step {old[0]} of {run.ref} finished before steps kept their commits, so there is no commit to "
+                "carry on from. Send it back for changes instead.")
+    out: dict[str, str] = {}
+    for part in parts:
+        sha = part.base
+        for x in run.steps:
+            if x.kind == "edit" and x.n <= last_good and part.label in (commits.get(str(x.n)) or {}):
+                sha = commits[str(x.n)][part.label]
+        out[part.label] = sha
+    return out
+
+
+def _survey(run: Run) -> Survey:
+    """Blocking. Read where every part of an interrupted run stands, and decide what that allows.
+
+    Four cases per part, and only four. The worktree is on the checkpoint and clean — a true boundary.
+    It is on the checkpoint with loose files — a step was killed between writing and committing, and
+    those files are kept before the tree is taken back. It is ahead of the checkpoint and every commit
+    beyond it carries this run's trailer — the step committed and the process died before that was
+    written down, so the commit is adopted rather than paid for again. It is somewhere else entirely —
+    refused, naming both shas, because a person moved this branch and the runtime does not get to guess
+    what they meant.
+    """
+    steps = sorted(run.steps, key=lambda x: x.n)
+    last_good = 0
+    for step in steps:
+        if step.status not in ("done", "skipped"):
+            break
+        last_good = step.n
+    at = next((x.n for x in steps if x.n > last_good), 0)
+    if at == 0:
+        return Survey(last_good, 0, 0, {}, {},
+                      f"Every step of {run.ref} ran, so there is nothing left to carry on to. Send it back for "
+                      "changes instead.")
+
+    parts = _parts(run)
+    found = _checkpoints(run, parts, last_good)
+    if isinstance(found, str):
+        return Survey(last_good, at, at, {}, {}, found)
+
+    trailer = f"NeuroCode {run.ref}"
+    at_parts: dict[str, PartAt] = {}
+    for part in parts:
+        checkpoint = found[part.label]
+        where = PartAt(part.label, "", checkpoint)
+        if part.worktree.is_dir():
+            where.here = agent.head(part.worktree)
+            where.dirty = agent.dirty(part.worktree)
+            read_in, until = part.worktree, "HEAD"
+        elif branch_exists(part.repo, part.branch):
+            where.opened = True
+            where.here = branch_tip(part.repo, part.branch) or ""
+            read_in, until = part.repo, part.branch
+        else:
+            where.gone = True
+            at_parts[part.label] = where
+            continue
+        if where.here and where.here != checkpoint:
+            extras = commits_since(read_in, checkpoint, until)
+            wrong = next((sha for sha, message in extras if trailer not in message), "")
+            if not extras or wrong:
+                where.foreign = wrong or where.here
+            else:
+                where.adopt = where.here
+        at_parts[part.label] = where
+
+    named = len(parts) > 1
+    for part in parts:
+        where = at_parts[part.label]
+        lead = f"The {part.label} source of " if named and part.label else ""
+        if where.gone:
+            return Survey(last_good, at, at, at_parts, {},
+                          f"{lead or ''}{run.ref}'s branch {part.branch} is gone, so there is nothing to carry "
+                          "on from.")
+        if where.foreign:
+            return Survey(last_good, at, at, at_parts, {},
+                          f"{lead}{run.ref}'s worktree is at {where.here[:7]}, but its last checkpoint after step "
+                          f"{last_good} is {where.checkpoint[:7]}, and {where.foreign[:7]} was not made by this "
+                          f"run. Take it back to step {last_good} and continue, or send it back for changes.")
+    adopt = {label: where.adopt for label, where in at_parts.items() if where.adopt}
+    return Survey(last_good, at, at + 1 if adopt else at, at_parts, adopt)
+
+
+def _carry_worktrees(run: Run, parts: list[Part], survey: Survey) -> dict[str, str]:
+    """Blocking. Put every worktree back on the boundary the run will carry on from, keeping whatever
+    was loose in it first. Returns label → the commit the loose files were kept as."""
+    kept: dict[str, str] = {}
+    message = (f"What step {survey.at} of {run.ref} had written when the server stopped, kept so nothing is "
+               f"lost. It is not on {run.branch} and was never reviewed.\n\nNeuroCode {run.ref}")
+    for part in parts:
+        where = survey.parts[part.label]
+        if where.opened:
+            reopen_worktree(part.repo, part.branch, part.worktree)
+        if where.dirty:
+            sha = keep_partial(part.worktree, _partial_ref(run.ref, survey.at), message)
+            if sha:
+                kept[part.label] = sha
+        if where.dirty or agent.head(part.worktree) != where.target:
+            agent.reset_worktree(part.worktree, part.branch, where.target)
+    return kept
+
+
+def _resume_json(run: Run | None, survey: Survey, *, ref: str = "") -> dict[str, Any]:
+    """What the run screen shows for "carry on": every number read, and one sentence of plain words."""
+    if run is None:
+        return {"ref": ref, "canResume": False, "reason": survey.reason, "from": None, "lastGood": 0,
+                "worktree": "gone", "parts": [], "grants": {"run": 0, "once": 0},
+                "steps": {"done": 0, "left": 0}, "said": ""}
+    steps = sorted(run.steps, key=lambda x: x.n)
+    left = [x for x in steps if x.n >= survey.resume_from] if survey.resume_from else []
+    running_again = next((x for x in steps if x.n == survey.resume_from), None)
+    grants = run.grants or []
+    said = ""
+    if not survey.reason and running_again is not None:
+        stood = (f"Steps 1–{survey.last_good} stand: {run.diff_commits} "
+                 f"commit{'s' if run.diff_commits != 1 else ''}, +{run.diff_insertions} −{run.diff_deletions}."
+                 if survey.last_good else "No step had finished, so it starts from the beginning.")
+        said = f"Step {running_again.n} ({running_again.label}) runs again. {stood}"
+        if survey.adopt:
+            said += (f" Step {survey.at} had already committed {next(iter(survey.adopt.values()))[:7]}, so it is "
+                     "not written again.")
+        if any(p.dirty for p in survey.parts.values()):
+            said += (f" What step {survey.at} had half written is kept on {_partial_ref(run.ref, survey.at)}, "
+                     f"and not on {run.branch}.")
+    elif not survey.reason and survey.resume_from > (steps[-1].n if steps else 0):
+        said = (f"Step {survey.at} had already committed, so every step of {run.ref} is accounted for and it "
+                "finishes where it stood.")
+    worktree = ("gone" if any(p.gone for p in survey.parts.values())
+                else "missing" if any(p.opened for p in survey.parts.values()) else "present")
+    return {
+        "ref": run.ref, "canResume": not survey.reason, "reason": survey.reason,
+        "from": (survey.resume_from or None) if not survey.reason else None,
+        "lastGood": survey.last_good,
+        "worktree": worktree if survey.parts else "gone",
+        "parts": [{"label": p.label, "head": p.here, "checkpoint": p.checkpoint, "dirty": p.dirty,
+                   "adopts": p.adopt or None, "foreign": p.foreign or None}
+                  for p in survey.parts.values()],
+        "grants": {"run": sum(1 for g in grants if g.get("scope") == "run"),
+                   "once": sum(1 for g in grants if g.get("scope") == "once" and not g.get("used"))},
+        "steps": {"done": survey.last_good, "left": len(left)},
+        "said": said,
+    }
 
 
 class RunService:
@@ -469,7 +709,8 @@ class RunService:
 
     def _edit_steps(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [{"n": i + 1, "kind": "edit", "label": s["label"], "agent": s["agent"],
-                 "detail": s.get("detail", "")} for i, s in enumerate(items)]
+                 "detail": s.get("detail", ""), "max_attempts": _tries(s.get("retry"), "edit")}
+                for i, s in enumerate(items)]
 
     def _tail(self, done: int, tests: dict[str, Any] | None, checks: list[dict[str, Any]] = (),
               goal: bool = False) -> list[dict[str, Any]]:
@@ -490,7 +731,8 @@ class RunService:
                         "check": {"name": check["name"], "command": check["command"],
                                   **({"label": check["label"]} if check.get("label") else {}),
                                   **({"tests": True} if check.get("tests") else {})}})
-        out.append({"n": done + len(out) + 1, "kind": "review", "label": "Review the diff", "agent": roster.REVIEWER})
+        out.append({"n": done + len(out) + 1, "kind": "review", "label": "Review the diff",
+                    "agent": roster.REVIEWER, "max_attempts": _tries(None, "review")})
         if goal:
             out.append({"n": done + len(out) + 1, "kind": "review", "agent": GOAL_CHECK,
                         "label": "Check the goal against the plan's acceptance criteria", "goal": True})
@@ -578,8 +820,10 @@ class RunService:
         checks: list[dict[str, Any]] = []
         goal: dict[str, Any] | None = None
         for step in steps:
+            # attempts starts at nothing, not at one: a step that has never run has not been tried.
             self.session.add(RunStep(run_id=run.id, n=step["n"], kind=step["kind"], label=step["label"],
                                      agent=step.get("agent", ""), detail=step.get("detail", ""),
+                                     attempts=0, max_attempts=step.get("max_attempts", 1),
                                      child_run_id=step.get("child_run_id")))
             if step.get("check"):
                 checks.append({"step": step["n"], **step["check"], "status": "not run", "exit": None,
@@ -839,6 +1083,160 @@ class RunService:
         await self.session.flush()
         return run
 
+    async def _signed_at(self, run: Run) -> datetime | None:
+        """When a person signed this run, read from the gate they answered. None when nobody has."""
+        gate = next((x for x in run.steps if x.kind == "handoff"), None)
+        if gate is None:
+            return None
+        for asked in await self.approvals.for_run(run.ref):
+            if asked.step == gate.n and asked.status == "approved" and asked.decided_at:
+                return asked.decided_at
+        return None
+
+    async def _forge_for(self, part: Part, doc: dict[str, Any]) -> tuple[str, str, str | None, str | None]:
+        """Where a pushed branch landed and how this machine can reach it: (host, path, how, token).
+        `how` is None when nothing here can open a request there, which is a fact the caller says out
+        loud rather than an error it hides."""
+        where = await asyncio.to_thread(_forge_target, part, doc)
+        if where is None:
+            raise Refused(f"{doc.get('remote')} is not GitHub or GitLab, so there is no pull request to "
+                          f"open from here. NeuroCode drives `gh` and `glab`, and nothing else.")
+        host, path = where
+        token = forge_token(host, self.gateway.secrets)
+        how = await asyncio.to_thread(forge_reach, host, token)
+        return host, path, how, token
+
+    async def open_pull_request(self, ref: str, by: str) -> Run:
+        """Open the pull or merge request for a run's pushed branch, with the person's own `gh` or
+        `glab` when it is signed in, else a token they stored — never a credential of ours.
+
+        The title is the run's own, and the body is the run's record: what it did, what the reviewer
+        found, what the tests and the checks said. It goes up as a draft when the run has findings
+        nobody has answered, and ready when it is signed; either way the request says which, in the
+        first line a reviewer reads. What comes back — the number, the URL, the state — is kept on the
+        run's `pushed` document beside the compare link, so the run screen can say how it is going
+        without anybody opening a browser.
+        """
+        run = await self.runs.by_ref(ref)
+        if run is None:
+            raise NotFound(f"run {ref}")
+        if not run.pushed:
+            raise Refused(f"{ref}'s branch is not on a remote yet, so there is nothing to open a pull "
+                          f"request for. Push it first.")
+        if run.removed:
+            raise Refused(f"{ref}'s branch was removed from this machine.")
+        receipt = (run.review or {}).get("receipt") or {}
+        on_remote = str(run.pushed.get("sha") or "")
+        if receipt.get("head") and on_remote and receipt["head"] != on_remote:
+            raise Refused(f"{run.branch} stands at {on_remote[:7]} on {run.pushed.get('remote')}, but the "
+                          f"review read {str(receipt['head'])[:7]}. Push it again, so the request "
+                          f"describes what is actually there.")
+        draft, why = pr_readiness(run, await self._signed_at(run))
+        targets = _pushed_parts(run)
+        opened: dict[str, dict[str, Any]] = {}
+        for part, doc in targets:
+            host, path, how, token = await self._forge_for(part, doc)
+            if how is None:
+                raise Refused(no_way_to_open(host, doc.get("compareUrl")))
+            base = str(doc.get("baseBranch") or "") or await asyncio.to_thread(
+                default_branch, part.repo, str(doc.get("remote") or ""))
+            title = _pr_title(run)
+            body = _pr_body(run, part=part, doc=doc, why=why, by=by, parts=len(targets))
+            try:
+                got = await asyncio.to_thread(
+                    functools.partial(forge_open, part.repo, host=host, path=path,
+                                      branch=str(doc.get("branch") or run.branch), base=base, title=title,
+                                      body=body, draft=draft, how=how, token=token))
+            except agent.Refused as refused:
+                # A request that is open cannot be taken back from here, so the ones already opened are named.
+                already = ", ".join(f"{label or 'the branch'}: #{pr['number']}" for label, pr in opened.items())
+                said = f"{part.name}: {refused}" if len(targets) > 1 else str(refused)
+                said += f" ({already} is already open)" if already else ""
+                await self.logs.write(run.id, level="err", line=f"pull request refused · {said}"[:300])
+                raise Refused(said) from refused
+            now = utcnow().isoformat()
+            opened[part.label] = {**got, "host": host, "path": path, "base": base, "noun": forge_noun(host),
+                                  "draftBecause": why, "by": by, "at": now, "checkedAt": now}
+
+        run.pushed = _with_requests(run.pushed, opened)
+        first = opened[targets[0][0].label]
+        await self.logs.write(run.id, level="ok",
+                              line=f"{first['noun']} #{first['number']} opened on {first['host']} "
+                                   f"({'draft' if first.get('draft') else 'ready'}) · {first['url']}"[:300])
+        await self.activity.record(actor=by, actor_kind="human",
+                                   action=f"{first['noun'].capitalize()} opened",
+                                   detail=f"{ref} · #{first['number']} on {first['host']} · {why}",
+                                   level="ok", project_id=run.project_id)
+        await self.session.flush()
+        return run
+
+    async def pull_request_state(self, ref: str) -> dict[str, Any]:
+        """Read the request's state back from the forge and keep it, so the run screen says "open",
+        "merged" or "closed" without a person going to look.
+
+        A forge that cannot be reached is not an error here: what was last read is still true as of when
+        it was read, so it is answered with `checkFailed` saying why rather than nothing at all.
+        """
+        run = await self.runs.by_ref(ref)
+        if run is None:
+            raise NotFound(f"run {ref}")
+        pushed = run.pushed or {}
+        if not pushed:
+            return {"ref": ref, "pullRequest": None, "compareUrl": None, "forge": None,
+                    "why": f"{ref}'s branch is not on a remote yet."}
+        part, doc = _pushed_parts(run)[0]
+        try:
+            host, path, how, token = await self._forge_for(part, doc)
+        except Refused as refused:
+            return {"ref": ref, "pullRequest": pushed.get("pullRequest"), "compareUrl": doc.get("compareUrl"),
+                    "forge": None, "why": str(refused)}
+        forge = {"host": host, "path": path, "noun": forge_noun(host), "reach": how,
+                 "why": "" if how else no_way_to_open(host, doc.get("compareUrl"))}
+        held = pushed.get("pullRequest")
+        if not held or how is None:
+            return {"ref": ref, "pullRequest": held, "compareUrl": doc.get("compareUrl"), "forge": forge,
+                    "why": "" if held else f"No {forge['noun']} has been opened for this branch yet."}
+        try:
+            got = await asyncio.to_thread(
+                functools.partial(forge_state, part.repo, host=host, path=path,
+                                  number=int(held.get("number") or 0), how=how, token=token))
+        except agent.Refused as refused:
+            return {"ref": ref, "pullRequest": {**held, "checkFailed": str(refused)},
+                    "compareUrl": doc.get("compareUrl"), "forge": forge, "why": str(refused)}
+        fresh = {**held, **got, "checkedAt": utcnow().isoformat()}
+        fresh.pop("checkFailed", None)
+        run.pushed = _with_requests(run.pushed, {part.label: fresh})
+        if fresh.get("state") != held.get("state"):
+            await self.logs.write(run.id, level="ok",
+                                  line=f"{forge['noun']} #{fresh['number']} is {fresh['state']} on {host}")
+        await self.session.flush()
+        return {"ref": ref, "pullRequest": fresh, "compareUrl": doc.get("compareUrl"), "forge": forge, "why": ""}
+
+    async def forges(self) -> list[dict[str, Any]]:
+        """What this machine can do about pull requests right now, forge by forge. The tools are asked
+        rather than remembered: a person can sign `gh` in while this screen is open, and the next answer
+        should say so. A forge with no way in carries the sentence that says what to do about it."""
+        out: list[dict[str, Any]] = []
+        for host in FORGES:
+            token = forge_token(host, self.gateway.secrets)
+            how = await asyncio.to_thread(forge_reach, host, token)
+            out.append({"host": host, "noun": forge_noun(host), "tool": FORGE_TOOL.get(host),
+                        "reach": how, "takesToken": host in FORGE_SECRETS, "hasToken": bool(token),
+                        "tokenMask": Secrets.mask(token),
+                        "tokenSource": forge_token_source(host, self.gateway.secrets),
+                        "why": "" if how else no_way_to_open(host)})
+        return out
+
+    async def set_forge_token(self, host: str, token: str | None) -> dict[str, Any]:
+        """Keep a forge token the way a model key is kept: in the keys file, mode 0600, never in the
+        database and never in a response — what comes back is the last four characters and nothing more."""
+        if host not in FORGE_SECRETS:
+            raise Refused(f"{host} is not a forge NeuroCode talks to an API for. It knows "
+                          f"{' and '.join(FORGE_SECRETS)}.")
+        clean = (token or "").strip() or None
+        await asyncio.to_thread(self.gateway.secrets.set, FORGE_SECRETS[host][0], clean)
+        return next(x for x in await self.forges() if x["host"] == host)
+
     async def review_again(self, ref: str, by: str) -> tuple[Run, int]:
         """Mark a run's review to be read again on the branch as it is now. The reading happens in the
         background (`reread`); this says whether it may, and returns the run and the review step.
@@ -998,6 +1396,137 @@ class RunService:
         await self.session.flush()
         return run
 
+    # ── carrying an interrupted run on ───────────────────────────
+    async def _for_resume(self, ref: str) -> Run:
+        """The run, or the reason it cannot be carried on — in the words a person can act on."""
+        run = await self.runs.by_ref(ref)
+        if run is None:
+            raise NotFound(f"run {ref}")
+        if run.role == "check":
+            raise Refused(f"{ref} only ran the project's tests; there are no steps to carry on with.")
+        if run.parent_id:
+            parent = await self.runs.get(run.parent_id)
+            raise Refused(f"{ref} is one agent's part of {parent.ref if parent else 'a larger run'}; carrying it "
+                          "on on its own would leave the run that merges it behind. Send that run back for "
+                          "changes instead.")
+        if run.status in ("queued", "running"):
+            raise Refused(f"{ref} is already carrying on.")
+        if run.status == "waiting":
+            raise Refused(f"{ref} is waiting for your decision; answering it is how it carries on.")
+        if run.status == "done":
+            raise Refused(f"{ref} finished, so there is nothing left to carry on with.")
+        if run.removed:
+            raise Refused(f"{ref}'s worktree was removed, so there is nothing to carry on from.")
+        if run.merged:
+            raise Refused(f"{ref} is already merged into {run.merged['into']}, so it is finished with.")
+        return run
+
+    async def resume_plan(self, ref: str) -> dict[str, Any]:
+        """What carrying this run on would do, measured and changing nothing.
+
+        Everything in the answer is read: the sha each part stands on now, the sha the run's own record
+        says its last finished step left, and whether anything is loose in the worktree. Nothing is
+        guessed and nothing is written — the button this answers for is the thing that writes.
+        """
+        try:
+            run = await self._for_resume(ref)
+        except Refused as refused:
+            # Not an error: "it cannot be carried on, and here is why" is the answer this question has.
+            run = await self.runs.by_ref(ref)
+            return _resume_json(run, Survey(0, 0, 0, {}, {}, str(refused))) if run is not None else \
+                _resume_json(None, Survey(0, 0, 0, {}, {}, str(refused)), ref=ref)
+        survey = await asyncio.to_thread(_survey, run)
+        return _resume_json(run, survey)
+
+    async def carry_on(self, ref: str, by: str) -> Run:
+        """Carry an interrupted run on from its last finished step, keeping every step already done.
+
+        The commits the finished steps made are what makes this safe, and they are already stored: each
+        edit step wrote its per-source sha into `review.commits` in the same transaction that marked it
+        done, so "where it got to" is a fact rather than a reconstruction. What this adds is the three
+        things that record cannot answer on its own — a worktree that was deleted is opened again on the
+        branch, a step killed between writing and committing has its loose files kept on a ref of the
+        run's own and the worktree taken back to the boundary, and a step that committed before the
+        process died is adopted rather than paid for twice.
+
+        A worktree that has moved on for some other reason is refused, naming both shas. Nothing widens:
+        a grant for the run is still the same run's grant, a once-grant already spent stays spent, and a
+        gate nobody answered is asked again when the step reaches it.
+        """
+        run = await self._for_resume(ref)
+        # Two people pressing the button at once, or two API workers, must not both reset one worktree.
+        # The lock is this transaction's; the status it sets is what stops the second attempt afterwards.
+        held = (await self.session.execute(text("SELECT pg_try_advisory_xact_lock(:key)"),
+                                           {"key": _run_lock(run.id)})).scalar_one()
+        if not held:
+            raise Refused(f"{ref} is already carrying on.")
+        survey = await asyncio.to_thread(_survey, run)
+        if survey.reason:
+            raise Refused(survey.reason)
+        parts = _parts(run)
+        kept = await asyncio.to_thread(_carry_worktrees, run, parts, survey)
+
+        review = {k: v for k, v in (run.review or {}).items() if k != "reviewing"}
+        adopted = {label: sha for label, sha in survey.adopt.items() if sha}
+        if adopted:
+            # It committed and the process died before that was written down. The commit is the step's,
+            # so the step is done — re-running it would ask a model to write what is already on the branch.
+            step = next(x for x in run.steps if x.n == survey.at)
+            commits = {**(review.get("commits") or {})}
+            commits[str(survey.at)] = {**(commits.get(str(survey.at)) or {}), **adopted}
+            review["commits"] = commits
+            step.status = "done"
+            step.commit_sha = next(iter(adopted.values()), "")
+            step.detail = (step.detail or step.label)[:220] + \
+                " · committed, but the server stopped before it was written down; adopted when the run carried on."
+        for step in run.steps:
+            if step.n >= survey.resume_from:
+                step.status, step.detail, step.ms = "todo", "", None
+                step.commit_sha, step.question, step.answer = "", "", ""
+                step.attempts = 0
+        # What the steps that are running again found described code that is not written yet.
+        for key in ("commits", "grounding", "asks"):
+            if key in review:
+                review[key] = {k: v for k, v in review[key].items() if int(k) < survey.resume_from}
+        review.update({"findings": [], "verdict": "", "by": ""})
+        review.pop("receipt", None)
+        review["checks"] = [{**c, "status": "not run", "exit": None, "summary": "", "output": []}
+                            if c.get("step", 0) >= survey.resume_from else c for c in review.get("checks") or []]
+        if review.get("goal") and review["goal"].get("step", 0) >= survey.resume_from:
+            review["goal"] = {"step": review["goal"]["step"], "verdict": "not run", "why": "", "criteria": [],
+                              "by": "", "at": None}
+        if any(x.kind == "test" and not _check_at(run, x.n) for x in run.steps if x.n >= survey.resume_from):
+            run.tests_status, run.tests_summary = "not run", ""
+        review["resumes"] = [*(review.get("resumes") or []),
+                             {"from": survey.resume_from, "by": by, "at": utcnow().isoformat(),
+                              "adopted": survey.at if adopted else None, "kept": kept,
+                              "sha": {label: p.target for label, p in survey.parts.items()}}]
+        run.review = review
+        run.status, run.finished_at, run.waiting_on = "queued", None, None
+        run.note = f"Carried on from step {survey.resume_from} by {by}."
+        stopped(ref).clear()
+
+        for label, part in survey.parts.items():
+            where = f"{label or 'worktree'} at {part.target[:7]}"
+            if part.opened:
+                await self.logs.write(run.id, level="ok", line=f"worktree opened again on {run.branch} · {where}")
+            if kept.get(label):
+                await self.logs.write(run.id, level="warn", step=survey.at,
+                                      line=f"step {survey.at} had written files it never committed · kept on "
+                                           f"{_partial_ref(ref, survey.at)} at {kept[label][:7]} · {where}")
+        if adopted:
+            await self.logs.write(run.id, level="ok", step=survey.at,
+                                  line=f"step {survey.at} had committed before the server stopped · adopted "
+                                       f"{next(iter(adopted.values()))[:7]}, not written again")
+        await self.logs.write(run.id, level="info", step=survey.resume_from,
+                              line=f"carrying on from step {survey.resume_from} by {by} · steps 1–"
+                                   f"{survey.resume_from - 1} stand")
+        await self.activity.record(actor=by, actor_kind="human", action="Run carried on",
+                                   detail=f"{ref} · from step {survey.resume_from} of {len(run.steps)} on "
+                                          f"{run.branch}", level="ok", project_id=run.project_id)
+        await self.session.flush()
+        return run
+
     async def diff(self, ref: str) -> dict[str, Any]:
         run = await self.runs.by_ref(ref)
         if run is None:
@@ -1124,6 +1653,149 @@ def _push_parts(parts: list[Part], remote: str | None) -> dict[str, Any]:
             went = ", ".join(x.name for x, _ in pushed)
             raise agent.Refused(f"{part.name}: {refused}" + (f" ({went} already pushed)" if went else "")) from refused
     return {**pushed[0][1], "sources": [{"label": part.label, **out} for part, out in pushed]}
+
+
+#: A pull request describes a run, so everything in its body is read off the run: the requirement it was
+#: given, the steps it committed, what the reviewer found, what the project's own tests and checks said.
+#: Nothing is asked of a model here, and nothing is summarised — a sentence that is not a stored fact of
+#: that run does not belong on a branch somebody else is about to read.
+MAX_PR_STEPS, MAX_PR_FINDINGS = 12, 12
+
+
+def _pushed_parts(run: Run) -> list[tuple[Part, dict[str, Any]]]:
+    """Each branch this run pushed, with the checkout it went from. One pair for a project with one
+    source; one per source for a project with several, because each source has a remote of its own and
+    therefore a request of its own."""
+    pushed = run.pushed or {}
+    parts = _parts(run)
+    listed = pushed.get("sources")
+    if not listed:
+        return [(parts[0], pushed)]
+    by_label = {p.label: p for p in parts}
+    return [(by_label[x["label"]], x) for x in listed if x.get("label") in by_label]
+
+
+def _forge_target(part: Part, push_doc: dict[str, Any]) -> tuple[str, str] | None:
+    """Blocking. The forge a pushed branch landed on and the project's path there, read from the remote
+    the push actually used — never from anything stored, so a remote a person re-pointed is followed."""
+    url = remote_url(part.repo, str(push_doc.get("remote") or ""))
+    return forge_of(url) if url else None
+
+
+def _when(stamp: Any) -> datetime | None:
+    """An ISO timestamp this product wrote, back as a moment. None when it is not one — a document
+    carried in from an older version, say — so a comparison is skipped rather than guessed."""
+    try:
+        return datetime.fromisoformat(str(stamp)) if stamp else None
+    except (TypeError, ValueError):
+        return None
+
+
+def pr_readiness(run: Run, signed_at: datetime | None) -> tuple[bool, str]:
+    """Whether the request goes up as a draft, and the one sentence that says why — which is shown on
+    the run screen and written into the request itself, so the reviewer reads the same reason.
+
+    A signature answers the findings that were on the table when it was given: the gate shows them. So
+    a run whose review was read *again* after it was signed has findings nobody has answered, and that
+    is what a draft is for. A run signed after its last review is ready, findings or not: a person saw
+    them and said yes.
+    """
+    review = run.review or {}
+    findings = review.get("findings") or []
+    reviewed = _when((review.get("receipt") or {}).get("at"))
+    count = f"{len(findings)} finding{'' if len(findings) == 1 else 's'}"
+    if signed_at is None:
+        return True, "a draft: nobody has signed this run, so nothing in it is settled yet."
+    if findings and reviewed is not None and reviewed > signed_at:
+        return True, (f"a draft: its diff was read again after it was signed, and that review's {count} "
+                      "have not been answered by anybody.")
+    if findings:
+        return False, f"ready: signed after the review that found {count}."
+    return False, "ready: signed, and its review found nothing."
+
+
+def _pr_title(run: Run) -> str:
+    """The run's own title: the first line of the requirement it was given, and its reference."""
+    first = next((ln.strip() for ln in (run.requirement or "").splitlines() if ln.strip()), "") or run.ref
+    return f"{first[:160]} ({run.ref})"
+
+
+def _pr_body(run: Run, *, part: Part, doc: dict[str, Any], why: str, by: str, parts: int) -> str:
+    """What the request says, built out of the run's own record and nothing else."""
+    review = run.review or {}
+    lines = [(run.requirement or "").strip(), "",
+             f"This request is {why}", "",
+             f"**{run.ref}** · branch `{doc.get('branch', run.branch)}` at `{str(doc.get('sha', ''))[:7]}` · "
+             f"{run.diff_files} file{'' if run.diff_files == 1 else 's'}, "
+             f"+{run.diff_insertions} −{run.diff_deletions} over {run.diff_commits} "
+             f"commit{'' if run.diff_commits == 1 else 's'}."]
+    if parts > 1:
+        lines.append(f"One of {parts} sources this run changed; this request is the `{part.label}` one.")
+
+    written = [x for x in run.steps if x.kind in ("edit", "merge") and x.status in ("done", "failed", "skipped")]
+    lines += ["", "### What the run did"]
+    lines += [f"- {x.n} · {x.label} — {x.status}" + (f" (`{x.commit_sha[:7]}`)" if x.commit_sha else "")
+              + (f" · {x.agent}" if x.agent else "")
+              for x in written[:MAX_PR_STEPS]] or ["- Nothing was committed."]
+    if len(written) > MAX_PR_STEPS:
+        lines.append(f"- … and {len(written) - MAX_PR_STEPS} more steps, on the run screen.")
+
+    findings = review.get("findings") or []
+    lines += ["", "### What the reviewer found"]
+    lines.append(f"Read by **{review.get('by') or 'nobody'}**: {review.get('verdict') or '—'}")
+    lines += [f"- {f.get('severity', 'LOW')} `{f.get('file') or '—'}"
+              + (f":{f['line']}" if f.get("line") else "") + f"` — {f.get('note', '')}"
+              for f in findings[:MAX_PR_FINDINGS]] or ["- No findings."]
+    if len(findings) > MAX_PR_FINDINGS:
+        lines.append(f"- … and {len(findings) - MAX_PR_FINDINGS} more, on the run screen.")
+    receipt = review.get("receipt") or {}
+    if receipt.get("sha256"):
+        lines.append(f"\nThe reviewed diff fingerprints as `{_short(receipt['sha256'])}` "
+                     f"at `{str(receipt.get('head', ''))[:7]}`.")
+
+    lines += ["", "### What the tests said"]
+    if run.tests_status and run.tests_status != "not run":
+        counted = [f"{n} {word}" for word, n in (("passed", run.tests_passed), ("failed", run.tests_failed),
+                                                 ("skipped", run.tests_skipped)) if n]
+        lines.append(f"`{run.tests_command or 'the project\'s own test command'}` — **{run.tests_status}**"
+                     + (f" · {', '.join(counted)}" if counted else "")
+                     + (f" · {run.tests_summary}" if run.tests_summary else ""))
+    else:
+        lines.append("They were not run for this branch.")
+
+    checks = review.get("checks") or []
+    if checks:
+        lines += ["", "### The project's own checks"]
+        lines += [f"- {c.get('name')} — **{c.get('status', 'not run')}**"
+                  + (f" · {c['summary']}" if c.get("summary") else "") for c in checks]
+    goal = review.get("goal")
+    if goal:
+        lines += ["", "### The goal",
+                  f"**{goal.get('verdict', 'not run')}** on attempt {run.attempt} of {run.goal_budget}"
+                  + (f" · {goal['why']}" if goal.get("why") else "")]
+
+    lines += ["", "---",
+              f"Opened from NeuroCode by {by}, for run {run.ref}. Every line above is a stored fact of "
+              "that run: nothing here was written by a model at the moment this was opened."]
+    return "\n".join(lines)
+
+
+def _with_requests(pushed: dict[str, Any], opened: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """The push document with each source's request written on to it, and the first source's also at the
+    top — where a screen that knows nothing about sources reads it. The document is rebuilt rather than
+    reached into, because a JSONB column only notices a change when the whole value is replaced."""
+    out = {**pushed}
+    listed = out.get("sources")
+    if listed:
+        out["sources"] = [{**x, **({"pullRequest": opened[x["label"]]} if x.get("label") in opened else {})}
+                          for x in listed]
+        lead = listed[0].get("label") if listed else ""
+        first = opened.get(lead) or next(iter(opened.values()), None)
+    else:
+        first = opened.get("") or next(iter(opened.values()), None)
+    if first:
+        out["pullRequest"] = first
+    return out
 
 
 def agent_free_branch(repo: Path, wanted: str) -> str:
@@ -1572,6 +2244,9 @@ async def _edit(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool:
             told = await _told(s, project_id, [*(run.targets or []), *(h.path for h in files)])
             taste = await _taste(s, project_id)
             asked = (f"\n\nYou asked: {step.question}\nThe person answered: {step.answer}" if answered else "")
+            # What the steps before this one did. Nothing here is generated: each line is a stored
+            # summary or a measured result, and a first step gets no block at all.
+            so_far = _so_far(run, step_n)
             read = ("\n\nRead from retrieval for this step — quote a ref when you rely on it:\n\n"
                     + "\n\n".join(f"[{x['kind']} · {x['ref']}]\n{x['text'][:PIECE_CHARS]}" for x in pieces)
                     if pieces else "")
@@ -1589,7 +2264,8 @@ async def _edit(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool:
                                                            + (" (read only: a reference source)" if h.readonly else "")
                                                            + f"\n{h.text}" for h in files)
                                                or "(no file matched; create what the step needs)")
-                                            + read + asked},
+                                            + read + asked
+                                            + (f"\n\n{so_far}" if so_far else "")},
             ]
             grounding = _grounding_doc(told, pieces, files, taste)
 
@@ -1873,6 +2549,10 @@ async def _test(db: Database, ref: str, step_n: int) -> bool:
         allowed = setting.value if setting else None
         project = await ProjectRepository(s).get(project_id)
         project_name = project.name if project else project_id
+        # The fence this command will run behind, read here with everything else the step needs. A run
+        # spanning several sources writes in every one of their worktrees, so every one is named.
+        fence = sandbox.around(work, await sandbox.read_policy(s),
+                               extra=tuple(str(p.work) for p in _parts(run) if p.work != work))
 
     if not command:
         async with db.session() as s:
@@ -1889,7 +2569,7 @@ async def _test(db: Database, ref: str, step_n: int) -> bool:
         # No rule covers it: the project's one-time answer, as it always was.
         if allowed is None:
             await _pause(db, ref, step_n, title=f"Run `{command}` in {project_name}", tool=f"Bash({command})",
-                         risk="MEDIUM", payload=f"cwd {work}\ncommand {command}",
+                         risk="MEDIUM", payload=f"cwd {work}\ncommand {command}\n{fence.words()}",
                          reason="The agent wants to run this project's own tests inside its worktree. Nothing "
                                 "else is run, and your answer is remembered for this project.")
             return True
@@ -1900,6 +2580,9 @@ async def _test(db: Database, ref: str, step_n: int) -> bool:
             return False
 
     argv = command.split()
+    # Said before the command, not after: what a person reads on the run screen is the fence the
+    # command is about to run behind, including "none" and why, so nothing is taken on trust.
+    await _log(db, run_id, "info", fence.words(), step_n)
     await _log(db, run_id, "tool", f"$ {command}", step_n)
     sha, module, started = await asyncio.to_thread(_before_tests, work)
     lines: list[str] = []
@@ -1912,7 +2595,7 @@ async def _test(db: Database, ref: str, step_n: int) -> bool:
             lines.append(text)
         reader.feed(text)
 
-    code, tail = await asyncio.to_thread(agent.run_tests, argv, work, keep, stopped(ref))
+    code, tail = await asyncio.to_thread(agent.run_tests, fence.wrap(argv), work, keep, stopped(ref))
     interrupted = stopped(ref).is_set()
     found = reader.result()
     measured = [] if interrupted else await asyncio.to_thread(_coverage, work, started, module)
@@ -2006,6 +2689,39 @@ def _evidence(run: Run) -> str:
     return "\n".join(lines)
 
 
+#: How many earlier steps a step is told about, and how much of each. The detail is already capped at
+#: 300 characters where it is written, so this is a ceiling on the block, not a second truncation.
+SO_FAR_STEPS = 8
+
+
+def _so_far(run: Run, before: int) -> str:
+    """What the steps before this one did, in the words they themselves recorded.
+
+    State reaches the next step as files in a worktree, which is the right channel for code and an
+    empty one for intent: step 4 has no way of knowing that step 2 already added the column it is
+    about to add. This is that channel, and it carries nothing that was not already measured or
+    stored — an agent step contributes the summary the model wrote and the runtime kept, a test step
+    contributes the runner's own line, and a step that has not run contributes nothing at all.
+
+    Empty for a run's first step, deliberately: a heading with nothing under it reads as a fact that
+    went missing.
+    """
+    lines: list[str] = []
+    for step in sorted(run.steps, key=lambda x: x.n):
+        if step.n >= before or step.status not in ("done", "failed", "skipped"):
+            continue
+        if step.kind == "test" and not _check_at(run, step.n):
+            said = f"{run.tests_status}" + (f" ({run.tests_summary})" if run.tests_summary else "")
+        elif step.kind == "test" and (check := _check_at(run, step.n)):
+            said = f"{check.get('status', 'not run')}" + (f" ({check['summary']})" if check.get("summary") else "")
+        else:
+            said = f"{step.status}" + (f": {step.detail}" if step.detail else "")
+        lines.append(f"{step.n}. {step.label}" + (f" ({step.agent})" if step.agent else "") + f" — {said}")
+    if not lines:
+        return ""
+    return "Earlier steps of this run, and what they did:\n" + "\n".join(lines[-SO_FAR_STEPS:])
+
+
 async def _review(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool:
     async with db.read() as s:
         run = await RunRepository(s).by_ref(ref)
@@ -2013,6 +2729,9 @@ async def _review(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool
         lane, project_id, run_id = run.lane, run.project_id, run.id
         reviewer = next((x.agent for x in run.steps if x.n == step_n), "") or roster.REVIEWER
         evidence, checks = _evidence(run), list((run.review or {}).get("checks") or [])
+        # What the run was trying to do, step by step: a reviewer reading a diff of nine steps cannot
+        # tell a deliberate change from an accident without it.
+        so_far = _so_far(run, step_n)
         parts = _parts(run)
 
     # Read from the branch itself, the same way merge and push read it, so the receipt's fingerprint
@@ -2045,7 +2764,8 @@ async def _review(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool
     prompt = [{"role": "system", "content": system},
               # What the project's own commands said comes after the diff, so the preamble the Models
               # screen shows (requirement, then the diff) stays exactly what is sent first.
-              {"role": "user", "content": f"Requirement: {requirement}\n\nDiff:\n{diff}" + f"\n\n{evidence}"}]
+              {"role": "user", "content": f"Requirement: {requirement}\n\nDiff:\n{diff}" + f"\n\n{evidence}"
+                                            + (f"\n\n{so_far}" if so_far else "")}]
     try:
         # A second opinion is worth more from a different model, and free lanes make that free.
         result = await asyncio.to_thread(
@@ -2095,6 +2815,8 @@ async def _check(db: Database, ref: str, step_n: int) -> bool:
         allowed = setting.value if setting else None
         project = await ProjectRepository(s).get(run.project_id)
         project_name = project.name if project else run.project_id
+        fence = sandbox.around(work, await sandbox.read_policy(s),
+                               extra=tuple(str(p.work) for p in _parts(run) if p.work != work))
 
     if not command:
         async with db.session() as s:
@@ -2109,7 +2831,7 @@ async def _check(db: Database, ref: str, step_n: int) -> bool:
             return False
         if allowed is None:
             await _pause(db, ref, step_n, title=f"Run `{command}` in {project_name}", tool=f"Bash({command})",
-                         risk="MEDIUM", payload=f"cwd {work}\ncommand {command}",
+                         risk="MEDIUM", payload=f"cwd {work}\ncommand {command}\n{fence.words()}",
                          reason=f"The agent wants to run this project's own {name} check inside its worktree. "
                                 "Nothing else is run, and your answer is remembered for this project.")
             return True
@@ -2121,6 +2843,7 @@ async def _check(db: Database, ref: str, step_n: int) -> bool:
                 _put_check(run, step_n, status="skipped", summary=step.detail)
             return False
 
+    await _log(db, run_id, "info", fence.words(), step_n)
     await _log(db, run_id, "tool", f"$ {command}", step_n)
     lines: list[str] = []
     tail: list[str] = []
@@ -2136,7 +2859,7 @@ async def _check(db: Database, ref: str, step_n: int) -> bool:
         tail.append(text)
         del tail[:-CHECK_TAIL]
 
-    code, _ = await asyncio.to_thread(agent.run_tests, command.split(), work, keep, stopped(ref))
+    code, _ = await asyncio.to_thread(agent.run_tests, fence.wrap(command.split()), work, keep, stopped(ref))
     interrupted = stopped(ref).is_set()
     # The problems it named, placed in the project's files the way the Workbench names them: relative to
     # the worktree, with the source's label in front for a further source.
@@ -2460,6 +3183,58 @@ async def _goal_rework(db: Database, gateway: Gateway, ref: str) -> bool:
     return True
 
 
+#: How a step waits between tries: 2s, 4s, 8s… with a quarter either way, and never more than half a
+#: minute. Written here rather than inside the loop so a test can shorten it without faking the clock.
+RETRY_BASE_S, RETRY_CAP_S = 2.0, 30.0
+
+
+def _not_again(failure: Exception, attempt: int, allowed: int) -> str:
+    """Why this failure is not tried again, in the words the run log will carry — '' when it is.
+
+    Three of these are not failures at all. A tool rule's deny is the rules answering, and asking the
+    same question again would get the same answer. `NoModel` means the gateway already walked every
+    lane it has, so a second walk asks nothing new. A path the runtime refuses to write is refused by
+    its shape, and a model handed the same step proposes the same path. The fourth is a person's stop,
+    which is the one thing that should never be argued with.
+    """
+    if isinstance(failure, asyncio.CancelledError):
+        return "the run was stopped"
+    if isinstance(failure, NoModel):
+        return "no lane could answer, and the gateway had already tried every one of them"
+    if isinstance(failure, Denied | Refused):
+        return "a rule answered, and a rule's answer is not a failure to try again"
+    if isinstance(failure, agent.Refused):
+        return "the runtime refused that path, and the same step would propose it again"
+    if attempt >= allowed:
+        return f"it is tried at most {allowed} time{'s' if allowed != 1 else ''}"
+    return ""
+
+
+async def _worktree_mark(db: Database, ref: str) -> dict[str, tuple[str, bool]] | None:
+    """Blocking, in a thread: what every part of the run's worktree stands on and whether it is clean."""
+    async with db.read() as s:
+        run = await RunRepository(s).by_ref(ref)
+        parts = _parts(run) if run is not None else []
+
+    def read() -> dict[str, tuple[str, bool]]:
+        return {p.label: (agent.head(p.worktree), agent.dirty(p.worktree))
+                for p in parts if p.worktree.is_dir()}
+
+    return await asyncio.to_thread(read) if parts else None
+
+
+async def _wrote_already(db: Database, ref: str, before: dict[str, tuple[str, bool]] | None) -> str:
+    """Why a failed step is not tried again because it had already touched the worktree — '' when it
+    had not. Files on disk are a resume's business, not a retry's: running the step again would write
+    over, or commit on top of, work the first attempt had already half done."""
+    if before is None:
+        return ""
+    after = await _worktree_mark(db, ref)
+    if after is None or after == before:
+        return ""
+    return "the step had already written to the worktree, and taking that back is a resume's job"
+
+
 async def _run_id(db: Database, ref: str) -> str:
     async with db.read() as s:
         run = await RunRepository(s).by_ref(ref)
@@ -2517,30 +3292,53 @@ async def execute(db: Database, gateway: Gateway, ref: str, resume_from: int | N
                          reason=walk.reason)
             return
 
-        async with db.session() as s:
-            step = next(x for x in (await RunRepository(s).by_ref(ref)).steps if x.n == n)
-            step.status = "running"
         started = time.monotonic()
         again = False
-        try:
-            if kind == "edit":
-                paused = await _edit(db, gateway, ref, n)
-            elif kind == "merge":
-                paused = await _merge_step(db, ref, n)
-            elif kind == "test":
-                paused = await (_check(db, ref, n) if n in checks else _test(db, ref, n))
-            elif kind == "review" and n == goal_step:
-                paused, again = False, await _goal(db, gateway, ref, n) == "rework"
-            elif kind == "review":
-                paused = await _review(db, gateway, ref, n)
-            else:
-                paused = await _handoff(db, ref, n)
-        except Exception as e:                               # a run never pretends to be alive
+        # A step is tried to its own policy. The loop is here and not inside each step's function so
+        # that every kind is tried the same way, and so an attempt is an ordinary call of exactly what
+        # the first attempt was — the gateway sees a fresh `ask`, and the ledger gets a line for it.
+        while True:
             async with db.session() as s:
                 step = next(x for x in (await RunRepository(s).by_ref(ref)).steps if x.n == n)
-                step.status, step.detail = "failed", f"{type(e).__name__}: {str(e)[:200]}"
-            await _log(db, run_id, "err", f"{type(e).__name__}: {str(e)[:300]}", n)
-            paused = False
+                step.status, step.attempts = "running", step.attempts + 1
+                attempt, allowed = step.attempts, max(1, step.max_attempts)
+            # Read only when a retry is actually possible: it is two git calls per part.
+            before = await _worktree_mark(db, ref) if allowed > 1 else None
+            failure: Exception | None = None
+            try:
+                if kind == "edit":
+                    paused = await _edit(db, gateway, ref, n)
+                elif kind == "merge":
+                    paused = await _merge_step(db, ref, n)
+                elif kind == "test":
+                    paused = await (_check(db, ref, n) if n in checks else _test(db, ref, n))
+                elif kind == "review" and n == goal_step:
+                    paused, again = False, await _goal(db, gateway, ref, n) == "rework"
+                elif kind == "review":
+                    paused = await _review(db, gateway, ref, n)
+                else:
+                    paused = await _handoff(db, ref, n)
+            except Exception as e:                           # a run never pretends to be alive
+                failure, paused = e, False
+            if failure is None:
+                break
+            why = _not_again(failure, attempt, allowed) or await _wrote_already(db, ref, before)
+            async with db.session() as s:
+                step = next(x for x in (await RunRepository(s).by_ref(ref)).steps if x.n == n)
+                step.status, step.detail = "failed", f"{type(failure).__name__}: {str(failure)[:200]}"
+            await _log(db, run_id, "err",
+                       f"attempt {attempt} of {allowed} · {type(failure).__name__}: {str(failure)[:260]}", n)
+            if why:
+                if allowed > 1:
+                    await _log(db, run_id, "warn", f"not tried again · {why}", n)
+                break
+            wait = min(RETRY_CAP_S, RETRY_BASE_S * 2 ** (attempt - 1)) * random.uniform(0.75, 1.25)
+            await _log(db, run_id, "info", f"trying step {n} again in {wait:.1f}s · attempt "
+                                           f"{attempt + 1} of {allowed}", n)
+            # A person's stop ends the wait at once: waiting out a backoff nobody wants is the runtime
+            # ignoring them for half a minute.
+            if await asyncio.to_thread(stopped(ref).wait, wait):
+                break
 
         async with db.session() as s:
             step = next(x for x in (await RunRepository(s).by_ref(ref)).steps if x.n == n)

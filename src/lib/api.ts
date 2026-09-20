@@ -76,6 +76,18 @@ export interface AuthUser {
   projectRights?: Record<string, string[]>;
 }
 export interface Workspace { name: string }
+/**
+ * What the sign-in screen may know about single sign-on before anyone has signed in: whether there
+ * is a button and what it says. The issuer and the client id are an admin’s business and never
+ * reach a stranger, so they are deliberately not here.
+ */
+export interface SsoPublic {
+  enabled: boolean;
+  /** What the button says after “Continue with”. */
+  label: string;
+  /** The workspace requires SSO: a password only works for an Owner. */
+  passwordsOff: boolean;
+}
 export interface AuthStatus {
   needsSetup: boolean;
   /** A server on the internet asks for its setup token before the first Owner can be made. */
@@ -84,6 +96,8 @@ export interface AuthStatus {
   workspace: Workspace | null;
   /** Whether this server opens the machine it runs on at all: false on a hosted one. */
   machineAccess?: boolean;
+  /** Absent on an API older than single sign-on, which reads as “there is no button”. */
+  sso?: SsoPublic;
 }
 export interface SignedIn { user: AuthUser; workspace: Workspace | null; machineAccess?: boolean }
 export interface SetupInput { workspace: string; name: string; email: string; password: string; setupToken?: string }
@@ -122,19 +136,81 @@ export interface WorkspaceInfo {
   security: { sessionDays: number; minPassword: number; loginAttempts: number; lockoutSeconds: number };
 }
 
+/** Single sign-on as an admin sees it. The client secret is never sent back — only whether one is
+    held and its last four characters, exactly as a model key is reported. */
+export interface SsoConfig {
+  enabled: boolean;
+  issuer: string;
+  clientId: string;
+  label: string;
+  roleClaim: string;
+  /** A claim value → the role it carries here. Never the Owner role: the API refuses that outright. */
+  roleMap: Record<string, string>;
+  defaultRoles: string[];
+  createUsers: boolean;
+  requireSso: boolean;
+  redirectUri: string;
+  hasSecret: boolean;
+  secretMask: string | null;
+  /** Whether a sign-in through it could actually happen: on, with an issuer, a client id and an address. */
+  ready: boolean;
+  /** What to add to this app’s own address to get the address to register at the provider. */
+  callbackPath: string;
+}
+export interface SsoPatch {
+  enabled?: boolean; issuer?: string; clientId?: string; clientSecret?: string; label?: string;
+  roleClaim?: string; roleMap?: Record<string, string>; defaultRoles?: string[]; createUsers?: boolean;
+  requireSso?: boolean; redirectUri?: string;
+}
+
+/** The fence around every command the runtime runs, as the machine actually offers it. */
+export interface SandboxInfo {
+  enabled: boolean;
+  network: boolean;
+  /** False when the server itself was started with the sandbox off, which a screen cannot undo. */
+  serverAllows: boolean;
+  detected: { kind: string; name: string; why: string };
+  /** What is in force right now, including the one sentence a run’s log prints. */
+  inForce: {
+    kind: string; name: string; network: boolean; confinesWrites: boolean; confinesNetwork: boolean;
+    writable: string[]; why: string; words: string;
+  };
+}
+
 /** A lane is a provider and a model together. Several answer at once; free ones come first. */
-export type LaneId = 'groq' | 'cerebras' | 'gemini' | 'mistral' | 'openrouter' | 'github' | 'deepseek' | 'ollama';
+export type LaneId = 'groq' | 'cloudflare' | 'gemini' | 'zai' | 'mistral' | 'openrouter' | 'deepseek' | 'cerebras' | 'ollama';
 export type AiPreference = 'auto' | 'free' | 'local' | 'rules' | LaneId;
 export interface AiLane {
   id: LaneId; label: string; model: string; baseUrl: string; api: 'openai' | 'ollama';
-  /** What its free tier allows — the router's own cap, editable. 0 means unmetered. */
-  free: boolean; rpm: number; rpd: number; goodAt: ('write' | 'review' | 'plan' | 'chat')[];
+  /** Whether a call here costs no money. What the provider asks for instead is `gate`. */
+  free: boolean;
+  /** What its free tier asks for besides an account: '' (its documents name nothing), 'card', 'phone', 'identity'. */
+  gate: '' | 'card' | 'phone' | 'identity';
+  /** The whole of it in one line — the three meanings of "free", told apart, in the gateway's words. */
+  freedom: string;
+  /** When what is free here runs out for good (trial credit), or null when it does not. */
+  expires: string | null;
+  /** Calls a minute and a day the router allows itself. 0 means it sets no cap of its own. */
+  rpm: number; rpd: number;
+  /** Where those two came from: 'published' (the provider's, taken down) or 'ours' (it publishes none). */
+  caps: 'published' | 'ours' | '';
+  /** What the provider actually meters, in its own units and words. */
+  allowance: string;
+  /** Tokens a minute and a day as the provider publishes them — what a 2026 free tier really ends on. 0: unpublished. */
+  tpm: number; tpd: number;
+  /** True when the lane cannot be called until someone gives it a base URL of its own (an account id is in it). */
+  needsBaseUrl: boolean;
+  /** The most one call may ask for here, where the lane's own minute is smaller than a thinking call
+      (Groq's free minute holds 8,000 tokens). 0 when the lane sets no such ceiling. */
+  maxRequestTokens: number;
+  goodAt: ('write' | 'review' | 'plan' | 'chat')[];
   needsKey: boolean; signup: string; note: string;
   enabled: boolean; hasKey: boolean; keyMask: string | null; keySource: 'workspace' | 'environment' | null;
   rejected: boolean;
   /** Can it take the next call? If not, `blocked` says why in plain words. */
   ready: boolean; blocked: string | null; allowed: boolean;
-  spent: { minute: number; today: number };
+  /** Against its allowance: calls this minute and today, and tokens likewise (tokensToday only where a day's token budget is published). */
+  spent: { minute: number; today: number; tokensMinute: number; tokensToday: number };
   /** Why the model it is set to no longer answers — the provider withdrew it — or null. */
   retired: string | null;
   /** The model's context window in tokens, from its provider's documents; null when none is published. */
@@ -535,6 +611,9 @@ export const api = {
   login: (email: string, password: string) =>
     request<SignedIn>('/auth/login', { ...POST({ email, password }), signal: AbortSignal.timeout(10_000) }),
   logout: () => request<{ ok: boolean }>('/auth/logout', POST()),
+  /** Where to send the browser to sign in at the identity provider. The state and nonce that must
+      come back with it are set as a cookie by this call, and never touched by any script here. */
+  ssoStart: () => request<{ url: string }>('/auth/sso/start', { ...POST(), signal: AbortSignal.timeout(15_000) }),
   changePassword: (current: string, next: string) => request<{ ok: boolean }>('/auth/password', POST({ current, new: next })),
   /** Permissions, roles and agents by name, for anyone signed in: a Viewer's screens need the labels too. */
   catalogue: () => request<Catalogue>('/auth/catalogue'),
@@ -561,6 +640,11 @@ export const api = {
       request<AuditEntry[]>(`/admin/audit?${new URLSearchParams({ limit: '100', ...(before ? { before: String(before) } : {}) })}`),
     workspace: () => request<WorkspaceInfo>('/admin/workspace'),
     updateWorkspace: (name: string) => request<WorkspaceInfo>('/admin/workspace', PATCH({ name })),
+    sso: () => request<SsoConfig>('/admin/sso'),
+    updateSso: (patch: SsoPatch) => request<SsoConfig>('/admin/sso', { method: 'PUT', json: patch, signal: AbortSignal.timeout(15_000) }),
+    sandbox: () => request<SandboxInfo>('/admin/sandbox'),
+    updateSandbox: (body: { enabled: boolean; network: boolean }) =>
+      request<SandboxInfo>('/admin/sandbox', { method: 'PUT', json: body }),
     ai: () => request<AiConfig>('/admin/ai', { signal: AbortSignal.timeout(8000) }),
     updateAi: (patch: AiPatch) => request<AiConfig>('/admin/ai', { method: 'PUT', json: patch, signal: AbortSignal.timeout(8000) }),
     testAi: (provider: CompilerInfo['provider']) => request<AiTestResult>('/admin/ai/test', { ...POST({ provider }), signal: modelTimeout() }),

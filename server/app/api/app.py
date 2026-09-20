@@ -231,6 +231,12 @@ def create_api(db: Database | None = None, *, config: Settings | None = None) ->
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # Where this API can be reached from, said aloud before it serves anything. Binding to the LAN
+        # is a switch someone turned on (NEUROCODE_LISTEN_ON_LAN), and a switch whose consequences are
+        # only in a document is a switch people turn on without reading it — so the consequences are
+        # in the log of the process that is now exposed, every time it starts.
+        for line in cfg.reach_notice():
+            log.warning("%s", line)
         await _on_start(app)
         # Routines fire from here, in this process, after the start-up chores have run. The loop survives
         # a database that is not there yet; stopping the app stops it and any fire it has under way.

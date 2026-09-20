@@ -9,6 +9,12 @@ Two things follow from having many lanes. A call that fails moves to the next la
 straight to the offline rules. And agents working at the same time are *spread* across lanes, so four
 agents are four providers answering at once, not four requests queued behind one rate limit.
 
+An allowance is spent in **tokens** as well as in calls. Groq's free plan is a thousand calls a day
+and two hundred thousand tokens, and the tokens go first; its minute holds eight thousand, which is
+less than one call that thinks hard would ask for. So a lane is skipped when either budget is spent,
+and a lane whose minute is too small to hold the thinking a feature wants is asked for less rather
+than refused by its provider for asking — see `lanes.budget`.
+
 Slow counts as failed. Every call carries a **wall-clock budget** — one lane's, and the whole chain's
 — because a socket timeout is per read and a provider that dribbles a byte at a time resets it for
 ever. And a lane that fails for its own reasons rather than this request's — no answer, a refused
@@ -51,7 +57,7 @@ PREFERENCES = ("auto", "free", "local", "rules", *lanes.IDS)
 
 @dataclass
 class Provider:
-    id: str      # the lane: groq | cerebras | gemini | mistral | openrouter | github | deepseek | ollama | rules
+    id: str      # the lane: any of `lanes.IDS`, or "rules" when the offline answer stood in
     model: str   # the name the UI shows
 
 
@@ -215,8 +221,10 @@ def _counted(usage: dict[str, Any] | None) -> Usage:
 
 def _body(messages: list[dict[str, str]], cfg: dict[str, Any], stream: bool) -> dict[str, Any]:
     level, thinks = cfg.get("thinking", "off"), cfg.get("thinks", "")
+    # `maxTokens` is the lane's own budget, already lowered where its minute cannot hold the whole one
+    # (`lanes.budget`); without one — a stand-in, or the admin's test call — it is the level's.
     body: dict[str, Any] = {"model": cfg["model"], "messages": messages, "temperature": 0.2,
-                            "max_tokens": lanes.max_tokens(thinks, level),
+                            "max_tokens": cfg.get("maxTokens") or lanes.max_tokens(thinks, level),
                             "response_format": {"type": "json_object"}, **lanes.thinking_params(thinks, level)}
     if stream:
         body.update(stream=True, stream_options={"include_usage": True})
@@ -483,7 +491,8 @@ class Gateway:
         self._rejected: dict[str, str] = {}          # lane id → fingerprint of the key it refused
         self._resting: dict[str, tuple[float, str]] = {}   # lane id → until when, and why it is resting
         self._recent: dict[str, list[float]] = {}    # lane id → when it was called, this last minute
-        self._ollama_seen: tuple[float, str, bool] = (-1e9, "", False)
+        self._burned: dict[str, list[tuple[float, int]]] = {}   # lane id → (when, tokens) this last minute
+        self._ollama_seen: tuple[float, str, str | None] = (-1e9, "", None)
         self._turn = 0                               # so two agents starting together get two lanes
 
     # ── configuration ────────────────────────────────────────────
@@ -512,10 +521,12 @@ class Gateway:
         return {feature: self.thinking(feature) for feature in lanes.THINKING_FEATURES}
 
     def _asked(self, lane_id: str, feature: str, seconds: float | None = None) -> dict[str, Any]:
-        """The provider call's configuration for this feature: the lane's, how hard to think, and how
-        long it may take — what is left of the chain's budget, so three lanes cannot each spend it."""
+        """The provider call's configuration for this feature: the lane's, how hard to think, how many
+        tokens that may take on *this* lane, and how long it may take — what is left of the chain's
+        budget, so three lanes cannot each spend it."""
         lane = self.lane(lane_id)
-        return {**self.config(lane_id), "thinking": self.thinking(feature),
+        level, room = lanes.budget(lane, self.thinking(feature))
+        return {**self.config(lane_id), "thinking": level, "maxTokens": room,
                 "thinks": lane.thinks if lane else "", "seconds": seconds}
 
     def deepseek(self) -> dict[str, Any]:
@@ -563,21 +574,31 @@ class Gateway:
     def _rest(self, lane_id: str, why: str) -> None:
         self._resting[lane_id] = (time.monotonic() + COOLDOWN_SECONDS, why)
 
-    def ollama_ready(self) -> bool:
-        """Is an Ollama server up with the configured model pulled? Remembered for 30 seconds."""
+    def ollama_look(self) -> str | None:
+        """None when the local model is ready to answer, else why it is not. Remembered for 30 seconds.
+
+        Three states, not two. "Ollama is not running here" and "Ollama is running, but this model is
+        not pulled" are different problems with different first moves, and the screens used to call
+        both of them "no model pulled" — which sent a person to `ollama pull` on a machine with no
+        Ollama on it. (On this Mac, today, it is the first of the two.)"""
         cfg = self.ollama()
-        at, seen_for, ok = self._ollama_seen
+        at, seen_for, why = self._ollama_seen
         signature = cfg["url"] + cfg["model"]
         if seen_for == signature and time.monotonic() - at < 30:
-            return ok
+            return why
         try:
             with urllib.request.urlopen(f"{cfg['url']}/api/tags", timeout=0.4) as r:
                 names = {m.get("name", "") for m in json.loads(r.read()).get("models", [])}
-            ok = cfg["model"] in names or f"{cfg['model']}:latest" in names
+            why = None if cfg["model"] in names or f"{cfg['model']}:latest" in names else \
+                f"Ollama is running, but {cfg['model']} is not pulled — `ollama pull {cfg['model']}`"
         except (OSError, ValueError):
-            ok = False
-        self._ollama_seen = (time.monotonic(), signature, ok)
-        return ok
+            why = f"nothing is answering at {cfg['url']} — Ollama is not running on this machine"
+        self._ollama_seen = (time.monotonic(), signature, why)
+        return why
+
+    def ollama_ready(self) -> bool:
+        """Is an Ollama server up with the configured model pulled?"""
+        return self.ollama_look() is None
 
     # ── what a lane has spent ────────────────────────────────────
     def _this_minute(self, lane_id: str) -> int:
@@ -589,8 +610,24 @@ class Gateway:
     def _today(self, lane_id: str) -> int:
         return self.store.calls_today(lane_id)
 
+    def _tokens_this_minute(self, lane_id: str) -> int:
+        """What this lane has been counted for in the last minute, by the providers themselves.
+
+        In this process only, like the per-minute call count beside it: the point is not an audit, it
+        is not walking into a 429 we can see coming."""
+        cutoff = time.monotonic() - 60
+        recent = [pair for pair in self._burned.get(lane_id, []) if pair[0] > cutoff]
+        self._burned[lane_id] = recent
+        return sum(tokens for _at, tokens in recent)
+
     def spent(self, lane: Lane) -> dict[str, int]:
-        return {"minute": self._this_minute(lane.id), "today": self._today(lane.id)}
+        """What this lane has spent of its allowance — calls always, tokens where it has a token
+        budget, since that is the query the ledger would otherwise run for every lane on every screen."""
+        out = {"minute": self._this_minute(lane.id), "today": self._today(lane.id),
+               "tokensMinute": self._tokens_this_minute(lane.id), "tokensToday": 0}
+        if lane.tpd:
+            out["tokensToday"] = self.store.tokens_today(lane.id)
+        return out
 
     def why_not(self, lane: Lane) -> str | None:
         """Why this lane cannot take the next call — or None, meaning it can."""
@@ -601,15 +638,25 @@ class Gateway:
         if (rest := self.resting(lane.id)) is not None:
             return rest
         if lane.api == "ollama":
-            return None if self.ollama_ready() else "no model pulled on this machine"
+            return self.ollama_look()
         if lane.needs_key and not lanes.key_of(lane, self.secrets):
             return "no API key"
         if self.rejected(lane.id):
             return "the key was refused"
+        # A lane whose address carries an account id has none until somebody gives it one. Dialling an
+        # empty base URL is a connection error a minute later; this is the same news, at once.
+        if lane.needs_base_url:
+            return "no address yet — its base URL holds your own account id, and is set in Admin → AI providers"
         if lane.rpm and self._this_minute(lane.id) >= lane.rpm:
             return f"{lane.rpm} calls this minute — its free allowance"
         if lane.rpd and self._today(lane.id) >= lane.rpd:
             return f"{lane.rpd} calls today — its free allowance"
+        # Tokens, not calls, are what a 2026 free tier really ends on, and a lane that has spent them
+        # is busy rather than broken — the same as any other allowance.
+        if lane.tpm and self._tokens_this_minute(lane.id) >= lane.tpm:
+            return f"{lane.tpm:,} tokens this minute — its free allowance"
+        if lane.tpd and self.store.tokens_today(lane.id) >= lane.tpd:
+            return f"{lane.tpd:,} tokens today — its free allowance"
         return None
 
     # ── routing ──────────────────────────────────────────────────
@@ -817,7 +864,9 @@ class Gateway:
             return {"ok": True, "ms": 0, "detail": "The offline rules need no model."}
         lane = self.lane(lane_id)
         if lane is None:
-            return {"ok": False, "ms": 0, "detail": f"There is no lane called {lane_id}."}
+            # A lane whose provider ended it says so, rather than reading as a typo.
+            return {"ok": False, "ms": 0,
+                    "detail": lanes.ended(lane_id) or f"There is no lane called {lane_id}."}
         cfg = lanes.config(lane, self.secrets)
         if lane.needs_key and not cfg["key"]:
             return {"ok": False, "ms": 0, "detail": "No API key is set."}
@@ -855,6 +904,10 @@ class Gateway:
         larger than its whole. Nothing is invented; an impossible figure is read as the floor.
         """
         counted = {k: max(0, _int(usage.get(k))) for k in ("in", "out", "cached", "reasoning")}
+        # Against the lane's token allowance, in this process, before the line is even written: the
+        # next call chooses a lane in milliseconds and a database round trip is not in that path.
+        if spend := counted["in"] + counted["out"]:
+            self._burned.setdefault(provider.id, []).append((time.monotonic(), spend))
         try:
             self.store.record(feature=feature, lane=provider.id, model=provider.model, ok=ok,
                               ms=max(0, int(ms)),

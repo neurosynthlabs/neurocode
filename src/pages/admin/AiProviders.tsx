@@ -21,6 +21,11 @@ const ROUTES: { id: AiPreference; label: string }[] = [
   { id: 'auto', label: 'Automatic' }, { id: 'free', label: 'Free only' }, { id: 'local', label: 'This Mac only' }, { id: 'rules', label: 'No model' },
 ];
 const answering = (a: CompilerInfo) => (a.provider === 'rules' ? 'No model' : a.model);
+/** Three things get called free, and the tag has to tell them apart: free with nothing asked, free
+    once something is handed over, and not free at all. The whole sentence is the lane's `freedom`. */
+const GATE_WORD: Record<string, string> = { card: 'a card', phone: 'a phone', identity: 'ID' };
+const freeness = (l: AiLane) =>
+  l.free ? (l.gate ? `Free after ${GATE_WORD[l.gate] ?? l.gate}` : 'Free') : l.gate ? `Not free · ${GATE_WORD[l.gate] ?? l.gate} first` : 'Paid';
 
 export default function AiProviders() {
   const { can } = useAuth();
@@ -56,7 +61,7 @@ export default function AiProviders() {
     <Page>
       <PageHeader
         title="AI providers"
-        subtitle="Every AI feature goes through one gateway. Add a free key (Groq, Cerebras or Gemini take a minute) or a local Ollama model; with none, the features that need a model say so."
+        subtitle="Every AI feature goes through one gateway. Add a free key (Groq, Gemini or Cloudflare take a minute, and none of the three asks for a card) or a local Ollama model; with none, the features that need a model say so."
       />
       <PageBody>
         {error ? <LoadError error={error} onRetry={reload} /> : !cfg ? <Loading /> : (
@@ -188,6 +193,7 @@ function Lanes({ lanes, manage, busy, tests, onTest, onPatch }: {
   onTest: (id: LaneId) => void; onPatch: (patch: AiPatch, done: string) => Promise<boolean>;
 }) {
   const [keys, setKeys] = useState<Partial<Record<LaneId, string>>>({});
+  const [urls, setUrls] = useState<Partial<Record<LaneId, string>>>({});
   if (lanes.length === 0) return null;
   const ready = lanes.filter((l) => l.ready).length;
   const save = async (lane: AiLane) => {
@@ -205,10 +211,11 @@ function Lanes({ lanes, manage, busy, tests, onTest, onPatch }: {
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
               <Dot state={lane.ready ? 'ok' : lane.rejected ? 'error' : 'idle'} />
               <span className="text-[13.5px] font-medium text-ink">{lane.label}</span>
-              <Tag tone={lane.free ? 'ok' : 'neutral'}>{lane.free ? 'Free' : 'Paid'}</Tag>
+              <Tag tone={lane.free && !lane.gate ? 'ok' : lane.free ? 'info' : 'neutral'}>{freeness(lane)}</Tag>
               <Mono>{lane.model}</Mono>
               <span className="ml-auto flex items-center gap-2">
-                {lane.rpd > 0 && <span className="tnum text-[12px] text-dim">{lane.spent.today}/{lane.rpd} today</span>}
+                {lane.rpd > 0 && <span className="tnum text-[12px] text-dim">{lane.spent.today}/{lane.rpd} calls today</span>}
+                {lane.tpd > 0 && <span className="tnum text-[12px] text-dim">{tokens(lane.spent.tokensToday)}/{tokens(lane.tpd)} tokens today</span>}
                 {lane.hasKey && (
                   <Tag tone={lane.rejected ? 'danger' : 'ok'}>
                     {lane.rejected ? 'Key refused' : lane.keySource === 'environment' ? 'Key in environment' : 'Key saved'}
@@ -226,6 +233,9 @@ function Lanes({ lanes, manage, busy, tests, onTest, onPatch }: {
               {lane.window ? ` · ${tokens(lane.window)} context` : ''}
               {lane.thinks ? ' · thinking set per feature on Models & Router' : ''}
             </p>
+            <p className="mt-1 text-[12px] leading-relaxed text-soft">
+              {lane.freedom}{lane.expires ? ` · ${lane.expires}` : ''}{lane.allowance ? ` · ${lane.allowance}` : ''}
+            </p>
             {lane.retired && <p className="mt-1.5 rounded-lg bg-warn/10 px-3 py-2 text-[12.5px] text-warn">{lane.retired}</p>}
             {lane.prices.length > 0 && (
               <p className="mt-1.5 text-[12px] leading-relaxed text-soft">
@@ -234,6 +244,17 @@ function Lanes({ lanes, manage, busy, tests, onTest, onPatch }: {
               </p>
             )}
 
+            {manage && lane.needsBaseUrl && (
+              <div className="mt-2.5 flex flex-col gap-2 sm:flex-row sm:items-end">
+                <Field
+                  className="flex-1" label={`${lane.label} address`} mono autoComplete="off"
+                  placeholder="https://api.cloudflare.com/client/v4/accounts/<account id>/ai/v1"
+                  value={urls[lane.id] ?? ''} onChange={(v) => setUrls((u) => ({ ...u, [lane.id]: v }))}
+                />
+                <Button size="sm" disabled={busy || !(urls[lane.id] ?? '').trim()}
+                  onClick={() => void onPatch({ lane: lane.id, baseUrl: (urls[lane.id] ?? '').trim() }, `${lane.label} address saved`)}>Save</Button>
+              </div>
+            )}
             {manage && lane.needsKey && !lane.hasKey && (
               <div className="mt-2.5 flex flex-col gap-2 sm:flex-row sm:items-end">
                 <Field

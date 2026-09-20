@@ -212,7 +212,8 @@ ORDERING = ("Open lanes are taken in turn, rotated so agents working at the same
 #: What each preference lets the router use — `Gateway._allowed`, in words.
 PREFERENCE_TEXT = {
     "auto": "Every lane that is switched on, has its key and has allowance left.",
-    "free": "Only free lanes. The paid lane is never used.",
+    "free": "Only lanes whose calls cost no money. Neither paid lane is used — not DeepSeek, and not "
+            "Cerebras, whose trial credit is free only after a payment card.",
     "local": "Only Ollama, on this machine. Nothing leaves it.",
     "rules": "No model at all. Features with an offline answer give it; the rest say no model is set up.",
 }

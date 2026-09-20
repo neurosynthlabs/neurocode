@@ -149,6 +149,29 @@ def load() -> Profile:
                    token_store=where if token else None)
 
 
+# ── the session `--continue` continues ───────────────────────────
+def _session_key(server: str | None, project: str | None) -> str:
+    """One remembered session per server and project: continuing in one project must never walk into
+    another project's conversation, and two servers are two different workspaces."""
+    return f"{server or ''}|{project or ''}"
+
+
+def remember_session(server: str | None, project: str | None, ref: str) -> None:
+    """Keep the session this machine was last in. It is a convenience, not a record: the server holds
+    the sessions themselves, and `--continue` falls back to asking it for the newest."""
+    saved = _read(_config_file())
+    kept = saved.get("lastSession")
+    kept = dict(kept) if isinstance(kept, dict) else {}
+    kept[_session_key(server, project)] = ref
+    save(lastSession=kept)
+
+
+def last_session(server: str | None, project: str | None) -> str | None:
+    kept = _read(_config_file()).get("lastSession")
+    found = kept.get(_session_key(server, project)) if isinstance(kept, dict) else None
+    return found if isinstance(found, str) and found else None
+
+
 def save(**fields: Any) -> None:
     """Change these fields of the saved profile; None removes one."""
     saved = _read(_config_file())

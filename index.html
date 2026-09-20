@@ -3,12 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/neurocode.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover hands the notch and the home indicator to the page, which is the only way
+         env(safe-area-inset-*) below ever reports anything but zero. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
     <title>NeuroCode</title>
     <meta name="description" content="An AI engineering OS for one operator. Requirements go in, reviewed code comes out, and nothing ships without your signature." />
     <meta name="theme-color" content="#0b0d11" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- Installed on a phone: the manifest names it and its icons, and these two say the window has no
+         browser chrome, so the app draws to the edges and the status bar sits over its own background. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="NeuroCode" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="NeuroCode" />
     <meta property="og:title" content="NeuroCode, the AI engineering OS" />
@@ -17,6 +26,50 @@
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta name="twitter:card" content="summary_large_image" />
+    <!-- The two things a phone needs that a stylesheet of components cannot give it, kept here because
+         they are about the window rather than about any component, and because both are inert on a
+         desktop: the insets are zero where there is no notch, and the hit areas need a coarse pointer.
+
+         Safe area: only when the app is installed. In a browser tab the browser's own chrome already
+         sits in that space, and padding it again would leave a stripe under the toolbar.
+
+         Tap targets: a 24 px icon button is the right size to look at and the wrong size to hit. The
+         hit area is grown to 44 px — Apple's figure, and near enough Google's 48 — with a centred
+         pseudo-element, so nothing on any screen moves by a pixel; only the finger's margin changes.
+         This is the technique the Switch component already uses for the same reason. -->
+    <style>
+      @supports (padding: env(safe-area-inset-top)) {
+        @media (display-mode: standalone), (display-mode: fullscreen) {
+          #root {
+            padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+              env(safe-area-inset-left);
+          }
+        }
+      }
+      @media (pointer: coarse) {
+        button,
+        a[href],
+        summary,
+        [role='button'],
+        [role='tab'],
+        [role='menuitem'],
+        [role='option'] {
+          touch-action: manipulation;
+        }
+        [data-slot='button'] {
+          position: relative;
+        }
+        [data-slot='button']::after {
+          content: '';
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          width: max(100%, 44px);
+          height: max(100%, 44px);
+          transform: translate(-50%, -50%);
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

@@ -136,8 +136,13 @@ class RunStep(Base):
     status: Mapped[str] = mapped_column(RunStepStatus, nullable=False, server_default="todo")
     detail: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     ms: Mapped[int | None] = mapped_column(Integer)
-    #: The worktree commit this step left, so the run can be reverted to it; empty for a step that wrote nothing.
+    #: The worktree commit this step left, so the run can be reverted to it — and, when a run is interrupted,
+    #: the last one it is safe to carry on from. Empty for a step that wrote nothing.
     commit_sha: Mapped[str] = mapped_column(String(64), nullable=False, server_default="")
+    #: How many times this step has been tried, and how many times it may be. A step tried again after a
+    #: failure is the same step, not a new one: the number is what a person reads on the run screen.
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     #: A question the agent asked the person mid-step, and the person's answer once given.
     question: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     answer: Mapped[str] = mapped_column(Text, nullable=False, server_default="")

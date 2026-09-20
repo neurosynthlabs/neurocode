@@ -180,9 +180,15 @@ class Chunk(Base):
     model: Mapped[str] = mapped_column(String(120), nullable=False, server_default="")
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+    #: Postgres reads `GateActions` and `app/services/retrieval.py` as one word each, so a question in two
+    #: words matched neither — and that is the half of retrieval that runs when no lane can embed. The title
+    #: and the path are added again, split at the case changes and at the separators a path is made of, with
+    #: immutable functions only so the column stays generated and can never drift from the row.
     search: Mapped[str] = mapped_column(
         TSVECTOR,
-        Computed("to_tsvector('english', title || ' ' || body)", persisted=True),
+        Computed("to_tsvector('english', title || ' ' || body || ' ' || "
+                 "translate(regexp_replace(title || ' ' || path, '([a-z0-9])([A-Z])', '\\1 \\2', 'g'), "
+                 "'/._-:', '     '))", persisted=True),
     )
 
 

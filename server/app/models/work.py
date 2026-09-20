@@ -229,8 +229,11 @@ class WorkflowDefinition(Base, Mixin):
     created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     archived: Mapped[bool] = mapped_column(nullable=False, server_default="false")
 
+    # A step points at a workflow twice: the one it belongs to, and — for a step that calls another
+    # workflow — the one it calls. Say which of the two this list is, or the mapper cannot choose.
     steps: Mapped[list[WorkflowStep]] = relationship(back_populates="workflow", cascade="all, delete-orphan",
-                                                     order_by="WorkflowStep.n", lazy="selectin")
+                                                     order_by="WorkflowStep.n", lazy="selectin",
+                                                     foreign_keys="WorkflowStep.workflow_id")
 
 
 class WorkflowStep(Base):
@@ -238,7 +241,10 @@ class WorkflowStep(Base):
     rewrites what an earlier run was asked to do."""
 
     __tablename__ = "workflow_steps"
-    __table_args__ = (UniqueConstraint("workflow_id", "n"), CheckConstraint("n >= 1", name="n_positive"))
+    __table_args__ = (UniqueConstraint("workflow_id", "n"), CheckConstraint("n >= 1", name="n_positive"),
+                      # A step is given to an agent or to another workflow. Neither is a step that cannot run;
+                      # both is a step with two owners, and the runtime would have to pick one.
+                      CheckConstraint("(calls IS NULL) <> (agent = '')", name="agent_or_calls"))
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     workflow_id: Mapped[str] = mapped_column(ForeignKey("workflow_definitions.id", ondelete="CASCADE"),
@@ -247,8 +253,19 @@ class WorkflowStep(Base):
     label: Mapped[str] = mapped_column(Text, nullable=False)
     agent: Mapped[str] = mapped_column(String(120), nullable=False)
     detail: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    #: The steps this one waits for, by their number — `[]` means it waits for nothing and goes in the first
+    #: wave. A workflow is still a list of steps; `after` is what makes it a graph, and the server derives the
+    #: waves from it so no screen has to work out the topology itself.
+    after: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    #: When this step runs at all, from a closed vocabulary the runtime can actually measure (a check's
+    #: result, a file that changed, a step that failed). `{}` means always.
+    when: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    #: How many times it may be tried, and how long to wait between tries. `{}` means once.
+    retry: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    #: A step that calls another workflow instead of an agent. Exclusive with `agent`.
+    calls: Mapped[str | None] = mapped_column(ForeignKey("workflow_definitions.id", ondelete="RESTRICT"))
 
-    workflow: Mapped[WorkflowDefinition] = relationship(back_populates="steps")
+    workflow: Mapped[WorkflowDefinition] = relationship(back_populates="steps", foreign_keys=[workflow_id])
 
 
 class TestExpectation(Base, Mixin):
@@ -282,6 +299,12 @@ class PlanStep(Base):
     state: Mapped[str] = mapped_column(StepState, nullable=False, server_default="todo")
     detail: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     duration_s: Mapped[int | None] = mapped_column(Integer)
+    #: What a workflow's graph says about this step, carried into the plan the run executes: the steps it
+    #: waits for, when it runs at all, and how many times it may be tried. Empty is the plain ordered list a
+    #: compiled plan has always been.
+    after: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    when: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    retry: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
 
     plan: Mapped[Plan] = relationship(back_populates="steps")
 

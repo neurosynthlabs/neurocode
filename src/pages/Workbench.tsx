@@ -534,6 +534,20 @@ function Bench() {
     return all[0] ?? null;
   }, [roots, active]);
 
+  // Which of the project's own sources that repository is, so a commit goes to the right checkout:
+  // the first source needs no label, a further one is named by the label the project gave it.
+  const gitSource = useMemo(() => {
+    if (place.kind !== 'project' || !statusGit) return null;
+    const holding = roots.find((r) => r.path && r.git && r.git.root === statusGit.root && !r.readOnly);
+    return holding && holding.key !== 'primary' && !holding.key.startsWith('ref:') ? holding.label : null;
+  }, [place.kind, roots, statusGit]);
+  // A repository of a referenced project is read only here, so it has nothing to commit through this one.
+  const ownGit = useMemo(() => {
+    if (!statusGit) return null;
+    const holding = roots.find((r) => r.path && r.git && r.git.root === statusGit.root);
+    return holding?.readOnly ? null : statusGit;
+  }, [roots, statusGit]);
+
   const cwd = useMemo(() => {
     if (active) {
       const holding = roots.filter((r) => r.path && within(active, r.path)).sort((a, b) => (b.path?.length ?? 0) - (a.path?.length ?? 0))[0];
@@ -706,6 +720,9 @@ function Bench() {
             currentFile={active}
             onPaused={onPaused}
             openFile={(path, line) => void openFile(path, line)}
+            git={ownGit}
+            gitSource={gitSource}
+            onGitChanged={() => { setGitNonce((n) => n + 1); setTreeNonce((n) => n + 1); }}
           />
 
           <StatusBar git={statusGit} unsaved={unsaved}

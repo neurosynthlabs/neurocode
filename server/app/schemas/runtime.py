@@ -22,9 +22,15 @@ def run_step_json(step: RunStep, *, grounding: dict[str, Any] | None = None,
                   taken_back: dict[str, Any] | None = None) -> dict[str, Any]:
     """One step. What an agent step was handed (`grounding`: the instruction files, retrieval's pieces and
     the files it read), the question it asked and the answer it got, the commit it left, and — for a
-    step a revert took back — which revert, are there only when they are."""
+    step a revert took back — which revert, are there only when they are.
+
+    `attempts` is there only when there was more than one try to speak of, either because the step was
+    tried again or because its policy allows it to be. A step tried once, as most are, says nothing
+    about tries at all: a screen showing "attempt 1 of 1" everywhere is noise, not information."""
+    tried = step.attempts > 1 or step.max_attempts > 1
     return {"n": step.n, "kind": step.kind, "label": step.label, "agent": step.agent,
             "status": step.status, "detail": step.detail, "ms": step.ms,
+            **({"attempts": step.attempts, "maxAttempts": step.max_attempts} if tried else {}),
             **({"child": step.child_run_id} if step.child_run_id else {}),
             **({"commitSha": step.commit_sha} if step.commit_sha else {}),
             **({"question": step.question, "answer": step.answer or None} if step.question else {}),
@@ -39,8 +45,8 @@ def run_log_json(line: RunLog) -> dict[str, Any]:
 
 #: Kept on the run's review document, but shown beside it: the project's checks, a goal run's
 #: completion check, and a re-read in flight, which the screen reads from the run's own step.
-_BESIDE_REVIEW = ("checks", "goal", "reviewing", "grounding", "commits", "asks", "reverts", "references",
-                  "sources", "elsewhere", "awaiting")
+_BESIDE_REVIEW = ("checks", "goal", "reviewing", "grounding", "commits", "asks", "reverts", "resumes",
+                  "references", "sources", "elsewhere", "awaiting")
 
 
 def run_json(run: Run, *, project_name: str = "", children: Sequence[Run] = (),
@@ -80,11 +86,17 @@ def run_json(run: Run, *, project_name: str = "", children: Sequence[Run] = (),
         "conflicts": [{"branch": c.branch, "agent": c.agent, "files": c.files or []}
                       for c in run.conflicts],
         "merged": run.merged,
+        # The branch as last pushed, and — once one has been opened from here — the pull or merge request
+        # it has on the forge under `pullRequest`: its number, URL, state, whether it went up as a draft
+        # and why. A project with several sources carries one per source under `pushed.sources` too.
         "pushed": run.pushed,
         # What a person allowed beyond the tool rules, the reverts made, and the sources only read.
         "grants": [{k: g.get(k) for k in ("tool", "subject", "scope", "step", "by", "at", "used")}
                    for g in run.grants or []],
         "reverts": [{k: r.get(k) for k in ("to", "by", "at", "steps", "redo")} for r in reverts],
+        # Each time this run was carried on after being interrupted: where from, and what was kept.
+        "resumes": [{k: r.get(k) for k in ("from", "by", "at", "adopted", "kept")}
+                    for r in review.get("resumes") or []],
         "references": [x.get("label") for x in review.get("references") or []],
         "sources": [x.get("label") or "" for x in review.get("sources") or []],
         **({"waitingOn": run.waiting_on} if run.waiting_on else {}),

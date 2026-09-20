@@ -183,7 +183,7 @@ class Scripted:
     def ask(self, messages: list[dict[str, str]], parse: Any, *, feature: str = "", **_: Any) -> Result[Any]:
         self.seen.append((feature, messages))
         raw = self.by_feature[feature].pop(0)
-        return Result(parse(raw), Provider("groq", "llama-3.3-70b-versatile"), 7, reasoning="",
+        return Result(parse(raw), Provider("groq", "openai/gpt-oss-120b"), 7, reasoning="",
                       usage={"in": 900, "out": 30})
 
 
@@ -226,9 +226,9 @@ async def test_compacting_folds_the_older_turns_and_the_model_is_sent_the_summar
 
 
 async def test_a_session_near_its_window_folds_before_it_answers(live: Database):
-    window = lanes.window_for("groq", "llama-3.3-70b-versatile")
+    window = lanes.window_for("groq", "openai/gpt-oss-120b")
     assert window
-    await start(live, *conversation(6), ("you", "and now?"), lane="groq", model="llama-3.3-70b-versatile",
+    await start(live, *conversation(6), ("you", "and now?"), lane="groq", model="openai/gpt-oss-120b",
                 context_tokens=int(window * 0.9))
     gateway = Scripted(compact=[json.dumps({"summary": "Six questions about tax."})],
                        chat=[json.dumps({"answer": "Still pkg/tax.py."})])
@@ -246,7 +246,7 @@ async def test_a_session_near_its_window_folds_before_it_answers(live: Database)
 
 
 async def test_a_session_well_inside_its_window_is_not_folded(live: Database):
-    await start(live, *conversation(6), ("you", "and now?"), lane="groq", model="llama-3.3-70b-versatile",
+    await start(live, *conversation(6), ("you", "and now?"), lane="groq", model="openai/gpt-oss-120b",
                 context_tokens=2_000)
     gateway = Scripted(chat=[json.dumps({"answer": "Here."})])
     await think(live, gateway, CHAT, "Rajat")   # type: ignore[arg-type]

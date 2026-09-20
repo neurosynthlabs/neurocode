@@ -56,7 +56,7 @@ class FakeGateway:
         self.seen.append(messages)
         self.lanes_asked.append(kwargs.get("lane"))
         raw = self.script.pop(0) if self.script else '{"answer": "Done."}'
-        return Result(parse(raw), Provider("groq", "llama-3.3-70b-versatile"), 12)
+        return Result(parse(raw), Provider("groq", "openai/gpt-oss-120b"), 12)
 
 
 class Page(BaseHTTPRequestHandler):
@@ -275,10 +275,13 @@ def test_the_prompt_groups_mcp_tools_under_their_server_and_says_calls_may_wait(
 
 def test_only_models_whose_provider_documents_image_input_read_images():
     assert lanes.reads_images("gemini", "gemini-2.5-flash")
-    assert lanes.reads_images("github", "openai/gpt-4.1-mini")
+    # Z.ai's GLM-4.6V-Flash is in its Vision Models table and costs nothing: the first free model here
+    # that reads a picture. GitHub Models, which used to hold this line, was retired on 2026-07-30.
+    assert lanes.reads_images("zai", "glm-4.6v-flash")
+    assert lanes.reads_images("openrouter", "qwen/qwen3.8-27b:free")
     assert lanes.reads_images("deepseek", "deepseek-flash")
     assert not lanes.reads_images("deepseek", "deepseek-v4-pro")
-    assert not lanes.reads_images("groq", "llama-3.3-70b-versatile")
+    assert not lanes.reads_images("groq", "openai/gpt-oss-120b")
     assert not lanes.reads_images("gemini", "an-admins-own-model")
     assert lanes.describe(lanes.BY_ID["gemini"])["vision"] is True
 

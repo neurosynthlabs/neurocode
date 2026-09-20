@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   BookOpen, Bot, Brain, ChevronLeft, ChevronRight, Code2, Download, FileInput, FoldVertical, GitFork, ListChecks, Loader2,
-  MessageSquarePlus, MoreHorizontal, Paperclip, Pencil, RefreshCw, Wrench,
+  MessageSquarePlus, MoreHorizontal, Paperclip, Pencil, RefreshCw, Search, Wrench,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -10,8 +10,9 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Ascii, Bar, Dot, Empty, ListRow, Mono, Page, PageBody, PageHeader, Panel, Tag } from '@/components/os';
+import { Ascii, Bar, Dot, Empty, Field, ListRow, Mono, Page, PageBody, PageHeader, Panel, Tag } from '@/components/os';
 import { Composer, type Chip } from '@/components/sessions/Composer';
+import { matchSessions, readSession, turnsSaying } from '@/components/sessions/transcript';
 import { PermissionCard } from '@/components/sessions/PermissionCard';
 import { api, type ChatAttachment, type ChatMessage, type ChatStream, type SessionDoc } from '@/lib/api';
 import { agentName, useAccess } from '@/lib/access';
@@ -144,6 +145,9 @@ export default function Sessions() {
   const [acting, setActing] = useState<string | null>(null);
   const [lanes, setLanes] = useState<FleetLane[] | null>(null);
   const [importing, setImporting] = useState<unknown>(null);
+  // Two searches, each over what is already here: the list of sessions, and the turns of the open one.
+  const [findSession, setFindSession] = useState('');
+  const [findTurn, setFindTurn] = useState('');
   // "Ask <agent>": after a project is picked, who answers in it — when the project has agents of its own.
   const [answerers, setAnswerers] = useState<{ projectId: string; name: string; agents: CustomAgent[] } | null>(null);
   const { catalogue } = useAccess();
@@ -165,7 +169,9 @@ export default function Sessions() {
     return now.some((s) => s.ref === doc.ref) ? now.map((s) => (s.ref === doc.ref ? doc : s)) : [doc, ...now];
   });
 
-  const detail = useRemote(ref, () => api.session(ref ?? ''));
+  // Every turn, not the first five hundred: the detail route pages from an id, so the read walks it
+  // to the end. A session that fits in one page is still one request.
+  const detail = useRemote(ref, () => readSession(ref ?? ''));
   const reloadDetail = useRef(detail.reload);
   useEffect(() => { reloadDetail.current = detail.reload; }, [detail.reload]);
 
@@ -206,6 +212,10 @@ export default function Sessions() {
     return [...held, ...[...newer.values()].filter((m) => !seen.has(m.id))].sort((a, b) => a.id - b.id);
   }, [detail.data, live, ref]);
   const placed = useMemo(() => arrange(messages, chosen), [messages, chosen]);
+  // Searching a session searches what is on screen: every turn this browser holds, including the
+  // tool calls, because "it was in a session about three weeks ago" is usually a path or a name.
+  const looking = findTurn.trim();
+  const matching = useMemo(() => turnsSaying(placed, looking), [placed, looking]);
   const cited = useMemo(() => citedFiles(placed), [placed]);
   const card = messages.find((m) => m.permission?.state === 'pending' && !m.supersededBy) ?? null;
   const writing = ref ? pending[ref] : undefined;
@@ -375,6 +385,10 @@ export default function Sessions() {
   const loadLanes = () => {
     if (lanes === null) fetchModels().then((r) => setLanes(r.lanes), (e: unknown) => console.error('[NeuroCode] GET /models failed:', e));
   };
+
+  const seeking = findSession.trim();
+  // Cheap enough to do on every render, and `sessions` is a new array on most of them anyway.
+  const listed = matchSessions(sessions, findSession);
 
   const mayChat = can('sessions:chat');
   const busy = thinking || acting !== null || card !== null;
@@ -577,11 +591,22 @@ export default function Sessions() {
         <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 pt-4 pb-4 sm:px-6 md:flex-row">
           <div className="flex w-full shrink-0 max-h-[32vh] md:max-h-none md:w-[280px] flex-col overflow-y-auto rounded-xl border border-line bg-surface">
             <div className="flex shrink-0 items-center border-b border-line px-4 py-2.5 text-[12px] font-medium text-dim">
-              <span className="flex-1">{choosing ? 'Pick a project' : `${sessions.length} sessions`}</span>
+              <span className="flex-1">{choosing ? 'Pick a project' : seeking ? `${listed.length} of ${sessions.length} sessions` : `${sessions.length} sessions`}</span>
               {choosing && <button type="button" className="text-[12px] text-dim hover:text-ink" onClick={() => { setChoosing(null); setImporting(null); setAnswerers(null); }}>Cancel</button>}
             </div>
+            {!choosing && sessions.length > 0 && (
+              <div className="shrink-0 border-b border-line/60 px-2.5 py-2">
+                <Field value={findSession} onChange={setFindSession} icon={<Search className="size-3.5" />}
+                  placeholder="Find a session" onClear={() => setFindSession('')} />
+              </div>
+            )}
             <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
-              {choosing ? picker : sessions.map((s) => (
+              {choosing ? picker : seeking && listed.length === 0 ? (
+                <p className="px-4 py-4 text-[12.5px] leading-relaxed text-dim">
+                  No session's reference, title or project matches “{findSession.trim()}”. What was said inside a
+                  session is searched in the session itself, above its turns.
+                </p>
+              ) : listed.map((s) => (
                 <ListRow key={s.ref} active={s.ref === ref} onClick={() => setPicked(s.ref)}>
                   <div className="flex items-center gap-2">
                     <Dot state={s.waitingOn ? 'waiting' : s.status === 'thinking' ? 'running' : 'idle'} pulse={s.status === 'thinking'} />
@@ -654,6 +679,15 @@ export default function Sessions() {
                   )}
                 </div>
               )}
+              {messages.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Field className="min-w-[200px] flex-1" value={findTurn} onChange={setFindTurn} icon={<Search className="size-3.5" />}
+                    placeholder="Search what was said in this session" onClear={() => setFindTurn('')} />
+                  {looking && (
+                    <span className="text-[12px] text-dim">{matching.length} of {placed.length} turns match</span>
+                  )}
+                </div>
+              )}
               <div ref={box} className="min-h-0 flex-1 space-y-2.5 overflow-y-auto rounded-xl border border-line bg-surface p-4">
                 {detail.error && messages.length === 0 && (
                   <div className="flex items-center gap-3 text-[13px] text-ink-2">
@@ -663,10 +697,24 @@ export default function Sessions() {
                 )}
                 {detail.loading && messages.length === 0 && <p className="flex items-center gap-2 text-[12.5px] text-dim"><Loader2 className="size-3.5 animate-spin" />Reading the session…</p>}
                 {!detail.loading && !detail.error && messages.length === 0 && <p className="text-[13px] text-soft">Ask it anything about {session.projectName}. Type @ to attach a file, a symbol, a fact or a plan.</p>}
+                {detail.data?.earlier && (
+                  <p className="text-[12px] text-dim">
+                    This session is longer than this screen holds: its earliest turns are not drawn here. They are in the
+                    database, and in the Markdown or JSON export.
+                  </p>
+                )}
+                {detail.data && !detail.data.whole && (
+                  <p className="text-[12px] text-warn">
+                    Reading this session stopped at its own ceiling, so turns after these were not read. Export it to read the rest.
+                  </p>
+                )}
                 {placed.some((p) => p.m.supersededBy) && (
                   <p className="text-[12px] text-dim">You are reading an earlier version. The model is sent only the latest one.</p>
                 )}
-                {grouped(placed).map((g) => g.folded
+                {looking && matching.length === 0 && (
+                  <p className="text-[13px] text-soft">No turn here says “{findTurn.trim()}”.</p>
+                )}
+                {grouped(matching).map((g) => g.folded
                   ? <Folded key={`folded-${g.turns[0].m.id}`} count={g.turns.length}>{g.turns.map(turn)}</Folded>
                   : turn(g.turns[0]))}
                 {thinking && !card && (writing && (writing.answer || writing.reasoning) ? (

@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from . import sandbox
 from .errors import Refused
 
 #: How long one tool may run before it is stopped, and how much of its output is read.
@@ -739,6 +740,11 @@ class Check:
         self.ended_at: datetime | None = None
         self.problems: list[Problem] = []
         self.total = 0
+        # The fence every checker here runs behind. A lint or a type check reads the folder and prints;
+        # it has no business writing outside it and none at all reaching the network, so the network is
+        # off whatever the workspace allows a *run* — the answer there is about test suites that install
+        # packages, and nothing here installs anything.
+        self.sandbox = sandbox.around(target.folder, replace(sandbox.env_policy(), network=False))
         self._cancelled = False
         self._proc: asyncio.subprocess.Process | None = None
         self.task: asyncio.Task[None] | None = None
@@ -768,8 +774,9 @@ class Check:
         env = {**os.environ, "CI": "1", "NO_COLOR": "1", "FORCE_COLOR": "0", "TERM": "dumb"}
         try:
             proc = await asyncio.create_subprocess_exec(
-                *tool.checker.argv, cwd=folder, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE, env=env, start_new_session=True)
+                *self.sandbox.wrap(tool.checker.argv), cwd=folder, stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env,
+                start_new_session=True)
         except OSError as failed:
             tool.status = "error"
             tool.note = f"{tool.checker.argv[0]} could not be started: {failed.strerror or failed}"
@@ -903,7 +910,7 @@ class Check:
                 "startedAt": _stamp(self.started_at), "endedAt": _stamp(ended),
                 "ms": int((ended - self.started_at).total_seconds() * 1000) if ended else None,
                 "tools": [t.json(self.target.folder) for t in self.tools],
-                "missing": [m.json() for m in self.missing],
+                "missing": [m.json() for m in self.missing], "sandbox": self.sandbox.json(),
                 "counts": self.counts(), "total": self.total, "kept": len(self.problems),
                 "capped": self.total > len(self.problems), "matching": len(shown),
                 "offset": offset, "limit": limit, "problems": [p.json() for p in page]}

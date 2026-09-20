@@ -12,7 +12,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SERVER_DIR = Path(__file__).resolve().parent.parent
@@ -22,6 +22,19 @@ LOCAL_DB = "postgresql+asyncpg://neurocode:neurocode@127.0.0.1:5432/neurocode"
 # "/neurocode" in that URL matches the *user name* first, which silently asked Postgres for a role
 # that does not exist. Two plain constants cannot do that.
 LOCAL_TEST_DB = "postgresql+asyncpg://neurocode:neurocode@127.0.0.1:5432/neurocode_test"
+
+#: The origins a browser may carry the session cookie from when the API answers on this machine only.
+LOCAL_ORIGINS = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
+#: And when it has been told to answer on the LAN: the same, plus the addresses a private network
+#: actually hands out — RFC 1918's three ranges, IPv6 loopback, and the `.local` names Bonjour
+#: advertises a Mac under. Anchored at both ends, so `192.168.1.5.example.com` is not one of them.
+PRIVATE_ORIGINS = (
+    r"^https?://(localhost|127\.0\.0\.1|\[::1\]"
+    r"|10(\.\d{1,3}){3}"
+    r"|192\.168(\.\d{1,3}){2}"
+    r"|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2}"
+    r"|[A-Za-z0-9][A-Za-z0-9-]*\.local)(:\d+)?$"
+)
 
 
 class Settings(BaseSettings):
@@ -65,6 +78,17 @@ class Settings(BaseSettings):
     #: Where the folder browser may go, separated by ':'. `~` is the home of the account the API runs as.
     machine_roots: str = "~"
 
+    #: The fence around every command the runtime runs — the project's own tests, its checks, a custom
+    #: tool. On means "use whatever this machine has" (macOS Seatbelt, bubblewrap or unshare on Linux);
+    #: a machine with none says so on the run screen rather than pretending. This is a floor: turning it
+    #: off here cannot be undone from a screen, because the fence protects the machine this API runs on,
+    #: and that is the deployment's call, not the workspace's.
+    sandbox: bool = True
+    #: Whether a sandboxed command may reach the network. Off, because a test suite has no business
+    #: posting anywhere; a suite that installs packages needs it, and Admin → Workspace is where a person
+    #: says so knowingly. This is only the starting answer — the workspace's own wins once it is set.
+    sandbox_network: bool = False
+
     #: Jupyter kernels the Workbench's notebooks run on. Each is a process holding whatever the notebook
     #: loaded (a dataframe, a model on the GPU), so the server keeps a ceiling on how many run at once, in
     #: all and per person, and shuts one down once nobody has had its notebook open for `kernel_idle_minutes`
@@ -82,7 +106,14 @@ class Settings(BaseSettings):
 
     # ── the web layer ────────────────────────────────────────────
     #: Origins allowed to carry the session cookie. Local by default; add a domain to host it.
-    cors_origin_regex: str = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
+    cors_origin_regex: str = LOCAL_ORIGINS
+    #: Answer on this machine's network address as well as on 127.0.0.1 — which is what lets a phone
+    #: or a second laptop on the same Wi-Fi reach this API at all. Off, and off is the right default:
+    #: turning it on hands the workspace, and on a machine with machine access the Workbench's shell,
+    #: to everyone on that network who has an account or a token. It changes exactly two things —
+    #: `bind_host` below, and the allowed origins (`_widen_origins_for_the_lan`) — and `reach_notice()`
+    #: is what it means, in sentences.
+    listen_on_lan: bool = False
     session_days: int = Field(default=14, ge=1, le=365)
     #: Five wrong passwords lock an account for this long.
     lockout_seconds: int = Field(default=30, ge=0)
@@ -132,6 +163,56 @@ class Settings(BaseSettings):
         """The same database again, for the one component that is blocking by nature: the AI gateway
         waits on model providers from a worker thread, so it speaks psycopg rather than asyncpg."""
         return self.database_url.replace("+asyncpg", "+psycopg")
+
+    @model_validator(mode="after")
+    def _widen_origins_for_the_lan(self) -> Settings:
+        """Listening on the LAN and refusing every LAN origin is a server nobody can sign in to.
+
+        The browser sends `Origin: http://192.168.1.14:5180`, the default regex allows only localhost,
+        and the sign-in fails with a CORS error rather than a sentence — the worst kind of refusal,
+        because it appears in the console and not on the screen. So turning the switch on widens the
+        allowed origins to the private ranges and `.local` names, which is exactly the set of places
+        the API has just become reachable from, and no wider.
+
+        A `NEUROCODE_CORS_ORIGIN_REGEX` someone wrote themselves is never touched: they have already
+        said which origins they mean, and quietly adding to that list would be the API deciding
+        something its operator had decided.
+        """
+        if self.listen_on_lan and self.cors_origin_regex == LOCAL_ORIGINS:
+            self.cors_origin_regex = PRIVATE_ORIGINS
+        return self
+
+    @property
+    def bind_host(self) -> str:
+        """The address the API is told to listen on: this machine only, or every interface on it.
+
+        Read by `scripts/dev.sh` when it starts uvicorn, and said aloud at start-up, so the switch and
+        the socket can never disagree about which one is in force.
+        """
+        return "0.0.0.0" if self.listen_on_lan else "127.0.0.1"  # noqa: S104 — the point of the switch
+
+    def reach_notice(self) -> list[str]:
+        """What listening on the LAN means, in sentences a person can act on — logged at start-up.
+
+        Empty when the API is bound to this machine, because then there is nothing to warn anybody
+        about. Each sentence is one true consequence of the switch being on, in the order that
+        matters: who can reach it, what the cookie is crossing, and the one combination that hands
+        out a shell.
+        """
+        if not self.listen_on_lan:
+            return []
+        said = [
+            f"Listening on {self.bind_host}: everyone on this network can reach this API, and anyone "
+            "with an account or a personal access token can sign in to your workspace.",
+            "Over plain http the session cookie crosses the network in the clear. Put it behind HTTPS "
+            "(deploy/ has a Caddy that does) before using this anywhere you do not trust.",
+        ]
+        if self.machine_access:
+            said.append(
+                "Machine access is on as well, so an Owner signing in from another device gets the "
+                "Workbench: this machine's files, terminals and debugger. Set "
+                "NEUROCODE_MACHINE_ACCESS=false unless that is what you meant.")
+        return said
 
 
 @lru_cache(maxsize=1)

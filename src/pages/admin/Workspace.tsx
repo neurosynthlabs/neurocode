@@ -1,9 +1,11 @@
-import { useEffect, useState, type SyntheticEvent } from 'react';
+import { useCallback, useEffect, useState, type SyntheticEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Field, KV, Page, PageBody, PageHeader, Panel, Stat, StatGrid } from '@/components/os';
-import { api, type WorkspaceInfo } from '@/lib/api';
+import { Switch } from '@/components/ui/switch';
+import { Field, KV, Page, PageBody, PageHeader, Panel, Stat, StatGrid, Tag } from '@/components/os';
+import { api, type SandboxInfo, type SsoConfig, type WorkspaceInfo } from '@/lib/api';
+import { useAccess } from '@/lib/access';
 import { useAuth } from '@/lib/auth';
 import { useData } from '@/lib/data';
 import { attempt, useAdmin, when } from './load';
@@ -18,6 +20,9 @@ export default function WorkspacePage() {
   const nav = useNavigate();
   const { can, refresh } = useAuth();
   const { health, reset } = useData();
+  // The workspace's own roles, custom ones included, so a claim map names what this workspace has.
+  const { catalogue } = useAccess();
+  const roles = catalogue?.roles.map((r) => ({ id: r.id, name: r.name })) ?? [];
   const { data: ws, setData, error, reload } = useAdmin<WorkspaceInfo>(loadWorkspace);
   const manage = can('workspace:admin');
   const [name, setName] = useState<string | null>(null);
@@ -82,6 +87,14 @@ export default function WorkspacePage() {
               </Panel>
             </div>
 
+            {/* Both read routes need workspace:admin, so there is nothing here for anybody else to see. */}
+            {manage && (
+              <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+                <SingleSignOn roles={roles} />
+                <Sandbox />
+              </div>
+            )}
+
             <Panel title="Work data" eyebrow="PostgreSQL, on this machine" className="border-danger/30">
               {health && <KV k="Database" v={health.db} mono />}
               {health && (
@@ -105,5 +118,229 @@ export default function WorkspacePage() {
         )}
       </PageBody>
     </Page>
+  );
+}
+
+/* ── The fence around the runtime's commands ─────────────────────
+   Read, never described: what this panel shows is what the server measured on the machine it is
+   running on, including "there is no sandbox here" and why. The one decision a person makes is the
+   network, because a test suite that installs its packages needs it and nobody should find that out
+   by reading code. */
+function Sandbox() {
+  const [box, setBox] = useState<SandboxInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let live = true;
+    api.admin.sandbox().then(
+      (found) => { if (live) setBox(found); },
+      (e: unknown) => console.error('[NeuroCode] GET /admin/sandbox failed:', e),
+    );
+    return () => { live = false; };
+  }, []);
+
+  const save = async (patch: { enabled: boolean; network: boolean }, said: string) => {
+    setBusy(true);
+    const next = await attempt(() => api.admin.updateSandbox(patch), 'The sandbox was not changed');
+    setBusy(false);
+    if (!next) return;
+    setBox(next);
+    toast.success(said);
+  };
+
+  if (!box) return null;
+  const fenced = box.inForce.confinesWrites;
+  return (
+    <Panel
+      title="Sandbox"
+      eyebrow="Around every command a run executes"
+      actions={<Tag tone={fenced ? 'ok' : box.inForce.kind === 'none' ? 'warn' : 'info'}>{box.inForce.name}</Tag>}
+    >
+      <p className="mb-3 text-[12.5px] leading-relaxed text-soft">{box.inForce.words}</p>
+      <KV k="This machine offers" v={box.detected.name} wrap />
+      {box.detected.why && <p className="mt-1 text-[12px] leading-relaxed text-warn">{box.detected.why}</p>}
+      <div className="mt-3 flex items-center justify-between gap-4 border-t border-line/70 pt-3">
+        <div>
+          <p className="text-[13px] font-medium text-ink">Let a command reach the network</p>
+          <p className="mt-0.5 max-w-md text-[12px] leading-relaxed text-dim">
+            Off, so a test suite cannot send anything anywhere. Turn it on when a project installs its packages
+            as part of running its tests.
+          </p>
+        </div>
+        <Switch
+          checked={box.network}
+          disabled={busy}
+          aria-label="Let a sandboxed command reach the network"
+          onCheckedChange={(on) => void save({ enabled: box.enabled, network: on },
+            on ? 'Sandboxed commands may reach the network' : 'The network is off inside the sandbox')}
+        />
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-4 border-t border-line/70 pt-3">
+        <div>
+          <p className="text-[13px] font-medium text-ink">Sandbox the runtime's commands</p>
+          <p className="mt-0.5 max-w-md text-[12px] leading-relaxed text-dim">
+            {box.serverAllows
+              ? 'Turning this off runs a project’s tests and checks with everything this account can reach.'
+              : 'This server was started with NEUROCODE_SANDBOX=false, which a screen cannot undo.'}
+          </p>
+        </div>
+        <Switch
+          checked={box.enabled}
+          disabled={busy || !box.serverAllows}
+          aria-label="Sandbox the commands a run executes"
+          onCheckedChange={(on) => void save({ enabled: on, network: box.network },
+            on ? 'Commands run behind the sandbox' : 'Commands run unsandboxed')}
+        />
+      </div>
+    </Panel>
+  );
+}
+
+/* ── Single sign-on ──────────────────────────────────────────────
+   An issuer, a client id, a secret kept the way a model key is kept, and a map from a claim to a role
+   here. The Owner role is not offerable: the API refuses a map that names it, and a screen that let
+   somebody try would be a screen that teaches the wrong thing. */
+function SingleSignOn({ roles }: { roles: { id: string; name: string }[] }) {
+  const [doc, setDoc] = useState<SsoConfig | null>(null);
+  const [draft, setDraft] = useState<Partial<SsoConfig> & { clientSecret?: string }>({});
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => {
+    api.admin.sso().then(
+      (found) => { setDoc(found); setDraft({}); },
+      (e: unknown) => console.error('[NeuroCode] GET /admin/sso failed:', e),
+    );
+  }, []);
+  useEffect(load, [load]);
+
+  if (!doc) return null;
+  const at = <K extends keyof SsoConfig>(k: K): SsoConfig[K] => (draft[k] ?? doc[k]) as SsoConfig[K];
+  const edited = Object.keys(draft).length > 0;
+  const suggested = `${window.location.origin}${doc.callbackPath}`;
+
+  const save = async (extra: Record<string, unknown> = {}) => {
+    setBusy(true);
+    const next = await attempt(() => api.admin.updateSso({ ...draft, ...extra }), 'Single sign-on was not saved');
+    setBusy(false);
+    if (!next) return;
+    setDoc(next);
+    setDraft({});
+    toast.success('Single sign-on saved');
+  };
+
+  const mapped = Object.entries(at('roleMap'));
+  const addClaim = (claim: string, role: string) => {
+    if (!claim.trim()) return;
+    setDraft((d) => ({ ...d, roleMap: { ...at('roleMap'), [claim.trim()]: role } }));
+  };
+  const dropClaim = (claim: string) => {
+    const left = { ...at('roleMap') };
+    delete left[claim];
+    setDraft((d) => ({ ...d, roleMap: left }));
+  };
+
+  return (
+    <Panel
+      title="Single sign-on"
+      eyebrow="OpenID Connect — Google, Okta, Entra, or any provider with a discovery document"
+      actions={<Tag tone={doc.ready ? 'ok' : 'neutral'}>{doc.ready ? 'On' : 'Off'}</Tag>}
+    >
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Issuer" value={at('issuer')} onChange={(v) => setDraft((d) => ({ ...d, issuer: v }))}
+          mono placeholder="https://accounts.google.com"
+          hint="NeuroCode reads its .well-known/openid-configuration and nothing else." />
+        <Field label="Client id" value={at('clientId')} onChange={(v) => setDraft((d) => ({ ...d, clientId: v }))}
+          mono />
+        <Field label="Client secret" type="password" value={draft.clientSecret ?? ''} mono autoComplete="off"
+          onChange={(v) => setDraft((d) => ({ ...d, clientSecret: v }))}
+          hint={doc.hasSecret ? `Set · ${doc.secretMask}. Type a new one to replace it.`
+                              : 'Kept on this machine beside the model keys, never shown again in full.'} />
+        <Field label="Button label" value={at('label')} onChange={(v) => setDraft((d) => ({ ...d, label: v }))}
+          hint="The sign-in screen says “Continue with …”." />
+        <Field className="sm:col-span-2" label="Redirect address" value={at('redirectUri')} mono
+          onChange={(v) => setDraft((d) => ({ ...d, redirectUri: v }))}
+          hint={<>Register this at the provider. For this browser that is <code className="font-mono [overflow-wrap:anywhere]">{suggested}</code>.</>} />
+      </div>
+
+      <div className="mt-4 border-t border-line/70 pt-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <Field className="w-44" label="Role claim" value={at('roleClaim')} mono
+            onChange={(v) => setDraft((d) => ({ ...d, roleClaim: v }))}
+            hint="Usually groups or roles." />
+          <ClaimAdder roles={roles} onAdd={addClaim} />
+        </div>
+        {mapped.length > 0 && (
+          <ul className="mt-3 flex flex-wrap gap-2">
+            {mapped.map(([claim, role]) => (
+              <li key={claim} className="flex items-center gap-2 rounded-lg border border-line bg-surface-2/60 px-2.5 py-1 text-[12.5px]">
+                <span className="font-mono text-ink">{claim}</span>
+                <span className="text-dim">→</span>
+                <span className="text-ink">{roles.find((r) => r.id === role)?.name ?? role}</span>
+                <button type="button" onClick={() => dropClaim(claim)} className="text-dim hover:text-danger" aria-label={`Remove ${claim}`}>×</button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="mt-2 text-[12px] leading-relaxed text-dim">
+          Applied on every sign-in, so taking somebody out of a group there takes the role away here. An Owner’s
+          roles are never touched by a claim, and no claim can grant the Owner role.
+        </p>
+      </div>
+
+      <div className="mt-4 space-y-3 border-t border-line/70 pt-3">
+        <Choice label="Turn it on" hint="The sign-in screen then offers the provider’s button."
+          on={at('enabled')} disabled={busy}
+          onChange={(v) => setDraft((d) => ({ ...d, enabled: v }))} />
+        <Choice label="Make an account for anyone the provider vouches for"
+          hint="Off means somebody the provider knows and this workspace does not is told to ask an admin."
+          on={at('createUsers')} disabled={busy}
+          onChange={(v) => setDraft((d) => ({ ...d, createUsers: v }))} />
+        <Choice label="Require it" hint="Passwords stop working for everyone but an Owner, so a broken provider can never lock the workspace."
+          on={at('requireSso')} disabled={busy || !doc.ready}
+          onChange={(v) => setDraft((d) => ({ ...d, requireSso: v }))} />
+      </div>
+
+      <div className="mt-4 flex justify-end gap-2">
+        <Button variant="ghost" size="sm" onClick={load} disabled={!edited || busy}>Discard</Button>
+        <Button size="sm" onClick={() => void save()} disabled={!edited || busy}>Save</Button>
+      </div>
+    </Panel>
+  );
+}
+
+function Choice({ label, hint, on, disabled, onChange }: {
+  label: string; hint: string; on: boolean; disabled: boolean; onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div>
+        <p className="text-[13px] font-medium text-ink">{label}</p>
+        <p className="mt-0.5 max-w-md text-[12px] leading-relaxed text-dim">{hint}</p>
+      </div>
+      <Switch checked={on} disabled={disabled} aria-label={label} onCheckedChange={onChange} />
+    </div>
+  );
+}
+
+function ClaimAdder({ roles, onAdd }: {
+  roles: { id: string; name: string }[]; onAdd: (claim: string, role: string) => void;
+}) {
+  // The Owner role is absent on purpose: the API refuses a map that names it, and offering it here
+  // would be offering something that cannot happen.
+  const offered = roles.filter((r) => r.id !== 'owner');
+  const [claim, setClaim] = useState('');
+  const [role, setRole] = useState(offered[0]?.id ?? 'viewer');
+  return (
+    <div className="flex flex-wrap items-end gap-2">
+      <Field className="w-44" label="Claim value" value={claim} onChange={setClaim} mono
+        placeholder="platform-engineers" />
+      <label className="block">
+        <span className="mb-1.5 block text-[12.5px] font-medium text-soft">Carries</span>
+        <select value={role} onChange={(e) => setRole(e.target.value)}
+          className="h-9 rounded-lg border border-line bg-surface-2/60 px-2.5 text-[13.5px] text-ink-2 hover:text-ink focus-visible:border-brand">
+          {offered.map((r) => <option key={r.id} value={r.id} className="bg-surface">{r.name}</option>)}
+        </select>
+      </label>
+      <Button type="button" size="sm" variant="secondary" disabled={!claim.trim()}
+        onClick={() => { onAdd(claim, role); setClaim(''); }}>Add</Button>
+    </div>
   );
 }

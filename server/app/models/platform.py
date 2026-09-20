@@ -84,7 +84,8 @@ class ToolRule(Base, Mixin):
     __tablename__ = "tool_rules"
     __table_args__ = (
         CheckConstraint("action IN ('allow', 'ask', 'deny')", name="action"),
-        CheckConstraint("tool IN ('edit', 'command', 'read', 'web_fetch', 'web_search', 'mcp')", name="tool"),
+        CheckConstraint("tool IN ('edit', 'command', 'read', 'web_fetch', 'web_search', 'mcp', 'tool', 'hook')",
+                        name="tool"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -94,6 +95,33 @@ class ToolRule(Base, Mixin):
     pattern: Mapped[str] = mapped_column(Text, nullable=False)
     action: Mapped[str] = mapped_column(String(10), nullable=False)
     note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+
+class CustomTool(Base, Mixin):
+    """A tool a person defined for their agents: a command on this machine, or an HTTP call.
+
+    It is not a way around the rules — it is another thing the rules govern. A custom tool is refused unless
+    a tool rule allows it (`tool` in tool_rules), it runs where every other command runs (inside the run's
+    worktree, under the machine's roots), and what it returns is data, never an instruction.
+    """
+
+    __tablename__ = "custom_tools"
+    __table_args__ = (
+        CheckConstraint("kind IN ('command', 'http')", name="kind"),
+        UniqueConstraint("project_id", "name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    #: Null is the workspace's own tool, offered in every project.
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    #: What it runs or calls, and the arguments it takes — a JSON Schema the model is shown and the runtime
+    #: checks before anything happens.
+    spec: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    enabled: Mapped[bool] = mapped_column(nullable=False, server_default="true")
     created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
 

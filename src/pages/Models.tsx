@@ -29,6 +29,14 @@ const LEVELS: ThinkingLevel[] = ['off', 'low', 'high', 'max'];
 const pct = (part: number, whole: number) => (whole ? Math.round((100 * part) / whole) : 0);
 const compact = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(n % 1_000_000 ? 2 : 0)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`);
 const money = (usd: number) => (usd === 0 ? 'free' : `$${usd.toFixed(usd < 1 ? 4 : 2)}`);
+/** What a lane allows itself, and whose numbers those are. A provider that publishes none gets said so:
+    0 here means "no cap of ours", which is not the same as "unlimited", and must never read as it. */
+const caps = (l: FleetLane) => {
+  const parts = [l.rpm ? `${l.rpm}/min` : '', l.rpd ? `${l.rpd}/day` : '', l.tpd ? `${compact(l.tpd)} tokens/day` : '',
+    l.maxRequestTokens ? `${compact(l.maxRequestTokens)} tokens a call, so it thinks less here` : ''].filter(Boolean);
+  if (!parts.length) return '';
+  return ` · ${parts.join(' · ')}${l.caps === 'ours' ? ' (ours — it publishes none)' : ''}`;
+};
 const why = (e: unknown) => (e instanceof ApiError ? e.message : 'The local API did not answer.');
 
 /** A router diagram drawn from what the gateway would try now, one line per feature. */
@@ -137,8 +145,9 @@ function LiveModels() {
                         <Cell className="font-medium text-ink">
                           {l.label} <Mono className="ml-1">{l.model}</Mono>
                           <span className="mt-0.5 block max-w-[380px] truncate text-[12px] font-normal text-dim">
-                            {l.free ? 'free' : 'paid'}{l.window ? ` · ${compact(l.window)} context` : ''}{l.rpm ? ` · ${l.rpm}/min` : ''}{l.rpd ? ` · ${l.rpd}/day` : ''}{l.embed ? ` · embeds with ${l.embed}` : ''} · {l.note}
+                            {l.freedom}{l.expires ? ` · ${l.expires}` : ''}{l.window ? ` · ${compact(l.window)} context` : ''}{caps(l)}{l.embed ? ` · embeds with ${l.embed}` : ''} · {l.note}
                           </span>
+                          {l.allowance && <span className="mt-0.5 block max-w-[380px] text-[12px] font-normal whitespace-normal text-soft">{l.allowance}</span>}
                           {l.retired && <span className="mt-0.5 block max-w-[380px] text-[12px] font-normal whitespace-normal text-warn">{l.retired}</span>}
                           {l.offPeak && <span className="mt-0.5 block max-w-[380px] text-[12px] font-normal whitespace-normal text-dim">{l.offPeak.words}</span>}
                         </Cell>
@@ -160,7 +169,7 @@ function LiveModels() {
                         <Cell>
                           <span className="flex items-center gap-1.5">
                             <Dot state={l.ready ? 'ready' : l.enabled ? 'offline' : 'disabled'} pulse={l.ready} />
-                            <span className={cn('text-[12.5px]', l.ready ? 'text-ok' : 'text-soft')}>{l.ready ? `ready · ${l.spent.today} today` : l.blocked ?? 'not allowed'}</span>
+                            <span className={cn('text-[12.5px]', l.ready ? 'text-ok' : 'text-soft')}>{l.ready ? `ready · ${l.spent.today} today${l.tpd ? ` · ${compact(l.spent.tokensToday)} of ${compact(l.tpd)} tokens` : ''}` : l.blocked ?? 'not allowed'}</span>
                           </span>
                           {l.ready && !l.allowed && <span className="mt-0.5 block text-[12px] text-dim">outside the routing policy</span>}
                         </Cell>

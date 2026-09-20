@@ -154,20 +154,31 @@ function SearchResults({ query, loading, error, data, onOpen }: {
             </DataTable>
           )}
       {counts && (
-        <div className="grid grid-cols-1 gap-x-6 border-t border-line/60 px-5 py-2.5 md:grid-cols-3">
-          {[
-            { n: counts.lexical, name: 'Words · Postgres full text', note: counts.lexical >= counts.lexicalCap ? `pieces matching the words, counted to ${counts.lexicalCap.toLocaleString()}` : 'pieces matching the words' },
-            { n: counts.semantic, name: `Meaning · ${data?.model || 'no model'}`, note: counts.semantic ? 'nearest neighbours compared' : 'off — no embedding lane answered' },
-            { n: counts.fused, name: `Fused · reciprocal rank, k = ${counts.k}`, note: 'what survived both lists' },
-          ].map((line) => (
-            <div key={line.name} className="flex items-start gap-2 py-1">
-              <span className="tnum w-10 shrink-0 text-right text-[12px] text-brand">{line.n.toLocaleString()}</span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-[12.5px] text-ink-2">{line.name}</span>
-                <span className="block text-[11.5px] text-dim">{line.note}</span>
-              </span>
-            </div>
-          ))}
+        <div className="border-t border-line/60 px-5 py-2.5">
+          <div className="grid grid-cols-1 gap-x-6 md:grid-cols-3">
+            {[
+              { n: counts.lexical, name: 'Words · Postgres full text', note: counts.lexical >= counts.lexicalCap ? `pieces matching the words, counted to ${counts.lexicalCap.toLocaleString()}` : 'pieces matching the words' },
+              { n: counts.semantic, name: `Meaning · ${data?.model || 'no model'}`, note: counts.semantic ? 'nearest neighbours compared' : 'off — no embedding lane answered' },
+              { n: counts.fused, name: `Fused · reciprocal rank, k = ${counts.k}`, note: 'what survived both lists' },
+            ].map((line) => (
+              <div key={line.name} className="flex items-start gap-2 py-1">
+                <span className="tnum w-10 shrink-0 text-right text-[12px] text-brand">{line.n.toLocaleString()}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[12.5px] text-ink-2">{line.name}</span>
+                  <span className="block text-[11.5px] text-dim">{line.note}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+          {/* The two rules that shaped this list, said only when they did something: a file may give at
+              most a couple of pieces, and a piece too far from the question is never handed to a model. */}
+          {(counts.dropped > 0 || counts.floored > 0) && (
+            <p className="mt-1.5 border-t border-line/60 pt-2 text-[11.5px] leading-relaxed text-dim">
+              {counts.dropped > 0 && `${counts.dropped} skipped so one file could not fill the answer`}
+              {counts.dropped > 0 && counts.floored > 0 && ' · '}
+              {counts.floored > 0 && `${counts.floored} shown here are below the relevance floor — a session is told there is nothing rather than handed these`}
+            </p>
+          )}
         </div>
       )}
     </Panel>

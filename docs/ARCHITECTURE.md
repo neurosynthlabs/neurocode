@@ -82,6 +82,7 @@ server/app/
   secrets.py       API keys on disk (0600), only ever reported masked
 server/alembic/    the migrations, and the only thing that creates a schema
 cli/               `nc`, the terminal client — its own package and environment
+vscode/            the VS Code extension: a client of this API, built with tsc, packaged with vsce
 desktop/           the Electron shell
 deploy/            Docker Compose (Postgres with pgvector, the API, Caddy with HTTPS) for a server of your own
 ```
@@ -211,6 +212,17 @@ refuses outright if your working tree has uncommitted changes, undoes itself and
 merge collides, and always hands back the command that undoes it (`git reset --hard <sha>`). Nothing is
 ever merged while a run is still working, and nothing is merged twice.
 
+**Pushing, and the pull request.** An accepted run's branch can be pushed to the project's own remote —
+your git credentials, never forced — and from there the pull or merge request is opened **from here**:
+with your own `gh` or `glab` when they are installed and signed in, else a token kept beside the model
+keys (mode 0600, masked everywhere), and if neither is there, that is said in words and the compare link
+stays. The title is the run's; the body is the run's record — what it did, what the reviewer found, what
+the tests and the checks said — every line a stored fact, none of it written by a model at that moment.
+It goes up a draft while findings stand that nobody has answered, and ready once the run is signed; the
+request says which. What comes back (number, URL, state) is kept on the run beside the compare link and
+read back on demand, so the run screen says "open", "merged" or "closed" without anybody going to look.
+`nc pr` does the same, and `nc forges` says what this machine can open one with.
+
 Three rules keep it safe to leave running:
 
 - **Nothing touches your working tree.** Every change happens in the worktree, on a new branch.
@@ -227,7 +239,8 @@ this run, or always in this project (which writes an audited rule). An agent tha
 ask a question in words; the answer resumes the step and is kept in the project's memory. A plan can be
 dispatched step by step, with a gate before each one, or with a goal budget: the run goes again until a
 model on another lane judges every acceptance criterion met, or the attempts run out. Every step's commit
-is kept, so one can be reverted; an accepted run can be pushed to the remote with the compare link.
+is kept, so one can be reverted; an accepted run can be pushed to the remote and its pull request
+opened from here.
 
 **Owners beyond the roster.** A plan or workflow step can be owned by a custom agent — the workspace's,
 the project's, or one the repository declares in `.neurocode/agents/*.md` or `.claude/agents/*.md` — as
@@ -269,7 +282,7 @@ Two searches run over the same rows and are fused by reciprocal rank:
 
 Fusing them means neither has to win outright, and retrieval keeps working with no model at all: it
 says it is lexical only rather than quietly becoming worse. Embeddings come from whichever lane serves
-them — Gemini, Mistral, GitHub Models, or `nomic-embed-text` in Ollama on this machine — in batches,
+them — Cloudflare's `@cf/baai/bge-m3`, Gemini, Mistral, or `nomic-embed-text` in Ollama here — in batches,
 normalised on the way in and stored in a pgvector column under an HNSW index, so searching is one SQL
 query and needs no vector service of its own.
 
@@ -330,19 +343,54 @@ What the Workbench adds for any language and for data work:
   off and the configuration locked — so a query reads that file and nothing else, not another file and not
   the network.
 
-## Three ways in: web, terminal, desktop
+## Five ways in: web, phone, terminal, editor, desktop
 
 - **Web.** Every feature, in any browser, on any screen down to a phone's width.
+- **Phone.** The same web app, installed. A manifest and a service worker (`public/`, registered
+  from `src/lib/pwa.ts`) make it an app on the home screen: the shell is cached so it opens
+  without a network, and **nothing of the workspace ever is** — `/api` is passed straight
+  through, so a phone out of signal opens to the app saying it cannot reach its server, never to
+  yesterday's figures presented as today's. It draws into the safe area, and on a coarse pointer
+  every button carries a 44 px hit area without a pixel of the layout moving. The worker is
+  registered only where it belongs: never on the dev server, never inside the desktop app, and
+  one found in either of those places is removed.
 - **Terminal.** `nc` (`uv tool install ./cli`) signs in with a personal access token kept in the OS
   keychain and talks to any NeuroCode server: `nc ask`, a full-screen `nc chat` with streaming answers,
   permission cards, `@` mentions and slash commands, `nc plan`, `nc approve` / `deny`, `nc runs --watch`,
-  `nc merge`, `nc push`, `nc memory`, `nc open`. Every command takes `--json`, and exits 3 when it is
+  `nc merge`, `nc push`, `nc pr`, `nc forges`, `nc memory`, `nc open`. Every command takes `--json`, and exits 3 when it is
   waiting on a person, so scripts can tell.
+- **Editor.** A VS Code extension (`vscode/`, TypeScript, `vsce package`): sign in with a personal
+  access token kept in the editor's secret store, "Ask NeuroCode about this selection" (which
+  starts a session with the file attached and the lines quoted), "Compile this as a requirement",
+  a Runs view following the same `/activity/stream` every open tab reads, and "Open in the
+  Workbench", which is a URL. It is a client and nothing more — no model, no rules, no copy of
+  the workspace — and it refuses to sign, merge or answer a gate, because those need the diff
+  and the review in front of a person. `vscode/src/protocol.ts` holds every decision it makes
+  and imports nothing, so all of it is read back by `node --test` without an editor.
 - **Desktop.** An Electron app (`npm run desktop:build`, an arm64 .dmg) finds a running API or starts one,
   serves the same web app through a local server on one origin, locks navigation to it, and adds what
   only a desktop can do: native folder and file dialogs, Reveal in Finder, Open in your editor at a line,
   native notifications, the approvals count on the Dock, menus and shortcuts, and `neurocode://` links —
   which is how `nc open` hands a project to it.
+
+**From a workflow.** `.github/actions/neurocode` is a composite action that installs `nc` from this
+repository's own `cli/` and runs it against a server with a token, so a workflow can compile a
+requirement, dispatch a plan or wait on a run. What it adds over a `curl` is that it understands the
+answer: `nc` exits 3 when a run has stopped at a gate, a permission card or a signature, and the job
+goes red and says which screen to open, because a green tick over work nobody has looked at is the
+one result this product must never produce. `accept`, `approve`, `deny`, `merge`, `push` and
+`send-back` are refused there outright — there is no `--yes` in `nc` and there is none here either.
+
+**Reaching it from another device.** `nc`, the extension and a phone's browser all talk to whichever
+server they are pointed at, so the question is only ever which server is reachable. A hosted one
+(`deploy/`) is, over HTTPS. The API on a laptop is not: it binds to `127.0.0.1`, and
+`NEUROCODE_LISTEN_ON_LAN=true` is the one switch that changes that — it binds every interface and
+widens the allowed origins to the private ranges and `.local` names, and to nothing else. It is off,
+because turning it on hands the workspace to everyone on that network who has an account or a token,
+over plain http where the session cookie crosses in the clear; and on a machine that still has
+machine access it hands them the Workbench's files, terminals and debugger with it. The API prints
+all three of those sentences every time it starts with the switch on, and `scripts/dev.sh` prints
+the address a phone should use — `status` says which of the two it is either way.
 
 ## Routines and the inbox
 
@@ -392,13 +440,28 @@ machine a person sits at.
 
 ## Lanes: many small free models instead of one big paid one
 
-A **lane** is a provider and a model together — `groq/llama-3.3-70b`, `cerebras/qwen-3-coder`,
-`gemini/2.5-flash`, `mistral`, `openrouter`, `github`, the paid `deepseek`, and `ollama` on this Mac.
-Each lane carries what it is good at (write, review, plan, chat) and the free tier's limits, and every
-one of them speaks the same chat-completions shape, so adding a provider is a row in a table, not a
-client.
+A **lane** is a provider and a model together — `groq/gpt-oss-120b`, `cloudflare/glm-4.7-flash`,
+`gemini/2.5-flash`, `zai/glm-4.7-flash`, `mistral`, `openrouter`, the paid `deepseek`, the
+card-backed `cerebras`, and `ollama` on this Mac. Each lane carries what it is good at (write,
+review, plan, chat) and the free tier's limits, and every one of them speaks the same
+chat-completions shape, so adding a provider is a row in a table, not a client.
 
-The router picks the lane: free first, the paid one only when the free ones are spent, the local model
+**Three different things are called free, and the table keeps them apart.** `free` is about money —
+a call on a free lane costs nothing, which is what lets the ledger price it at $0 and mean it.
+`gate` is what the provider asks for instead: nothing, a payment card, a phone number, an identity
+check. Cerebras answers its own FAQ "Is there a permanently free tier? No" — $5 of trial credit that
+needs a verified card and expires in thirty days — so it is a paid lane here, and one that publishes
+no price, which the ledger reports as unknown rather than as zero. Every screen that shows a lane
+shows which kind of free it is, in a sentence, beside it.
+
+**And a free tier in 2026 ends on tokens, not calls.** Groq's free plan allows a thousand calls a day
+and two hundred thousand tokens; the tokens go first, at about two dozen calls that write a file. A
+lane therefore carries `tpm` and `tpd` beside `rpm` and `rpd`, the router stops on whichever runs out
+first, and a lane whose minute is too small to hold the thinking a feature asked for is asked for
+less rather than refused for asking — Groq's free minute holds 8,000 tokens and a review that thinks
+hard wants 27,576, and providers estimate a request before they run it.
+
+The router picks the lane: free first, the paid ones only when the free ones are spent, the local model
 last — skipping any lane with no key, with its allowance spent for this minute or this day, that an
 admin switched off, or that refused the key it holds. A call that fails moves to the next lane instead
 of giving up, and only when every lane is spent does the feature say so: compiling and brainstorming
@@ -406,14 +469,20 @@ refuse, and the features with an honest rule-based answer give that, labelled.
 
 Two things fall out of that. **Agents that work at the same time are spread across different lanes**,
 so four agents are four providers answering at once rather than four requests queued behind one
-rate limit — the real ceiling on parallel work is requests-per-minute, not intelligence. And **the
+rate limit — the real ceiling on parallel work is one provider's allowance, not intelligence. And **the
 reviewer avoids the lane that wrote the code**, so a second model reads the diff: with free lanes, a
 second opinion costs nothing.
 
 Limits are the router's own caps, not promises from a provider: every lane's model, base URL, calls a
 minute and calls a day are editable in Admin → AI providers, where each lane shows whether it can
-answer right now and what it has spent today. Keys live in the secrets file (or an environment
-variable), one per lane, never in the database and never in a log line.
+answer right now and what it has spent today. Every number in the table is sourced in a comment
+beside it, with the page and the day it was read; where a provider has stopped publishing its free
+limits — Google, Mistral and Z.ai all have — the caps say in the screens that they are ours and not
+theirs, because a number that pretends is worse than no number. A model a provider has withdrawn is
+named in `RETIRED` with what to choose instead, and a lane whose provider ended it — GitHub retired
+GitHub Models entirely on 2026-07-30 — stays in `ENDED`, so its calls in the ledger keep the cost
+they really had. Keys live in the secrets file (or an environment variable), one per lane, never in
+the database and never in a log line.
 
 ## API map
 
@@ -434,7 +503,7 @@ hosted server).
 | `/diagnostics`, `/lsp` | machine | the checkers a folder declares, checks and their problems, a file's problems; hover, definition and symbols from a language server |
 | `/notebooks` | machine | open and save a notebook, kernels for its language, start, interrupt, restart, stop; cells run over a WebSocket |
 | `/data` | machine | open a data file, rows (paged, sorted), column statistics, a chart, one read-only query |
-| `/runs` | session; `runs:run` to stop, discard, revert or send back; `runs:merge` to merge or push | agent runs, their output, gates, checks and their problems, the diff, the merge, the push, rework |
+| `/runs` | session; `runs:run` to stop, discard, revert or send back; `runs:merge` to merge, push or open the pull request; `workspace:admin` to keep a forge token | agent runs, their output, gates, checks and their problems, the diff, the merge, the push, the pull request and its state, rework |
 | `/reviews`, `/agents` | session; `runs:run` to ask for a review; `agents:manage` to write an agent; `sessions:chat` to try one | reviews of any diff and what they became; the roster and custom agents, including those a repository declares |
 | `/permissions` | session; `rules:manage` to write a rule | the standing answers the runtime applies, and the tool rules — allow, ask or deny — for every tool |
 | `/schedules`, `/inbox` | session; `workflows:write` to write a routine, plus `plans:compile` + `plans:decide` to run it now; the webhook's own token | routines, their fires and webhooks; what needs you, what is working, what finished since you last looked |
@@ -460,7 +529,9 @@ hosted server).
   retrieval and taste; the code index for 25+ languages; sessions that read the code, the web and MCP
   tools behind permission cards; custom agents and reviews of any diff; routines and the inbox; Blueprints;
   the Workbench on this machine — files, terminals, run, debug, problems, language servers, notebooks and
-  data; and the three ways in — web, `nc` in the terminal, and the desktop app. No sample data anywhere:
+  data; and the ways in — the web app, installable on a phone, `nc` in the terminal, the VS Code
+  extension, the desktop app, and a composite GitHub action that runs `nc` in a workflow. No sample
+  data anywhere:
   a new workspace is empty, and no figure appears that nothing measured. The checks run on the real
   stack — a throwaway Postgres, the API and a stub model (`scripts/stack.mjs`) — building their own data:
   the end-to-end run from an empty workspace (38 steps, from setup to a notebook's kernel), and the smoke

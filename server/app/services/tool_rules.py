@@ -1,9 +1,15 @@
 """Tool rules: what the runtime may do without asking, what it must ask about, and what it never does.
 
 A rule names a tool — `edit` (a path an agent writes), `command` (a command line run in a worktree),
-`read` (a path a session reads), `web_fetch` (a URL), `web_search` (a query) or `mcp` (`server/tool`) —
-a glob over what the tool acts on, and one of three answers: allow, ask or deny. A rule with no project
+`read` (a path a session reads), `web_fetch` (a URL), `web_search` (a query), `mcp` (`server/tool`),
+`tool` (a custom tool a person defined, by its name) or `hook` (a repository's hook, as `event/command`)
+— a glob over what the tool acts on, and one of three answers: allow, ask or deny. A rule with no project
 holds across the workspace; a project's own rule holds only there.
+
+Two of those kinds refuse rather than ask when no rule covers them, and they say so where they are used
+rather than here: a custom tool and a repository's hook are somebody's shell script, so silence about
+one is a no. `decide` still answers **ask** for them — it only reports what the rules say — and
+`custom_tools.py` and `extensions.py` turn that silence into the refusal a person reads.
 
 `decide` is the one place those answers are weighed, and the order is fixed so a person can predict it:
 
@@ -36,11 +42,15 @@ from ..schemas.platform import tool_rule_json
 from .errors import Refused
 from .identity import Person
 
-TOOLS = ("edit", "command", "read", "web_fetch", "web_search", "mcp")
+TOOLS = ("edit", "command", "read", "web_fetch", "web_search", "mcp", "tool", "hook")
 ACTIONS = ("allow", "ask", "deny")
 #: What each tool acts on, in the words a screen and a refusal use.
 SUBJECTS = {"edit": "path", "command": "command line", "read": "path", "web_fetch": "URL",
-            "web_search": "query", "mcp": "server/tool"}
+            "web_search": "query", "mcp": "server/tool", "tool": "custom tool name",
+            "hook": "event/command"}
+#: The kinds where no rule is a refusal rather than a question. Nothing here decides that — it is the
+#: one place that fact is written down, so a screen and a refusal can both read it from the product.
+REFUSED_UNLESS_ALLOWED = frozenset({"tool", "hook"})
 MAX_PATTERN = 300
 MAX_NOTE = 300
 MAX_SUBJECT = 2000
@@ -83,7 +93,11 @@ def weigh(rules: list[ToolRule], tool: str, subject: str) -> Decision:
     """Pure: which of these rules decides, by scope, then length, then caution. Exposed for tests."""
     matching = [r for r in rules if r.tool == tool and fnmatch.fnmatchcase(subject, r.pattern)]
     if not matching:
-        return Decision("ask", None, f"No tool rule covers this {SUBJECTS.get(tool, 'subject')}, so it asks.")
+        # The answer is the same word for every kind — ask — but what the caller then does differs, and a
+        # person reading the "try it" box deserves to be told which it is rather than left to find out.
+        silence = ("so it does not run: a custom tool and a repository's hook run only where a rule allows them"
+                   if tool in REFUSED_UNLESS_ALLOWED else "so it asks")
+        return Decision("ask", None, f"No tool rule covers this {SUBJECTS.get(tool, 'subject')}, {silence}.")
     best = max(matching, key=lambda r: (r.project_id is not None, _literal(r.pattern), len(r.pattern),
                                         CAUTION[r.action]))
     where = f"project {best.project_id}" if best.project_id else "the workspace"

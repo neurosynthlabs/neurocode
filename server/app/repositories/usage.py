@@ -78,10 +78,13 @@ def _priced(value: Callable[[Price], ColumnElement[float]]
 
     `value(price)` is the expression for one priced model at full rate; it is multiplied by the hour's
     rate here. A free lane is zero for the models its price holds for; a call on anything else is NULL."""
-    from ..ai.lanes import IDS, price_table, priced, priced_models
+    from ..ai.lanes import ENDED, IDS, price_table, priced, priced_models
 
     whens = []
-    for lane in (*IDS, OFFLINE):
+    # A lane that has ended still has history: GitHub Models answered for months and every one of those
+    # calls was free. Leaving it out of this CASE would price those days NULL — unknown — which is a
+    # different claim from the one the ledger can make about them, and a false one.
+    for lane in (*IDS, *ENDED, OFFLINE):
         if not priced(lane):
             continue
         table = price_table(lane)

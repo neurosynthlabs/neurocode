@@ -103,7 +103,7 @@ async def test_a_session_says_how_full_its_context_is(client: AsyncClient, sessi
 
     chat = await ChatRepository(session).by_ref(ref)
     assert chat is not None
-    chat.context_tokens, chat.lane, chat.model = 65_536, "groq", "llama-3.3-70b-versatile"
+    chat.context_tokens, chat.lane, chat.model = 65_536, "groq", "openai/gpt-oss-120b"
     await session.flush()
     body = (await client.get(f"/sessions/{ref}")).json()
     assert (body["contextTokens"], body["contextWindow"]) == (65_536, 131_072)

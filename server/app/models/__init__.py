@@ -33,7 +33,7 @@ from .knowledge import (
     TasteRule,
     TasteSignal,
 )
-from .platform import AiCall, Brainstorm, EvalCase, EvalResult, EvalRun, EvalSuite, McpServer, McpTool, ToolRule
+from .platform import AiCall, Brainstorm, CustomTool, EvalCase, EvalResult, EvalRun, EvalSuite, McpServer, McpTool, ToolRule
 from .runtime import Chat, ChatFile, ChatMessage, Run, RunConflict, RunLog, RunStep, TestCoverage, TestFailure
 from .work import (
     ActivityEvent,
@@ -69,7 +69,7 @@ __all__ = [
     "ChecklistItem", "Chunk", "CodeEdge", "CodeFile", "CodeIndexRun", "CodeSymbol", "Decision",
     "EvalCase", "EvalResult", "EvalRun", "EvalSuite",
     "LoginAttempt", "McpServer", "McpTool", "MemoryConflict", "MemoryFact", "MemoryHit", "MemoryTag",
-    "Plan", "ToolRule", "ChatFile", "TasteRule", "TasteSignal", "PlanComment", "Schedule", "ScheduleFire", "RunConfig", "ProjectSource", "Blueprint", "BlueprintTemplate", "ProjectReference", "CodeReview", "CustomAgent", "ApiToken",
+    "Plan", "ToolRule", "ChatFile", "TasteRule", "TasteSignal", "PlanComment", "Schedule", "ScheduleFire", "RunConfig", "ProjectSource", "Blueprint", "BlueprintTemplate", "ProjectReference", "CodeReview", "CustomAgent", "CustomTool", "ApiToken",
     "PlanQuestion", "PlanStep", "Pref", "Project", "ResearchAngle", "ResearchCitation", "ResearchReport",
     "RetrievalRun", "Role", "RolePermission", "Run",
     "RunConflict", "RunLog", "RunStep", "Session", "Setting", "Task", "TaskAgent", "Team", "TeamMember",

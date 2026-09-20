@@ -183,7 +183,7 @@ class ScriptedGateway:
             raw = json.dumps(self.angle)
         else:
             raw = json.dumps(self.synthesis)
-        return Result(parse(raw), Provider(kw.get("lane") or "groq", "llama-3.3-70b-versatile"), 7)
+        return Result(parse(raw), Provider(kw.get("lane") or "groq", "openai/gpt-oss-120b"), 7)
 
 
 class NoLanes:

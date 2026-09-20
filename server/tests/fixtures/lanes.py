@@ -13,7 +13,8 @@ import pytest
 
 from app.ai import gateway as gateway_module
 
-LANE_MODEL = "llama-3.3-70b-versatile"
+#: What the Groq lane really calls today — Groq shut the Llama down on 2026-08-16.
+LANE_MODEL = "openai/gpt-oss-120b"
 
 #: A plan a model might write for an invoice-tax requirement: steps with owners, two questions it
 #: would not guess, and a confidence of its own.

@@ -43,7 +43,7 @@ class FakeGateway:
         if self.raises is not None:
             raise self.raises
         raw = self.script.pop(0) if self.script else '{"answer": "Done."}'
-        return Result(parse(raw), Provider("groq", "llama-3.3-70b-versatile"), 12)
+        return Result(parse(raw), Provider("groq", "openai/gpt-oss-120b"), 12)
 
 
 @pytest.fixture(autouse=True)

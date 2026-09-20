@@ -27,7 +27,8 @@ from app.services.chat import Tools
 from app.services.code import Source, is_writable, reference_labels, roots, writable, writable_at
 from app.services.errors import Refused
 from app.services.references import referenced_ids
-from app.services.retrieval import RetrievalService
+from app.repositories.words import terms
+from app.services.retrieval import RetrievalService, near_enough
 from tests.fixtures.workspace import load_workspace
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
@@ -199,7 +200,10 @@ async def test_retrieval_hands_over_a_referenced_projects_pieces_labelled(client
 
     text, pieces = await service.grounding("shop", "checkout charge", limit=6)
     assert "[code · payments:app/charge.py#charge_card:1 · Payments · reference]" in text
-    assert "read only" in text and pieces == found
+    # Grounding hands on what the search found, less whatever the relevance floor refused: the design
+    # tokens piece shares one word with "checkout charge" and is about neither of them.
+    assert "read only" in text and pieces == [x for x in found if near_enough(x, len(terms("checkout charge")))]
+    assert pieces and len(pieces) < len(found)
     assert await referenced_ids(session, "shop") == ["payments"]
 
 

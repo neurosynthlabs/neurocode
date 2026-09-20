@@ -1,5 +1,6 @@
 """Agent runs over HTTP: what they did, their output, the real diff, and stopping, merging, pushing,
-discarding, reviewing again, sending one back for changes or taking it back to one of its steps.
+opening the pull request, discarding, reviewing again, sending one back for changes or taking it back
+to one of its steps.
 
 Same paths and same JSON as before. What changed underneath: a run's steps, logs, children and
 collisions are rows now, so this file reads them in a fixed number of queries however many runs are
@@ -41,6 +42,11 @@ class PushIn(BaseModel):
     remote: str | None = Field(default=None, min_length=1, max_length=200)
 
 
+class ForgeTokenIn(BaseModel):
+    #: The person's own token for that forge. Empty removes the one stored.
+    token: str = Field(default="", max_length=500)
+
+
 async def _context(open_session: AsyncSession, runs: list[Run]) -> dict[str, dict[str, Any]]:
     """Everything the serialiser needs for a list of runs, in three queries rather than three per run."""
     if not runs:
@@ -74,6 +80,31 @@ async def runs(project: str | None = None, limit: int | None = None, offset: int
                                                     hidden=await unseen_by(who, open_session))
     context = await _context(open_session, page.items)
     return [_one(r, context) for r in page.items]
+
+
+# `forges` is a word, not a reference, and it is declared above `/{ref}` so FastAPI never tries to
+# read it as one. Run references are `RUN-<number>`, so the two can never collide.
+@router.get("/forges")
+async def forges(who: Person = Depends(require("runs:merge")),
+                 open_session: AsyncSession = Depends(session),
+                 gw: Gateway = Depends(gateway)) -> list[dict[str, Any]]:
+    """What this machine can open a pull request with: your own `gh` or `glab` when it is signed in,
+    else a token you stored here. A forge with neither carries the sentence that says what to do."""
+    return await RunService(open_session, gw).forges()
+
+
+@router.put("/forges/{host}/token")
+async def set_forge_token(host: str, body: ForgeTokenIn, request: Request,
+                          who: Person = Depends(require("workspace:admin")),
+                          open_session: AsyncSession = Depends(session),
+                          gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """Keep a forge token beside the model keys: one file, mode 0600, never in the database. What comes
+    back is the last four characters. Audited — whether it was set or cleared, never what it was."""
+    saved = await RunService(open_session, gw).set_forge_token(host, body.token)
+    await AuditRepository(open_session).record(
+        action="forge.token", user_id=who.id, target=host,
+        detail={"set": bool(body.token.strip())}, ip=request.client.host if request.client else "")
+    return saved
 
 
 @router.get("/{ref}")
@@ -141,6 +172,40 @@ async def push(ref: str, request: Request, body: PushIn | None = None,
     return _one(pushed, await _context(open_session, [pushed]))
 
 
+@router.post("/{ref}/pr")
+async def open_pull_request(ref: str, request: Request, who: Person = Depends(require("runs:merge")),
+                            open_session: AsyncSession = Depends(session),
+                            gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """Open the pull or merge request for an accepted run's pushed branch, with your own `gh` or `glab`
+    — or a token you stored here. Its title is the run's; its body is the run's record: what it did,
+    what the reviewer found, what the tests said. A draft while findings stand unanswered, ready once
+    it is signed, and the request itself says which. Answers the run, whose `pushed.pullRequest`
+    carries the number, the URL and the state."""
+    run = await RunService(open_session, gw).open_pull_request(ref, who.name)
+    opened = (run.pushed or {}).get("pullRequest") or {}
+    await AuditRepository(open_session).record(
+        action="run.pull_request", user_id=who.id,
+        target=f"{run.branch} → {opened.get('host')} #{opened.get('number')}",
+        detail={"run": ref, "url": opened.get("url"), "draft": opened.get("draft"),
+                "via": opened.get("via"), "why": opened.get("draftBecause")},
+        ip=request.client.host if request.client else "")
+    return _one(run, await _context(open_session, [run]))
+
+
+@router.get("/{ref}/pr")
+async def pull_request(ref: str, who: Person = Depends(current_person),
+                       open_session: AsyncSession = Depends(session),
+                       gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """The request's state, read back from the forge and kept on the run — so the run screen says
+    "open", "merged" or "closed" without anybody opening a browser. A forge that cannot be reached
+    answers with what was last read and `checkFailed` saying why, never with nothing."""
+    found = await RunRepository(open_session).by_ref(ref)
+    if found is None:
+        raise NotFound(f"run {ref}")
+    await must_see(who, open_session, found.project_id, f"run {ref}")
+    return await RunService(open_session, gw).pull_request_state(ref)
+
+
 @router.post("/{ref}/review")
 async def review_again(ref: str, jobs: BackgroundTasks, who: Person = Depends(require("runs:run")),
                        open_session: AsyncSession = Depends(session), db: Database = Depends(database),
@@ -175,6 +240,40 @@ async def rework(ref: str, body: ReworkIn, jobs: BackgroundTasks, who: Person = 
     answer = _one(lead, await _context(open_session, [lead]))
     starter = runtime.execute_batch if len(made) > 1 else runtime.execute
     await hand_off(open_session, jobs, starter, db, gw, lead.ref)
+    return answer
+
+
+@router.get("/{ref}/resume")
+async def resume_plan(ref: str, who: Person = Depends(current_person),
+                      open_session: AsyncSession = Depends(session),
+                      gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """What carrying an interrupted run on would do, and whether it can be. Reads git and writes
+    nothing: the shas, whether anything is loose in the worktree, the step it would start from, and one
+    sentence saying so in words. `canResume: false` carries the reason, which is the whole answer."""
+    found = await RunRepository(open_session).by_ref(ref)
+    if found is None:
+        raise NotFound(f"run {ref}")
+    await must_see(who, open_session, found.project_id, f"run {ref}")
+    return await RunService(open_session, gw).resume_plan(ref)
+
+
+@router.post("/{ref}/resume")
+async def resume(ref: str, request: Request, jobs: BackgroundTasks,
+                 who: Person = Depends(require("runs:run")), open_session: AsyncSession = Depends(session),
+                 db: Database = Depends(database), gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """Carry an interrupted run on from its last finished step. The steps already done stand, with the
+    commits they made; a step killed half way has its loose files kept on a ref of the run's own before
+    the worktree is taken back to the boundary. The rest runs after the response. Audited: it moves a
+    branch and it spends money."""
+    run = await RunService(open_session, gw).carry_on(ref, who.name)
+    last = (run.review or {}).get("resumes", [{}])[-1]
+    await AuditRepository(open_session).record(
+        action="run.resume", user_id=who.id, target=f"{run.ref} → step {last.get('from')}",
+        detail={"branch": run.branch, "from": last.get("from"), "adopted": last.get("adopted"),
+                "kept": last.get("kept", {}), "sha": last.get("sha", {})},
+        ip=request.client.host if request.client else "")
+    answer = _one(run, await _context(open_session, [run]))
+    await hand_off(open_session, jobs, runtime.execute, db, gw, ref, last.get("from"))
     return answer
 
 

@@ -43,7 +43,8 @@ HEADERS = {"X-NC-Client": "test"}
 
 @pytest.fixture
 def lane_gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Gateway:
-    """Three free lanes with keys, and Ollama switched off so no test depends on this Mac running it.
+    """Three lanes with keys — two of them free, and Cerebras, which is free only after a card — and
+    Ollama switched off so no test depends on this Mac running it.
 
     Every lane's environment variable is taken away first: a machine that exports GROQ_API_KEY would
     otherwise open a lane here that is closed everywhere else.
@@ -221,15 +222,15 @@ async def test_lanes_and_prompt_are_the_runtimes_not_the_rows(client: AsyncClien
 
     writer = cards["backend"]
     assert writer["callsAs"] == "write" and writer["noCall"] is None
-    assert writer["lanes"]["primary"] == {"lane": "groq", "model": "llama-3.3-70b-versatile"}
-    assert writer["lanes"]["fallback"] == {"lane": "cerebras", "model": "qwen-3-coder-480b"}
+    assert writer["lanes"]["primary"] == {"lane": "groq", "model": "openai/gpt-oss-120b"}
+    assert writer["lanes"]["fallback"] == {"lane": "cerebras", "model": "gpt-oss-120b"}
     assert writer["prompt"]["system"] == EDIT_SYSTEM
     assert writer["prompt"]["user"].startswith("You are the Backend Engineer.")
     assert writer["prompt"]["system"] != writer["declared"]["systemPrompt"]
 
     reviewer = cards["reviewer"]
     assert reviewer["callsAs"] == "review" and reviewer["prompt"]["system"] == REVIEW_SYSTEM
-    assert [reviewer["lanes"]["primary"]["lane"], reviewer["lanes"]["fallback"]["lane"]] == ["cerebras", "gemini"]
+    assert [reviewer["lanes"]["primary"]["lane"], reviewer["lanes"]["fallback"]["lane"]] == ["gemini", "cerebras"]
     last = reviewer["lanes"]["lastAnswered"]
     assert last["lane"] == "gemini" and last["model"] == "gemini-2.5-flash"   # the failed call answered nothing
 
@@ -282,23 +283,27 @@ async def test_a_lane_that_ran_a_model_its_price_is_not_for_has_no_known_cost_th
     # groq is free for its catalogue model. The same lane pointed at another model has no price: the day's
     # cost is unknown, not $0. A call that used no tokens (a 429) cost nothing either way.
     session.add_all([
-        AiCall(feature="agent", lane="groq", model="llama-3.3-70b-versatile", tokens_in=100, tokens_out=40),
+        AiCall(feature="agent", lane="groq", model="openai/gpt-oss-120b", tokens_in=100, tokens_out=40),
         AiCall(feature="agent", lane="groq", model="a-paid-model-an-admin-chose", tokens_in=500, tokens_out=90),
-        AiCall(feature="agent", lane="cerebras", model="a-refused-model", ok=False, error="429"),
+        AiCall(feature="chat", lane="ollama", model="anything-at-all", ok=False, error="429"),
+        AiCall(feature="agent", lane="cerebras", model="gpt-oss-120b", tokens_in=500, tokens_out=90),
     ])
     await session.flush()
     lanes_by_id = {lane["id"]: lane for lane in (await client.get("/models")).json()["lanes"]}
     assert lanes_by_id["groq"]["cost24h"] is None
-    assert lanes_by_id["cerebras"]["cost24h"] == 0.0
+    assert lanes_by_id["ollama"]["cost24h"] == 0.0
+    # And a lane that is not free and publishes no price is unknown rather than zero — Cerebras's
+    # trial credit needs a card, and the ledger used to write $0 against it.
+    assert lanes_by_id["cerebras"]["cost24h"] is None
 
 
 async def test_the_router_answers_with_its_lanes_and_no_key_material(client: AsyncClient, session: AsyncSession):
     session.add_all([
-        AiCall(feature="agent", lane="groq", model="llama-3.3-70b-versatile", ms=300, tokens_in=100, tokens_out=40),
+        AiCall(feature="agent", lane="groq", model="openai/gpt-oss-120b", ms=300, tokens_in=100, tokens_out=40),
         AiCall(feature="agent", lane="groq", model="an-older-model", ms=100, ok=False, error="429"),
         AiCall(feature="compile", lane="rules", model="offline planner", ms=2),
         AiCall(feature="chat", lane="ollama", model="qwen2.5-coder:7b", ms=900, tokens_in=10, tokens_out=5),
-        AiCall(feature="compile", lane="groq", model="llama-3.3-70b-versatile", at=utcnow() - timedelta(days=2)),
+        AiCall(feature="compile", lane="groq", model="openai/gpt-oss-120b", at=utcnow() - timedelta(days=2)),
     ])
     await a_run(session, "RUN-31", status="waiting", review_by="offline rules", steps=[])
     await a_run(session, "RUN-32", status="done", review_by="gemini-2.5-flash", steps=[])
@@ -325,13 +330,40 @@ async def test_the_router_answers_with_its_lanes_and_no_key_material(client: Asy
 
     routes = {r["feature"]: r for r in report["routes"]}
     assert [c["lane"] for c in routes["agent"]["chain"]] == ["groq", "cerebras", "gemini"]
-    assert [c["lane"] for c in routes["review"]["chain"]] == ["cerebras", "gemini", "groq"]
+    assert [c["lane"] for c in routes["review"]["chain"]] == ["gemini", "cerebras", "groq"]
     assert routes["review"]["avoidsWriter"] and routes["review"]["offline"]
     assert routes["review"]["offline24h"] == 1                     # from the run, since no ledger line exists
     assert routes["compile"]["offline24h"] == 1 and routes["compile"]["calls24h"] == 1
     assert routes["agent"]["calls24h"] == 2 and routes["agent"]["failures24h"] == 1
     assert [c["lane"] for c in routes["embed"]["chain"]] == ["gemini"]
-    assert routes["embed"]["chain"][0]["model"] == "text-embedding-004"
+    assert routes["embed"]["chain"][0]["model"] == "gemini-embedding-001"
+
+
+async def test_the_router_says_which_kind_of_free_every_lane_is(client: AsyncClient, session: AsyncSession):
+    """Money is one question and what a provider asks for instead is another, and the screens could
+    only ever show the first. Three lanes, three different answers, all on the same screen."""
+    by_id = {lane["id"]: lane for lane in (await client.get("/models")).json()["lanes"]}
+
+    groq = by_id["groq"]                       # free, with nothing else asked, and it publishes both
+    assert groq["free"] is True and groq["gate"] == "" and groq["freedom"].startswith("Free")
+    assert (groq["tpm"], groq["tpd"]) == (8_000, 200_000) and groq["caps"] == "published"
+    assert "200,000" in groq["allowance"] and groq["expires"] is None
+
+    cerebras = by_id["cerebras"]               # free only after a card, which is not free
+    assert cerebras["free"] is False and cerebras["gate"] == "card" and cerebras["expires"]
+    assert cerebras["freedom"].startswith("Not free") and cerebras["priced"] is False
+
+    gemini = by_id["gemini"]                   # free, but the numbers beside it are ours, not Google's
+    assert gemini["free"] is True and gemini["caps"] == "ours"
+    assert "not guaranteed" in gemini["allowance"]
+    # And the thing a product about private code must not bury: Google's free tier is trained on.
+    assert "trained on" in gemini["note"]
+    assert gemini["embed"] == "gemini-embedding-001"
+
+    cloudflare = by_id["cloudflare"]           # free, and cannot answer until it is given an address
+    assert cloudflare["needsBaseUrl"] is True and cloudflare["embed"] == "@cf/baai/bge-m3"
+    assert cloudflare["blocked"] == "no API key"     # first things first; the address is next
+    assert "github" not in by_id               # retired whole on 2026-07-30
 
 
 async def test_anyone_signed_in_reads_the_router_and_nobody_else(client: AsyncClient, session: AsyncSession):
@@ -515,7 +547,7 @@ async def test_usage_is_priced_per_lane_and_grouped_by_agent_project_and_call(
         line(at=utcnow(), feature="review", lane="mystery", model="m", tokens_in=3000, tokens_out=1000,
              agent="reviewer", project_id="erp"),
         # Yesterday: the backend agent again, by id this time, on a free lane, for the workspace.
-        line(at=utcnow() - timedelta(days=1), feature="agent", lane="groq", model="llama-3.3-70b-versatile",
+        line(at=utcnow() - timedelta(days=1), feature="agent", lane="groq", model="openai/gpt-oss-120b",
              tokens_in=500,
              tokens_out=500, agent="backend"),
         # Yesterday: a person's call, answered by the rules, for the workspace.
@@ -571,9 +603,9 @@ async def test_a_free_lane_pointed_at_another_model_is_unpriced_not_free(client:
     session.add_all([
         AiCall(feature="agent", lane="openrouter", model="anthropic/claude-sonnet-4", ok=True, ms=100,
                tokens_in=100_000, tokens_out=20_000, agent="Backend Engineer"),
-        AiCall(feature="agent", lane="groq", model="llama-3.3-70b-versatile", ok=True, ms=100,
+        AiCall(feature="agent", lane="groq", model="openai/gpt-oss-120b", ok=True, ms=100,
                tokens_in=10, tokens_out=10, agent="Backend Engineer"),
-        AiCall(feature="embed", lane="gemini", model="text-embedding-004", ok=True, ms=100, tokens_in=10),
+        AiCall(feature="embed", lane="gemini", model="gemini-embedding-001", ok=True, ms=100, tokens_in=10),
         AiCall(feature="chat", lane="ollama", model="llama3.1:8b", ok=True, ms=100, tokens_in=10),
     ])
     await session.flush()
@@ -587,7 +619,7 @@ async def test_a_free_lane_pointed_at_another_model_is_unpriced_not_free(client:
     assert by_lane["openrouter"] is None
     agent = next(a for a in report["byAgent"] if a["agent"] == "backend")
     assert agent["costUsd"] == 0.0 and agent["costComplete"] is False
-    assert lanes.priced_call("openrouter", "deepseek/deepseek-chat-v3.1:free")
+    assert lanes.priced_call("openrouter", lanes.BY_ID["openrouter"].model)
     assert not lanes.priced_call("openrouter", "anthropic/claude-sonnet-4")
 
 
@@ -636,11 +668,11 @@ async def test_an_agents_spend_is_summed_from_the_ledger(client: AsyncClient, se
     """Both figures were a hardcoded 0, which on a card reads as a measurement rather than a gap."""
     who = (await client.get("/agents")).json()["agents"][0]
     session.add_all([
-        AiCall(feature="agent", lane="groq", model="llama-3.3-70b-versatile", ok=True, ms=800,
+        AiCall(feature="agent", lane="groq", model="openai/gpt-oss-120b", ok=True, ms=800,
                tokens_in=1200, tokens_out=3400, agent=who["name"]),
-        AiCall(feature="review", lane="cerebras", model="qwen-3-coder-480b", ok=True, ms=500,
+        AiCall(feature="review", lane="gemini", model="gemini-2.5-flash", ok=True, ms=500,
                tokens_in=400, tokens_out=900, agent=who["name"]),
-        AiCall(feature="agent", lane="groq", model="llama-3.3-70b-versatile", ok=True, ms=700,
+        AiCall(feature="agent", lane="groq", model="openai/gpt-oss-120b", ok=True, ms=700,
                tokens_in=100, tokens_out=200, agent="Somebody Else"),
     ])
     await session.flush()
@@ -708,7 +740,7 @@ async def test_a_cache_hit_is_priced_as_one_and_off_peak_costs_half(client: Asyn
                tokens_in=1_000_000, tokens_cached=400_000, tokens_out=100_000, tokens_reasoning=60_000),
         AiCall(at=_at(peak=False), feature="compile", lane="deepseek", model="deepseek-flash", ok=True, ms=10,
                tokens_in=1_000_000, tokens_cached=400_000, tokens_out=100_000, tokens_reasoning=0),
-        AiCall(at=_at(peak=True), feature="chat", lane="groq", model="llama-3.3-70b-versatile", ok=True, ms=10,
+        AiCall(at=_at(peak=True), feature="chat", lane="groq", model="openai/gpt-oss-120b", ok=True, ms=10,
                tokens_in=1000, tokens_out=10),
         AiCall(at=_at(peak=True), feature="compile", lane="rules", model="offline planner", ok=True, ms=1),
     ])
@@ -757,7 +789,8 @@ async def test_the_router_shows_each_lanes_window_retirement_and_cache(client: A
     assert (deepseek["tokensCached24h"], deepseek["tokensReasoning24h"]) == (1000, 40)
     assert deepseek["cost24h"] is not None and deepseek["saved24h"] > 0
     groq = next(lane for lane in report["lanes"] if lane["id"] == "groq")
-    assert groq["window"] == 131_072 and groq["retired"] is None and groq["thinks"] is None
+    # Groq's GPT-OSS takes an effort with no "none" in it, which is a dialect of its own.
+    assert groq["window"] == 131_072 and groq["retired"] is None and groq["thinks"] == "effort-lmh"
 
     admin = (await client.get("/admin/ai")).json()
     assert "retired" in admin["deepseek"]["retired"]

@@ -70,13 +70,14 @@ from ..repositories import (
 from ..repositories.code import CodeIndexRepository
 from ..schemas.work import step_changes
 from ..repositories.sources import ProjectSourceRepository
+from ..repositories.words import terms
 from . import instructions
 from .code import Source, checkout, writable
 from .custom_agents import CustomAgentService
 from .errors import Refused, needs_a_model
 from .instructions import Resolved
 from .knowledge import MemoryService
-from .retrieval import RetrievalService
+from .retrieval import RetrievalService, near_enough
 from .runs import RunService, _setup
 from .taste import TasteService
 
@@ -177,7 +178,12 @@ class PlanService:
         except Exception as failed:                  # a lane or the index misbehaving must not stop a compile
             log.warning("retrieval for a compile in %s did not answer: %s", project_id, failed)
             return []
-        return [x for x in found if x["kind"] in ("code", "doc")][:PIECES_FOR_CONTEXT]
+        # The same relevance floor the session grounds by. A plan quoting a file that merely shares one
+        # word with the requirement is worse than a plan that quotes nothing: the compiler is told those
+        # pieces are what the repository holds about it, and writes steps against them.
+        words = len(terms(requirement))
+        return [x for x in found
+                if x["kind"] in ("code", "doc") and near_enough(x, words)][:PIECES_FOR_CONTEXT]
 
     async def _ground(self, project: Project, requirement: str, answers: list[dict[str, str]],
                       targets: Sequence[str] = ()) -> tuple[Context, list[dict[str, str]]]:

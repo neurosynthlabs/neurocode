@@ -64,7 +64,7 @@ class FakeGateway:
             self.on_ask()
         if self.raises is not None:
             raise self.raises
-        return Result(parse(self.answers.pop(0)), Provider("groq", "llama-3.3-70b-versatile"), 40)
+        return Result(parse(self.answers.pop(0)), Provider("groq", "openai/gpt-oss-120b"), 40)
 
     def run(self, messages: list[dict[str, str]], parse: Any, fallback: Any, **kwargs: Any) -> Result[Any]:
         self.calls.append(kwargs)
@@ -236,7 +236,7 @@ async def _finished_runs(session: AsyncSession, suite_id: str, case_id: str,
         result = m.EvalResult(run_id=f"er-{ref}", case_id=case_id, status=status, score=Decimal(case_score),
                               output='{"answer": "CGST and SGST"}',
                               checks=[{"kind": "contains", "ok": status == "pass", "observed": "“IGST” absent"}],
-                              lane="groq", model="llama-3.3-70b-versatile", ms=812)
+                              lane="groq", model="openai/gpt-oss-120b", ms=812)
         session.add(result)
         await session.flush()
         made.append(result)
@@ -358,9 +358,12 @@ async def test_a_run_scores_its_cases_and_the_judge_is_a_labelled_call_of_its_ow
     run, results = await _run(live, ref)
     assert run.status == "done" and run.score == 50 and (run.passed, run.failed) == (1, 1)
     assert [r.status for r in results] == ["pass", "fail"]
-    assert results[0].judge_model == "llama-3.3-70b-versatile" and results[0].judge_reason == "it names IGST"
-    assert results[1].checks == [{"kind": "json_equals", "ok": False, "observed": "LOW"},
-                                 {"kind": "not_contains", "ok": False, "observed": "“CGST” present"}]
+    assert results[0].judge_model == "openai/gpt-oss-120b" and results[0].judge_reason == "it names IGST"
+    # Every check result carries what it earned, from 0 to 1 — a stated check is worth its verdict, and
+    # a graded one (recall over the refs that mattered) is worth what it measured.
+    assert results[1].checks == [{"kind": "json_equals", "ok": False, "observed": "LOW", "score": 0.0},
+                                 {"kind": "not_contains", "ok": False, "observed": "“CGST” present",
+                                  "score": 0.0}]
     assert [c["feature"] for c in gateway.calls] == ["eval", "eval-judge", "eval"]
     assert gateway.calls[0]["lane"] == "groq" and gateway.calls[1]["avoid"] == "groq"
 
@@ -430,13 +433,14 @@ def test_the_checks_say_what_they_saw():
     answer = Answer(output='{"steps": [{"agent": "Architect"}, {"agent": "QA Engineer"}]}',
                     data={"steps": [{"agent": "Architect"}, {"agent": "QA Engineer"}]},
                     refs=["MEM-1", "MEM-142", "code:a.py"], lane="deepseek", ms=900)
+    # A check says whether it held, what was there, and what it earned: 1 or 0 for a stated check.
     assert check({"kind": "json_contains", "path": "$.steps[*].agent", "value": "qa engineer"}, answer)[0]
-    assert check({"kind": "json_equals", "path": "$.steps[1].agent", "value": "Architect"}, answer) == (False, "QA Engineer")
-    assert check({"kind": "retrieves", "ref": "MEM-142", "k": 2}, answer) == (True, "rank 2")
-    assert check({"kind": "retrieves", "ref": "code:a.py", "k": 2}, answer) == (False, "not in top 2")
-    assert check({"kind": "regex", "value": r"QA \w+"}, answer) == (True, "QA Engineer")
-    assert check({"kind": "free_lane"}, answer) == (False, "deepseek is paid")
-    assert check({"kind": "max_ms", "value": 500}, answer) == (False, "900 ms")
+    assert check({"kind": "json_equals", "path": "$.steps[1].agent", "value": "Architect"}, answer) == (False, "QA Engineer", 0.0)
+    assert check({"kind": "retrieves", "ref": "MEM-142", "k": 2}, answer) == (True, "rank 2", 1.0)
+    assert check({"kind": "retrieves", "ref": "code:a.py", "k": 2}, answer) == (False, "not in top 2", 0.0)
+    assert check({"kind": "regex", "value": r"QA \w+"}, answer) == (True, "QA Engineer", 1.0)
+    assert check({"kind": "free_lane"}, answer) == (False, "deepseek is paid", 0.0)
+    assert check({"kind": "max_ms", "value": 500}, answer) == (False, "900 ms", 0.0)
 
 
 #: Every route that changes something, and the permission it must ask for. The ids do not exist: the

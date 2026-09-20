@@ -48,6 +48,10 @@ class User(Base, Mixin):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(UserStatus, nullable=False, server_default="active")
+    #: The identity provider that vouches for this person, and who they are there — set only when someone
+    #: signed in through one. A password still works unless an admin turns that off for the workspace.
+    idp: Mapped[str] = mapped_column(String(40), nullable=False, server_default="")
+    idp_subject: Mapped[str | None] = mapped_column(String(200))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     #: When this person last looked at the inbox: "done since your last visit" is counted from it.
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -11,6 +11,16 @@ const { version } = JSON.parse(readFileSync(new URL('./package.json', import.met
 // often than the framework does.
 const vendor = (pkgs: string) => new RegExp(`[\\\\/]node_modules[\\\\/](${pkgs})[\\\\/]`)
 
+/* Reaching the dev server from a phone on the same Wi-Fi. Off unless NC_LAN says otherwise, and the
+   same switch the API reads (NEUROCODE_LISTEN_ON_LAN), because a web app on the LAN with its API
+   still bound to 127.0.0.1 is a screen that can never load anything. `scripts/dev.sh` sets both.
+
+   `host: true` means every interface, which is what a phone needs and also what anyone else on that
+   network gets: this is a deliberate switch, not a default, and docs/ARCHITECTURE.md says what it
+   exposes. `allowedHosts` lets Bonjour names through as well as the raw address, since that is what
+   a Mac advertises itself as. */
+const lan = ['1', 'true', 'yes'].includes((process.env.NC_LAN ?? '').toLowerCase())
+
 const apiProxy = {
   target: `http://127.0.0.1:${process.env.NC_API_PORT ?? 8787}`,
   rewrite: (p: string) => p.replace(/^\/api/, ''),
@@ -27,8 +37,8 @@ export default defineConfig({
   },
   // /api/* is the local FastAPI server (server/). The app always talks to it there, so the dev server and
   // `vite preview` — which the smoke and layout checks run against a production build — proxy it the same way.
-  server: { proxy: { '/api': apiProxy } },
-  preview: { proxy: { '/api': apiProxy } },
+  server: { host: lan || undefined, allowedHosts: lan ? ['.local'] : undefined, proxy: { '/api': apiProxy } },
+  preview: { host: lan || undefined, allowedHosts: lan ? ['.local'] : undefined, proxy: { '/api': apiProxy } },
   build: {
     rolldownOptions: {
       output: {

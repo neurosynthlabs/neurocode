@@ -22,7 +22,8 @@ from ..models import EvalCase, EvalResult, EvalRun, EvalSuite, MemoryFact
 from .work import when
 
 CheckKind = Literal["exact", "contains", "not_contains", "regex", "json_equals", "json_contains", "cites",
-                    "retrieves", "max_ms", "free_lane", "not_offline", "judge"]
+                    "retrieves", "retrieves_all", "retrieves_nothing", "max_ms", "free_lane", "not_offline",
+                    "judge"]
 
 TARGET_LABEL = {"compile": "Requirement compiler", "ask": "Ask memory", "retrieval": "Retrieval",
                 "review": "Reviewer prompt", "prompt": "Lane prompt"}
@@ -32,6 +33,8 @@ PATH = re.compile(r"^\$(?:\.[A-Za-z_][\w-]*|\[(?:\d+|\*)\])*$")
 MAX_PATTERN = 300
 #: How much of an answer the table shows in its Got column.
 GOT = 200
+#: The refs one `retrieves_all` check may name. More than this is not a case any more, it is a suite.
+MAX_REFS = 20
 
 
 class Check(BaseModel):
@@ -42,6 +45,10 @@ class Check(BaseModel):
     path: str | None = Field(default=None, max_length=200)
     ref: str | None = Field(default=None, max_length=120)
     k: int | None = Field(default=None, ge=1, le=50)
+    #: Every ref a `retrieves_all` case says had to come back — the ones a person ticked as the pieces
+    #: that actually answered. `ref` holds one; this holds the set, and the score is how many of it
+    #: came back, which is recall@k and not a pass or a fail.
+    refs: list[str] | None = Field(default=None, max_length=MAX_REFS)
     rubric: str | None = Field(default=None, max_length=2000)
 
     @model_validator(mode="after")
@@ -63,8 +70,15 @@ class Check(BaseModel):
                 raise ValueError(f"a {self.kind} check needs the value to compare with")
         if self.kind in ("cites", "retrieves") and not (self.ref or "").strip():
             raise ValueError(f"a {self.kind} check needs the ref it expects, such as MEM-142")
-        if self.kind == "retrieves" and self.k is None:
-            raise ValueError("a retrieves check needs k, how far down the results the ref may be")
+        if self.kind in ("retrieves", "retrieves_all", "retrieves_nothing") and self.k is None:
+            raise ValueError(f"a {self.kind} check needs k, how many results it is asked of")
+        if self.kind == "retrieves_all":
+            kept = [r.strip() for r in (self.refs or []) if r.strip()]
+            if not kept:
+                raise ValueError("a retrieves_all check needs the refs that had to come back")
+            if any(len(r) > 120 for r in kept):
+                raise ValueError("a ref in a retrieves_all check is at most 120 characters")
+            self.refs = list(dict.fromkeys(kept))
         if self.kind == "max_ms" and (isinstance(self.value, bool) or not isinstance(self.value, int)
                                       or self.value < 1):
             raise ValueError("a max_ms check needs a whole number of milliseconds")
@@ -89,6 +103,10 @@ def expected(checks: list[dict[str, Any]]) -> str:
             case "json_contains": return f"{c.get('path')} has {value}"
             case "cites": return f"cites {c.get('ref')}"
             case "retrieves": return f"{c.get('ref')} in top {c.get('k')}"
+            case "retrieves_all":
+                refs = list(c.get("refs") or [])
+                return f"{len(refs)} of {len(refs)} refs in top {c.get('k')}"
+            case "retrieves_nothing": return f"nothing in the top {c.get('k')} — the question is unanswerable here"
             case "max_ms": return f"under {value} ms"
             case "free_lane": return "answered on a free lane"
             case "not_offline": return "a model answered, not the rules"

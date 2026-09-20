@@ -2,7 +2,7 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode,
 } from 'react';
 import { toast } from 'sonner';
-import { SIGNED_OUT, api, unreachable, type AuthUser, type Workspace } from '@/lib/api';
+import { SIGNED_OUT, api, unreachable, type AuthUser, type SsoPublic, type Workspace } from '@/lib/api';
 import { clearAccess, loadAccess, roleName, useAccess } from '@/lib/access';
 
 /* ═══════════════════════════════════════════════════════════════
@@ -41,8 +41,18 @@ interface AuthCtx {
   machine: boolean;
   /** "Owner", "Engineer, Viewer"… named by the workspace's own catalogue. */
   roleNames: string;
+  /**
+   * Single sign-on, as the sign-in screen needs it: whether there is a button, what it says, and
+   * whether passwords are off for everyone but an Owner. Never on for an API that has none.
+   */
+  sso: SsoPublic;
   /** Throws an ApiError with the server's reason on a wrong password or a lockout. */
   login: (email: string, password: string) => Promise<void>;
+  /**
+   * Leave for the identity provider. The server mints the state and the nonce and sets them as a
+   * cookie of its own; this only carries the browser there, so nothing in the page ever holds either.
+   */
+  signInWithSso: () => Promise<void>;
   logout: () => Promise<void>;
   /** Re-reads the session: once the setup wizard has finished, or as the retry when not connected. */
   refresh: () => Promise<void>;
@@ -54,7 +64,11 @@ interface Session {
   state: AuthState; user: AuthUser | null; workspace: Workspace | null; offlineReason: string | null;
   /** What the server said about opening its own machine; true until it says otherwise, as a local one does. */
   machineAccess: boolean;
+  sso: SsoPublic;
 }
+
+/** What an API with no single sign-on amounts to: no button, and passwords as they always were. */
+const NO_SSO: SsoPublic = { enabled: false, label: 'single sign-on', passwordsOff: false };
 
 
 /** What the server says about this browser's session. */
@@ -64,17 +78,18 @@ async function readSession(): Promise<Session> {
     return {
       state: s.needsSetup ? 'setup' : s.user ? 'signed-in' : 'signed-out',
       user: s.user, workspace: s.workspace, offlineReason: null, machineAccess: s.machineAccess !== false,
+      sso: s.sso ?? NO_SSO,
     };
   } catch (e) {
     console.error('[NeuroCode] GET /auth/status failed:', e);
     return { state: 'offline', user: null, workspace: null, offlineReason: unreachable(e, '/auth/status'),
-             machineAccess: true };
+             machineAccess: true, sso: NO_SSO };
   }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session>({ state: 'loading', user: null, workspace: null,
-    offlineReason: null, machineAccess: true });
+    offlineReason: null, machineAccess: true, sso: NO_SSO });
   const { state, user, workspace, offlineReason } = session;
   const { catalogue } = useAccess();
   const current = useRef(state);
@@ -112,6 +127,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                          machineAccess: r.machineAccess !== false }));
   }, []);
 
+  // The server answers with the address to go to; the browser goes there. A failure is thrown on,
+  // so the sign-in screen can say what the server said rather than leaving a button that does nothing.
+  const signInWithSso = useCallback(async () => {
+    const { url } = await api.ssoStart();
+    window.location.assign(url);
+  }, []);
+
   const logout = useCallback(async () => {
     if (current.current !== 'signed-in') return;
     try {
@@ -140,8 +162,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const roleNames = useMemo(() => (user?.roles ?? []).map((id) => roleName(catalogue, id)).join(', '), [user, catalogue]);
 
   const value = useMemo<AuthCtx>(
-    () => ({ state, user, workspace, offlineReason, can, canAny, canIn, machine, roleNames, login, logout, refresh }),
-    [state, user, workspace, offlineReason, can, canAny, canIn, machine, roleNames, login, logout, refresh],
+    () => ({ state, user, workspace, offlineReason, can, canAny, canIn, machine, roleNames, sso: session.sso,
+             login, signInWithSso, logout, refresh }),
+    [state, user, workspace, offlineReason, can, canAny, canIn, machine, roleNames, session.sso, login,
+     signInWithSso, logout, refresh],
   );
   return <C.Provider value={value}>{children}</C.Provider>;
 }

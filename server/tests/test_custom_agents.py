@@ -283,7 +283,7 @@ class FakeGateway:
         self.seen.append(messages)
         self.lanes.append(kw.get("lane"))
         raw = self.script.pop(0) if self.script else '{"answer": "Done."}'
-        return Result(parse(raw), Provider(kw.get("lane") or "groq", "llama-3.3-70b-versatile"), 12)
+        return Result(parse(raw), Provider(kw.get("lane") or "groq", "openai/gpt-oss-120b"), 12)
 
 
 @pytest_asyncio.fixture

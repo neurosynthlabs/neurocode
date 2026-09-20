@@ -173,8 +173,8 @@ class Client:
         return self.get(f"/projects/{_q(pid)}")
 
     # ── sessions ─────────────────────────────────────────────────
-    def sessions(self, project: str | None = None, *, limit: int = 20) -> list[dict[str, Any]]:
-        return self.get("/sessions", project=project, limit=limit)
+    def sessions(self, project: str | None = None, *, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
+        return self.get("/sessions", project=project, limit=limit, offset=offset or None)
 
     def start_session(self, project: str, title: str = "") -> dict[str, Any]:
         return self.post("/sessions", {"projectId": project, "title": title[:80]})
@@ -211,8 +211,8 @@ class Client:
         # A compile is one model call, sometimes a slow one; the API answers when the plan is written.
         return self.post("/plans/compile", {"projectId": project, "requirement": requirement}, timeout=180)
 
-    def plans(self, project: str | None = None, *, limit: int = 20) -> list[dict[str, Any]]:
-        return self.get("/plans", project=project, limit=limit)
+    def plans(self, project: str | None = None, *, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
+        return self.get("/plans", project=project, limit=limit, offset=offset or None)
 
     def plan(self, ref: str) -> dict[str, Any]:
         return self.get(f"/plans/{_q(ref)}")
@@ -220,9 +220,13 @@ class Client:
     def dispatch(self, ref: str, *, goal_budget: int | None = None, step_gate: bool = False) -> dict[str, Any]:
         return self.post(f"/plans/{_q(ref)}/dispatch", {"goalBudget": goal_budget, "stepGate": step_gate})
 
+    def answer_question(self, ref: str, index: int, answer: str) -> dict[str, Any]:
+        """`index` counts the plan's *open* questions from zero, exactly as the screen shows them."""
+        return self.post(f"/plans/{_q(ref)}/questions/{index}", {"answer": answer})
+
     # ── gates ────────────────────────────────────────────────────
-    def approvals(self, *, pending: bool = True, limit: int = 50) -> list[dict[str, Any]]:
-        return self.get("/approvals", status="pending" if pending else None, limit=limit)
+    def approvals(self, *, pending: bool = True, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        return self.get("/approvals", status="pending" if pending else None, limit=limit, offset=offset or None)
 
     def decide(self, ref: str, decision: str, *, scope: str | None = None,
                answer: str | None = None) -> dict[str, Any]:
@@ -230,11 +234,32 @@ class Client:
         return self.post(f"/approvals/{_q(ref)}/{decision}", body or None)
 
     # ── runs ─────────────────────────────────────────────────────
-    def runs(self, project: str | None = None, *, limit: int = 20) -> list[dict[str, Any]]:
-        return self.get("/runs", project=project, limit=limit)
+    def runs(self, project: str | None = None, *, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
+        return self.get("/runs", project=project, limit=limit, offset=offset or None)
 
     def run(self, ref: str, *, after: int = 0) -> dict[str, Any]:
         return self.get(f"/runs/{_q(ref)}", after=after)
+
+    def diff(self, ref: str) -> dict[str, Any]:
+        """The run's real patch, its stat and whether the server cut it at its 200 KB ceiling."""
+        return self.get(f"/runs/{_q(ref)}/diff")
+
+    def rework(self, ref: str, notes: str) -> dict[str, Any]:
+        """Send the run back: the same plan again, as a new run told these notes and the review's
+        findings. A signature the old run was waiting for is refused by the server, not here."""
+        return self.post(f"/runs/{_q(ref)}/rework", {"notes": notes}, timeout=120)
+
+    def review_again(self, ref: str) -> dict[str, Any]:
+        return self.post(f"/runs/{_q(ref)}/review", timeout=120)
+
+    def cancel_run(self, ref: str) -> dict[str, Any]:
+        return self.post(f"/runs/{_q(ref)}/cancel", timeout=120)
+
+    def discard(self, ref: str) -> dict[str, Any]:
+        return self.post(f"/runs/{_q(ref)}/discard", timeout=120)
+
+    def revert(self, ref: str, n: int, *, redo: bool = False) -> dict[str, Any]:
+        return self.post(f"/runs/{_q(ref)}/steps/{n}/revert", {"redo": redo}, timeout=120)
 
     def merge(self, ref: str) -> dict[str, Any]:
         return self.post(f"/runs/{_q(ref)}/merge", timeout=120)

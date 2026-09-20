@@ -38,7 +38,9 @@ async def client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
 async def test_a_fresh_workspace_asks_to_be_set_up(client: AsyncClient):
     status = (await client.get("/auth/status")).json()
     assert status == {"needsSetup": True, "setupNeedsToken": False, "user": None, "workspace": None,
-                      "machineAccess": True}
+                      "machineAccess": True,
+                      # No provider configured: a button the sign-in screen will not draw.
+                      "sso": {"enabled": False, "label": "single sign-on", "passwordsOff": False}}
 
 
 async def test_a_server_with_a_setup_token_lets_only_its_holder_create_the_first_owner(client: AsyncClient,

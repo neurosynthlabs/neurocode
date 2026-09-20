@@ -1,0 +1,152 @@
+{
+  "name": "neurocode",
+  "displayName": "NeuroCode",
+  "description": "Ask NeuroCode about the code you are looking at, compile a requirement, and watch its agent runs \u2014 from the editor, against the same API the web app and nc use.",
+  "version": "0.9.4",
+  "publisher": "neurocode",
+  "private": true,
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/neurosynthlabs/neurocode.git",
+    "directory": "vscode"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "neurocode",
+    "agents",
+    "code review",
+    "planning"
+  ],
+  "icon": "media/icon.png",
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "neurocode.signIn",
+        "title": "Sign in with a personal access token",
+        "category": "NeuroCode"
+      },
+      {
+        "command": "neurocode.signOut",
+        "title": "Sign out (forget the token)",
+        "category": "NeuroCode"
+      },
+      {
+        "command": "neurocode.chooseProject",
+        "title": "Choose the project",
+        "category": "NeuroCode"
+      },
+      {
+        "command": "neurocode.askAboutSelection",
+        "title": "Ask NeuroCode about this selection",
+        "category": "NeuroCode"
+      },
+      {
+        "command": "neurocode.compileRequirement",
+        "title": "Compile this as a requirement",
+        "category": "NeuroCode"
+      },
+      {
+        "command": "neurocode.openInWorkbench",
+        "title": "Open in the Workbench",
+        "category": "NeuroCode"
+      },
+      {
+        "command": "neurocode.refreshRuns",
+        "title": "Refresh runs",
+        "category": "NeuroCode",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "neurocode.openRun",
+        "title": "Open this run in NeuroCode",
+        "category": "NeuroCode",
+        "icon": "$(link-external)"
+      }
+    ],
+    "configuration": {
+      "title": "NeuroCode",
+      "properties": {
+        "neurocode.server": {
+          "type": "string",
+          "default": "http://localhost:5180",
+          "markdownDescription": "The NeuroCode server: the web app's address (its API is under `/api`) or an API's own. The same address `nc login` takes."
+        },
+        "neurocode.project": {
+          "type": "string",
+          "default": "",
+          "description": "The project every command works in. Set it with \u201cNeuroCode: Choose the project\u201d."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "neurocode",
+          "title": "NeuroCode",
+          "icon": "media/neurocode.svg"
+        }
+      ]
+    },
+    "views": {
+      "neurocode": [
+        {
+          "id": "neurocode.runs",
+          "name": "Runs"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "neurocode.askAboutSelection",
+          "when": "editorHasSelection",
+          "group": "neurocode@1"
+        },
+        {
+          "command": "neurocode.compileRequirement",
+          "when": "editorHasSelection",
+          "group": "neurocode@2"
+        },
+        {
+          "command": "neurocode.openInWorkbench",
+          "when": "editorIsOpen",
+          "group": "neurocode@3"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "neurocode.refreshRuns",
+          "when": "view == neurocode.runs",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "neurocode.openRun",
+          "when": "view == neurocode.runs && viewItem == run",
+          "group": "inline"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -p . --watch",
+    "test": "npm run build && node --test test/",
+    "package": "npm run build && vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.6.0",
+    "typescript": "~5.9.3"
+  }
+}

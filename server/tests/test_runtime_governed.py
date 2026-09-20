@@ -85,7 +85,7 @@ class FakeGateway:
         self.asked.append(kw.get("feature", ""))
         self.prompts.append(messages)
         raw = self.script.pop(0) if self.script else '{"summary": "nothing", "files": []}'
-        return Result(parse(raw), Provider("groq", "llama-3.3-70b-versatile"), 20)
+        return Result(parse(raw), Provider("groq", "openai/gpt-oss-120b"), 20)
 
 
 def wrote(*files: tuple[str, str], summary: str = "Rounded.") -> str:

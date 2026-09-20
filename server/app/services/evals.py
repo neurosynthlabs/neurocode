@@ -74,8 +74,11 @@ log = logging.getLogger(__name__)
 FEATURE, JUDGE_FEATURE = "eval", "eval-judge"
 #: Targets that read one project's workspace, and so need one.
 READS_A_PROJECT = ("compile", "ask", "retrieval")
-#: Checks that only mean something for one target.
-ONLY_FOR = {"cites": ("ask",), "retrieves": ("retrieval",)}
+#: Checks that only mean something for one target. The three retrieval ones ask about a list of refs,
+#: which only the retrieval target produces — and `retrieves_nothing` is the unanswerable set, which
+#: would be nonsense asked of a compiler.
+ONLY_FOR = {"cites": ("ask",), "retrieves": ("retrieval",), "retrieves_all": ("retrieval",),
+            "retrieves_nothing": ("retrieval",)}
 #: Retrieval calls no model, so a check about which model answered cannot say anything about it.
 NOT_FOR_RETRIEVAL = ("free_lane", "not_offline", "judge")
 #: The same number of facts the compiler is handed when a person compiles a requirement.
@@ -83,6 +86,8 @@ COMPILE_FACTS = 6
 #: How much of an answer is stored, and how many results retrieval is asked for when no check says.
 MAX_OUTPUT = 20_000
 DEFAULT_K = 8
+#: The checks that ask retrieval for a list of refs, and so say how far down that list they look.
+RETRIEVAL_CHECKS = ("retrieves", "retrieves_all", "retrieves_nothing")
 #: How many agents a case captured from a plan checks for.
 PLAN_AGENTS = 6
 
@@ -581,12 +586,18 @@ async def _answer(db: Database, gateway: Gateway, plan: RunPlan, case: dict[str,
             answer.cited = list(asked.data.citations)
             return answer
         if plan.target == "retrieval" and project_id:
-            k = max([int(c.get("k") or 0) for c in case["checks"] if c.get("kind") == "retrieves"] or [DEFAULT_K])
+            k = max([int(c.get("k") or 0) for c in case["checks"] if c.get("kind") in RETRIEVAL_CHECKS]
+                    or [DEFAULT_K])
+            # Grounding, not the bare search: what a case measures has to be what a session is really
+            # handed, which is the list after the relevance floor has refused what is too far away.
+            # Measuring the search behind it would score pieces no feature would ever have seen.
             async with db.read() as s:
-                hits = await RetrievalService(s, gateway).search(project_id, case["input"], k)
+                _text, hits, searched = await RetrievalService(s, gateway).grounded(
+                    project_id, case["input"], k)
             refs = [h["ref"] for h in hits]
             meaning = any(h["how"] != "lexical" for h in hits)
-            return Answer(output=json.dumps({"refs": refs}), data={"refs": refs}, refs=refs,
+            answered = {"refs": refs, "floored": int(searched.get("floored") or 0)}
+            return Answer(output=json.dumps(answered), data=answered, refs=refs,
                           model="lexical + semantic" if meaning else "lexical",
                           ms=round((time.monotonic() - t0) * 1000))
         if plan.target == "review":
@@ -642,8 +653,27 @@ def _brief(value: Any) -> str:
     return (value if isinstance(value, str) else json.dumps(value, ensure_ascii=False))[:200]
 
 
-def check(spec: dict[str, Any], answer: Answer) -> tuple[bool, str]:
-    """One stated check against one answer: whether it held, and what was actually there."""
+def check(spec: dict[str, Any], answer: Answer) -> tuple[bool, str, float]:
+    """One stated check against one answer: whether it held, what was actually there, and how much of
+    it held.
+
+    The score is what a check is worth to the case, from 0 to 1. Most checks can only be true or
+    false and score 1 or 0 — but "did retrieval bring back the five pieces that actually answered
+    this" has an answer between them, and counting it as a failure until all five arrive throws away
+    the only measurement that says whether a change made retrieval better or worse.
+    """
+    ok, observed = _check(spec, answer)
+    if spec["kind"] == "retrieves_all":
+        wanted = list(dict.fromkeys(spec.get("refs") or []))
+        top = answer.refs[:int(spec["k"])]
+        found = [r for r in wanted if r in top]
+        recall = len(found) / len(wanted) if wanted else 0.0
+        return ok, observed, recall
+    return ok, observed, 1.0 if ok else 0.0
+
+
+def _check(spec: dict[str, Any], answer: Answer) -> tuple[bool, str]:
+    """Whether one check held, and what was actually there."""
     kind, value, out = spec["kind"], spec.get("value"), answer.output
     if kind == "exact":
         return out.strip() == str(value).strip(), _brief(out)
@@ -666,6 +696,18 @@ def check(spec: dict[str, Any], answer: Answer) -> tuple[bool, str]:
         top = answer.refs[:int(spec["k"])]
         rank = top.index(spec["ref"]) + 1 if spec["ref"] in top else None
         return rank is not None, f"rank {rank}" if rank else f"not in top {spec['k']}"
+    if kind == "retrieves_all":
+        k = int(spec["k"])
+        wanted = list(dict.fromkeys(spec.get("refs") or []))
+        top = answer.refs[:k]
+        missing = [r for r in wanted if r not in top]
+        seen = f"{len(wanted) - len(missing)} of {len(wanted)} in top {k}"
+        return not missing, seen if not missing else f"{seen} · missing {', '.join(missing)[:120]}"
+    if kind == "retrieves_nothing":
+        # The unanswerable set. It passes only when retrieval refused: nothing survived the relevance
+        # floor, so the session is told there is nothing rather than handed pieces about the words.
+        top = answer.refs[:int(spec["k"])]
+        return not top, "nothing was handed over" if not top else f"handed {len(top)}: {', '.join(top)[:120]}"
     if kind == "max_ms":
         return answer.ms is not None and answer.ms <= int(value), f"{answer.ms} ms"
     if kind == "free_lane":
@@ -687,8 +729,8 @@ async def _score(gateway: Gateway, plan: RunPlan, case: dict[str, Any], answer: 
     judge_model, judge_reason = None, ""
     for spec in case["checks"]:
         if spec["kind"] != "judge":
-            ok, observed = check(spec, answer)
-            results.append({"kind": spec["kind"], "ok": ok, "observed": observed})
+            ok, observed, earned = check(spec, answer)
+            results.append({"kind": spec["kind"], "ok": ok, "observed": observed, "score": round(earned, 3)})
             continue
         try:
             judged = await asyncio.to_thread(
@@ -699,13 +741,16 @@ async def _score(gateway: Gateway, plan: RunPlan, case: dict[str, Any], answer: 
                 actor=plan.actor, project=plan.project["id"] if plan.project else None)
         except Exception as e:          # noqa: BLE001 — a judge that cannot judge is an error, never a pass
             reason = f"The judge could not run: {str(e)[:300] or type(e).__name__}"
-            results.append({"kind": "judge", "ok": None, "observed": reason})
+            results.append({"kind": "judge", "ok": None, "observed": reason, "score": 0.0})
             return Scored(status="error", score=0.0, checks=results, error=reason)
         judge_model, judge_reason = judged.provider.model, judged.data.reason
-        results.append({"kind": "judge", "ok": judged.data.passed, "observed": judged.data.reason[:200]})
-    held = sum(1 for r in results if r["ok"])
-    score = held / len(results)
-    status = "pass" if held == len(results) else "fail" if held == 0 else "partial"
+        results.append({"kind": "judge", "ok": judged.data.passed, "observed": judged.data.reason[:200],
+                        "score": 1.0 if judged.data.passed else 0.0})
+    # The case's score is what its checks earned, not how many of them were true: a graded check —
+    # "three of the five refs that mattered came back" — is worth what it measured.
+    earned = sum(float(r.get("score") or 0.0) for r in results)
+    score = earned / len(results)
+    status = "pass" if all(r["ok"] for r in results) else "fail" if earned == 0 else "partial"
     return Scored(status=status, score=score, checks=results, judge_model=judge_model, judge_reason=judge_reason)
 
 
@@ -739,12 +784,19 @@ async def _finish(db: Database, plan: RunPlan) -> None:
         run.finished_at = utcnow()
         answered = [r for r in results if not r.error]
         offline = sum(1 for r in results if r.offline)
+        # Two runs of a retrieval suite are only the same experiment when the same halves were working.
+        # A run with an embedding lane and one without are not comparable, and a score that moved
+        # between them moved for that reason — so the run says how many answers had no lane at all.
+        words_only = sum(1 for r in answered if r.model == "lexical")
         if run.status == "failed":
             run.note = f"Every case errored. The first: {results[0].error[:200]}"
         elif offline and offline == len(answered):
             run.note = "Every answer came from the offline rules, not a model."
         elif offline:
             run.note = f"{offline} of {len(results)} answers came from the offline rules, not a model."
+        elif words_only:
+            run.note = (f"{words_only} of {len(answered)} cases were answered by words only — no lane "
+                        "embedded the question, so this run is not comparable with one that had a lane.")
         await s.flush()
         history = (await runs.history([plan.suite_id])).get(plan.suite_id, [])
         before = history[1]["score"] if run.status == "done" and len(history) > 1 else None

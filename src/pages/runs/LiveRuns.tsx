@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowDownToLine, ChevronRight, ExternalLink, FileDiff, FolderGit2, GitMerge, Loader2, RefreshCw, Square, Trash2, TriangleAlert, Undo2, Upload } from 'lucide-react';
+import { ArrowDownToLine, ChevronRight, ExternalLink, FileDiff, FolderGit2, GitMerge, GitPullRequest, Loader2, PlayCircle, RefreshCw, Square, Trash2, TriangleAlert, Undo2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Ascii, Dot, Empty, KV, ListRow, Mono, Page, PageBody, PageHeader, Panel, Stat, StatGrid, Tag } from '@/components/os';
@@ -11,8 +11,9 @@ import { useRemote } from '@/lib/remote';
 import { cn } from '@/lib/utils';
 import { ago } from '@/pages/code/format';
 import { SEVERITY_TONE, clock } from '@/lib/live/work';
-import { asRuntime, gateKind, runtimeApi, shortReceipt, type RunCheck, type RunGoal, type RuntimeRun, type RuntimeStep } from '@/lib/live/runtime';
+import { asRuntime, gateKind, runtimeApi, shortReceipt, type PullRequest, type RunCheck, type RunGoal, type RuntimeRun, type RuntimeStep } from '@/lib/live/runtime';
 import { GateActions } from '@/components/runs/GateActions';
+import { PatchFiles } from '@/components/workbench/DiffView';
 import { plural } from '@/lib/words';
 
 /* Live Runs, for real: every run is a git worktree on a branch of its own, and this is what it did. */
@@ -26,6 +27,11 @@ const KIND_LABEL: Record<RunStep['kind'], string> = {
 };
 const CHECK_TONE: Record<RunCheck['status'], 'ok' | 'danger' | 'neutral'> = { passed: 'ok', failed: 'danger', skipped: 'neutral', 'not run': 'neutral' };
 const GOAL_TONE: Record<RunGoal['verdict'], 'ok' | 'danger' | 'warn' | 'neutral'> = { met: 'ok', 'not met': 'danger', unjudged: 'warn', 'not run': 'neutral' };
+/* A request on the forge: merged is done, closed is done another way, open is still waiting on somebody.
+   "unknown" is what a forge said in a word this product does not translate — shown as itself, not guessed. */
+const PR_TONE: Record<PullRequest['state'], 'ok' | 'danger' | 'brand' | 'neutral'> = { merged: 'ok', closed: 'danger', open: 'brand', unknown: 'neutral' };
+const Noun = (pr: PullRequest | null) => (pr?.noun ?? 'pull request');
+const sentence = (words: string) => words.charAt(0).toUpperCase() + words.slice(1);
 const done = (s: RunStep) => s.status === 'done' || s.status === 'skipped' || s.status === 'failed';
 /** What a step does, told apart where one kind does two jobs: a check runs as a test step, the completion check as a review. */
 const stepKind = (r: RuntimeRun, s: RunStep) =>
@@ -65,6 +71,20 @@ export function LiveRuns() {
   const mergeResult = run && merged?.ref === run.ref ? merged.result : null;
   const logBox = useRef<HTMLDivElement>(null);
   const diff = useRemote(showDiff && run ? `diff:${run.ref}:${run.diff.commits}` : null, () => api.runDiff(run?.ref ?? ''));
+  /* Whether this run can be carried on, and from where. Asked only of a run that stopped with steps it
+     never reached — the answer reads git, so there is no reason to ask it of a run that finished. The
+     key carries the status and the step count, so answering a gate or carrying it on asks again. */
+  const stranded = !!run && (run.status === 'failed' || run.status === 'cancelled')
+    && !run.removed && !run.merged && !run.parent && run.role !== 'check'
+    && run.steps.some((st) => st.status === 'todo');
+  const carryOn = useRemote(stranded && run ? `resume:${run.ref}:${run.status}:${run.steps.filter(done).length}` : null,
+    () => runtimeApi.resumePlan(run?.ref ?? ''));
+  /* The request's state, read back from the forge so this screen says "merged" without anybody going to
+     look. Asked only of a run that has one — a run with no request has nothing to read, and asking would
+     shell out to `gh` for an answer that is already known. */
+  const held = run?.pushed?.pullRequest ?? null;
+  const prState = useRemote(held && run ? `pr:${run.ref}:${held.number}` : null, () => runtimeApi.pullRequest(run?.ref ?? ''));
+  const request = prState.data?.pullRequest ?? held;
 
   useEffect(
     () => onRunLog((line) => setStreamed((m) => ({ ...m, [line.runRef]: [...(m[line.runRef] ?? []), line].slice(-LIVE_LINES) }))),
@@ -114,6 +134,21 @@ export function LiveRuns() {
       setBusy(false);
     }
   };
+  const openPullRequest = async () => {
+    if (!run) return;
+    setBusy(true);
+    try {
+      const out = asRuntime(await runtimeApi.openPullRequest(run.ref));
+      const made = out.pushed?.pullRequest ?? null;
+      toast.success(`${sentence(Noun(made))} #${made?.number ?? ''} opened`.trim(), { description: made?.draftBecause ?? 'It is open on the remote.' });
+      prState.reload();
+    } catch (e) {
+      // The refusal says what is missing and keeps the compare link, which is what there was before.
+      toast.error('Nothing was opened', { description: failed(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
   const reviewAgain = async () => {
     if (!run) return;
     setBusy(true);
@@ -138,6 +173,21 @@ export function LiveRuns() {
       });
     } catch (e) {
       toast.error('Not reverted', { description: failed(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const resume = async () => {
+    if (!run) return;
+    setBusy(true);
+    try {
+      const from = carryOn.data?.from;
+      await runtimeApi.resume(run.ref);
+      toast.success(`Carrying on from step ${from ?? ''}`.trim(), {
+        description: 'The steps already done stand, with the commits they made. Nothing is written again.',
+      });
+    } catch (e) {
+      toast.error('Not carried on', { description: failed(e) });
     } finally {
       setBusy(false);
     }
@@ -199,6 +249,7 @@ export function LiveRuns() {
   const asking = reverting?.ref === run.ref ? reverting.n : null;
   const runGrants = run.grants.filter((g) => g.scope === 'run');
   const lastRevert = run.reverts.at(-1);
+  const lastResume = run.resumes.at(-1);
 
   return (
     <Page>
@@ -220,12 +271,24 @@ export function LiveRuns() {
                 {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}{run.pushed ? 'Push again' : 'Push branch'}
               </Button>
             )}
-            {run.pushed?.compareUrl && (
+            {/* One control for the forge, never three: the request when there is one, the button that opens
+                it when there is not, and — for somebody who may not push — the compare link as before. */}
+            {request ? (
+              <a href={request.url} target="_blank" rel="noopener noreferrer" className={buttonVariants({ size: 'sm', variant: 'outline' })}
+                title={`${sentence(request.noun)} #${request.number} on ${request.host} — ${request.draft ? 'a draft' : 'ready'}, ${request.state}`}>
+                <GitPullRequest className="size-3.5" />#{request.number} · {request.draft ? `draft, ${request.state}` : request.state}<ExternalLink className="size-3.5" />
+              </a>
+            ) : canPush && run.pushed ? (
+              <Button size="sm" variant="outline" onClick={() => void openPullRequest()} disabled={busy}
+                title="Opens it on the forge with your own gh or glab — a draft while findings stand unanswered, ready once it is signed.">
+                {busy ? <Loader2 className="size-3.5 animate-spin" /> : <GitPullRequest className="size-3.5" />}Open pull request
+              </Button>
+            ) : run.pushed?.compareUrl ? (
               <a href={run.pushed.compareUrl} target="_blank" rel="noopener noreferrer" className={buttonVariants({ size: 'sm', variant: 'outline' })}
                 title="Opens the remote's pull request page, under your own account">
                 Open pull request<ExternalLink className="size-3.5" />
               </a>
-            )}
+            ) : null}
             {can('runs:merge') && run.status === 'done' && !run.merged && !run.removed && run.diff.files > 0 && (
               <Button size="sm" onClick={() => void merge()} disabled={busy}>
                 <GitMerge className="size-3.5" />{armed ? 'Click again to merge' : 'Merge'}
@@ -305,6 +368,20 @@ export function LiveRuns() {
                   <button onClick={() => setPicked({ link: linked, ref: run.review.reworkedAs ?? '' })} className="mt-2 text-[13px] text-brand hover:underline">
                     Open {run.review.reworkedAs} →
                   </button>
+                )}
+                {carryOn.data?.canResume && carryOn.data.from !== null && (
+                  <div className="mt-3 border-t border-line/60 pt-3">
+                    <p className="text-[13px] leading-relaxed text-ink-2">{carryOn.data.said}</p>
+                    {can('runs:run') && (
+                      <Button size="sm" className="mt-2.5" onClick={() => void resume()} disabled={busy}>
+                        {busy ? <Loader2 className="size-3.5 animate-spin" /> : <PlayCircle className="size-3.5" />}
+                        Carry on from step {carryOn.data.from}
+                      </Button>
+                    )}
+                  </div>
+                )}
+                {carryOn.data && !carryOn.data.canResume && carryOn.data.reason && (
+                  <p className="mt-3 border-t border-line/60 pt-3 text-[13px] leading-relaxed text-soft">{carryOn.data.reason}</p>
                 )}
               </Panel>
             )}
@@ -434,11 +511,12 @@ export function LiveRuns() {
             )}
 
             {showDiff && (
-              <Panel flush title="Diff" eyebrow={`${stat.files} files · +${stat.insertions} −${stat.deletions}`}>
+              <Panel flush title="Diff" eyebrow={`${stat.files} files · +${stat.insertions} −${stat.deletions}${diff.data?.truncated ? ' · cut at 200 kB' : ''}`}>
                 {diff.loading ? <p className="px-5 py-3 text-[13px] text-dim"><Loader2 className="mr-2 inline size-3.5 animate-spin" />reading the worktree…</p>
-                  : diff.data?.gone ? <p className="px-5 py-3 text-[13px] text-soft">The worktree was removed, so there is no diff to show.</p>
-                    : !diff.data?.patch ? <p className="px-5 py-3 text-[13px] text-soft">Nothing changed yet.</p>
-                      : <Ascii className="max-h-[420px] overflow-auto rounded-none text-[12px] ring-0">{diff.data.patch}</Ascii>}
+                  : diff.error ? <p className="px-5 py-3 text-[13px] text-soft">{diff.error}</p>
+                    : diff.data?.gone ? <p className="px-5 py-3 text-[13px] text-soft">The worktree was removed, so there is no diff to show.</p>
+                      : !diff.data?.patch ? <p className="px-5 py-3 text-[13px] text-soft">Nothing changed yet.</p>
+                        : <PatchFiles patch={diff.data.patch} truncated={diff.data.truncated} />}
               </Panel>
             )}
 
@@ -458,6 +536,9 @@ export function LiveRuns() {
               {lastRevert && (
                 <KV k="Reverted" v={`to step ${lastRevert.to} by ${lastRevert.by}, ${ago(lastRevert.at)}${lastRevert.redo ? ' · later steps ran again' : ''}`} />
               )}
+              {lastResume && (
+                <KV k="Carried on" v={`from step ${lastResume.from} by ${lastResume.by}, ${ago(lastResume.at)}${lastResume.adopted ? ` · step ${lastResume.adopted} had already committed` : ''}${Object.keys(lastResume.kept ?? {}).length > 0 ? ' · what was half written is kept on a ref of its own' : ''}`} />
+              )}
               {receipt && (
                 <KV k="Reviewed diff" v={<span><Mono>{shortReceipt(receipt.sha256)}</Mono> at <Mono>{receipt.head.slice(0, 7) || '—'}</Mono>{receipt.by ? ` · ${receipt.by}` : ''}</span>} />
               )}
@@ -465,9 +546,23 @@ export function LiveRuns() {
                 <KV k="Pushed" v={<span>to {run.pushed.remote} at <Mono>{run.pushed.sha.slice(0, 7)}</Mono>, by {run.pushed.by}, {ago(run.pushed.at)}</span>} />
               )}
               {run.pushed && (
-                <KV k="Pull request" v={run.pushed.compareUrl
-                  ? <a href={run.pushed.compareUrl} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">Open it on the remote ↗</a>
-                  : 'This remote has no pull request page NeuroCode knows how to open.'} />
+                <KV k={request ? sentence(request.noun) : 'Pull request'} v={request ? (
+                  <span className="flex flex-col gap-0.5">
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      <a href={request.url} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">#{request.number} on {request.host} ↗</a>
+                      <Tag tone={PR_TONE[request.state]}>{request.draft ? `draft · ${request.state}` : request.state}</Tag>
+                    </span>
+                    <span className="text-dim">{request.draftBecause}</span>
+                    <span className="text-dim">Opened by {request.by} with {request.via === 'token' ? 'a stored token' : `your own ${request.via}`}, {ago(request.at)} · into <Mono>{request.base}</Mono></span>
+                    {/* What is on screen is what the forge last said, and when it said it. */}
+                    <span className="text-dim">{request.checkFailed ? `Last read ${ago(request.checkedAt)}; it could not be read again just now.` : `Read from ${request.host} ${ago(request.checkedAt)}.`}</span>
+                  </span>
+                ) : run.pushed.compareUrl ? (
+                  <span className="flex flex-col gap-0.5">
+                    <span>{canPush ? 'Not opened yet — “Open pull request” above does it from here.' : 'Not opened yet.'}</span>
+                    <a href={run.pushed.compareUrl} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">Open it on the remote yourself ↗</a>
+                  </span>
+                ) : 'This remote has no pull request page NeuroCode knows how to open.'} />
               )}
               {run.merged ? (
                 <>
@@ -486,7 +581,7 @@ export function LiveRuns() {
 }
 
 /** Whether a step has more to show than its row: what it was handed, a question, a commit, a revert. */
-const hasMore = (s: RuntimeStep) => !!(s.grounding || s.question || s.commitSha || s.takenBack);
+const hasMore = (s: RuntimeStep) => !!(s.grounding || s.question || s.commitSha || s.takenBack || (s.attempts ?? 0) > 1);
 const VIA: Record<'plan' | 'retrieval' | 'index', string> = { plan: 'the plan named it', retrieval: 'retrieval found it', index: 'the index matched its words' };
 
 /** One step unfolded: the question and its answer, what it was handed, the commit it left — and the revert to here. */
@@ -551,6 +646,9 @@ function StepDetail({ step: s, projectId, last, canRevert, asking, busy, onAsk, 
       )}
       {g?.taste && g.taste.length > 0 && (
         <p className="flex flex-wrap items-center gap-x-2"><span className="text-dim">Taste applied</span>{g.taste.map((t) => <Mono key={t}>{t}</Mono>)}</p>
+      )}
+      {(s.attempts ?? 0) > 1 && (
+        <p><span className="text-dim">Tried </span>{s.attempts} times of {s.maxAttempts} allowed<span className="text-dim"> — the first answer was one the runtime could not use.</span></p>
       )}
       {s.commitSha && <p><span className="text-dim">Left commit </span><Mono>{s.commitSha.slice(0, 7)}</Mono></p>}
       {s.takenBack && <p className="text-dim">Taken back when the run was reverted to step {s.takenBack.to} by {s.takenBack.by}, {ago(s.takenBack.at)}.</p>}

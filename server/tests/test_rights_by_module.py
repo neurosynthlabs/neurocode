@@ -80,6 +80,11 @@ async def role_with(client: AsyncClient, name: str, permissions: list[str]) -> s
 #: token in the URL. The three WebSockets authenticate in the body, through `admit`.
 OPEN_ON_PURPOSE = {
     ("POST", "/auth/setup"), ("POST", "/auth/login"), ("POST", "/auth/logout"), ("GET", "/auth/status"),
+    # Single sign-on, for the same reason as /auth/login: both are how somebody who is nobody yet
+    # becomes somebody. The start mints a state and a nonce into a cookie of its own; the callback
+    # believes nothing but an id token verified against the issuer's published keys, and the state
+    # that came back with it.
+    ("POST", "/auth/sso/start"), ("GET", "/auth/sso/callback"),
     ("POST", "/schedules/{schedule_id}/webhook"),
     ("WS", "/machine/terminals/{terminal_id}/ws"), ("WS", "/debug/{session_id}/ws"),
     ("WS", "/notebooks/kernels/{kernel_id}/ws"),

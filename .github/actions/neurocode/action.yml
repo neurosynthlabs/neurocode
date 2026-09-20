@@ -1,0 +1,137 @@
+name: NeuroCode
+description: >-
+  Run NeuroCode from a workflow: compile a requirement, dispatch a plan, or wait on an agent run —
+  and fail the job when it needs a person.
+author: NeuroCode
+
+branding:
+  icon: cpu
+  color: orange
+
+# Everything below is `nc`, the same terminal client a person uses, against a server this workflow can
+# reach with a token. There is no second API and no privileged path: the token acts as the person who
+# made it, cut to the scopes it names, and every gate, tool rule and signature is still the server's.
+#
+# Which means the honest thing this action does that a plain `curl` cannot: it knows what "waiting on a
+# person" looks like. `nc` exits 3 when a run has stopped at an approval, a gate or a permission card,
+# and 4 when `--watch --timeout` gave up while the run was still going. A workflow that treated those
+# as success would be a green tick over work nobody has looked at, which is the one thing this product
+# is built not to do — so by default the job fails and says which screen to open.
+
+inputs:
+  server:
+    description: The NeuroCode server — the web app's address (its API is under /api) or an API's own.
+    required: true
+  token:
+    description: >-
+      A personal access token (Settings → Access tokens), from a secret. Never pass a password. A token
+      with no scopes carries everything its person holds except machine:access.
+    required: true
+  command:
+    description: >-
+      What to do: `status`, `compile`, `dispatch`, `wait`, `approvals`, or `nc` to pass your own
+      arguments in `args`.
+    required: true
+  project:
+    description: The project id. Needed by compile; the default for the rest.
+    required: false
+    default: ''
+  requirement:
+    description: "compile: the requirement, in your words."
+    required: false
+    default: ''
+  requirement-file:
+    description: "compile: a file in the checkout to read the requirement from, instead of `requirement`."
+    required: false
+    default: ''
+  plan:
+    description: "dispatch: the plan to hand to the agents (PLAN-…)."
+    required: false
+    default: ''
+  run:
+    description: "wait: the run to follow (RUN-…). Left out, the one run here that waits on you."
+    required: false
+    default: ''
+  timeout:
+    description: "wait: seconds before it gives up watching. 0 waits for ever; the job's own timeout still applies."
+    required: false
+    default: '900'
+  goal-budget:
+    description: "dispatch: run again until every acceptance criterion is met, at most this many attempts."
+    required: false
+    default: ''
+  args:
+    description: "command: nc — the arguments to pass, e.g. `memory search \"rounding\"`. --json is added."
+    required: false
+    default: ''
+  fail-on-waiting:
+    description: >-
+      Fail the job when NeuroCode says a person is needed (nc's exit code 3). True, because a green
+      tick over an unread run is worse than a red one. Set false to carry on and read the `waiting`
+      output yourself.
+    required: false
+    default: 'true'
+
+outputs:
+  json:
+    description: What `nc --json` printed — the API's own answer, unchanged.
+    value: ${{ steps.nc.outputs.json }}
+  ref:
+    description: The reference the command produced (PLAN-…, RUN-…), when it produced one.
+    value: ${{ steps.nc.outputs.ref }}
+  status:
+    description: The status in that answer, when it has one.
+    value: ${{ steps.nc.outputs.status }}
+  waiting:
+    description: '`true` when NeuroCode stopped because it needs a person.'
+    value: ${{ steps.nc.outputs.waiting }}
+  exit-code:
+    description: "nc's own exit code: 0 done, 1 refused, 2 usage, 3 waiting on a person, 4 watch timed out."
+    value: ${{ steps.nc.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    # `nc` is installed from this repository's own cli/ — the action lives three folders inside it, so
+    # the checkout that carries the action carries the client it runs. Nothing is downloaded from an
+    # index, and the client can never be a different version from the action.
+    #
+    # The trap this walks around: on every Linux runner `nc` is already a command — netcat. So the
+    # install goes to ~/.local/bin and that folder is put *first* on the PATH, and the step below
+    # checks it really is ours before it runs anything.
+    - name: Install nc
+      shell: bash
+      env:
+        CLI: ${{ github.action_path }}/../../../cli
+      run: |
+        set -euo pipefail
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        if [ ! -f "$CLI/pyproject.toml" ]; then
+          echo "::error::The NeuroCode CLI is not beside this action ($CLI). Check out the repository that holds it."
+          exit 1
+        fi
+        if command -v uv >/dev/null 2>&1; then
+          uv tool install --force "$CLI"
+        elif command -v pipx >/dev/null 2>&1; then
+          pipx install --force "$CLI"
+        else
+          python3 -m pip install --user --upgrade "$CLI"
+        fi
+
+    - name: Run
+      id: nc
+      shell: bash
+      env:
+        INPUT_SERVER: ${{ inputs.server }}
+        INPUT_TOKEN: ${{ inputs.token }}
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_PROJECT: ${{ inputs.project }}
+        INPUT_REQUIREMENT: ${{ inputs.requirement }}
+        INPUT_REQUIREMENT_FILE: ${{ inputs.requirement-file }}
+        INPUT_PLAN: ${{ inputs.plan }}
+        INPUT_RUN: ${{ inputs.run }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
+        INPUT_GOAL_BUDGET: ${{ inputs.goal-budget }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_FAIL_ON_WAITING: ${{ inputs.fail-on-waiting }}
+      run: ${{ github.action_path }}/run.sh

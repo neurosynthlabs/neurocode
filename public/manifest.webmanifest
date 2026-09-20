@@ -1,0 +1,24 @@
+{
+  "name": "NeuroCode",
+  "short_name": "NeuroCode",
+  "description": "An AI engineering OS for one operator. Requirements go in, reviewed code comes out, and nothing ships without your signature.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b0d11",
+  "theme_color": "#0b0d11",
+  "categories": ["developer", "productivity"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/neurocode.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "Command Center", "short_name": "Home", "url": "/", "description": "What needs you, what is working, what finished" },
+    { "name": "Live Runs", "short_name": "Runs", "url": "/runs", "description": "The agents at work, and the runs waiting on your signature" },
+    { "name": "Sessions", "short_name": "Ask", "url": "/sessions", "description": "Ask a question of the workspace" }
+  ]
+}

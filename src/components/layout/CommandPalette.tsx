@@ -6,6 +6,8 @@ import {
   Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator,
 } from '@/components/ui/command';
 import { buildIndex, codeHits, SEARCH_GROUPS } from '@/lib/search';
+import { sessionHits } from '@/components/sessions/transcript';
+import type { SessionDoc } from '@/lib/api';
 import { Kbd } from '@/components/os';
 import { ApiError, api } from '@/lib/api';
 import { useData } from '@/lib/data';
@@ -16,6 +18,12 @@ import type { SearchHit } from '@/types';
 
 /** How long typing has to pause before the code index is asked, so a word is one request, not five. */
 const PAUSE_MS = 220;
+
+/* The groups, in order. Sessions are not in the store — no screen but Sessions needs the list — so the
+   palette reads them itself when it opens, and they sit with the work they came out of. They are found
+   by their reference, their title and their project; what was *said* in one is searched inside the
+   session, which is the only place that holds its turns. */
+const GROUPS = SEARCH_GROUPS.flatMap((group) => (group === 'Runs' ? [group, 'Sessions'] : [group]));
 
 function Icon({ name }: { name: string }) {
   const C = ICONS[name] ?? Circle;
@@ -32,10 +40,23 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const { project } = useProject();
   const [query, setQuery] = useState('');
   const [code, setCode] = useState<Code>({ pid: '', q: '', hits: [], error: null });
+  const [sessions, setSessions] = useState<SessionDoc[] | null>(null);
   const index = useMemo(
     () => buildIndex({ projects, tasks, plans, runs, memory, brainstorms, mcp, agents }, canAny),
     [projects, tasks, plans, runs, memory, brainstorms, mcp, agents, canAny],
   );
+
+  // The sessions are read once each time the palette opens, so one started a minute ago is findable
+  // and one someone else deleted is not. A failure leaves the group out and says so in the console.
+  useEffect(() => {
+    if (!open) return;
+    let current = true;
+    api.sessions().then(
+      (all) => { if (current) setSessions(all); },
+      (e: unknown) => { console.warn('[NeuroCode] the sessions were not read for ⌘K:', e); },
+    );
+    return () => { current = false; };
+  }, [open]);
 
   // Symbols live in the active project's code index, which only the server can search. A project that
   // was never indexed has nothing to ask, so it is not asked.
@@ -59,9 +80,10 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
 
   // An answer for an earlier query, or another project, never stands in for this one.
   const fresh = pid && q.length >= 2 && code.pid === pid && code.q === q ? code : null;
-  const hits = useMemo(() => (fresh ? [...index, ...fresh.hits] : index), [index, fresh]);
+  const mine = useMemo(() => sessionHits(sessions ?? []), [sessions]);
+  const hits = useMemo(() => [...index, ...mine, ...(fresh ? fresh.hits : [])], [index, mine, fresh]);
   const grouped = useMemo(
-    () => SEARCH_GROUPS.map((g) => ({ group: g, items: hits.filter((i) => i.group === g) })).filter((g) => g.items.length),
+    () => GROUPS.map((g) => ({ group: g, items: hits.filter((i) => i.group === g) })).filter((g) => g.items.length),
     [hits],
   );
 
@@ -75,14 +97,14 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       <Command className="rounded-none! bg-transparent p-0">
       <CommandInput
         value={query} onValueChange={setQuery}
-        placeholder={indexed ? `Search screens, work, memory, and symbols in ${indexed.name}…` : 'Search screens, projects, tasks, plans, runs and memory…'}
+        placeholder={indexed ? `Search screens, work, sessions, memory, and symbols in ${indexed.name}…` : 'Search screens, projects, tasks, plans, runs, sessions and memory…'}
       />
       <CommandList className="max-h-[440px]">
         <CommandEmpty>
           <div className="py-6 text-center">
             <p className="text-[14px] text-ink-2">Nothing matches yet.</p>
             <p className="mt-1 text-[12.5px] text-dim">
-              Projects, tasks, plans, runs, memory and tools appear here as you create them.
+              Projects, tasks, plans, runs, sessions, memory and tools appear here as you create them.
               {indexed ? ` Symbols come from ${indexed.name}’s code index.` : ''}
             </p>
           </div>

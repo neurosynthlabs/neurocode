@@ -394,7 +394,7 @@ class FakeGateway:
         return None
 
     def ask(self, messages: Any, parse: Any, **kw: Any) -> Result[Any]:
-        return Result(parse("{}"), Provider("groq", "llama-3.3-70b-versatile"), 1)
+        return Result(parse("{}"), Provider("groq", "openai/gpt-oss-120b"), 1)
 
 
 async def test_the_import_job_unpacks_then_onboards(schema: str, tmp_path: Path):

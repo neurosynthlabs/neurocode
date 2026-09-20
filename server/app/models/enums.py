@@ -32,7 +32,9 @@ AgentStatus = Enum("running", "idle", "waiting", "blocked", "error", "disabled",
 Autonomy = Enum("supervised", "semi", "autonomous", name="autonomy")
 
 # Runs and sessions
-RunStatus = Enum("queued", "running", "waiting", "done", "failed", "cancelled", name="run_status")
+#: `interrupted` is not a failure: the process stopped while the run was working, and it can carry on from
+#: the last step it finished. A run that really failed stays `failed`.
+RunStatus = Enum("queued", "running", "waiting", "done", "failed", "cancelled", "interrupted", name="run_status")
 #: `check` is a run that only tests: started from the Testing screen, with no agent writing anything.
 RunRole = Enum("solo", "agent", "integration", "check", name="run_role")
 RunStepKind = Enum("edit", "merge", "test", "review", "handoff", name="run_step_kind")

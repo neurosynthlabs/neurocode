@@ -5,6 +5,11 @@ approval — the answers the runtime keeps and consults the next time, per proje
 person writes ahead of time: allow, ask or deny, for a tool and a pattern, for the workspace or one
 project. Reading either needs a session; writing a tool rule decides what runs without a person, so it
 needs `rules:manage`, and every change to one is in the audit log.
+
+Two of the kinds a rule may name are not a narrowing of something already allowed but the whole of the
+permission: `tool` (a custom tool somebody defined) and `hook` (a hook in a repository's settings file)
+do nothing at all until a rule allows them. Writing one of those is how a person says yes to a command
+line running on this machine, which is why it needs the same right as every other rule.
 """
 from __future__ import annotations
 
@@ -24,7 +29,7 @@ router = APIRouter(prefix="/permissions")
 #: The most tool rules one page holds, however the caller spells the number.
 MAX_LIST = 200
 
-Tool = Literal["edit", "command", "read", "web_fetch", "web_search", "mcp"]
+Tool = Literal["edit", "command", "read", "web_fetch", "web_search", "mcp", "tool", "hook"]
 Answer = Literal["allow", "ask", "deny"]
 
 

@@ -45,6 +45,7 @@ import {
   projectLabel,
   work,
   RULE_TOOLS,
+  REFUSED_UNLESS_ALLOWED,
   RULES_PERMISSION,
   type RuleAction,
   type RuleTool,
@@ -763,14 +764,20 @@ function ToolRules({ projects }: { projects: Project[] }) {
             <li>A project's own rule beats the workspace's, whatever either says.</li>
             <li>Then the longer pattern, counted without its wildcards: src/api/* beats src/*.</li>
             <li>Then deny beats ask beats allow, when two rules are equally specific.</li>
-            <li>No rule matches: it asks.</li>
+            <li>No rule matches: it asks — except for custom tools and repository hooks, where no rule is a no.</li>
           </ol>
+          <p className="mt-2 text-[12.5px] text-soft">
+            Those two are the whole of the permission rather than a narrowing of it: a custom tool and a
+            hook in somebody's settings file do nothing at all until a rule allows them, so silence about
+            one is a refusal and nobody is asked.
+          </p>
           <SectionTitle className="mt-3">Consulted today</SectionTitle>
           <div className="space-y-1">
             {RULE_TOOLS.map((t) => (
               <p key={t.id} className="text-[12.5px] text-ink-2">
                 <span className="font-medium text-ink">{t.label}:</span>{' '}
                 {t.consultedBy ?? <span className="text-dim">nothing yet — the rule is kept for when runs read it</span>}
+                {REFUSED_UNLESS_ALLOWED.includes(t.id) && <span className="text-warn"> · no rule means no</span>}
               </p>
             ))}
           </div>

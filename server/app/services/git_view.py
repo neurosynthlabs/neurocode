@@ -27,6 +27,7 @@ import logging
 import os
 import re
 import subprocess
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import datetime
 from functools import cache
@@ -35,14 +36,20 @@ from typing import Any, Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..agent.git import AUTHOR, MAX_DIFF, git, repo_of
+from ..agent.git import (
+    AUTHOR, MAX_CHANGE_PATHS, MAX_DIFF, Refused as GitRefused, commit_paths, discard_paths,
+    file_diff as agent_file_diff, git, repo_of, safe_path,
+)
 from ..models import Approval, Plan, Project, Run, Task
 from ..repositories.base import NotFound
+from ..repositories.identity import AuditRepository
 from ..repositories.runtime import RunRepository
 from ..repositories.work import ApprovalRepository, PlanRepository, ProjectRepository, TaskRepository
 from ..schemas.git import Head, Preview, RunFacts, Snapshot, WorktreeView, overview_json
+from . import machine
 from .code import roots
 from .errors import Refused
+from .identity import Person
 
 log = logging.getLogger(__name__)
 
@@ -631,4 +638,87 @@ class GitViewService:
     async def conflicts(self, project_id: str, source: str | None = None) -> list[dict[str, Any]]:
         snap, facts, repo = await self._available(project_id, source)
         return await asyncio.to_thread(collisions, repo, snap, facts)
+
+
+class GitChangeService(GitViewService):
+    """The one part of the Git screen that writes: the changes a person made in the checkout itself.
+
+    The Workbench saves straight into the working tree, and a working tree with changes that are not
+    committed refuses every merge (`agent.DIRTY`). Until now nothing in the product could commit or
+    take back a single one of them, so the way out of the Workbench was a terminal. These three do
+    exactly that much and no more: show what one file changed, commit the files a person picked, or
+    put them back the way the last commit had them. Staging, branching and stashing stay in git —
+    a stash this product could make but never bring back would be a trap, not a feature.
+
+    Three fences, in this order: machine access must be on and the person must hold `machine:access`
+    (the route's door), every path is `safe_path` — relative, never `..`, never `.git` — and the file
+    it names must also be inside `NEUROCODE_MACHINE_ROOTS`, which is the same boundary the editor that
+    wrote it obeyed. Each write is one audit line: who, which repository, which files.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session)
+        self.audit = AuditRepository(session)
+
+    async def _repo(self, project_id: str, source: str | None) -> Path:
+        """The repository holding this project's checkout, refused in words when there is none."""
+        project = await self._project(project_id)
+        root = await self._root(project, source)
+        found = await asyncio.to_thread(repo_of, root)
+        if found is None:
+            raise Refused(f"{project.name} is not a git repository, so there is nothing to commit.")
+        return found[0]
+
+    @staticmethod
+    async def _done(work: Callable[..., dict[str, Any]], *args: Any) -> dict[str, Any]:
+        """One blocking git call, off the event loop, with its refusal put in the words a route answers
+        with. `agent.git` raises its own `Refused` — a plain RuntimeError, which would reach a person as
+        a 500 instead of the sentence it carries."""
+        try:
+            return await asyncio.to_thread(work, *args)
+        except GitRefused as refused:
+            raise Refused(str(refused)) from refused
+
+    @staticmethod
+    def _fenced(repo: Path, paths: Sequence[str]) -> list[str]:
+        """Every path as the repository names it, checked twice: inside the repository, and inside the
+        folders this server opens at all. A path that is outside either is refused, never trimmed."""
+        if not paths:
+            raise Refused("Name at least one file.")
+        if len(paths) > MAX_CHANGE_PATHS:
+            raise Refused(f"That is {len(paths)} files; {MAX_CHANGE_PATHS} at a time is the most this takes.")
+        out: list[str] = []
+        for path in paths:
+            try:
+                rel = str(safe_path(path))      # absolute, `..` or `.git` is refused here, in agent.git
+            except GitRefused as refused:
+                raise Refused(str(refused)) from refused
+            machine.inside(str(repo / rel))     # and outside the machine's roots here
+            out.append(rel)
+        return out
+
+    async def file_diff(self, project_id: str, path: str, source: str | None = None) -> dict[str, Any]:
+        """What one file in the checkout has that the last commit does not."""
+        repo = await self._repo(project_id, source)
+        [rel] = self._fenced(repo, [path])
+        return await self._done(agent_file_diff, repo, rel)
+
+    async def commit(self, project_id: str, paths: Sequence[str], message: str, who: Person,
+                     *, ip: str = "", source: str | None = None) -> dict[str, Any]:
+        repo = await self._repo(project_id, source)
+        wanted = self._fenced(repo, paths)
+        done = await self._done(commit_paths, repo, wanted, message)
+        await self.audit.record(action="git.commit", user_id=who.id, target=str(repo),
+                                detail={"project": project_id, "paths": wanted, "commit": done["sha"],
+                                        "message": done["message"]}, ip=ip)
+        return done
+
+    async def discard(self, project_id: str, paths: Sequence[str], who: Person,
+                      *, ip: str = "", source: str | None = None) -> dict[str, Any]:
+        repo = await self._repo(project_id, source)
+        wanted = self._fenced(repo, paths)
+        done = await self._done(discard_paths, repo, wanted)
+        await self.audit.record(action="git.discard", user_id=who.id, target=str(repo),
+                                detail={"project": project_id, "paths": wanted}, ip=ip)
+        return done
 

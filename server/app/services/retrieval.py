@@ -30,6 +30,7 @@ from ..ai.gateway import Gateway
 from ..data.base import utcnow
 from ..models import EMBED_DIM, Chunk, CodeFile, CodeSymbol, MemoryFact, Project, RetrievalRun
 from ..repositories.retrieval import CANDIDATES, ChunkRepository, LEXICAL_COUNT_CAP, RRF_K
+from ..repositories.words import terms
 from ..repositories.work import ProjectRepository
 
 log = logging.getLogger(__name__)
@@ -80,18 +81,95 @@ BUILDING: set[str] = set()
 #: A referenced project's pieces take at most 1/REFERENCE_SHARE of a search's slots.
 REFERENCE_SHARE = 3
 
+#: The relevance floor, below which a piece is not handed to a model as an answer to the question.
+#:
+#: Postgres scores one occurrence of one word at exactly 0.0607927, and `ts_rank` over an `a | b | c`
+#: query returns the mean of each word's own rank (measured: `step` 0.08275, `run` 0.07599,
+#: `step | run` 0.07937). So a piece's evidence is its rank times the number of words the question
+#: was split into, and this floor states the rule in one line: **a single mention of a single word of
+#: the question is not evidence about the question.** Measured against it, "how does the Kubernetes
+#: operator reconcile a custom resource" over a billing document lands on 0.0608 exactly — one word,
+#: once — and is floored, while every question here that its pieces really did answer scored three to
+#: seven times the floor. Without it, one shared word — file, run, step, code — filled all four
+#: grounding slots for a question this repository holds no answer to, under a heading telling the
+#: model they were what the repository holds about it.
+#:
+#: The value is that single hit, 0.0607927106, rounded up to the next ten-thousandth, so a piece with
+#: exactly one hit can never scrape over the line on a floating-point rounding error.
+TS_RANK_FLOOR = 0.0608
+#: The same idea for the half that finds by meaning: a nearest neighbour is still the nearest thing in
+#: the index even when the index holds nothing near. This ceiling is NOT measured — no lane on this
+#: machine makes embeddings, so there are no real distances to read — and it is deliberately far out,
+#: where only an unrelated piece lands. Every search now records its `distance` in the trace, so the
+#: first workspace with a lane can tighten this from its own numbers instead of from an opinion.
+DISTANCE_CEILING = 0.75
+#: How many hits one trace keeps, which is also the most a search returns (repositories.retrieval).
+TRACE_HITS = 50
+
 
 def label(piece: dict[str, Any]) -> str:
     """How a piece is named to a model: its kind and ref, and "reference" when it is one."""
     return " · ".join(x for x in (piece["kind"], piece["ref"], piece.get("reference")) if x)
 
 
-NO_LANE = ("No lane makes embeddings, so search here is by words only. Add a Gemini or Mistral key, "
-           "or pull nomic-embed-text in Ollama.")
+def near_enough(piece: dict[str, Any], words: int) -> bool:
+    """Whether one piece is close enough to the question to be handed to a model as an answer to it.
+
+    Found both ways, it stays: the two halves agreeing is the strongest signal either can give. Found
+    by words alone, its rank times `words` — the number of words the question was split into, because
+    the rank is their mean — must clear the floor. Found by meaning alone, its cosine distance must be
+    inside the ceiling. A piece carrying neither number is kept: a missing figure is not evidence
+    against it, and inventing one to refuse with would be worse than keeping it.
+    """
+    if piece.get("how") == "both":
+        return True
+    if piece.get("how") == "semantic":
+        distance = piece.get("distance")
+        return distance is None or float(distance) <= DISTANCE_CEILING
+    ts_rank = piece.get("tsRank")
+    return ts_rank is None or float(ts_rank) * max(words, 1) > TS_RANK_FLOOR
+
+
+def trace(q: str, pieces: list[dict[str, Any]], *, lane: str | None, ms: int, floored: int = 0,
+          k: int | None = None) -> dict[str, Any]:
+    """What one search did, in the shape every caller records it in.
+
+    Which pieces answered a question was nowhere on record: the session wrote prose, a run wrote the
+    text it handed on, and nothing kept the query, the ranks or the scores. So "were those the right
+    eight" could not be asked of anything that had already happened, and no golden set could be
+    harvested from real work. This goes into JSONB that already exists on the turn and on the step —
+    no new table, and nothing here is guessed: every figure comes back out of the statement.
+    """
+    return {
+        "q": q[:2_000], "k": k if k is not None else len(pieces), "lane": lane, "ms": ms,
+        "floored": floored,
+        "hits": [{"ref": x["ref"], "kind": x["kind"], "path": x["path"], "how": x["how"],
+                  "score": x.get("score"), "tsRank": x.get("tsRank"), "distance": x.get("distance"),
+                  "lexicalRank": (x.get("rank") or {}).get("lexical"),
+                  "semanticRank": (x.get("rank") or {}).get("semantic")}
+                 for x in pieces[:TRACE_HITS]],
+    }
+
+
+NO_LANE = ("No lane makes embeddings, so search here is by words only. Add a Cloudflare, Gemini or Mistral "
+           "key — Cloudflare's free allowance is the largest of the three — or pull nomic-embed-text in Ollama.")
 
 
 def _clip(text: str) -> str:
     return text.strip()[:MAX_CHARS]
+
+
+def embedded_text(title: str, body: str) -> str:
+    """What the embedding model is actually given for a chunk: its title, then its body.
+
+    A document chunk's body is the bare section — its file path and its heading live only in the
+    title, which the full-text vector reads and the embedding did not. So a question naming the
+    document by name could be matched by the words and never by meaning, for a header that was
+    already written, already true and free to send. A code chunk repeats a little of its own header
+    here, which costs ten or twenty tokens and puts the symbol's name in the vector twice over.
+    """
+    head = title.strip()
+    return f"{head}\n{body}" if head and not body.startswith(head) else body
 
 
 def _pad(vector: list[float]) -> list[float]:
@@ -200,7 +278,8 @@ def entity_tokens(text: str, cap: int = MAX_TOKENS) -> tuple[list[str], list[str
 def pipeline(summary: dict[str, Any]) -> list[dict[str, Any]]:
     """The stages a document really goes through, written from the constants that govern them."""
     embedding = (f"In batches of {BATCH} by {summary.get('model') or 'the embedding model'}"
-                 f"{' via ' + summary['lane'] if summary.get('lane') else ''}, padded to one width."
+                 f"{' via ' + summary['lane'] if summary.get('lane') else ''}, padded to one width. Each "
+                 "piece is embedded with its title — its file path and heading — not the section alone."
                  if summary.get("semantic") else "No embedding lane, so documents are found by their words only.")
     return [
         {"n": 1, "step": "Onboarding scans the checkout",
@@ -362,30 +441,59 @@ class RetrievalService:
 
     async def search_counted(self, project_id: str, q: str, limit: int) -> tuple[list[dict[str, Any]], dict[str, int]]:
         """The search, and what each half had to work with: the chunks the words matched (to a cap), the
-        neighbours the vector was compared against — none when no lane embedded the question — and how
-        many survived the fusion."""
+        neighbours the vector was compared against — none when no lane embedded the question — how many
+        survived the fusion, how many of those a near-duplicate rule skipped, and how many of the ones
+        shown would not be handed to a model because they are below the relevance floor.
+
+        The floor does not cut this list. Someone typing in the search box is narrowing on purpose and
+        wants to see what matched at all; the screen says which of the results grounding would refuse.
+        """
         vector = await self._embed_query(q, project_id)
         # The search box: what a person typed there is a narrowing, so every word counts.
-        found = await self.chunks.search(project_id, q, vector=vector, limit=limit, mode="all")
+        found, dropped = await self.chunks.fused(project_id, q, vector=vector, limit=limit, mode="all")
         semantic = min(CANDIDATES, await self.chunks.embedded(project_id)) if vector is not None else 0
         # The count's ceiling and the fusion constant travel with the counts, so the screen reads them
         # instead of keeping its own copies that would go quietly wrong the day either changes.
         return found, {"lexical": await self.chunks.lexical_count(project_id, q, mode="all"), "semantic": semantic,
-                       "fused": len(found), "lexicalCap": LEXICAL_COUNT_CAP, "k": RRF_K}
+                       "fused": len(found), "lexicalCap": LEXICAL_COUNT_CAP, "k": RRF_K, "dropped": dropped,
+                       "floored": sum(1 for x in found if not near_enough(x, len(terms(q))))}
+
+    async def grounded(self, project_id: str, question: str,
+                       limit: int = 4) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+        """Grounding, and the trace of the search behind it, for a caller that records what answered.
+
+        Nothing below the floor is handed on. Retrieval used to be the one feature here that never
+        refused: `search` ORs every meaningful word of the question, reciprocal rank gives any single
+        lexical hit a score, and so an unanswerable question came back with four pieces under a heading
+        saying they were what the repository holds about it. Now the two numbers the statement already
+        computed decide, and when nothing clears the floor the caller is told plainly that there is
+        nothing — which costs about 900 tokens less than four pieces that answer nothing.
+        """
+        t0 = time.monotonic()
+        found = await self.search(project_id, question, limit)
+        near = [x for x in found if near_enough(x, len(terms(question)))]
+        lane = self.gateway.embed_lane()
+        record = trace(question, near, lane=lane.id if lane is not None else None,
+                       ms=round((time.monotonic() - t0) * 1000), floored=len(found) - len(near), k=limit)
+        if not near:
+            return "", [], record
+        return self._as_text(near), near, record
 
     async def grounding(self, project_id: str, question: str, limit: int = 4) -> tuple[str, list[dict[str, Any]]]:
         """What this workspace already holds about a question, as text a model can be handed — and the
         pieces themselves, so the caller can record which remembered facts it was handed."""
-        found = await self.search(project_id, question, limit)
-        if not found:
-            return "", []
+        ground, found, _record = await self.grounded(project_id, question, limit)
+        return ground, found
+
+    @staticmethod
+    def _as_text(found: list[dict[str, Any]]) -> str:
         pieces = [f"[{label(x)}]\n{x['text'][:900]}" for x in found]
         read_only = ("\n\nA piece marked \"reference\" is read only: it comes from a reference source or from "
                      "another project this one reads from (its refs start with that project's id and a colon — "
                      "read its files with that prefix). Nothing there is changed from here."
                      if any(x.get("reference") for x in found) else "")
         return ("What this repository already holds about the question — quote these refs when you use "
-                "them, and read the files if you need more:\n\n" + "\n\n".join(pieces) + read_only), found
+                "them, and read the files if you need more:\n\n" + "\n\n".join(pieces) + read_only)
 
     # ── building ─────────────────────────────────────────────────
     async def _code_chunks(self, project: Project, sources: list[Any]) -> list[dict[str, Any]]:
@@ -450,7 +558,9 @@ class RetrievalService:
                 made = Chunk(project_id=project_id, **row)
                 self.session.add(made)
                 fresh.append(made)
-            elif held.body != row["body"]:
+            elif embedded_text(held.title, held.body) != embedded_text(row["title"], row["body"]):
+                # The title is embedded with the body, so a piece whose heading or path changed no
+                # longer has a vector that describes what it says, even when its text is untouched.
                 for field, value in row.items():
                     setattr(held, field, value)
                 held.embedding, held.dim, held.model = None, 0, ""
@@ -476,7 +586,8 @@ class RetrievalService:
             batch = chunks[start:start + BATCH]
             try:
                 vectors, model, lane_id = await asyncio.to_thread(
-                    self.gateway.embed, [c.body for c in batch], project=project_id, lane=lane)
+                    self.gateway.embed, [embedded_text(c.title, c.body) for c in batch],
+                    project=project_id, lane=lane)
             except Exception as e:   # a lane that stops answering must not lose the index
                 return done, lane.embed, lane.id, f"{type(e).__name__} after {done} chunks — the rest stay lexical."
             if not vectors:

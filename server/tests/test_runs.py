@@ -46,7 +46,7 @@ class FakeGateway:
     def ask(self, messages: list[dict[str, str]], parse: Any, **kw: Any) -> Result[Any]:
         self.asked.append(kw.get("feature", ""))
         raw = self.script.pop(0) if self.script else '{"summary": "nothing", "files": []}'
-        return Result(parse(raw), Provider("groq", "llama-3.3-70b-versatile"), 20)
+        return Result(parse(raw), Provider("groq", "openai/gpt-oss-120b"), 20)
 
 
 def run_git(args: list[str], cwd: Path) -> None:
@@ -120,7 +120,7 @@ async def test_a_run_writes_in_its_own_worktree_and_stops_at_your_signature(live
     assert run.branch.startswith("neurocode/plan-9001")
 
     assert steps["edit"].status == "done" and "Rounded" in steps["edit"].detail
-    assert steps["review"].status == "done" and run.review["by"] == "llama-3.3-70b-versatile"
+    assert steps["review"].status == "done" and run.review["by"] == "openai/gpt-oss-120b"
     assert run.diff_files == 1 and run.diff_commits == 1 and run.diff_insertions >= 1
     assert run.tests_status == "not run"                  # a bare repo has no test command to find
 

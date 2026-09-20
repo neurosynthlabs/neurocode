@@ -24,12 +24,25 @@ NOISE = frozenset("a an and are as at be by can could do does for from has have 
                   "will with would you your".split())
 
 
+def terms(q: str) -> list[str]:
+    """The meaningful words of a question: what the "any" query is built from, in order, deduplicated.
+
+    Said once here because two things need it and must agree. The query is one of them. The other is
+    the relevance floor: `ts_rank` over an `a | b | c` query is the *mean* of each word's own rank —
+    measured on this Postgres, `step` alone ranks 0.08275, `run` alone 0.07599, and `step | run`
+    0.07937, which is their mean to seven places — so a rank only means something beside the number of
+    words it was averaged over.
+    """
+    return list(dict.fromkeys(w for w in re.findall(r"[a-z0-9_]+", q.lower())
+                              if len(w) > 2 and w not in NOISE))
+
+
 def tsquery(q: str, mode: Mode = "all") -> ColumnElement:
     """The query. "all" keeps the search-box syntax — quotes, `-word`, `or` — that people type on purpose."""
     text = q.strip()
     if mode == "all":
         return func.websearch_to_tsquery("english", text)
-    words = list(dict.fromkeys(w for w in re.findall(r"[a-z0-9_]+", text.lower()) if len(w) > 2 and w not in NOISE))
+    words = terms(text)
     if not words:
         return func.websearch_to_tsquery("english", text)
     # Each word goes through to_tsquery as a lexeme of its own, joined with `|`. Only [a-z0-9_] survives

@@ -220,7 +220,7 @@ async def test_a_lane_that_fails_still_answers_and_the_feed_says_which(
     feed = (await ActivityRepository(session).recent()).items
     fell_back = next(e for e in feed if e.action == "AI fell back")
     assert fell_back.level == "warn" and fell_back.actor_kind == "system"
-    assert "llama-3.3-70b-versatile" in fell_back.detail and fell_back.project_id == "erp"
+    assert "openai/gpt-oss-120b" in fell_back.detail and fell_back.project_id == "erp"
     assert any(e.action == "Asked memory" and e.actor == "Rajat" for e in feed)
 
 

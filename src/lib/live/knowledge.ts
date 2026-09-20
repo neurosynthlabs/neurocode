@@ -39,7 +39,17 @@ export interface CountedSearch extends RetrievalState {
   results: RetrievalHit[];
   /** Present when a question was asked: what the words matched, what meaning compared, what survived. */
   /** `lexicalCap` is where the word count stops counting; `k` is the reciprocal-rank constant. */
-  counts?: { lexical: number; semantic: number; fused: number; lexicalCap: number; k: number };
+  /** `dropped` is what the near-duplicate rule skipped to fill these slots; `floored` is how many of the
+      results shown are too far from the question to be handed to a model as an answer to it. */
+  counts?: {
+    lexical: number;
+    semantic: number;
+    fused: number;
+    lexicalCap: number;
+    k: number;
+    dropped: number;
+    floored: number;
+  };
 }
 
 const seg = encodeURIComponent;

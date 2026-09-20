@@ -6,7 +6,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { ApiError } from '@/lib/api';
 import { onPathMenu } from '@/lib/desktop';
 import {
-  dirName, joinPath, machineApi, within, type GitLetter, type MachineEntry, type MachineGit, type MachineListing,
+  dirName, GIT_TONE, joinPath, machineApi, within,
+  type GitLetter, type MachineEntry, type MachineGit, type MachineListing,
 } from '@/lib/live/machine';
 import { cn } from '@/lib/utils';
 
@@ -27,18 +28,6 @@ export interface TreeRoot {
 }
 
 type Loaded = { state: 'loading' } | { state: 'error'; error: string } | { state: 'ok'; listing: MachineListing };
-
-/** How git's letter reads in the tree: a colour, and the word a tooltip uses. */
-const GIT_TONE: Record<GitLetter, { cls: string; word: string }> = {
-  M: { cls: 'text-warn', word: 'modified' },
-  T: { cls: 'text-warn', word: 'type changed' },
-  A: { cls: 'text-ok', word: 'added' },
-  '?': { cls: 'text-ok', word: 'untracked' },
-  C: { cls: 'text-ok', word: 'copied' },
-  R: { cls: 'text-info', word: 'renamed' },
-  D: { cls: 'text-danger', word: 'deleted' },
-  U: { cls: 'text-danger', word: 'conflicted' },
-};
 
 /** Every changed path of every root, made absolute, and the folders that hold one. */
 function gitMarks(roots: TreeRoot[]) {

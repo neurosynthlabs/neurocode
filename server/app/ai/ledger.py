@@ -1,5 +1,9 @@
 """Where the gateway keeps its settings and its ledger.
 
+(Five questions now, not four. A free tier in 2026 ends on tokens a day rather than calls a day —
+Groq's is a thousand calls and two hundred thousand tokens — so the port has to be able to answer
+what a lane has spent in tokens as well as in calls, and it is the same one-line query.)
+
 The gateway is a blocking thing by nature: it opens sockets to model providers and waits on them, so
 it always runs on a worker thread and can never hold the request's async session. Giving it one
 anyway is how you get a deadlock. It is handed this narrow port instead — four questions, answered by
@@ -34,6 +38,8 @@ class Ledger(Protocol):
     def save_setting(self, key: str, value: Any) -> None: ...
 
     def calls_today(self, lane_id: str) -> int: ...
+
+    def tokens_today(self, lane_id: str) -> int: ...
 
     def record(self, *, feature: str, lane: str, model: str, ok: bool, ms: int, tokens_in: int,
                tokens_out: int, user_id: str | None, project_id: str | None, agent: str,
@@ -84,6 +90,15 @@ class PostgresLedger:
                 {"lane": lane_id}).scalar_one()
         return int(n)
 
+    def tokens_today(self, lane_id: str) -> int:
+        """What this lane has spent against a daily *token* allowance — in and out together, because
+        that is how a provider counts them. The same day as `calls_today`: the database's, in UTC."""
+        with self.engine.connect() as conn:
+            n = conn.execute(text(
+                "SELECT COALESCE(SUM(tokens_in + tokens_out), 0) FROM ai_calls "
+                "WHERE lane = :lane AND at >= date_trunc('day', now())"), {"lane": lane_id}).scalar_one()
+        return int(n)
+
     def record(self, *, feature: str, lane: str, model: str, ok: bool, ms: int, tokens_in: int,
                tokens_out: int, user_id: str | None, project_id: str | None, agent: str = "",
                error: str, run_id: str | None = None, tokens_cached: int = 0,
@@ -129,6 +144,7 @@ class Remembered:
         self._lock = threading.Lock()
         self._settings: dict[str, tuple[float, Any]] = {}
         self._spent: dict[str, tuple[float, int]] = {}
+        self._tokens: dict[str, tuple[float, int]] = {}
 
     def __getattr__(self, name: str) -> Any:
         """Everything else — `close`, a test's own `calls` — belongs to the ledger underneath."""
@@ -166,16 +182,26 @@ class Remembered:
             self._keep(self._spent, lane_id, value)
         return int(value)
 
+    def tokens_today(self, lane_id: str) -> int:
+        known, value = self._fresh(self._tokens, lane_id)
+        if not known:
+            value = self._store.tokens_today(lane_id)
+            self._keep(self._tokens, lane_id, value)
+        return int(value)
+
     def record(self, **line: Any) -> None:
         self._store.record(**line)
         with self._lock:
-            self._spent.pop(str(line.get("lane") or ""), None)
+            lane = str(line.get("lane") or "")
+            self._spent.pop(lane, None)
+            self._tokens.pop(lane, None)
 
     def forget(self) -> None:
         """Everything, now — for a test, and for anything that changed the database behind us."""
         with self._lock:
             self._settings.clear()
             self._spent.clear()
+            self._tokens.clear()
 
 
 class MemoryLedger:
@@ -196,6 +222,11 @@ class MemoryLedger:
     def calls_today(self, lane_id: str) -> int:
         today = datetime.now(timezone.utc).date()
         return sum(1 for c in self.calls if c["lane"] == lane_id and c["at"].date() == today)
+
+    def tokens_today(self, lane_id: str) -> int:
+        today = datetime.now(timezone.utc).date()
+        return sum(int(c.get("tokens_in") or 0) + int(c.get("tokens_out") or 0)
+                   for c in self.calls if c["lane"] == lane_id and c["at"].date() == today)
 
     def record(self, **line: Any) -> None:
         with self._lock:

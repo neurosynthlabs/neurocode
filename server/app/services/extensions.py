@@ -11,20 +11,35 @@ Three places are read: the user-level Claude home (`~/.claude`, or wherever `NEU
 Code installed and enabled. Every file found is resolved and must still be inside the root it was found
 under, so a symlink cannot walk discovery somewhere else; every count and size is capped.
 
-Hooks are discovered, redacted and shown. NeuroCode never executes one, and nothing here runs anything:
-a command's !`shell` lines are shown with a warning and replaced with a note when a session expands it.
+Hooks are discovered, redacted and shown, and a hook is refused by default: a repository's hook is
+somebody else's shell script, and nothing runs it because it is there. A person may allow a specific
+one with a tool rule of kind `hook` — matched on `event/command`, the command as it is really written —
+and only then does it fire at its event, inside the project's checkout, under the machine's roots, with
+a timeout and a cap on what it may say back. Every firing is in the activity log. A command's !`shell`
+lines are still never run: they are replaced with a note when a session expands the command.
+
+Plugins are read from Claude Code's own cache, which NeuroCode never writes to, and from a folder of the
+workspace's own — `NEUROCODE_PLUGINS_DIR`, or `.plugins` beside the clones. A plugin installed there came
+from a person naming an https git URL or a folder inside the machine's roots; it can be listed and
+removed again. The registry is a JSON file of plugins somebody wrote down as worth offering, and that is
+all it is: there is no index anybody fetches from, and the screen says so in those words.
 """
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import hashlib
 import json
 import logging
 import math
 import os
 import re
+import secrets as token
 import shlex
+import shutil
 import subprocess
+import time
+import urllib.parse
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import timedelta
@@ -38,11 +53,15 @@ from .. import onboarding
 from ..agent.git import git
 from ..data.base import utcnow
 from ..models import Chat, ChatMessage, Project
-from ..repositories import NotFound, ProjectRepository
+from ..repositories import ActivityRepository, AuditRepository, NotFound, ProjectRepository
 from ..repositories.work import PrefRepository
 from ..schemas.extensions import command_json, hook_json, skill_json
+from ..settings import settings
+from . import machine
 from .code import checkout
 from .errors import Refused
+from .identity import Person
+from .tool_rules import decide
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +75,29 @@ MAX_MARKETPLACE = 500
 MAX_HOOKS = 500
 #: Rows a usage question may return. One per skill or command, so this is far above any real count.
 MAX_USAGE_ROWS = 1_000
+
+#: A hook that has not finished in this long is killed, whatever its own `timeout` says — a settings file
+#: is not allowed to hold a session open. Its own timeout still applies when it is shorter.
+MAX_HOOK_SECONDS = 60
+#: What one firing may say back. A hook that prints a log is cut, and the answer says it was.
+MAX_HOOK_OUTPUT = 20_000
+#: Exit code 2 is Claude Code's own "refuse what was about to happen", and only on the blocking events.
+REFUSAL_CODE = 2
+#: A plugin folder the workspace owns is copied or cloned at most this big, and with at most this many
+#: files. A plugin is skills, commands and agents in markdown — anything larger is not one.
+MAX_PLUGIN_FILES = 4_000
+MAX_PLUGIN_BYTES = 80 * 1024 * 1024
+CLONE_TIMEOUT = 180
+#: A plugin name is a folder name, so it is the narrow set a folder name may be here.
+PLUGIN_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,39}$")
+#: The marketplace a workspace plugin belongs to: its own. Claude Code never sees these.
+WORKSPACE_MARKET = "workspace"
+#: Installing a plugin fetches somebody else's code, and removing one deletes a folder, so both need the
+#: right that already governs what the runtime may reach for.
+MANAGE = "mcp:manage"
+#: Reading the hooks list already needs this, because a hook is a command line. Running one needs no more
+#: than reading one does — a rule has already said yes, and without a rule the button refuses too.
+HOOKS_WRITE = "settings:write"
 
 #: The events where Claude Code lets a hook's exit code 2 refuse what was about to happen.
 BLOCKING_EVENTS = frozenset({"PreToolUse", "UserPromptSubmit", "Stop", "SubagentStop"})
@@ -305,6 +347,30 @@ class HookEntry:
     blocking: bool
     description: str
     timeout_s: int | None
+    #: The command exactly as the settings file writes it. A rule is matched against this and a firing
+    #: runs this, because a rule matched against the redacted text would allow something else. It is
+    #: never put in an answer — `hook_json` does not read it, and nothing here returns it.
+    raw: str = ""
+
+    @property
+    def subject(self) -> str:
+        """What a `hook` rule's pattern is matched against: the event, then the command as written.
+
+        This holds the command unredacted, so it never leaves the server: the hooks list is read by
+        anyone with `settings:write`, and the whole point of the redaction is that a secret pasted into
+        a settings file does not reach a browser. `pattern` is what a screen is given instead.
+        """
+        return f"{self.event}/{self.raw}"
+
+    @property
+    def pattern(self) -> str:
+        """A `hook` rule's pattern that would allow exactly this hook, fit to be shown to a person.
+
+        It is built from the redacted command, and it still matches the real one: what redaction leaves
+        behind is `***`, and a glob reads that as "anything". So a person can copy this off the screen,
+        paste it into a rule, and have it match — without the secret ever being shown to them.
+        """
+        return f"{self.event}/{self.command}"
 
 
 @dataclass
@@ -345,6 +411,185 @@ def installed_plugins(home: Path, use: dict[str, bool]) -> list[Plugin]:
                           version=str(entry.get("version", "")), updated_at=str(entry.get("lastUpdated", "")),
                           enabled_in_claude=enabled.get(pid) is True, used=use.get(pid, True) is not False))
     return out
+
+
+# ── the workspace's own plugin folder ────────────────────────────
+def workspace_plugins_dir() -> Path:
+    """Where a plugin this workspace installed lives. Never Claude Code's cache: that folder belongs to
+    Claude Code, and writing into it would arm somebody else's hooks inside its configuration.
+
+    Read from the environment first so a test can point it somewhere of its own, exactly as `claude_home`
+    is; otherwise it sits beside the clones, where everything else this server writes already lives.
+    """
+    chosen = os.environ.get("NEUROCODE_PLUGINS_DIR")
+    return Path(os.path.expanduser(chosen)) if chosen else Path(settings().repos_dir).parent / ".plugins"
+
+
+def workspace_plugins(use: dict[str, bool]) -> list[Plugin]:
+    """The plugins this workspace installed: one folder each, directly under the plugins folder.
+
+    They are `enabled_in_claude=True` because Claude Code has nothing to say about them — nobody else
+    installed them and nobody else can switch them off. Whether their skills and commands reach sessions
+    is the same switch every plugin has, `plugins.installed`.
+    """
+    root = workspace_plugins_dir()
+    if not root.is_dir():
+        return []
+    out: list[Plugin] = []
+    for path in sorted(root.iterdir())[:MAX_PER_ROOT]:
+        if not path.is_dir() or path.is_symlink() or not _inside(root, path):
+            continue
+        manifest = _json(path / ".claude-plugin" / "plugin.json") or {}
+        pid = f"{path.name}@{WORKSPACE_MARKET}"
+        stamp = _json(path / ".claude-plugin" / "neurocode.json") or {}
+        out.append(Plugin(id=pid, name=path.name, marketplace=WORKSPACE_MARKET, path=path.resolve(),
+                          version=str(manifest.get("version", "")), updated_at=str(stamp.get("installedAt", "")),
+                          enabled_in_claude=True, used=use.get(pid, True) is not False))
+    return out
+
+
+def _is_git_url(source: str) -> bool:
+    return source.startswith(("http://", "https://", "git@", "ssh://", "git://"))
+
+
+def _checked_source(source: str) -> tuple[str, str]:
+    """What a person may install from, and which of the two it is: ("git", url) or ("path", folder).
+
+    Only https is accepted for a git URL. `git@` and `ssh://` would use this account's own keys, and
+    `http://` and `git://` carry the repository over a connection nobody checked — a plugin is code that
+    then runs on this machine, so neither is a thing this server does on somebody's word. A local path
+    goes through the machine door like every other path a request names.
+    """
+    text = (source or "").strip()
+    if not text:
+        raise Refused("Name a git URL to clone, or a folder on this machine to copy.", status=422)
+    if _is_git_url(text):
+        parts = urllib.parse.urlsplit(text)
+        if parts.scheme != "https" or not parts.hostname:
+            raise Refused("A plugin is cloned from an https:// URL only. ssh:// and git@ would use this "
+                          "machine's own keys, and http:// is not checked on the way — clone it yourself "
+                          "and install from the folder instead.", status=422)
+        return "git", text
+    return "path", str(machine.inside(text))
+
+
+def _weigh_plugin_folder(root: Path) -> tuple[int, int]:
+    """How many files a folder holds and how large they are, stopping the moment it is past the ceiling —
+    so a folder nobody should be copying is not first walked in full."""
+    files = size = 0
+    for here, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs if d != ".git"]
+        for name in names:
+            path = Path(here) / name
+            if path.is_symlink():
+                continue
+            files += 1
+            try:
+                size += path.stat().st_size
+            except OSError:
+                continue
+            if files > MAX_PLUGIN_FILES or size > MAX_PLUGIN_BYTES:
+                return files, size
+    return files, size
+
+
+def _plugin_contents(path: Path) -> dict[str, int]:
+    """What a folder would bring, so a person is told before it is kept rather than after."""
+    return _count_contents(path)
+
+
+def install_plugin(source: str, name: str) -> dict[str, Any]:
+    """Blocking. Put a plugin in the workspace's plugin folder, from an https git URL or a local folder.
+
+    Nothing from the outside is trusted here beyond being copied in: the clone is shallow and its `.git`
+    is dropped, so what stays is files rather than a repository that could be pulled from again; symlinks
+    are not copied, so a link cannot reach out of the folder later; the size and file count are capped
+    before anything is kept. A folder that holds none of the four things a plugin is made of is refused
+    with those four things named, because a person who typed the wrong path deserves to be told which.
+    """
+    machine.enabled()
+    if not PLUGIN_NAME.match(name or ""):
+        raise Refused("A plugin's name is 1 to 40 characters of lowercase letters, digits, dot, dash or "
+                      "underscore — it is the folder it is kept in.", status=422)
+    kind, where = _checked_source(source)
+    root = workspace_plugins_dir()
+    target = root / name
+    if target.exists():
+        raise Refused(f"A plugin called {name} is already installed here. Remove it first, or install "
+                      f"under another name.", status=409)
+    root.mkdir(parents=True, exist_ok=True)
+    staging = root / f".installing-{name}-{token.token_hex(4)}"
+    try:
+        if kind == "git":
+            done = git(["clone", "--depth", "1", "--no-tags", "--single-branch", "--", where, str(staging)],
+                       root, timeout=CLONE_TIMEOUT)
+            if done.returncode != 0:
+                raise Refused(f"git could not clone {where}: {done.stderr.strip()[:300] or 'it said nothing'}.")
+            shutil.rmtree(staging / ".git", ignore_errors=True)
+        else:
+            files, size = _weigh_plugin_folder(Path(where))
+            if files > MAX_PLUGIN_FILES or size > MAX_PLUGIN_BYTES:
+                raise Refused(f"{where} holds {files} files and {size // 1_000_000} MB. A plugin is skills, "
+                              f"commands, agents and hooks — this is a working folder, not a plugin.", status=422)
+            shutil.copytree(where, staging, symlinks=False, ignore=shutil.ignore_patterns(".git"),
+                            ignore_dangling_symlinks=True)
+        brought = _plugin_contents(staging)
+        if not any(brought.values()) and not (staging / ".claude-plugin" / "plugin.json").is_file():
+            raise Refused(f"There is no plugin in {source}: nothing under skills/, commands/, agents/ or "
+                          f"hooks/, and no .claude-plugin/plugin.json. Nothing was kept.", status=422)
+        (staging / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+        # Where it came from, written beside it: the screen shows it, and a person who inherits this
+        # machine can tell a plugin somebody chose from a folder that merely appeared.
+        (staging / ".claude-plugin" / "neurocode.json").write_text(json.dumps(
+            {"source": source if kind == "git" else where, "sourceKind": kind,
+             "installedAt": utcnow().isoformat()}, indent=2))
+        staging.rename(target)
+    except Refused:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    except (OSError, shutil.Error, subprocess.SubprocessError) as e:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise Refused(f"Could not install {name}: {e}") from e
+    return {"id": f"{name}@{WORKSPACE_MARKET}", "name": name, "path": _display(target),
+            "provides": brought, "source": source, "sourceKind": kind}
+
+
+def remove_plugin(name: str) -> dict[str, Any]:
+    """Blocking. Delete one plugin folder this workspace installed. Only a direct child of that folder,
+    resolved, is ever removed — a name is not a path, and nothing else on this machine is reachable."""
+    machine.enabled()
+    root = workspace_plugins_dir()
+    if not PLUGIN_NAME.match(name or ""):
+        raise NotFound(f"plugin {name}")
+    target = root / name
+    if not target.is_dir() or target.is_symlink() or not _inside(root, target):
+        raise NotFound(f"plugin {name}")
+    shutil.rmtree(target)
+    return {"ok": True, "id": f"{name}@{WORKSPACE_MARKET}", "name": name}
+
+
+def registry() -> dict[str, Any]:
+    """The plugins somebody wrote down as worth offering: `registry.json` in the plugins folder.
+
+    This is the whole of the "marketplace" the screen offers, and the screen says so. Nothing is fetched
+    from anywhere — a registry is a file a person or a team keeps, and if it is not there the answer is
+    the path it would be at, so the screen can say where to put one.
+    """
+    root = workspace_plugins_dir()
+    path = root / "registry.json"
+    data = _json(path)
+    entries: list[dict[str, Any]] = []
+    for item in (data.get("plugins") if data else None) or []:
+        if not isinstance(item, dict) or not item.get("name") or not item.get("source"):
+            continue
+        entries.append({"name": str(item["name"])[:80], "source": str(item["source"])[:500],
+                        "description": str(item.get("description", ""))[:500],
+                        "publisher": str(item.get("publisher", ""))[:120],
+                        "category": str(item.get("category") or "uncategorized")[:60]})
+        if len(entries) >= MAX_MARKETPLACE:
+            break
+    return {"path": _display(path), "exists": path.is_file(),
+            "name": str((data or {}).get("name", "")) or "This machine's registry", "plugins": entries}
 
 
 def _skills_under(root: Path, scope: str, key_prefix: str, project: str, shown: str,
@@ -414,8 +659,10 @@ def discover(home: Path, project_root: Path | None, project_id: str | None,
             _skills_under(claude / "skills", "project", f"project:{project_id}", project_id,
                           ".claude/skills", None, cat)
             _commands_under(claude / "commands", "project", f"project:{project_id}", ".claude/commands", None, cat)
-    cat.plugins = installed_plugins(home, plugin_use)
+    cat.plugins = [*installed_plugins(home, plugin_use), *workspace_plugins(plugin_use)]
     cat.roots.append(Root("plugin", _display(home / "plugins"), (home / "plugins").is_dir()))
+    workspace_root = workspace_plugins_dir()
+    cat.roots.append(Root("plugin", _display(workspace_root), workspace_root.is_dir()))
     for plugin in cat.plugins:
         if not (plugin.enabled_in_claude and plugin.used):
             continue
@@ -448,7 +695,8 @@ def _hooks_from(data: dict[str, Any] | None, scope: str, source: str, descriptio
                 digest = hashlib.sha256(f"{scope}|{source}|{event}|{g}|{h}|{matcher}|{command}".encode()).hexdigest()
                 timeout = handler.get("timeout")
                 out.append(HookEntry(
-                    id=digest[:16], event=str(event), matcher=matcher, type=kind, command=command, scope=scope,
+                    id=digest[:16], event=str(event), matcher=matcher, type=kind, command=command,
+                    raw=str(handler.get("command") or handler.get("prompt") or ""), scope=scope,
                     source=source, blocking=event in BLOCKING_EVENTS,
                     description=description or (f"Runs on {event} when the tool matches {matcher}." if matcher
                                                  and matcher != "*" else f"Runs on every {event}."),
@@ -469,7 +717,7 @@ def discover_hooks(home: Path, project_root: Path | None) -> tuple[list[HookEntr
             roots.append(Root(scope, f".claude/{name}", path.is_file()))
             if path.is_file() and _inside(project_root, path):
                 _hooks_from(_json(path), scope, f".claude/{name}", "", out)
-    for plugin in installed_plugins(home, {}):
+    for plugin in [*installed_plugins(home, {}), *workspace_plugins({})]:
         if not plugin.enabled_in_claude:
             continue
         path = plugin.path / "hooks" / "hooks.json"
@@ -527,7 +775,7 @@ def discover_plugins(home: Path, use: dict[str, bool]) -> dict[str, Any]:
                 "local": local if local is not None and local.is_dir() and _inside(location, local) else None,
             }
 
-    installed = installed_plugins(home, use)
+    installed = [*installed_plugins(home, use), *workspace_plugins(use)]
     installed_ids = {p.id for p in installed}
 
     def card(pid: str, name: str, market: str, *, version: str, updated: str, provides: dict[str, int] | None,
@@ -544,6 +792,9 @@ def discover_plugins(home: Path, use: dict[str, bool]) -> dict[str, Any]:
             "category": str(item.get("category") or "uncategorized"), "updatedAt": updated,
             "enabledInClaude": enabled, "usedInNeuroCode": used, "path": path,
             "installCommand": f"/plugin {'uninstall' if pid in installed_ids else 'install'} {pid}",
+            # A workspace plugin is one this server installed and can remove again; Claude Code's own is
+            # not, and the screen needs to know which before it offers a Remove button.
+            "workspace": market == WORKSPACE_MARKET, "source": "", "sourceKind": "",
         }
 
     out_installed = []
@@ -552,6 +803,11 @@ def discover_plugins(home: Path, use: dict[str, bool]) -> dict[str, Any]:
         made = card(p.id, p.name, p.marketplace, version=p.version, updated=p.updated_at,
                     provides=_count_contents(p.path), enabled=p.enabled_in_claude, used=p.used,
                     path=_display(p.path))
+        if p.marketplace == WORKSPACE_MARKET:
+            stamp = _json(p.path / ".claude-plugin" / "neurocode.json") or {}
+            made["source"] = str(stamp.get("source", ""))
+            made["sourceKind"] = str(stamp.get("sourceKind", ""))
+            made["installCommand"] = ""
         if isinstance(manifest.get("author"), dict) and manifest["author"].get("name"):
             made["publisher"] = str(manifest["author"]["name"])
         if not made["description"]:
@@ -562,7 +818,149 @@ def discover_plugins(home: Path, use: dict[str, bool]) -> dict[str, Any]:
                    enabled=False, used=None, path=None)
               for pid, listed in catalogue.items() if pid not in installed_ids][:MAX_MARKETPLACE]
     return {"installed": out_installed, "marketplace": market,
-            "countsFetchedAt": counts_file.get("fetchedAt") if installs else None}
+            "countsFetchedAt": counts_file.get("fetchedAt") if installs else None,
+            "registry": registry(), "workspaceRoot": _display(workspace_plugins_dir())}
+
+
+# ── hooks that may run, and only those ───────────────────────────
+@dataclass(frozen=True)
+class HookVerdict:
+    """What the tool rules say about one hook, in the words the screen and a log line use."""
+
+    action: str                  # allow | ask | deny
+    rule_id: int | None
+    why: str
+
+    @property
+    def allowed(self) -> bool:
+        return self.action == "allow"
+
+    def json(self) -> dict[str, Any]:
+        return {"allowed": self.allowed, "action": self.action, "ruleId": self.rule_id, "why": self.why}
+
+
+async def hook_verdicts(session: AsyncSession, hooks: Sequence[HookEntry],
+                        project_id: str | None) -> dict[str, HookVerdict]:
+    """Hook id → what a rule says about it. No rule is a refusal here, not a question: nobody is waiting
+    at a PostToolUse to answer one, and a hook that fires while a person is asked would have fired."""
+    out: dict[str, HookVerdict] = {}
+    for hook in hooks:
+        said = await decide(session, "hook", hook.subject, project_id)
+        if said.rule_id is None:
+            out[hook.id] = HookVerdict("ask", None, "No tool rule allows this hook, so it is shown and not run.")
+        else:
+            out[hook.id] = HookVerdict(said.action, said.rule_id, said.why)
+    return out
+
+
+def matches(matcher: str, subject: str) -> bool:
+    """Whether a hook's matcher covers what just happened. Claude Code writes these as `Write|Edit` — a
+    few names separated by pipes — so that is what is read, each part as a glob. An empty matcher, or
+    `*`, is every subject; a hook on an event that carries no subject has nothing to narrow and fires."""
+    text = matcher.strip()
+    if not text or text == "*":
+        return True
+    if not subject:
+        return False
+    return any(fnmatch.fnmatchcase(subject, part.strip()) for part in text.split("|") if part.strip())
+
+
+@dataclass(frozen=True)
+class Fired:
+    """One hook at one event: whether it ran, what it said, and whether it refused what was happening."""
+
+    hook_id: str
+    event: str
+    command: str                 # redacted: this goes into answers and into the log
+    ran: bool
+    exit_code: int | None
+    output: str
+    blocked: bool
+    why: str
+    ms: int
+
+    def json(self) -> dict[str, Any]:
+        return {"hookId": self.hook_id, "event": self.event, "command": self.command, "ran": self.ran,
+                "exitCode": self.exit_code, "output": self.output, "blocked": self.blocked, "why": self.why,
+                "ms": self.ms}
+
+
+def run_hook(hook: HookEntry, cwd: Path, payload: dict[str, Any]) -> tuple[int, str, int]:
+    """Blocking. One hook, in the project's checkout, with its event's payload on stdin as JSON.
+
+    The same limits every command in this product runs under: a timeout the settings file may shorten but
+    never lengthen, output cut rather than buffered without end, and no shell state carried in beyond the
+    environment this server already runs with. Returns its exit code, what it printed, and how long it took.
+    """
+    seconds = min(hook.timeout_s or MAX_HOOK_SECONDS, MAX_HOOK_SECONDS)
+    started = time.monotonic()
+    try:
+        done = subprocess.run(["/bin/sh", "-c", hook.raw], cwd=cwd, input=json.dumps(payload), text=True,
+                              capture_output=True, timeout=seconds, check=False,
+                              env={**os.environ, "CI": "1", "NO_COLOR": "1", "CLAUDE_PROJECT_DIR": str(cwd),
+                                   "NEUROCODE_HOOK_EVENT": hook.event})
+    except subprocess.TimeoutExpired:
+        return 124, f"It did not finish within {seconds} s, so it was stopped.", int((time.monotonic() - started) * 1000)
+    except OSError as e:
+        return 126, f"It could not be started: {e}", int((time.monotonic() - started) * 1000)
+    said = redact((done.stdout or "") + (done.stderr or ""))
+    cut = "" if len(said) <= MAX_HOOK_OUTPUT else f"\n[… {len(said) - MAX_HOOK_OUTPUT} more characters were cut]"
+    return done.returncode, said[:MAX_HOOK_OUTPUT] + cut, int((time.monotonic() - started) * 1000)
+
+
+async def fire(session: AsyncSession, event: str, project: Project | None, payload: dict[str, Any], *,
+               subject: str = "", actor: str = "a session", actor_kind: str = "agent") -> list[Fired]:
+    """Every hook configured on `event` here: the allowed ones run, the rest are reported and do not.
+
+    `subject` is what the event is about — the tool's name, for the tool events — and a hook's matcher is
+    weighed against it. Nothing runs without machine access and a checkout on this machine, because a hook
+    runs somewhere, and the only somewhere a repository's hook means is the repository.
+
+    Every firing is recorded in the activity feed: a command ran on this machine because somebody wrote a
+    rule, and that is exactly the kind of thing a person needs to be able to find afterwards.
+    """
+    home, root = claude_home(), _root_of(project)
+    found, _ = await asyncio.to_thread(discover_hooks, home, root)
+    at_event = [h for h in found if h.event == event and matches(h.matcher, subject) and h.type == "command"
+                and h.raw.strip()]
+    if not at_event:
+        return []
+    verdicts = await hook_verdicts(session, at_event, project.id if project else None)
+    activity = ActivityRepository(session)
+    out: list[Fired] = []
+    for hook in at_event:
+        verdict = verdicts[hook.id]
+        if not verdict.allowed:
+            out.append(Fired(hook.id, event, hook.command, False, None, "", False, verdict.why, 0))
+            continue
+        if not settings().machine_access:
+            out.append(Fired(hook.id, event, hook.command, False, None, "", False,
+                             "A rule allows this hook, but machine access is off on this server, so nothing "
+                             "runs on this machine.", 0))
+            continue
+        if root is None:
+            out.append(Fired(hook.id, event, hook.command, False, None, "", False,
+                             "A rule allows this hook, but this project has no checkout on this machine, so "
+                             "there is nowhere to run it.", 0))
+            continue
+        try:
+            machine.inside(str(root))
+        except Refused as refused:
+            out.append(Fired(hook.id, event, hook.command, False, None, "", False, str(refused), 0))
+            continue
+        code, said, ms = await asyncio.to_thread(run_hook, hook, root, payload)
+        blocked = hook.blocking and code == REFUSAL_CODE
+        fired = Fired(hook.id, event, hook.command, True, code, said, blocked,
+                      f"{verdict.why} It exited {code}." + (" It refused what was about to happen."
+                                                            if blocked else ""), ms)
+        out.append(fired)
+        await activity.record(
+            actor=actor, actor_kind=actor_kind, action="Hook fired",
+            detail=f"{event} · {hook.command[:120]} · exit {code} · {ms} ms"
+                   + (" · refused the action" if blocked else ""),
+            project_id=project.id if project else None,
+            level="warn" if blocked or code not in (0, REFUSAL_CODE) else "info")
+    return out
 
 
 def conflicts(commands: Iterable[CommandFile]) -> list[dict[str, str]]:
@@ -760,10 +1158,83 @@ class ExtensionService:
                 "conflicts": conflicts(cat.commands), "roots": [asdict(r) for r in cat.roots]}
 
     async def hooks(self, project_id: str | None) -> dict[str, Any]:
+        """Every hook configured here, each one saying plainly whether it would run or is only shown.
+
+        The verdict is added beside the hook rather than inside `hook_json`, because it is not a property
+        of the file: it is what this workspace's rules say about that file today, and it changes when
+        somebody writes a rule without anything on disk moving.
+        """
         project = await self._project(project_id)
         home, root = claude_home(), _root_of(project)
         found, roots = await asyncio.to_thread(discover_hooks, home, root)
-        return {"hooks": [hook_json(h) for h in found], "files": [asdict(r) for r in roots]}
+        verdicts = await hook_verdicts(self.session, found, project_id)
+        rows = [{**hook_json(h), **verdicts[h.id].json(), "pattern": h.pattern} for h in found]
+        return {"hooks": rows, "files": [asdict(r) for r in roots],
+                "canRun": settings().machine_access and root is not None,
+                "checkout": str(root) if root is not None else None,
+                "allowed": sum(1 for r in rows if r["allowed"])}
+
+    async def fire_hook(self, project_id: str | None, hook_id: str, who: Person) -> dict[str, Any]:
+        """Run one allowed hook, once, because a person pressed the button next to it.
+
+        This is the honest way to find out whether a hook works before it fires on its own: the same
+        rule decides, the same limits hold, and the firing is in the activity log like any other. A hook
+        no rule allows is refused here exactly as it is refused at its event.
+        """
+        who.must(HOOKS_WRITE, "run a hook")
+        machine.enabled()
+        project = await self._project(project_id)
+        home, root = claude_home(), _root_of(project)
+        found, _ = await asyncio.to_thread(discover_hooks, home, root)
+        hook = next((h for h in found if h.id == hook_id), None)
+        if hook is None:
+            raise NotFound(f"hook {hook_id}")
+        if hook.type != "command" or not hook.raw.strip():
+            raise Refused(f"This {hook.type} hook has no command to run.", status=422)
+        payload = {"hook_event_name": hook.event, "cwd": str(root) if root else "",
+                   "source": "NeuroCode · run once from the Hooks screen"}
+        fired = await fire(self.session, hook.event, project, payload, subject=hook.matcher.split("|")[0],
+                           actor=who.name, actor_kind="human")
+        mine = next((f for f in fired if f.hook_id == hook_id), None)
+        if mine is None:
+            # Its matcher did not cover the subject a trial carries; run it on its own terms instead of
+            # answering with somebody else's hook.
+            fired = await fire(self.session, hook.event, project, payload, actor=who.name, actor_kind="human")
+            mine = next((f for f in fired if f.hook_id == hook_id), None)
+        if mine is None:
+            raise Refused("This hook did not fire: its matcher covers nothing a trial can stand for.",
+                          status=422)
+        await AuditRepository(self.session).record(action="hook.run", user_id=who.id,
+                                                   target=f"hook {hook_id}",
+                                                   detail={"event": hook.event, "exit": mine.exit_code,
+                                                           "ran": mine.ran, "projectId": project_id})
+        return mine.json()
+
+    # ── the workspace's own plugins ──────────────────────────────
+    async def install_plugin(self, source: str, name: str, who: Person) -> dict[str, Any]:
+        """Bring a plugin into this workspace's own folder. It is not installed into Claude Code and
+        never will be: what is installed here reaches NeuroCode's sessions and nothing else."""
+        who.must(MANAGE, "install a plugin")
+        made = await asyncio.to_thread(install_plugin, source, name)
+        await ActivityRepository(self.session).record(
+            actor=who.name, actor_kind="human", action="Plugin installed",
+            detail=f"{made['name']} · from {made['sourceKind']} {source[:160]} · "
+                   + (", ".join(f"{n} {k}" for k, n in made["provides"].items() if n) or "nothing yet"),
+            level="warn")
+        await AuditRepository(self.session).record(action="plugin.install", user_id=who.id,
+                                                   target=f"plugin {made['name']}",
+                                                   detail={"source": source, "kind": made["sourceKind"],
+                                                           "provides": made["provides"]})
+        return made
+
+    async def remove_plugin(self, name: str, who: Person) -> dict[str, Any]:
+        who.must(MANAGE, "remove a plugin")
+        gone = await asyncio.to_thread(remove_plugin, name)
+        await ActivityRepository(self.session).record(actor=who.name, actor_kind="human",
+                                                      action="Plugin removed", detail=name, level="info")
+        await AuditRepository(self.session).record(action="plugin.remove", user_id=who.id,
+                                                   target=f"plugin {name}", detail={"name": name})
+        return gone
 
     async def plugins(self, project_id: str | None) -> dict[str, Any]:
         project = await self._project(project_id)

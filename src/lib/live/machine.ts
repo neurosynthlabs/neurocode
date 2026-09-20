@@ -53,6 +53,19 @@ export interface MachineSaved { path: string; size: number; modified: string | n
 export type GitLetter = 'M' | 'A' | 'D' | 'R' | 'C' | 'T' | 'U' | '?';
 export interface GitChange { path: string; status: GitLetter; staged: boolean; was?: string }
 
+/** How git's letter reads on a screen: a colour, and the word that names it. The file tree and the
+    Changes panel draw the same letters, so they read them from one place rather than two that drift. */
+export const GIT_TONE: Record<GitLetter, { cls: string; word: string }> = {
+  M: { cls: 'text-warn', word: 'modified' },
+  T: { cls: 'text-warn', word: 'type changed' },
+  A: { cls: 'text-ok', word: 'added' },
+  '?': { cls: 'text-ok', word: 'untracked' },
+  C: { cls: 'text-ok', word: 'copied' },
+  R: { cls: 'text-info', word: 'renamed' },
+  D: { cls: 'text-danger', word: 'deleted' },
+  U: { cls: 'text-danger', word: 'conflicted' },
+};
+
 /** `git status` for the repository holding a path. Paths in `changed` are relative to `root`. */
 export interface MachineGit {
   root: string;
@@ -204,6 +217,49 @@ export const machineApi = {
   newFile: (path: string) => request<MachineEntry>('/machine/new-file', { method: 'POST', json: { path } }),
   git: (path: string) => request<MachineGit | null>(`/machine/git?path=${q(path)}`, { signal: slow() }),
   files: (path: string) => request<MachineFiles>(`/machine/files?path=${q(path)}`, { signal: slow() }),
+};
+
+/* ── the checkout's own changes ───────────────────────────────────
+   The editor saves into the project's real working tree, and a working tree with changes that are not
+   committed refuses every merge. These three are how a person deals with that without leaving for a
+   terminal. They live here rather than with the Git screen's reads (lib/live/git.ts) because they are
+   the machine's door — machine access on, `machine:access`, inside the machine's roots — and because
+   the Workbench is the only screen that asks for them. Paths are relative to the repository's top,
+   which is exactly what `MachineGit.changed` carries. */
+
+/** What one file has that the last commit does not. `change` is git's letter; `?` is a file it has never seen. */
+export interface FileDiff {
+  path: string;
+  change: string;
+  tracked: boolean;
+  additions: number;
+  deletions: number;
+  /** The patch as git printed it, cut at the server's ceiling. */
+  patch: string;
+  truncated: boolean;
+}
+
+export interface Committed {
+  commit: string;
+  sha: string;
+  branch: string;
+  files: number;
+  message: string;
+  /** The git identity on this machine that the commit was made with. */
+  by: string;
+}
+
+export const checkoutApi = {
+  fileDiff: (projectId: string, path: string, source?: string | null) =>
+    request<FileDiff>(`/projects/${q(projectId)}/git/file-diff?path=${q(path)}${source ? `&source=${q(source)}` : ''}`,
+      { signal: slow() }),
+  commit: (projectId: string, paths: string[], message: string, source?: string | null) =>
+    request<Committed>(`/projects/${q(projectId)}/git/commit`,
+      { method: 'POST', json: { paths, message, ...(source ? { source } : {}) }, signal: slow() }),
+  /** Puts these files back the way the last commit had them. One that commit does not hold is refused, never deleted. */
+  discard: (projectId: string, paths: string[], source?: string | null) =>
+    request<{ discarded: string[] }>(`/projects/${q(projectId)}/git/discard`,
+      { method: 'POST', json: { paths, ...(source ? { source } : {}) }, signal: slow() }),
 };
 
 /** The last part of a path, the way a tab names a file. */

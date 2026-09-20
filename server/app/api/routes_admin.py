@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..ai.gateway import Gateway
 from ..models.identity import Role
 from ..repositories.identity import (
     AuditRepository,
@@ -27,10 +28,13 @@ from ..repositories.identity import (
     WorkspaceRepository,
 )
 from ..schemas.identity import audit_json, role_json, team_json, user_json, workspace_json
+from ..secrets import Secrets
+from ..services import sandbox
 from ..services.admin import RoleService, TeamService, catalogue, sorted_permissions
 from ..services.errors import Refused
-from ..services.identity import MIN_PASSWORD, IdentityService, Person
-from .deps import current_person, identity_service, require, require_any, session
+from ..services.identity import SSO_SECRET, MIN_PASSWORD, IdentityService, Person, SsoService
+from ..settings import settings
+from .deps import current_person, gateway, identity_service, require, require_any, session
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin")
@@ -79,6 +83,32 @@ class TeamPatch(BaseModel):
 
 class WorkspacePatch(BaseModel):
     name: str = Field(min_length=1, max_length=80)
+
+
+class SandboxPatch(BaseModel):
+    """What the workspace says about the fence around the runtime's commands. `enabled` can only ever
+    narrow what the server was started with — see `sandbox.read_policy`."""
+
+    enabled: bool = True
+    network: bool = False
+
+
+class SsoPatch(BaseModel):
+    """Everything on the single sign-on panel. A field left out is left alone, which is what lets the
+    secret be set without re-sending the issuer, and the issuer changed without clearing the secret."""
+
+    enabled: bool | None = None
+    issuer: str | None = Field(default=None, max_length=300)
+    clientId: str | None = Field(default=None, max_length=300)
+    #: Sent only when it is being changed. An empty string clears it.
+    clientSecret: str | None = Field(default=None, max_length=500)
+    label: str | None = Field(default=None, max_length=60)
+    roleClaim: str | None = Field(default=None, max_length=80)
+    roleMap: dict[str, str] | None = Field(default=None, max_length=50)
+    defaultRoles: list[str] | None = Field(default=None, max_length=10)
+    createUsers: bool | None = None
+    requireSso: bool | None = None
+    redirectUri: str | None = Field(default=None, max_length=500)
 
 
 def _ip(request: Request) -> str:
@@ -308,3 +338,70 @@ async def audit(limit: int = 100, before: int | None = None,
     reading push nothing off the page they are about to ask for."""
     entries = await AuditRepository(open_session).newest(before=before, limit=limit)
     return [audit_json(entry, user=name) for entry, name in entries]
+
+
+# ── the sandbox around the runtime's commands ────────────────────
+async def _sandbox_doc(open_session: AsyncSession) -> dict[str, Any]:
+    """What is actually in force, measured on this machine rather than described from the settings.
+
+    `detected` is what the machine has whatever anyone asked for — so a workspace that has turned
+    sandboxing off still reads what it is turning off, and one on a machine with nothing reads why.
+    """
+    policy = await sandbox.read_policy(open_session)
+    kind, why = sandbox.detect()
+    return {"enabled": policy.enabled, "network": policy.network,
+            "serverAllows": settings().sandbox,
+            "detected": {"kind": kind, "name": sandbox.NAMES.get(kind, kind), "why": why},
+            "inForce": sandbox.preview(policy).json()}
+
+
+@router.get("/sandbox", dependencies=[Depends(require("workspace:admin"))])
+async def sandbox_settings(open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    return await _sandbox_doc(open_session)
+
+
+@router.put("/sandbox")
+async def update_sandbox(body: SandboxPatch, request: Request,
+                         who: Person = Depends(require("workspace:admin")),
+                         open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    """Turning the network on is the one that matters, and it is why this screen exists: a test suite
+    that installs its packages needs it, and nobody should discover that it was on by reading code."""
+    await sandbox.write_policy(open_session, enabled=body.enabled, network=body.network)
+    await AuditRepository(open_session).record(action="sandbox.update", user_id=who.id,
+                                               target="runtime", detail=_sent(body), ip=_ip(request))
+    return await _sandbox_doc(open_session)
+
+
+# ── single sign-on ───────────────────────────────────────────────
+async def _sso_doc(open_session: AsyncSession, gw: Gateway) -> dict[str, Any]:
+    """The panel's document. The client secret is reported as set-or-not and its last four characters,
+    exactly as a model key is — a screen that could read it back is a screen that leaks it."""
+    config = await SsoService(open_session, gw.secrets).settings()
+    held = gw.secrets.get(SSO_SECRET)
+    return {**config.stored(), "hasSecret": bool(held), "secretMask": Secrets.mask(held),
+            "ready": config.ready,
+            # The address to register at the provider, for an admin who has not chosen one yet.
+            "callbackPath": "/api/auth/sso/callback"}
+
+
+@router.get("/sso", dependencies=[Depends(require("workspace:admin"))])
+async def sso_settings(open_session: AsyncSession = Depends(session),
+                       gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    return await _sso_doc(open_session, gw)
+
+
+@router.put("/sso")
+async def update_sso(body: SsoPatch, request: Request, who: Person = Depends(require("workspace:admin")),
+                     open_session: AsyncSession = Depends(session),
+                     gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """The settings are checked and stored first, the secret after — and that order is the whole of
+    the care taken here. The secrets file is the one thing outside this request's transaction, so a
+    save refused for naming an unknown role rolls the settings back but could not roll a file back;
+    writing the secret last means a refusal leaves the file exactly as it was."""
+    service = SsoService(open_session, gw.secrets)
+    patch = {k: v for k, v in body.model_dump().items() if k != "clientSecret" and v is not None}
+    if patch:
+        await service.save(patch, actor=who, ip=_ip(request))
+    if body.clientSecret is not None:
+        await service.set_secret(body.clientSecret, actor=who, ip=_ip(request))
+    return await _sso_doc(open_session, gw)

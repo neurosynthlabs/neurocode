@@ -142,6 +142,11 @@ export default function Setup() {
               <p className="mt-1 text-[13.5px] text-soft">
                 The Owner can do everything, including adding people and setting keys. You can add more Owners later.
               </p>
+              <p className="mt-2 text-[12.5px] leading-relaxed text-dim">
+                This account is made here and nowhere else. If your team signs in through Google, Okta or Entra, the
+                Owner turns that on afterwards in Admin → Workspace — an identity provider can never make the
+                first Owner of a workspace.
+              </p>
               <div className="mt-4 space-y-3">
                 <Field label="Your name" value={name} onChange={setName} autoComplete="name" autoFocus />
                 <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="username" placeholder="you@company.com" />

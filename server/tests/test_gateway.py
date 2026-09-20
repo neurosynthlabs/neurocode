@@ -269,12 +269,72 @@ def test_the_deepseek_lane_calls_a_model_its_provider_still_serves_and_prices_it
     assert (table["deepseek-flash"].per_m_in, table["deepseek-flash"].per_m_cached,
             table["deepseek-flash"].per_m_out) == (0.30, 0.006, 1.20)
     assert lanes.window_for("deepseek", "deepseek-v4-pro") == 1_000_000
-    assert lanes.window_for("groq", "llama-3.3-70b-versatile") == 131_072
+    assert lanes.window_for("groq", "openai/gpt-oss-120b") == 131_072
     assert lanes.window_for("groq", "a-model-an-admin-typed") is None   # unknown, not guessed
 
     saved = lanes.settled(MemoryLedger({"ai.lane.deepseek": {"model": "deepseek-chat"}}), "deepseek", {})
     assert saved is not None and "retired" in (lanes.retired(saved) or "")
     assert lanes.describe(saved)["retired"] and lanes.describe(saved)["window"] is None
+
+
+def test_no_lane_calls_a_model_its_provider_has_withdrawn():
+    """The whole table, checked against the whole withdrawn list. This is the test that would have
+    caught Groq five weeks ago: the lane the router prefers first was calling a model shut down on
+    2026-08-16, so every free-first call began with a wasted round trip to a 404."""
+    for lane in lanes.LANES:
+        assert lanes.retired(lane) is None, f"{lane.id} is set to a model its provider withdrew"
+        if lane.embed:
+            assert lanes.RETIRED.get(lane.id, {}).get(lane.embed) is None, \
+                f"{lane.id} embeds with a model its provider withdrew"
+    # And each withdrawal says what to choose instead, which is the difference between a message and
+    # a mystery. The two Groq models below are the ones it shut down on 2026-08-16.
+    for lane_id, withdrawn in lanes.RETIRED.items():
+        for model, words in withdrawn.items():
+            assert "choose" in words.lower(), f"{lane_id}/{model} does not say what to choose instead"
+    assert "openai/gpt-oss-120b" in lanes.RETIRED["groq"]["llama-3.3-70b-versatile"]
+    assert "openai/gpt-oss-20b" in lanes.RETIRED["groq"]["llama-3.1-8b-instant"]
+    assert "gemini-embedding-001" in lanes.RETIRED["gemini"]["text-embedding-004"]
+    assert "poolside" in lanes.RETIRED["openrouter"]["deepseek/deepseek-chat-v3.1:free"]
+    assert "mistral-small-2603" in lanes.RETIRED["mistral"]["mistral-small-2506"]
+
+
+def test_a_free_tier_behind_a_card_is_not_a_free_lane_and_is_not_priced_at_zero():
+    """Cerebras answers its own FAQ "Is there a permanently free tier? No": $5 of trial credit that
+    needs a verified card and expires. It sat here as `free=True`, so the ledger wrote $0 against a
+    card somebody had added — the one thing a cost column must never do, a level up from the model."""
+    cerebras = lanes.BY_ID["cerebras"]
+    assert cerebras.free is False and cerebras.gate == "card" and cerebras.expires
+    assert lanes.priced("cerebras") is False                     # unknown, and unknown is not zero
+    assert lanes.priced_call("cerebras", cerebras.model) is False
+    assert "card" in lanes.freedom(cerebras) and lanes.freedom(cerebras).startswith("Not free")
+    assert "cerebras" not in lanes.FREE_IDS                      # so "free only" never routes to it
+
+    # Every lane still says which kind of free it is, and every gate it names is one we have words for.
+    for lane in lanes.LANES:
+        assert lane.gate in lanes.GATES, f"{lane.id} names a gate nobody can read"
+        assert lanes.freedom(lane) and lanes.describe(lane)["freedom"] == lanes.freedom(lane)
+        if lane.free:
+            assert lanes.priced(lane.id), f"{lane.id} is free, so its cost is known: it is zero"
+
+
+def test_a_lane_whose_provider_ended_it_says_so_and_keeps_what_its_calls_cost():
+    """GitHub retired GitHub Models whole on 2026-07-30. The lane is gone, but its lines are still in
+    the ledger, and what they cost is still known — nothing — so a past day stays a fact."""
+    assert "github" not in lanes.IDS and lanes.BY_ID.get("github") is None
+    assert "2026-07-30" in (lanes.ended("github") or "")
+    assert lanes.priced("github") and lanes.priced_call("github", "openai/gpt-4.1-mini")
+    assert lanes.ended("groq") is None and lanes.priced("a-lane-that-never-was") is False
+
+
+def test_a_lane_that_publishes_no_limits_says_the_caps_are_ours():
+    """Google, Mistral and Z.ai all stopped publishing free-tier numbers in 2026. A number nobody
+    publishes may still be a cap the router holds itself to — it may not be dressed as a promise."""
+    for lane_id in ("gemini", "mistral", "zai", "cloudflare"):
+        lane = lanes.BY_ID[lane_id]
+        assert lane.caps == "ours" and lane.allowance
+        assert lanes.describe(lane)["caps"] == "ours"
+    assert lanes.BY_ID["groq"].caps == "published"               # Groq still publishes its free plan
+    assert lanes.BY_ID["groq"].tpd == 200_000 and lanes.BY_ID["groq"].tpm == 8_000
 
 
 def test_thinking_is_said_in_each_lanes_own_words():
@@ -283,6 +343,11 @@ def test_thinking_is_said_in_each_lanes_own_words():
     assert lanes.thinking_params("effort", "off") == {"reasoning_effort": "none"}
     assert lanes.thinking_params("effort", "max") == {"reasoning_effort": "high"}   # no "max" there
     assert lanes.thinking_params("", "high") == {}                                  # a lane that takes none
+    # Groq's GPT-OSS models take low | medium | high and have no "none" at all, so off sends nothing
+    # rather than a value the lane would refuse — a 400 and a second round trip for every call.
+    assert lanes.thinking_params("effort-lmh", "off") == {}
+    assert lanes.thinking_params("effort-lmh", "low") == {"reasoning_effort": "low"}
+    assert lanes.thinking_params("effort-lmh", "max") == {"reasoning_effort": "high"}
     store = MemoryLedger({"ai.thinking": {"chat": "max", "review": "nonsense"}})
     assert lanes.thinking(store, "chat") == "max"
     assert lanes.thinking(store, "review") == "high"            # an unknown level falls back to the default
@@ -292,16 +357,19 @@ def test_thinking_is_said_in_each_lanes_own_words():
 # ── slow, not wrong: the wall clock and the breaker ──────────────
 
 def _two_free_lanes(provider: Provider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Gateway:
-    """Groq and Cerebras, both pointed at the local server, so a chain really has somewhere to go."""
+    """Groq and Gemini, both pointed at the local server, so a chain really has somewhere to go.
+
+    Both are free in the sense the "free" preference means — no money — which is why Cerebras cannot
+    stand here any more: its trial credit needs a card, so the router no longer counts it as free."""
     for lane in lanes.LANES:
         if lane.env:
             monkeypatch.delenv(lane.env, raising=False)
     monkeypatch.setenv("NEUROCODE_COMPILER", "free")
     secrets = Secrets(tmp_path / "secrets.json")
     secrets.set("groq_api_key", "test-key")
-    secrets.set("cerebras_api_key", "test-key")
+    secrets.set("gemini_api_key", "test-key")
     return Gateway(MemoryLedger({"ai.lane.groq": {"baseUrl": provider.url},
-                                 "ai.lane.cerebras": {"baseUrl": provider.url}}), secrets)
+                                 "ai.lane.gemini": {"baseUrl": provider.url}}), secrets)
 
 
 def test_a_lane_that_dribbles_for_ever_is_cut_off_by_the_wall_clock(gateway: Gateway, provider: Provider,
@@ -401,6 +469,112 @@ def test_with_no_model_the_rules_still_answer_when_the_chain_runs_out_of_time(
     result = gw.run(ASK, extract_json, lambda: {"by": "rules"}, feature="compile")
     assert result.data == {"by": "rules"} and result.provider.id == "rules"
     assert result.fallback is not None and "no time left to ask another lane" in result.fallback
+
+
+# ── what a free tier really binds on: tokens ─────────────────────
+
+def _groq(provider: Provider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **saved: Any) -> Gateway:
+    """The Groq lane, pinned and pointed at the local server. Groq is the one lane in the catalogue
+    whose provider publishes a token budget, so it is the one that can be tested against one."""
+    for lane in lanes.LANES:
+        if lane.env:
+            monkeypatch.delenv(lane.env, raising=False)
+    monkeypatch.setenv("NEUROCODE_COMPILER", "groq")
+    secrets = Secrets(tmp_path / "secrets.json")
+    secrets.set("groq_api_key", "test-key")
+    return Gateway(MemoryLedger({"ai.lane.groq": {"baseUrl": provider.url, **saved}}), secrets)
+
+
+def test_a_lane_asks_for_a_budget_its_own_minute_can_hold(provider: Provider, tmp_path: Path,
+                                                          monkeypatch: pytest.MonkeyPatch):
+    """Groq's free minute holds 8,000 tokens. Compiling asks a model to think hard, which is 27,576.
+
+    A provider does not discover that halfway: Cerebras documents adding `max_completion_tokens` to
+    the prompt and refusing the request before it starts, and Groq says you hit whichever limit comes
+    first. So the call would never have run, the router would have read the refusal as the lane being
+    sick, and rested a lane that was perfectly well — on the two features that matter most."""
+    gw = _groq(provider, tmp_path, monkeypatch)
+    provider.replies.append((200, completion('{"ok": true}')))
+    gw.ask(ASK, extract_json, feature="compile")                 # compile thinks "high" by default
+
+    sent = provider.sent[0]
+    assert sent["max_tokens"] == lanes.ANSWER_TOKENS <= lanes.BY_ID["groq"].max_request_tokens
+    assert "reasoning_effort" not in sent          # the budget came down, and the thinking with it
+    # The level itself is lowered rather than the budget quietly clipped: a model handed all of its
+    # budget to reason with writes the reasoning and no answer, which is what OutOfBudget is for.
+    assert lanes.budget(lanes.BY_ID["groq"], "high") == ("off", lanes.ANSWER_TOKENS)
+    assert lanes.budget(lanes.BY_ID["deepseek"], "high") == (
+        "high", lanes.ANSWER_TOKENS + lanes.THINKING_TOKENS["high"])
+    # And the screens can say why this lane thinks less than the feature asked it to.
+    assert lanes.describe(lanes.BY_ID["groq"])["maxRequestTokens"] == 7_000
+    assert lanes.describe(lanes.BY_ID["deepseek"])["maxRequestTokens"] == 0
+
+
+def test_a_lane_that_has_spent_its_tokens_for_today_is_busy_not_broken(provider: Provider, tmp_path: Path,
+                                                                        monkeypatch: pytest.MonkeyPatch):
+    """Groq allows 1,000 calls a day and 200,000 tokens. The tokens go first — about two dozen calls
+    that write a file — and a router counting only calls would keep choosing a lane with nothing left,
+    walking into a 429 every time and resting the lane for a minute each time it did."""
+    gw = _groq(provider, tmp_path, monkeypatch)
+    assert gw.why_not(gw.lane("groq")) is None
+    for _ in range(4):                       # four calls, 50,000 tokens each: 200,000, and the day is done
+        gw.store.record(feature="agent", lane="groq", model="openai/gpt-oss-120b", ok=True, ms=10,
+                        tokens_in=40_000, tokens_out=10_000, user_id=None, project_id=None, agent="",
+                        error="")
+    assert gw.store.tokens_today("groq") == 200_000
+    blocked = gw.why_not(gw.lane("groq"))
+    assert blocked == "200,000 tokens today — its free allowance"
+    assert gw.chain() == [] and gw.spent(gw.lane("groq"))["tokensToday"] == 200_000
+
+
+def test_a_lane_that_has_spent_its_tokens_for_this_minute_waits_out_the_minute(
+        provider: Provider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The minute is counted from what the providers themselves reported, as the calls come back."""
+    gw = _groq(provider, tmp_path, monkeypatch)
+    provider.replies.append((200, completion('{"ok": true}', usage={"prompt_tokens": 7_000,
+                                                                    "completion_tokens": 1_500})))
+    gw.ask(ASK, extract_json, feature="agent")
+    assert gw.spent(gw.lane("groq"))["tokensMinute"] == 8_500
+    assert gw.why_not(gw.lane("groq")) == "8,000 tokens this minute — its free allowance"
+
+
+def test_a_lane_with_no_address_of_its_own_says_so_instead_of_dialling_nothing(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Cloudflare's address carries the account id, so the catalogue cannot hold it. A lane with a key
+    and no address used to look ready and fail a minute later on an empty URL."""
+    monkeypatch.delenv("NEUROCODE_COMPILER", raising=False)
+    monkeypatch.delenv("NEUROCODE_CLOUDFLARE_URL", raising=False)
+    secrets = Secrets(tmp_path / "secrets.json")
+    secrets.set("cloudflare_api_token", "test-token")
+    gw = Gateway(MemoryLedger(), secrets)
+    assert lanes.BY_ID["cloudflare"].needs_base_url is True
+    assert "no address yet" in (gw.why_not(gw.lane("cloudflare")) or "")
+    assert "cloudflare" not in [x.id for x in gw.chain(limit=len(lanes.IDS))]
+    assert lanes.describe(gw.lane("cloudflare"))["needsBaseUrl"] is True
+
+    account = "https://api.cloudflare.com/client/v4/accounts/abc123/ai/v1"
+    gw.store.save_setting("ai.lane.cloudflare", {"baseUrl": account})
+    assert gw.lane("cloudflare").base_url == account and gw.why_not(gw.lane("cloudflare")) is None
+
+
+def test_ollama_says_whether_it_is_installed_or_only_missing_the_model(provider: Provider, tmp_path: Path,
+                                                                        monkeypatch: pytest.MonkeyPatch):
+    """Two different problems with two different first moves. Calling both "no model pulled" sent a
+    person to `ollama pull` on a machine with no Ollama on it — which is this one, today."""
+    monkeypatch.setenv("NEUROCODE_COMPILER", "local")
+    secrets = Secrets(tmp_path / "secrets.json")
+
+    dead = Gateway(MemoryLedger({"ai.lane.ollama": {"baseUrl": "http://127.0.0.1:1"}}), secrets)
+    assert "not running on this machine" in (dead.why_not(dead.lane("ollama")) or "")
+    assert dead.ollama_ready() is False
+
+    provider.models = ["qwen2.5-coder:7b"]
+    wrong = Gateway(MemoryLedger({"ai.lane.ollama": {"baseUrl": provider.url, "model": "llama3:70b"}}), secrets)
+    assert wrong.why_not(wrong.lane("ollama")) == \
+        "Ollama is running, but llama3:70b is not pulled — `ollama pull llama3:70b`"
+
+    right = Gateway(MemoryLedger({"ai.lane.ollama": {"baseUrl": provider.url}}), secrets)
+    assert right.why_not(right.lane("ollama")) is None and right.ollama_ready() is True
 
 
 # ── the cost of choosing a lane ──────────────────────────────────

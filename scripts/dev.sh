@@ -13,6 +13,16 @@ WEB_PORT="${NC_PORT:-5180}"
 API_PORT="${NC_API_PORT:-8787}"
 export NC_API_PORT="$API_PORT"   # vite.config.ts points its /api proxy here
 
+# Reaching this stack from a phone or a second laptop on the same Wi-Fi. One switch, because half of it
+# is useless: a web app on the LAN whose API still answers only on 127.0.0.1 loads and then says it is
+# not connected, for ever. NEUROCODE_LISTEN_ON_LAN is the API's own setting (server/app/settings.py,
+# which also widens the allowed origins to the private ranges); NC_LAN is what vite.config.ts reads.
+# Off unless it is set, and the API prints what it exposes every time it starts with it on.
+case "$(printf '%s' "${NEUROCODE_LISTEN_ON_LAN:-}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes) API_HOST=0.0.0.0; export NC_LAN=1 ;;
+  *)          API_HOST=127.0.0.1 ;;
+esac
+
 pidf()  { echo "/tmp/neurocode-$1.pid"; }
 logf()  { echo "/tmp/neurocode-$1.log"; }
 port()  { if [ "$1" = web ]; then echo "$WEB_PORT"; else echo "$API_PORT"; fi; }
@@ -24,7 +34,7 @@ descendants() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do echo "$c"; de
 launch() {
   case $1 in
     web) npm run dev -- --port "$WEB_PORT" --strictPort ;;
-    api) uv run --project server uvicorn app.api.app:create_api --factory --app-dir server --host 127.0.0.1 --port "$API_PORT" --timeout-graceful-shutdown 5 ;;
+    api) uv run --project server uvicorn app.api.app:create_api --factory --app-dir server --host "$API_HOST" --port "$API_PORT" --timeout-graceful-shutdown 5 ;;
   esac
 }
 
@@ -72,7 +82,30 @@ status_one() {
   else printf '○ %-3s stopped\n' "$s"; fi
 }
 
+# This machine's address on the network, for the line below. macOS answers with ipconfig, Linux with
+# hostname -I; a machine that answers with neither is simply not told an address, which is better than
+# being told a wrong one.
+lan_address() {
+  ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null \
+    || { hostname -I 2>/dev/null | awk '{print $1}'; }
+}
+
+# Who can reach this stack — printed on start and on status, because "it is only on my laptop" is the
+# assumption every one of these ports is otherwise read with.
+reach() {
+  if [ "$API_HOST" = 0.0.0.0 ]; then
+    addr=$(lan_address)
+    printf '▸ NEUROCODE_LISTEN_ON_LAN: the web app and the API answer on every interface (0.0.0.0).\n'
+    if [ -n "$addr" ]; then
+      printf '  On the same Wi-Fi: http://%s:%s — and so is anyone else on this network.\n' "$addr" "$WEB_PORT"
+    fi
+  else
+    printf '▸ this machine only (127.0.0.1). NEUROCODE_LISTEN_ON_LAN=true opens it to the network.\n'
+  fi
+}
+
 start() {
+  reach
   if [ "${NC_API:-1}" = 0 ]; then
     printf '▸ NC_API=0: web app only. It says "Not connected" until an API answers on %s\n' "$API_PORT"
   elif ! command -v uv >/dev/null 2>&1; then
@@ -93,6 +126,6 @@ case "${1:-status}" in
   stop)    stop_one web; stop_one api ;;
   restart) stop_one web; stop_one api; sleep 0.4; start ;;
   logs)    tail -f "$(logf "${2:-web}")" ;;
-  status)  status_one web; status_one api ;;
+  status)  status_one web; status_one api; reach ;;
   *) printf 'usage: %s {start|stop|restart|status|logs [web|api]}\n' "$0"; exit 1 ;;
 esac
