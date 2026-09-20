@@ -41,6 +41,11 @@ if [ ! -f .env ]; then
       -e "s|^NEUROCODE_DB_PASSWORD=.*|NEUROCODE_DB_PASSWORD=$(rand)|" \
       -e "s|^NEUROCODE_SETUP_TOKEN=.*|NEUROCODE_SETUP_TOKEN=$(rand)|" \
       ${DOMAIN_WANTED:+-e "s|^DOMAIN=.*|DOMAIN=$DOMAIN_WANTED|"} .env.template > .env
+  # A small server has to share its memory with the API and the build; Postgres is told so once, here.
+  if [ "$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)" -lt 2500 ]; then
+    printf 'PG_SHARED_BUFFERS=96MB\nPG_EFFECTIVE_CACHE_SIZE=384MB\nPG_MAX_CONNECTIONS=25\n' >> .env
+    echo "A small machine: Postgres given 96 MB of shared buffers."
+  fi
   chmod 600 .env
   echo "First run: wrote .env for $(grep '^DOMAIN=' .env | cut -d= -f2)."
   echo "SETUP TOKEN (asked once, when you create the first Owner): $(grep '^NEUROCODE_SETUP_TOKEN=' .env | cut -d= -f2)"

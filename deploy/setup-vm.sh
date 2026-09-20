@@ -34,6 +34,18 @@ for rule in "tcp 80" "tcp 443" "udp 443"; do
 done
 sudo netfilter-persistent save
 
+# A machine with a gigabyte of memory can run this stack, but only with somewhere to put what it is not
+# using. Two gigabytes of swap, and a kernel told to reach for it late rather than early.
+MEM_MB=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)
+if [ "$MEM_MB" -lt 2500 ] && [ ! -f /swapfile ]; then
+  sudo fallocate -l 2G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+  sudo chmod 600 /swapfile && sudo mkswap /swapfile >/dev/null && sudo swapon /swapfile
+  grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+  echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-neurocode.conf >/dev/null
+  sudo sysctl -p /etc/sysctl.d/99-neurocode.conf >/dev/null
+  echo "a small machine (${MEM_MB} MB): 2 GB of swap added"
+fi
+
 sudo mkdir -p /opt/neurocode
 sudo chown "$USER":"$USER" /opt/neurocode
 

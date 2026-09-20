@@ -19,6 +19,11 @@ NAME=${NEUROCODE_VM_NAME:-neurocode}
 # cores often has room for one, and an A1 machine can be given the rest later (Compute → the instance → Edit →
 # shape) without rebuilding it. Anything you get now beats waiting a week for the perfect size.
 PLAN=${NEUROCODE_VM_PLAN:-"4:24 2:12 1:6"}
+# The shape itself. Ampere is the one worth having — four cores and 24 GB, free — but a region can be out of
+# it for hours. VM.Standard.E2.1.Micro is the always-free x86 machine (one core, 1 GB), which such a region
+# will still give you today; `setup-vm.sh` gives a machine that small swap and Postgres settings to match.
+SHAPE=${NEUROCODE_VM_SHAPE:-VM.Standard.A1.Flex}
+case "$SHAPE" in *A1.Flex) FLEX=yes ;; *) FLEX=no; PLAN="fixed" ;; esac
 SSH_KEY=${NEUROCODE_SSH_KEY:-$HOME/.ssh/neurocode_oci}
 TRIES=${NEUROCODE_CAPACITY_TRIES:-60}        # a capacity error is retried this many times, a minute apart
 oci() { command oci --profile "$PROFILE" "$@"; }
@@ -86,16 +91,16 @@ ID=$(oci compute instance list --compartment-id "$C" --display-name "$NAME" --li
      --query 'data[0].id' --raw-output 2>/dev/null || true)
 if [ -z "$ID" ] || [ "$ID" = "null" ]; then
   IMAGE=$(oci compute image list --compartment-id "$C" --operating-system 'Canonical Ubuntu' \
-          --operating-system-version '24.04' --shape VM.Standard.A1.Flex --sort-by TIMECREATED --sort-order DESC \
+          --operating-system-version '24.04' --shape "$SHAPE" --sort-by TIMECREATED --sort-order DESC \
           --query 'data[0].id' --raw-output)
-  [ -n "$IMAGE" ] || { echo "No Ubuntu 24.04 image for Ampere in this region" >&2; exit 1; }
+  [ -n "$IMAGE" ] || { echo "No Ubuntu 24.04 image for $SHAPE in this region" >&2; exit 1; }
   # macOS ships bash 3.2, which has no `mapfile`, and the CLI answers with JSON: read it with python.
   ADS=()
   while IFS= read -r ad; do [ -n "$ad" ] && ADS+=("$ad"); done < <(
     oci iam availability-domain list --compartment-id "$C" \
     | python3 -c 'import json,sys; [print(a["name"]) for a in json.load(sys.stdin)["data"]]')
   [ ${#ADS[@]} -gt 0 ] || { echo "Could not read this region's availability domains" >&2; exit 1; }
-  say "Asking for Ampere capacity (Ubuntu 24.04) — $PLAN — across ${#ADS[@]} availability domain(s)"
+  say "Asking for $SHAPE (Ubuntu 24.04, $PLAN) — across ${#ADS[@]} availability domain(s)"
   # One request per round, rotating through the sizes and the availability domains: asking faster does not
   # find capacity sooner, it finds Oracle's rate limit (429), which then stops us asking at all. A refusal for
   # capacity waits a minute; a 429 waits twice as long each time, up to ten minutes, and eases back off after.
@@ -109,12 +114,14 @@ if [ -z "$ID" ] || [ "$ID" = "null" ]; then
     cores=${size%%:*}; gb=${size##*:}
     AD=${ADS[$(( n % ${#ADS[@]} ))]}
     n=$(( n + 1 ))
+    # A flexible shape is asked for a size; a fixed one is what it is.
+    if [ "$FLEX" = yes ]; then set -- --shape-config "{\"ocpus\":$cores,\"memoryInGBs\":$gb}"; else set --; fi
     if out=$(oci compute instance launch --availability-domain "$AD" --compartment-id "$C" --display-name "$NAME" \
-             --shape VM.Standard.A1.Flex --shape-config "{\"ocpus\":$cores,\"memoryInGBs\":$gb}" \
+             --shape "$SHAPE" "$@" \
              --image-id "$IMAGE" --subnet-id "$SUBNET" --assign-public-ip true \
              --metadata "{\"ssh_authorized_keys\":\"$PUBKEY\"}" \
              --wait-for-state RUNNING --query 'data.id' --raw-output 2>&1); then
-      ID=$out; GOT="$cores cores and $gb GB"; break
+      ID=$out; GOT=$([ "$FLEX" = yes ] && echo "$cores cores and $gb GB" || echo "$SHAPE"); break
     fi
     if grep -qi 'TooManyRequests\|429' <<<"$out"; then
       WAIT=$(( WAIT * 2 )); [ "$WAIT" -gt 600 ] && WAIT=600
