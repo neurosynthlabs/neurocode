@@ -96,22 +96,39 @@ if [ -z "$ID" ] || [ "$ID" = "null" ]; then
     | python3 -c 'import json,sys; [print(a["name"]) for a in json.load(sys.stdin)["data"]]')
   [ ${#ADS[@]} -gt 0 ] || { echo "Could not read this region's availability domains" >&2; exit 1; }
   say "Asking for Ampere capacity (Ubuntu 24.04) — $PLAN — across ${#ADS[@]} availability domain(s)"
+  # One request per round, rotating through the sizes and the availability domains: asking faster does not
+  # find capacity sooner, it finds Oracle's rate limit (429), which then stops us asking at all. A refusal for
+  # capacity waits a minute; a 429 waits twice as long each time, up to ten minutes, and eases back off after.
+  WAIT=60
+  n=0
   for ((try = 1; try <= TRIES; try++)); do
-    for AD in "${ADS[@]}"; do
-      for size in $PLAN; do
-        cores=${size%%:*}; gb=${size##*:}
-        if out=$(oci compute instance launch --availability-domain "$AD" --compartment-id "$C" --display-name "$NAME" \
-                 --shape VM.Standard.A1.Flex --shape-config "{\"ocpus\":$cores,\"memoryInGBs\":$gb}" \
-                 --image-id "$IMAGE" --subnet-id "$SUBNET" --assign-public-ip true \
-                 --metadata "{\"ssh_authorized_keys\":\"$PUBKEY\"}" \
-                 --wait-for-state RUNNING --query 'data.id' --raw-output 2>&1); then
-          ID=$out; GOT="$cores cores and $gb GB"; break 3
-        fi
-        grep -qi 'capacity' <<<"$out" || { echo; echo "$out" >&2; exit 1; }
-        printf '\r  %s: no room for %s cores / %s GB — try %d of %d…                 ' "$AD" "$cores" "$gb" "$try" "$TRIES"
-      done
-    done
-    sleep 60
+    set -- $PLAN
+    shift $(( n % $# )) || true
+    size=$1
+    cores=${size%%:*}; gb=${size##*:}
+    AD=${ADS[$(( n % ${#ADS[@]} ))]}
+    n=$(( n + 1 ))
+    if out=$(oci compute instance launch --availability-domain "$AD" --compartment-id "$C" --display-name "$NAME" \
+             --shape VM.Standard.A1.Flex --shape-config "{\"ocpus\":$cores,\"memoryInGBs\":$gb}" \
+             --image-id "$IMAGE" --subnet-id "$SUBNET" --assign-public-ip true \
+             --metadata "{\"ssh_authorized_keys\":\"$PUBKEY\"}" \
+             --wait-for-state RUNNING --query 'data.id' --raw-output 2>&1); then
+      ID=$out; GOT="$cores cores and $gb GB"; break
+    fi
+    if grep -qi 'TooManyRequests\|429' <<<"$out"; then
+      WAIT=$(( WAIT * 2 )); [ "$WAIT" -gt 600 ] && WAIT=600
+      printf '\r  %s: Oracle is rate-limiting these requests — waiting %ds (try %d of %d)      ' "$AD" "$WAIT" "$try" "$TRIES"
+    elif grep -qi 'capacity' <<<"$out"; then
+      WAIT=$(( WAIT > 120 ? WAIT - 60 : 60 ))
+      printf '\r  %s: no room for %s cores / %s GB — try %d of %d      ' "$AD" "$cores" "$gb" "$try" "$TRIES"
+    elif grep -qi 'LimitExceeded\|limit' <<<"$out"; then
+      echo; echo "$out" >&2
+      echo "This looks like a service limit rather than capacity: check Governance → Limits, Quotas and Usage for VM.Standard.A1.Flex in this region." >&2
+      exit 1
+    else
+      echo; echo "$out" >&2; exit 1
+    fi
+    sleep "$WAIT"
   done
   [ -n "${ID:-}" ] || { echo; echo "Still no Ampere capacity after $TRIES tries. Leave it running longer (NEUROCODE_CAPACITY_TRIES=600), or try again at a quieter hour." >&2; exit 1; }
   echo; say "Got ${GOT:-a machine}"
