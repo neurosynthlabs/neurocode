@@ -14,8 +14,11 @@ set -euo pipefail
 
 PROFILE=${OCI_PROFILE:-DEFAULT}
 NAME=${NEUROCODE_VM_NAME:-neurocode}
-OCPUS=${NEUROCODE_VM_OCPUS:-4}
-MEMORY=${NEUROCODE_VM_MEMORY:-24}
+# What to ask for, in order, as `cores:gigabytes`. Always Free covers 4 Ampere cores and 24 GB in total, so the
+# first entry is the whole allowance; the smaller ones are there because a region that has no room for four
+# cores often has room for one, and an A1 machine can be given the rest later (Compute → the instance → Edit →
+# shape) without rebuilding it. Anything you get now beats waiting a week for the perfect size.
+PLAN=${NEUROCODE_VM_PLAN:-"4:24 2:12 1:6"}
 SSH_KEY=${NEUROCODE_SSH_KEY:-$HOME/.ssh/neurocode_oci}
 TRIES=${NEUROCODE_CAPACITY_TRIES:-60}        # a capacity error is retried this many times, a minute apart
 oci() { command oci --profile "$PROFILE" "$@"; }
@@ -92,26 +95,26 @@ if [ -z "$ID" ] || [ "$ID" = "null" ]; then
     oci iam availability-domain list --compartment-id "$C" \
     | python3 -c 'import json,sys; [print(a["name"]) for a in json.load(sys.stdin)["data"]]')
   [ ${#ADS[@]} -gt 0 ] || { echo "Could not read this region's availability domains" >&2; exit 1; }
-  say "Asking for ${OCPUS} Ampere cores and ${MEMORY} GB (Ubuntu 24.04), across ${#ADS[@]} availability domain(s)"
+  say "Asking for Ampere capacity (Ubuntu 24.04) — $PLAN — across ${#ADS[@]} availability domain(s)"
   for ((try = 1; try <= TRIES; try++)); do
     for AD in "${ADS[@]}"; do
-      if out=$(oci compute instance launch --availability-domain "$AD" --compartment-id "$C" --display-name "$NAME" \
-               --shape VM.Standard.A1.Flex --shape-config "{\"ocpus\":$OCPUS,\"memoryInGBs\":$MEMORY}" \
-               --image-id "$IMAGE" --subnet-id "$SUBNET" --assign-public-ip true \
-               --metadata "{\"ssh_authorized_keys\":\"$PUBKEY\"}" \
-               --wait-for-state RUNNING --query 'data.id' --raw-output 2>&1); then
-        ID=$out; break 2
-      fi
-      if grep -qi 'capacity' <<<"$out"; then
-        printf '\r  %s has no Ampere capacity right now — try %d of %d, asking again in a minute…' "$AD" "$try" "$TRIES"
-      else
-        echo; echo "$out" >&2; exit 1
-      fi
+      for size in $PLAN; do
+        cores=${size%%:*}; gb=${size##*:}
+        if out=$(oci compute instance launch --availability-domain "$AD" --compartment-id "$C" --display-name "$NAME" \
+                 --shape VM.Standard.A1.Flex --shape-config "{\"ocpus\":$cores,\"memoryInGBs\":$gb}" \
+                 --image-id "$IMAGE" --subnet-id "$SUBNET" --assign-public-ip true \
+                 --metadata "{\"ssh_authorized_keys\":\"$PUBKEY\"}" \
+                 --wait-for-state RUNNING --query 'data.id' --raw-output 2>&1); then
+          ID=$out; GOT="$cores cores and $gb GB"; break 3
+        fi
+        grep -qi 'capacity' <<<"$out" || { echo; echo "$out" >&2; exit 1; }
+        printf '\r  %s: no room for %s cores / %s GB — try %d of %d…                 ' "$AD" "$cores" "$gb" "$try" "$TRIES"
+      done
     done
     sleep 60
   done
-  [ -n "${ID:-}" ] || { echo; echo "Still no Ampere capacity after $TRIES tries. Run this again later, or set NEUROCODE_VM_OCPUS=2 NEUROCODE_VM_MEMORY=12." >&2; exit 1; }
-  echo
+  [ -n "${ID:-}" ] || { echo; echo "Still no Ampere capacity after $TRIES tries. Leave it running longer (NEUROCODE_CAPACITY_TRIES=600), or try again at a quieter hour." >&2; exit 1; }
+  echo; say "Got ${GOT:-a machine}"
 fi
 say "Instance $ID"
 
