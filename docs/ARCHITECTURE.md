@@ -381,7 +381,12 @@ as everything else.
 `deploy/` holds a Docker Compose stack for one small server (Oracle Cloud's Always Free Ampere VM is the
 one it is written for): Postgres 16 with pgvector, the API image, and Caddy in front with automatic HTTPS,
 serving the built web app and proxying `/api` with streaming kept open. Migrations run when the API
-starts. A hosted server keeps session cookies `Secure`, trusts the proxy's headers, needs the setup token
+starts. `oci-create.sh` makes the machine and its network from the command line, taking whatever Ampere
+capacity the region has; `setup-vm.sh` prepares it once (Docker, the firewall, log rotation, security
+updates, a nightly database dump kept for two weeks); `push.sh` is a release — it builds, copies, starts,
+waits for the API's own health check and then asks `/api/health` over HTTPS, and puts the previous image
+back if the new one never answers. `status.sh`, `logs.sh`, `backup.sh` and `domain.sh` are the day-to-day,
+and `.github/workflows/deploy.yml` runs the same `push.sh` on a commit that `verify` has passed. A hosted server keeps session cookies `Secure`, trusts the proxy's headers, needs the setup token
 for the first Owner, and has machine access switched off: the Workbench's machine features belong to the
 machine a person sits at.
 
