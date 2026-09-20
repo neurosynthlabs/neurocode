@@ -4,6 +4,7 @@
 #   deploy/logs.sh                 the API, from the last 100 lines
 #   deploy/logs.sh web 500         Caddy, from the last 500
 #   deploy/logs.sh db
+# shellcheck source=deploy/_common.sh
 . "$(dirname "$0")/_common.sh"
 resolve_host "" >/dev/null
 SERVICE=${1:-api}

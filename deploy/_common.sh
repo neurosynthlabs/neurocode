@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # What every deploy script needs: which server, how to reach it, and how to say things plainly.
 # Sourced, never run: `. "$(dirname "$0")/_common.sh"`.
 #
@@ -6,6 +7,7 @@
 set -euo pipefail
 
 DEPLOY_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck disable=SC2034  # the scripts that source this use it
 ROOT=$(cd "$DEPLOY_DIR/.." && pwd)
 HOST_FILE="$DEPLOY_DIR/.host"
 KEY=${NEUROCODE_SSH_KEY:-$HOME/.ssh/neurocode_oci}

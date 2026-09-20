@@ -5,6 +5,7 @@
 #
 # Point the name at the server first (an A record → its IP, and with Cloudflare, "DNS only" rather than the
 # orange cloud: a proxied name answers the certificate challenge itself, and Caddy never gets one of its own).
+# shellcheck source=deploy/_common.sh
 . "$(dirname "$0")/_common.sh"
 NAME=${1:?usage: deploy/domain.sh <domain>}
 resolve_host "${2:-}" >/dev/null
@@ -23,7 +24,7 @@ docker compose up -d web
 REMOTE
 
 bold "Waiting for the certificate"
-for i in $(seq 1 30); do
+for _ in $(seq 1 30); do
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$NAME/api/health" || true)
   [ "$code" = 200 ] && { note "https://$NAME/api/health → 200"; bold "Live: https://$NAME"; exit 0; }
   sleep 5

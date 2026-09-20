@@ -102,6 +102,7 @@ if [ -z "$ID" ] || [ "$ID" = "null" ]; then
   WAIT=60
   n=0
   for ((try = 1; try <= TRIES; try++)); do
+    # shellcheck disable=SC2086  # the plan is a list of sizes; splitting it is the point
     set -- $PLAN
     shift $(( n % $# )) || true
     size=$1

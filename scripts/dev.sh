@@ -5,7 +5,9 @@
 # NC_API=0 starts the web app alone, for working on a screen's layout: it holds no data of its own, so it
 # shows "Not connected" until an API answers on $NC_API_PORT.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+# Everything below is relative to the repository, and a shell that could not get there would start the wrong
+# things in the wrong place.
+cd "$(dirname "$0")/.." || { echo "cannot find the repository from $0" >&2; exit 1; }
 
 WEB_PORT="${NC_PORT:-5180}"
 API_PORT="${NC_API_PORT:-8787}"
@@ -45,7 +47,7 @@ start_one() {
 }
 
 stop_one() {
-  local s=$1 p pids
+  local s=$1 p
   if ! alive "$s"; then
     rm -f "$(pidf "$s")"
     if [ -n "$(owner "$s")" ]; then printf '▸ %s: port %s is held by pid %s, which this script did not start. Left alone.\n' "$s" "$(port "$s")" "$(owner "$s")"
@@ -53,10 +55,12 @@ stop_one() {
     return
   fi
   p=$(cat "$(pidf "$s")")
-  pids="$p $(descendants "$p")"   # npm → sh → node and uv → uvicorn: take the whole tree
-  kill $pids 2>/dev/null
+  # npm → sh → node and uv → uvicorn: take the whole tree. A list of pids is a list of words on purpose.
+  # shellcheck disable=SC2046,SC2086
+  set -- $p $(descendants "$p")
+  kill "$@" 2>/dev/null
   sleep 0.6
-  kill -9 $pids 2>/dev/null
+  kill -9 "$@" 2>/dev/null
   rm -f "$(pidf "$s")"
   printf '\033[1;32m✓\033[0m %s stopped (pid %s)\n' "$s" "$p"
 }

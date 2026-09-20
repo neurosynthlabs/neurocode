@@ -4,6 +4,7 @@
 #
 #   deploy/status.sh            the server deploy/push.sh last used
 #   deploy/status.sh ubuntu@<ip>
+# shellcheck source=deploy/_common.sh
 . "$(dirname "$0")/_common.sh"
 resolve_host "${1:-}" >/dev/null
 
@@ -32,6 +33,7 @@ echo | openssl s_client -servername "$DOMAIN" -connect "$DOMAIN:443" 2>/dev/null
   | openssl x509 -noout -issuer -dates 2>/dev/null | sed 's/^/  /' || note "no certificate yet"
 
 bold "The machine"
+# shellcheck disable=SC2016  # these expand on the server, not here
 ssh_to 'printf "  uptime:%s\n" "$(uptime | sed "s/.*up //;s/,.*load/, load/")"; \
   printf "  memory: %s\n" "$(free -h | awk "/^Mem:/ {print \$3 \" used of \" \$2}")"; \
   printf "  disk:   %s\n" "$(df -h / | awk "NR==2 {print \$3 \" used of \" \$2 \" (\" \$5 \")\"}")"; \

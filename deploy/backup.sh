@@ -3,11 +3,13 @@
 # not a backup. The server keeps its own copies too (a nightly timer, set up by setup-vm.sh).
 #
 #   deploy/backup.sh               → deploy/backups/neurocode-<when>.sql.gz on this Mac
+# shellcheck source=deploy/_common.sh
 . "$(dirname "$0")/_common.sh"
 resolve_host "" >/dev/null
 OUT="$DEPLOY_DIR/backups"; mkdir -p "$OUT"
 
 bold "Asking the server for a fresh dump"
+# shellcheck disable=SC2119  # no environment to pass: the script on stdin is all of it
 NAME=$(remote <<'REMOTE'
 set -euo pipefail
 cd /opt/neurocode/deploy
@@ -26,7 +28,8 @@ ssh_to "cd /opt/neurocode/deploy && docker compose exec -T api cat /data/backups
 [ -s "$OUT/$NAME" ] || { rm -f "$OUT/$NAME"; die "The copy came back empty."; }
 note "$OUT/$NAME ($(du -h "$OUT/$NAME" | cut -f1))"
 
-# Keep the last ten here; the server prunes its own.
-ls -1t "$OUT"/neurocode-*.sql.gz 2>/dev/null | tail -n +11 | xargs -r rm --
+# Keep the last ten here; the server prunes its own. Newest first, by modification time, whatever the names are.
+find "$OUT" -name 'neurocode-*.sql.gz' -type f -print0 2>/dev/null \
+  | xargs -0 ls -1t 2>/dev/null | tail -n +11 | while IFS= read -r old; do rm -- "$old"; done
 bold "Restoring one, if it ever comes to that"
 note "gunzip -c $OUT/$NAME | ssh -i $KEY $HOST 'cd /opt/neurocode/deploy && docker compose exec -T db psql -U neurocode -d neurocode'"

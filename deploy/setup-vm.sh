@@ -27,6 +27,7 @@ sudo systemctl enable --now unattended-upgrades
 # list. Both must allow 80 and 443: this is the host half (the cloud half is in the security list —
 # deploy/oci-create.sh opens it, or add the ingress rules in the console).
 for rule in "tcp 80" "tcp 443" "udp 443"; do
+  # shellcheck disable=SC2086  # "tcp 80" is two words on purpose
   set -- $rule
   sudo iptables -C INPUT -p "$1" --dport "$2" -m state --state NEW -j ACCEPT 2>/dev/null \
     || sudo iptables -I INPUT 5 -p "$1" --dport "$2" -m state --state NEW -j ACCEPT

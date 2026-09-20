@@ -13,6 +13,7 @@
 #   NEUROCODE_DOMAIN=1.2.3.4.sslip.io deploy/push.sh ubuntu@1.2.3.4
 #
 # To move it to your own name later: deploy/domain.sh eurex.dev.
+# shellcheck source=deploy/_common.sh
 . "$(dirname "$0")/_common.sh"
 resolve_host "${1:-}" >/dev/null
 
