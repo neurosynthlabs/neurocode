@@ -11,7 +11,7 @@ from __future__ import annotations
 from sqlalchemy import ColumnElement, Integer, cast, func, or_, select
 
 from ..models import Brainstorm, McpServer, Project, ToolRule, User
-from .base import Page, Repository, bounded
+from .base import Page, Repository, bounded, fence
 
 
 class BrainstormRepository(Repository[Brainstorm]):
@@ -21,9 +21,10 @@ class BrainstormRepository(Repository[Brainstorm]):
         return await self.one(Brainstorm.ref == ref)
 
     async def newest(self, project_id: str | None = None, *, limit: int | None = None,
-                     offset: int = 0) -> Page[Brainstorm]:
+                     offset: int = 0, hidden: frozenset[str] = frozenset()) -> Page[Brainstorm]:
         where: list[ColumnElement[bool]] = [Brainstorm.project_id == project_id] if project_id else []
-        return await self.page(*where, order_by=Brainstorm.created_at.desc(), limit=limit, offset=offset)
+        return await self.page(*where, *fence(Brainstorm.project_id, hidden),
+                               order_by=Brainstorm.created_at.desc(), limit=limit, offset=offset)
 
     async def next_ref(self, prefix: str = "IDEA-") -> str:
         """The next reference: the highest number any ref carries, plus one — worked out in SQL rather
@@ -56,7 +57,8 @@ class ToolRuleRepository(Repository[ToolRule]):
         return list((await self.session.execute(stmt)).scalars())
 
     async def listed(self, *, project: str | None = None, tool: str | None = None, limit: int | None = None,
-                     offset: int = 0) -> list[tuple[ToolRule, str | None, str | None]]:
+                     offset: int = 0,
+                     hidden: frozenset[str] = frozenset()) -> list[tuple[ToolRule, str | None, str | None]]:
         """Rules with the names a screen shows beside them: the project's and the author's.
 
         `project` is a project id, or `workspace` for the rules that hold everywhere; None is both.
@@ -69,6 +71,9 @@ class ToolRuleRepository(Repository[ToolRule]):
             where.append(ToolRule.project_id == project)
         if tool:
             where.append(ToolRule.tool == tool)
+        # A project's rule names the project and the globs somebody drew around its files, so it is
+        # cut with the project. The workspace's rules carry no project and are everybody's.
+        where += fence(ToolRule.project_id, hidden)
         stmt = (select(ToolRule, Project.name, User.name)
                 .outerjoin(Project, Project.id == ToolRule.project_id)
                 .outerjoin(User, User.id == ToolRule.created_by)

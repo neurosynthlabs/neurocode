@@ -154,7 +154,6 @@ export default function Permissions() {
     <Page>
       <PageHeader
         title="Permissions"
-        subtitle="What an agent may do alone, what asks you once, and what always stops at your desk."
         actions={
           <Segmented
             options={[
@@ -173,6 +172,10 @@ export default function Permissions() {
       />
 
       <PageBody className="space-y-4">
+        {/* The gate model is the Inbox's subject, and the three cards are how it is explained. On the Rules,
+            Tool rules and Sandbox tabs it is a hundred words of theory above a table that names its own
+            rule, so they stay here — word for word — on the one tab they belong to. */}
+        {tab === 'inbox' && (
         <div className="grid grid-cols-1 gap-3 stagger lg:grid-cols-3">
           {TIERS.map((t) => {
             const I = t.icon;
@@ -191,7 +194,6 @@ export default function Permissions() {
                     {t.label}
                   </span>
                 }
-                actions={<Tag tone={t.tone}>{t.verdict}</Tag>}
               >
                 <p className="text-[12.5px] text-ink-2">{t.what}</p>
                 <p className="mt-2 border-t border-line pt-2 text-[12.5px] text-dim">{t.why}</p>
@@ -199,6 +201,7 @@ export default function Permissions() {
             );
           })}
         </div>
+        )}
 
         {tab === 'inbox' && (
           <>
@@ -207,7 +210,6 @@ export default function Permissions() {
                 label="Waiting on you"
                 value={pending.length}
                 tone={pending.length ? 'warn' : 'ok'}
-                sub="nothing moves until you decide"
               />
               <Stat
                 label="Approved 7d"
@@ -215,14 +217,13 @@ export default function Permissions() {
                 tone="ok"
                 sub={week.median === null ? 'no decision this week' : `median decision ${span(week.median)}`}
               />
-              <Stat label="Denied 7d" value={week.denied} tone="danger" sub="decided in the last 7 days" />
+              <Stat label="Denied 7d" value={week.denied} tone="danger" />
             </StatGrid>
 
             {pending.length === 0 ? (
               <Empty
                 icon={<ShieldCheck className="size-6" />}
                 title="Nothing is waiting on you"
-                hint="Every gated action has been decided. Agents are free to keep working."
               />
             ) : (
               <div className="space-y-3 stagger">

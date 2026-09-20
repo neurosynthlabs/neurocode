@@ -612,3 +612,32 @@
 @media (prefers-reduced-motion: reduce) {
   .nc-arrive, .nc-icon-in, .nc-shake { animation: none }
 }
+
+/* ── Less motion, everywhere ────────────────────────────────────
+   The blocks above turn off the animations this app writes by hand, and nothing else. Every overlay is
+   moved by something else: tw-animate-css's utilities animate the dialog, menu, popover, select and
+   tooltip; the sheet slides on a CSS transition; sonner's toasts fly in from sonner's own stylesheet.
+   So someone who had asked their system for less motion still got all of it. These are the slots those
+   three use, named directly — the utilities are emitted under a variant, so their class is
+   `data-open:animate-in` and a plain `.animate-in` never matches. Unlayered and important, to win over
+   a utility. */
+@media (prefers-reduced-motion: reduce) {
+  [data-slot='dialog-content'],
+  [data-slot='dialog-overlay'],
+  [data-slot='dropdown-menu-content'],
+  [data-slot='dropdown-menu-sub-content'],
+  [data-slot='popover-content'],
+  [data-slot='select-content'],
+  [data-slot='tooltip-content'] {
+    animation: none !important;
+  }
+  [data-slot='sheet-content'],
+  [data-slot='sheet-overlay'] {
+    transition: none !important;
+  }
+  [data-sonner-toaster],
+  [data-sonner-toast] {
+    animation: none !important;
+    transition: none !important;
+  }
+}

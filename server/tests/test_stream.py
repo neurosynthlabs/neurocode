@@ -239,3 +239,36 @@ async def test_every_connection_counts_days_in_utc(settings: Settings, which: st
                 assert conn.execute(text(evening_utc)).scalar_one() == "2026-09-18"
         finally:
             ledger.close()
+
+
+# ── a tab that is connected and merely slow ──────────────────────
+
+async def test_a_reader_that_fell_behind_is_told_it_missed_events():
+    """The queue is bounded on purpose — one slow tab must never hold up the API — but the drop was
+    silent, and silence is what made it a defect rather than a trade-off: the connection never
+    dropped, so nothing resynced, so the board kept a task in the wrong column until a reload."""
+    import json
+
+    from app.api import stream as stream_module
+
+    feed = Bus()
+    # A Reader with nothing hidden: this is about the queue, not about who may see which project.
+    response = await stream_module.stream(feed, stream_module.Reader())
+    frames = response.body_iterator
+    assert await anext(frames) == "retry: 3000\n\n"
+
+    queue = next(iter(feed.queues))
+    for n in range(520):                          # the queue holds 500
+        feed.publish("activity", {"n": n})
+    await asyncio.sleep(0.05)                     # each offer is scheduled on this loop
+    assert queue.qsize() == 500
+
+    told = await anext(frames)
+    assert told.startswith("event: resync\n")
+    assert json.loads(told.split("data: ", 1)[1]) == {"why": "missed", "events": 20}
+
+    # Then it carries on with what it does still hold, and is not told again for the same fall-behind.
+    assert (await anext(frames)).startswith("event: activity\n")
+    assert (await anext(frames)).startswith("event: activity\n")
+    await frames.aclose()
+    assert feed.queues == {} and feed.missed == {}

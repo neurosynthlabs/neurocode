@@ -18,7 +18,7 @@ import {
 } from '@/components/os';
 import { MEMORY_CATEGORIES, RECALLED_BY, categoryLabel, memoryApi, type ConflictInput } from '@/lib/live/knowledge';
 import { useProject } from '@/lib/project-context';
-import { useData } from '@/lib/data';
+import { useData, useDataActions } from '@/lib/data';
 import { useRemote } from '@/lib/remote';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -32,6 +32,12 @@ const within = (iso: string | null, ms: number) => !!iso && Date.now() - new Dat
 /** What moves when a fact streams in, is pinned, recalled or archived: a key for reading the counts again. */
 const changed = (live: MemoryFact[]) =>
   `${live.length}:${live.reduce((n, f) => n + f.hits24h, 0)}:${live.filter((f) => f.pinned).length}`;
+/** What one read of memory answers, the same either way: `api.facts` stops there, and so does the
+    server's ranked search (MemoryRepository.search). Both lists say where they stop. */
+const MEMORY_PAGE = 200;
+/** The facts a scope holds: one project's own plus the workspace's, or the workspace's alone. */
+const inScope = (f: MemoryFact, scope: 'project' | 'global', projectId: string | null) =>
+  scope === 'global' || !projectId ? f.projectId === null : f.projectId === projectId || f.projectId === null;
 
 export default function Memory() {
   const { projectId, project } = useProject();
@@ -43,7 +49,7 @@ export default function Memory() {
   const [adding, setAdding] = useState(false);
   const [marking, setMarking] = useState<{ a: string } | null>(null);
 
-  const { memory, conflicts, setPinned, archive, searchMemory, resolveConflict } = useData();
+  const { memory, conflicts, capped, setPinned, archive, searchMemory, resolveConflict } = useData();
   const query = q.trim();
   // An archived fact streams back as a change; it is out of recall, so it is out of these lists.
   const live = useMemo(() => memory.filter((f) => !f.archived), [memory]);
@@ -63,34 +69,31 @@ export default function Memory() {
 
   // Search is the server's full text, best match first. Answers are keyed by their query, so a slow
   // answer never replaces a newer one; until it arrives, the local filter stands in.
-  const [ranked, setRanked] = useState<{ q: string; refs: string[] } | null>(null);
+  const [ranked, setRanked] = useState<{ q: string; facts: MemoryFact[] } | null>(null);
   useEffect(() => {
     if (!query) return;
     const ctl = new AbortController();
     const id = window.setTimeout(() => {
-      searchMemory(query, ctl.signal).then((refs) => setRanked({ q: query, refs })).catch(() => { /* superseded by a newer query */ });
+      searchMemory(query, ctl.signal).then((facts) => setRanked({ q: query, facts })).catch(() => { /* superseded by a newer query */ });
     }, 120);
     return () => { window.clearTimeout(id); ctl.abort(); };
   }, [query, searchMemory]);
-  const fts = query && ranked?.q === query ? ranked.refs : null;
+  const fts = query && ranked?.q === query ? ranked.facts : null;
 
-  const scoped = useMemo(
-    () => live.filter((f) => (scope === 'global' || !projectId ? f.projectId === null : f.projectId === projectId || f.projectId === null)),
-    [live, scope, projectId],
-  );
+  const scoped = useMemo(() => live.filter((f) => inScope(f, scope, projectId)), [live, scope, projectId]);
 
   const list = useMemo(() => {
     const inCat = (f: MemoryFact) => cat === 'all' || f.category === cat;
-    if (fts) {
-      const byRef = new Map(scoped.map((f) => [f.ref, f]));
-      return fts.map((r) => byRef.get(r)).filter((f): f is MemoryFact => !!f && inCat(f));
-    }
+    // The search answer is the server's, and the server holds every fact. Looking each match up in the
+    // store threw away the ones older than the page it holds, so a search could find a fact and then
+    // show nothing — and say nothing matched. The facts it found are shown as they came back.
+    if (fts) return fts.filter((f) => !f.archived && inScope(f, scope, projectId) && inCat(f));
     const s = query.toLowerCase();
     return scoped
       .filter(inCat)
       .filter((f) => (s ? (f.title + f.body + f.reason + f.tags.join(' ') + f.ref).toLowerCase().includes(s) : true))
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? '') || b.createdAt.localeCompare(a.createdAt));
-  }, [scoped, cat, query, fts]);
+  }, [scoped, cat, query, fts, scope, projectId]);
 
   const fact = useMemo(() => list.find((f) => f.id === sel) ?? list[0], [list, sel]);
   // The rail's figures are the server's counts for this scope: the list is a page of the facts, and
@@ -103,7 +106,7 @@ export default function Memory() {
     <Page>
       <PageHeader
         title="Memory"
-        subtitle="Facts the workspace keeps, each with its reason, its source and its evidence. Every time a feature uses one, that use is recorded."
+        subtitle="Facts the workspace keeps, with their reason, source and evidence."
         actions={
           <>
             <Button size="sm" variant="outline" onClick={() => setAdding(true)}><FilePlus2 className="size-3.5" />Add from text</Button>
@@ -143,7 +146,7 @@ export default function Memory() {
       <PageBody className={cn(tab === 'facts' && 'flex h-full flex-col p-0')}>
         {tab === 'facts' && (scoped.length === 0 ? (
           <Empty icon={<Layers className="size-6" />} title="Nothing remembered yet"
-            hint="Facts arrive when you answer a plan's open question or use Add from text. Each keeps its reason, its source and its evidence."
+            hint="Facts arrive when you answer a plan's open question, or from Add from text."
             action={<Button size="sm" variant="outline" onClick={() => setAdding(true)}>Add facts from text</Button>} />
         ) : (
           <div className="flex min-h-0 flex-1 flex-col gap-0 lg:flex-row">
@@ -194,7 +197,7 @@ export default function Memory() {
 
             {/* Fact list */}
             <div className="no-scrollbar w-full shrink-0 max-h-[42vh] lg:max-h-none lg:w-[340px] overflow-y-auto border-b border-line lg:border-b-0 lg:border-r">
-              {list.length === 0 ? <Empty title="Nothing recalled" hint="No fact in this scope matches that search." /> : list.map((f) => (
+              {list.length === 0 ? <Empty title="Nothing recalled" hint="No fact in this scope matches that search." /> : <>{list.map((f) => (
                 <ListRow key={f.id} active={fact?.id === f.id} onClick={() => setSel(f.id)}>
                   <div className="flex items-center gap-2">
                     <Mono tone={f.pinned ? 'brand' : 'neutral'}>{f.ref}</Mono>
@@ -210,6 +213,20 @@ export default function Memory() {
                   </div>
                 </ListRow>
               ))}
+              {/* Neither list is all there is: the store holds the newest page of facts, and the server ranks
+                  at most a page of matches. Saying where each one stops keeps the rail's real total — which is
+                  counted by the database, not from this list — from reading as a broken list. */}
+              {fts
+                ? fts.length >= MEMORY_PAGE && (
+                  <p className="border-t border-line px-3.5 py-2.5 text-[12px] text-dim">
+                    The {MEMORY_PAGE} best matches are shown. Narrow the words to reach the rest.
+                  </p>
+                )
+                : capped.memory && (
+                  <p className="border-t border-line px-3.5 py-2.5 text-[12px] text-dim">
+                    Drawn from the newest {MEMORY_PAGE} facts. Search reaches the ones before them.
+                  </p>
+                )}</>}
             </div>
 
             {/* Detail */}
@@ -290,10 +307,6 @@ export default function Memory() {
         {tab === 'conflicts' && (
           <div className="space-y-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <p className="max-w-3xl text-[13px] text-soft">
-                Two facts that cannot both be true. Nothing detects this on its own: when you notice two that disagree,
-                mark them, and both claims stay intact until you keep one. The other is archived, never deleted.
-              </p>
               <Button size="sm" variant="outline" disabled={live.length < 2} onClick={() => setMarking({ a: fact?.ref ?? live[0]?.ref ?? '' })}>
                 <Split className="size-3.5" />Mark a contradiction
               </Button>
@@ -412,7 +425,7 @@ function Health({ live, conflicts }: { live: MemoryFact[]; conflicts: number }) 
 function MarkContradiction({ facts, first, onClose, onFiled }: {
   facts: MemoryFact[]; first: string; onClose: () => void; onFiled: () => void;
 }) {
-  const { fileConflict } = useData();
+  const { fileConflict } = useDataActions();
   const [a, setA] = useState(first);
   const [b, setB] = useState(() => facts.find((f) => f.ref !== first)?.ref ?? '');
   const [topic, setTopic] = useState('');
@@ -468,7 +481,7 @@ function MarkContradiction({ facts, first, onClose, onFiled }: {
 function AddFromText({ open, onOpenChange, projectId, onAdded }: {
   open: boolean; onOpenChange: (open: boolean) => void; projectId: string | null; onAdded: (facts: MemoryFact[]) => void;
 }) {
-  const { extract, addFacts } = useData();
+  const { extract, addFacts } = useDataActions();
   const [text, setText] = useState('');
   const [found, setFound] = useState<Extracted | null>(null);
   const [skip, setSkip] = useState<Set<number>>(() => new Set());

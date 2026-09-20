@@ -23,7 +23,7 @@ from ..repositories.platform import BrainstormRepository
 from ..schemas.ai import brainstorm_json
 from ..services.ai_features import AiFeatureService
 from ..services.identity import Person
-from .deps import current_person, gateway, require, session
+from .deps import current_person, gateway, require, session, unseen_by
 
 router = APIRouter(prefix="/ai")
 
@@ -52,13 +52,18 @@ async def ask(body: AskIn, who: Person = Depends(require("ai:use")),
                                                         by=who.name, by_id=who.id)
 
 
-@router.get("/brainstorms", dependencies=[Depends(current_person)])
+@router.get("/brainstorms")
 async def brainstorms(project: str | None = None, limit: int | None = None, offset: int = 0,
+                      who: Person = Depends(current_person),
                       open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
     """The Brainstorm screen holds all of these at once, so the default is the ceiling rather than the
-    usual hundred — a hundred would have been a silent truncation the caller could not even see."""
+    usual hundred — a hundred would have been a silent truncation the caller could not even see.
+
+    An idea argued out about a project this person may not see is not among them; one filed against
+    no project is the workspace's and is."""
     page = await BrainstormRepository(open_session).newest(project, limit=limit or MAX_LIMIT,
-                                                           offset=offset)
+                                                           offset=offset,
+                                                           hidden=await unseen_by(who, open_session))
     return [brainstorm_json(b) for b in page.items]
 
 

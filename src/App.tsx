@@ -6,6 +6,7 @@ import { Toaster } from '@/components/ui/sonner';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { ThemeProvider, useTheme } from '@/lib/theme';
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { permissionLabel, useAccess } from '@/lib/access';
 import { ProjectProvider, useProject } from '@/lib/project-context';
 import { DataProvider, useData } from '@/lib/data';
 import { NAV } from '@/lib/nav';
@@ -65,18 +66,32 @@ const Audit = lazy(() => import('@/pages/admin/Audit'));
 const WorkspacePage = lazy(() => import('@/pages/admin/Workspace'));
 const DatabasePage = lazy(() => import('@/pages/admin/Database'));
 
-/** A screen that needs a permission opens only for roles that hold it. The API checks again regardless. */
+/**
+ * A screen that needs a permission opens only for roles that hold it. The API checks again
+ * regardless — this is the sign, not the fence.
+ *
+ * Every screen NAV gives a `perm` is wrapped, not only the admin ones: one declaration (NAV), one
+ * enforcer (Guard), one fence (the API). A screen that carried its own check as well was the same
+ * rule written twice, and the two drifted.
+ *
+ * The refusal names where you are, what is missing in words rather than an id, and both places it
+ * can come from — a right is granted on a role, and a role is given to a person, and most people
+ * meeting this sentence do not yet know that.
+ */
 function Guard({ to, children }: { to: string; children: ReactNode }) {
   const { canAny, roleNames } = useAuth();
-  const perm = NAV.find((n) => n.to === to)?.perm;
+  const { catalogue } = useAccess();
+  const item = NAV.find((n) => n.to === to);
+  const perm = item?.perm;
   if (!perm || canAny(...perm)) return children;
+  const where = [item?.section, item?.sub].filter(Boolean).join(' → ');
   return (
     <Page>
       <PageBody>
         <Empty
           icon={<ShieldAlert className="size-6" />}
-          title="This screen is for admins"
-          hint={`${roleNames || 'Your role'} cannot open it. An Owner or Admin can change your roles in Admin → People.`}
+          title={item ? `${item.label} is part of ${where}` : 'This screen needs a permission'}
+          hint={`${roleNames || 'Your role'} does not include “${permissionLabel(catalogue, perm[0])}”. An Owner or Admin can grant it in Admin → Roles & permissions, or give you a role that has it in Admin → People.`}
         />
       </PageBody>
     </Page>
@@ -156,11 +171,11 @@ function Shell() {
                   <Route path="/testing" element={<Testing />} />
                   <Route path="/review" element={<Review />} />
                   <Route path="/git" element={<Git />} />
-                  <Route path="/workbench" element={<Workbench />} />
-                  <Route path="/devops" element={<DevOps />} />
+                  <Route path="/workbench" element={<Guard to="/workbench"><Workbench /></Guard>} />
+                  <Route path="/devops" element={<Guard to="/devops"><DevOps /></Guard>} />
                   <Route path="/skills" element={<Skills />} />
                   <Route path="/commands" element={<Commands />} />
-                  <Route path="/hooks" element={<Hooks />} />
+                  <Route path="/hooks" element={<Guard to="/hooks"><Hooks /></Guard>} />
                   <Route path="/plugins" element={<Plugins />} />
                   <Route path="/mcp" element={<Mcp />} />
                   <Route path="/models" element={<Models />} />

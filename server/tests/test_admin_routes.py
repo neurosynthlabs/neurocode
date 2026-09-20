@@ -181,9 +181,16 @@ async def test_the_catalogue_is_the_one_the_roles_screen_groups_by(client: Async
     from app.data import catalogue as shipped
 
     catalogue = (await client.get("/admin/permissions")).json()
-    assert len(catalogue) == len(shipped.PERMISSIONS) == 23
-    assert all(set(p) >= {"id", "label", "group", "description"} for p in catalogue)
-    assert {p["group"] for p in catalogue} <= {"Work", "Gates", "Knowledge", "Platform", "Admin"}
+    assert len(catalogue) == len(shipped.PERMISSIONS) == 26
+    assert all(set(p) >= {"id", "label", "group", "module", "sub", "verb", "description"} for p in catalogue)
+    # The rows of the matrix are the sidebar's own modules, and nothing else: a right filed anywhere
+    # else is a right nobody can find.
+    modules = dict(shipped.MODULES)
+    assert {p["module"] for p in catalogue} <= set(modules)
+    assert all(p["sub"] is None or p["sub"] in modules[p["module"]] for p in catalogue)
+    assert {p["verb"] for p in catalogue} <= set(shipped.VERBS)
+    # `group` is the module again, for one release, so an old bundle still files every right.
+    assert all(p["group"] == p["module"] for p in catalogue)
     assert [p["id"] for p in catalogue[:2]] == ["plans:compile", "plans:decide"]
 
 
@@ -205,13 +212,16 @@ async def test_anyone_signed_in_reads_the_catalogue_the_screens_name_things_by(a
 
     assert body["permissions"] == (await client.get("/admin/permissions")).json()
     assert [p["id"] for p in body["permissions"]] == [p.id for p in shipped.PERMISSIONS]
-    assert all(set(p) == {"id", "group", "label", "description"} for p in body["permissions"])
+    assert all(set(p) == {"id", "group", "module", "sub", "verb", "label", "description"}
+               for p in body["permissions"])
 
     roles = {r["id"]: r for r in body["roles"]}
     assert all(set(r) == {"id", "name", "description", "builtin", "permissions"} for r in body["roles"])
     assert [r["id"] for r in body["roles"][:len(shipped.ROLES)]] == [r.id for r in shipped.ROLES]
     assert roles["approver"]["name"] == "AI Project Manager" and roles["approver"]["builtin"] is True
-    assert roles["viewer"]["permissions"] == []
+    # A Viewer reads everything and changes nothing — and the two rights that fence what it could
+    # already read (the DevOps screen, other people's sessions) are the only ones it holds.
+    assert roles["viewer"]["permissions"] == ["sessions:read", "ops:read"]
     assert roles[custom.json()["id"]] == {**{k: custom.json()[k] for k in ("id", "name", "description")},
                                           "builtin": False, "permissions": ["tasks:write"]}
 

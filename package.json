@@ -16,6 +16,7 @@
     "vercel:deploy": "./scripts/deploy.sh",
     "vercel:preview": "./scripts/deploy.sh -p",
     "smoke": "npm run build && node scripts/smoke.mjs",
+    "test:unit": "node --test src/lib/__tests__/",
     "audit:themes": "node scripts/theme-audit.mjs",
     "lint:layout": "npm run build && node scripts/layout-lint.mjs",
     "api": "uv run --project server uvicorn app.api.app:create_api --factory --app-dir server --host 127.0.0.1 --port ${NC_API_PORT:-8787} --timeout-graceful-shutdown 5",

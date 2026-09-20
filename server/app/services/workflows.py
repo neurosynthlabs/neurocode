@@ -179,9 +179,10 @@ class WorkflowService:
         flawed = await self.workflows.blemishes([r.id for r in last.values()])
         return {wid: _result(run, flawed) for wid, run in last.items()}
 
-    async def library(self, project_id: str | None) -> list[dict[str, Any]]:
+    async def library(self, project_id: str | None,
+                      hidden: frozenset[str] = frozenset()) -> list[dict[str, Any]]:
         """Every workflow, the built-in first, with phases drawn for the project named, or their own."""
-        rows = await self.workflows.active()
+        rows = await self.workflows.active(hidden=hidden)
         stats, results = await self.workflows.stats(), await self._results()
         used = await self.workflows.referenced_ids()
         wanted = await self.projects.get(project_id) if project_id else None

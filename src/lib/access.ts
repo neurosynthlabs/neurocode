@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
-import { ApiError, api, type Catalogue } from '@/lib/api';
+import { ApiError, api, type Catalogue, type PermissionDef } from '@/lib/api';
+import { NAV, NAV_SECTIONS, type NavSection } from '@/lib/nav';
 
 /* ═══════════════════════════════════════════════════════════════
    ACCESS — the product's catalogue, as the server keeps it: every
@@ -83,3 +84,73 @@ export const roleName = (catalogue: Catalogue | null, id: string) =>
 /** Runs name an agent by id or by name, so either finds it. */
 export const agentName = (catalogue: Catalogue | null, id: string) =>
   catalogue?.agents.find((a) => a.id === id || a.name === id)?.name ?? id;
+
+/* ═══════════════════════════════════════════════════════════════
+   WHERE A RIGHT LIVES — every permission names the module and
+   sub-module the sidebar shows it under, and a verb. That filing
+   is the server's (server/app/data/catalogue.json); this is only
+   how the Roles matrix reads it back, in the sidebar's own order,
+   so the map a person navigates and the grid an admin grants in
+   are provably the same shape.
+   ═══════════════════════════════════════════════════════════════ */
+
+/** What holding a right lets someone do. The four columns of the matrix. */
+export const VERBS = ['use', 'write', 'decide', 'admin'] as const;
+export type Verb = (typeof VERBS)[number];
+export const VERB_LABELS: Record<Verb, string> = {
+  use: 'Use', write: 'Write', decide: 'Decide', admin: 'Admin',
+};
+
+/** A permission with its filing. `module` is a NavSection; `sub` is one of that section's own. */
+export interface FiledPermission extends PermissionDef {
+  module: NavSection;
+  sub: string | null;
+  verb: Verb;
+}
+
+const isVerb = (v: unknown): v is Verb => VERBS.includes(v as Verb);
+const isSection = (v: unknown): v is NavSection => NAV_SECTIONS.includes(v as NavSection);
+
+/**
+ * The catalogue's permissions with their filing read off. An older API sends only `group`, so the
+ * module falls back to it and the verb to `use` — a right filed roughly is still a right you can
+ * find, and nothing here is invented that the server did not send.
+ */
+export function filedPermissions(permissions: PermissionDef[]): FiledPermission[] {
+  return permissions.map((p) => {
+    const raw = p as PermissionDef & Partial<Pick<FiledPermission, 'module' | 'sub' | 'verb'>>;
+    const module = isSection(raw.module) ? raw.module : isSection(p.group) ? p.group : 'Admin';
+    return { ...p, module, sub: raw.sub ?? null, verb: isVerb(raw.verb) ? raw.verb : 'use' };
+  });
+}
+
+/** One row of the matrix: a module, or one sub-module of it. */
+export interface ModuleRow {
+  key: string;
+  module: NavSection;
+  sub: string | null;
+  /** "Build" or "Build → Execution": what the sidebar calls this place. */
+  label: string;
+}
+
+/**
+ * The rows, in sidebar order: each section, its own rights first, then each sub-section in the order
+ * the sidebar lists it. A module with no rights at all has no row — there would be nothing in it.
+ */
+export function moduleRows(permissions: FiledPermission[]): ModuleRow[] {
+  const rows: ModuleRow[] = [];
+  for (const module of NAV_SECTIONS) {
+    const here = permissions.filter((p) => p.module === module);
+    if (here.some((p) => !p.sub)) rows.push({ key: module, module, sub: null, label: module });
+    const order = [...new Set(NAV.filter((i) => i.section === module && i.sub).map((i) => i.sub as string))];
+    const extra = [...new Set(here.map((p) => p.sub).filter((s): s is string => !!s))];
+    for (const sub of [...order.filter((s) => extra.includes(s)), ...extra.filter((s) => !order.includes(s))]) {
+      rows.push({ key: `${module}/${sub}`, module, sub, label: `${module} → ${sub}` });
+    }
+  }
+  return rows;
+}
+
+/** The rights in one cell: this row, this verb. Empty means the cell draws an em dash, not a box. */
+export const cellOf = (permissions: FiledPermission[], row: ModuleRow, verb: Verb) =>
+  permissions.filter((p) => p.module === row.module && (p.sub ?? null) === row.sub && p.verb === verb);

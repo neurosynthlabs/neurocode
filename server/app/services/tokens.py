@@ -126,8 +126,12 @@ class TokenService:
         if row.last_used_at is None or now - row.last_used_at >= TOUCH_EVERY:
             row.last_used_at = now
             await self.session.flush()
+        # The project grants come across untouched. A token narrows what the person may *do*; it does
+        # not change which projects they are listed on, and dropping them here made every restricted
+        # project answer 404 to `nc` and to every script — for the very people the project is for.
         return TokenPerson(found.id, found.email, found.name, found.status, found.roles,
-                           effective(found.permissions, row.scopes or []), token_id=row.id, token_name=row.name)
+                           effective(found.permissions, row.scopes or []), found.project_rights,
+                           token_id=row.id, token_name=row.name)
 
     # ── a person's own tokens ────────────────────────────────────
     async def mine(self, who: Person, *, limit: int | None = None, offset: int = 0) -> Page[ApiToken]:

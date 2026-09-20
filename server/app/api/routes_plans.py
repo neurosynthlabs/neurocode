@@ -28,7 +28,7 @@ from ..schemas.work import comment_json
 from ..services import runs as runtime
 from ..services.identity import Person
 from ..services.plans import MAX_DETAIL, MAX_LABEL, MAX_STEPS, PlanService
-from .deps import current_person, database, gateway, hand_off, require, session
+from .deps import current_person, database, gateway, hand_off, require, scoped, session
 
 router = APIRouter()
 
@@ -75,7 +75,7 @@ async def edit_plan(ref: str, body: PlanPatch, who: Person = Depends(require("pl
 
 
 @router.post("/projects/{pid}/instructions/draft", status_code=201)
-async def draft_instructions(pid: str, who: Person = Depends(require("plans:compile")),
+async def draft_instructions(pid: str, who: Person = Depends(scoped("plans:compile")),
                              open_session: AsyncSession = Depends(session),
                              gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Compile a plan that writes the project's first AGENTS.md from what the code index measured.

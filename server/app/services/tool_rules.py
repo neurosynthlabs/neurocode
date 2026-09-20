@@ -110,10 +110,11 @@ class ToolRuleService:
 
     # ── reading ──────────────────────────────────────────────────
     async def listed(self, *, project: str | None, tool: str | None, limit: int | None,
-                     offset: int) -> list[dict[str, Any]]:
+                     offset: int, hidden: frozenset[str] = frozenset()) -> list[dict[str, Any]]:
         if tool and tool not in TOOLS:
             raise Refused(f"There is no tool called {tool}.", status=422)
-        rows = await self.rules.listed(project=project, tool=tool, limit=limit, offset=offset)
+        rows = await self.rules.listed(project=project, tool=tool, limit=limit, offset=offset,
+                                       hidden=hidden)
         return [tool_rule_json(rule, project_name=name, author=author) for rule, name, author in rows]
 
     async def one(self, rule_id: int) -> dict[str, Any]:

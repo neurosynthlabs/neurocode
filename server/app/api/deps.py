@@ -11,19 +11,27 @@ own write, and a commit that failed reached the screen as a 2xx for data that wa
 transaction is therefore held in the *function* scope, which FastAPI closes as soon as the route has
 returned and its answer is serialised: the commit is done, or has failed as a 500, before a byte of
 the answer is sent. It is also why the live stream holds no connection while it streams.
+
+"Who is asking" has two answers where a project is involved: what a person holds across the workspace
+(`require`) and what they hold inside one project (`scoped`). The second is the whole of per-project
+rights — a grant that narrows nothing anybody actually asks for narrows nothing at all.
 """
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterable
+from dataclasses import replace
 from typing import Any
 
 from fastapi import BackgroundTasks, Depends, Request
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai.gateway import Gateway
 from ..data.engine import Database
+from ..models import Project
+from ..repositories import NotFound, ProjectRepository
 from ..services.errors import Denied, Refused
-from ..services.identity import IdentityService, Person
+from ..services.identity import NEVER_NARROWED, IdentityService, Person
 from ..services.tokens import PREFIX as TOKEN_PREFIX, TokenPerson, TokenService
 
 #: The session cookie. A script may send `Authorization: Bearer <token>` instead — a session token, or a
@@ -113,12 +121,16 @@ async def hand_off(open_session: AsyncSession, jobs: BackgroundTasks, job: Calla
     jobs.add_task(job, *args)
 
 
+def _all_of(held: frozenset[str], wanted: Iterable[str]) -> None:
+    """Every one of these, or a refusal naming the ones that are missing."""
+    if missing := [p for p in wanted if p not in held]:
+        raise Denied(", ".join(missing))
+
+
 def require(*permissions: str):
     """Lets the request through only when the person holds every one of these."""
     async def dependency(who: Person = Depends(current_person)) -> Person:
-        missing = [p for p in permissions if p not in who.permissions]
-        if missing:
-            raise Denied(", ".join(missing))
+        _all_of(who.permissions, permissions)
         return who
     return dependency
 
@@ -130,3 +142,74 @@ def require_any(*permissions: str):
             raise Denied(" or ".join(permissions))
         return who
     return dependency
+
+
+def scoped(*permissions: str, path: str = "pid"):
+    """`require`, asked inside the project this request names.
+
+    The permission is tested against what the person holds *there* — their workspace rights, narrowed
+    by the grant the project gives them (`Person.in_project`) — and the person handed to the route is
+    narrowed the same way, so a check the route makes for itself later cannot quietly answer with
+    more than the project allows. A project nobody has restricted resolves to the workspace set
+    unchanged, which is every project until somebody restricts one, so this costs one indexed read
+    and changes nothing else.
+
+    A restricted project the person holds no grant in answers 404 before the permission is even
+    weighed: whether there is a project here is itself something they were not told.
+
+    Two cases are deliberately *not* guessed at. A request that names no project in its path is
+    exactly `require(*permissions)` — there is nothing to narrow by, and refusing on a guess would be
+    inventing a rule. A project id that is not a project at all is left to the route to answer in its
+    own words, because this dependency knows what was asked for and not what it was for.
+    """
+    async def dependency(request: Request, who: Person = Depends(current_person),
+                         open_session: AsyncSession = Depends(session)) -> Person:
+        pid = request.path_params.get(path)
+        if not pid or not isinstance(pid, str):
+            _all_of(who.permissions, permissions)
+            return who
+        found = await ProjectRepository(open_session).get(pid)
+        if found is None:
+            _all_of(who.permissions, permissions)
+            return who
+        if not who.may_see(pid, found.restricted):
+            raise NotFound(f"project {pid}")
+        held = who.in_project(pid, found.restricted)
+        _all_of(held, permissions)
+        return who if held == who.permissions else replace(who, permissions=held)
+    return dependency
+
+
+async def unseen_by(who: Person, open_session: AsyncSession) -> frozenset[str]:
+    """The projects this person may not see: the restricted ones they hold no grant in.
+
+    Said as what to hide rather than what to show, because the answer outlives the question. A list
+    of what may be seen goes stale the moment a project is made — and a project is open to the whole
+    workspace until somebody restricts it, so a new one would be filtered out of a feed for no
+    reason. What must be hidden only grows by an admin's deliberate act.
+
+    One query in a workspace where nothing is restricted, which is every workspace until something
+    is; two where something is.
+    """
+    if who.permissions & NEVER_NARROWED:     # an Owner or Admin is never locked out of a project
+        return frozenset()
+    restricted = set((await open_session.execute(
+        select(Project.id).where(Project.restricted.is_(True)))).scalars())
+    if not restricted:
+        return frozenset()
+    return frozenset(restricted - set(await IdentityService(open_session).project_rights(who.id)))
+
+
+async def must_see(who: Person, open_session: AsyncSession, project_id: str | None, what: str) -> None:
+    """The same fence for one row, reached by its own reference rather than through a list.
+
+    `scoped` cannot help here: the path names a task, a plan, a run or a review, not the project it
+    belongs to, so the project is only known once the row has been read. What the row knows is its
+    `project_id`, and that is enough — a row of a project `unseen_by` hides is not there.
+
+    404 and never 403, for the same reason `scoped` answers 404: "there is a plan called PLAN-12,
+    and you may not read it" has already told them the thing the restriction exists to withhold. A
+    row belonging to no project is the workspace's own and is never hidden.
+    """
+    if project_id and project_id in await unseen_by(who, open_session):
+        raise NotFound(what)

@@ -116,7 +116,7 @@ async def _person(open_session: AsyncSession, user_id: str) -> dict[str, Any]:
                      teams=await TeamRepository(open_session).teams_of(user_id))
 
 
-@router.get("/users", dependencies=[Depends(require_any("users:manage", "teams:manage"))])
+@router.get("/users", dependencies=[Depends(require_any("people:read", "users:manage", "teams:manage"))])
 async def users(limit: int | None = None, offset: int = 0,
                 open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
     return await _people(open_session, limit=limit, offset=offset)
@@ -169,7 +169,9 @@ async def _role(open_session: AsyncSession, role: Role) -> dict[str, Any]:
 
 @router.get("/permissions", dependencies=[Depends(require_any("roles:manage", "users:manage"))])
 async def permissions() -> list[dict[str, Any]]:
-    """The whole catalogue, each entry carrying the group the access screen files it under."""
+    """The whole catalogue, each entry carrying the module, sub-module and verb the Roles matrix
+    files it under. Reading which rights a role carries is a different question from reading who is
+    here, so this one stays on the pair that can change them."""
     return catalogue()
 
 
@@ -221,7 +223,7 @@ async def delete_role(rid: str, request: Request, who: Person = Depends(require(
 
 
 # ── teams ────────────────────────────────────────────────────────
-@router.get("/teams", dependencies=[Depends(require_any("teams:manage", "users:manage"))])
+@router.get("/teams", dependencies=[Depends(require_any("people:read", "teams:manage", "users:manage"))])
 async def teams(limit: int | None = None, offset: int = 0,
                 open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
     repo = TeamRepository(open_session)

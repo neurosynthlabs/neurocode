@@ -105,8 +105,6 @@ export default function CommandCenter() {
     return m;
   }, [agentRuns]);
   const feed = useMemo(() => activity.slice(0, 6), [activity]);
-  const running = mine.filter((t) => t.status === 'in_progress').length;
-  const working = agentRuns.filter((r) => r.status === 'running').length;
   const suggestions = useMemo<Suggestion[]>(() => {
     if (kind !== 'ask') return STARTERS[kind];
     const known = memory.filter((f) => !project || f.projectId === project.id || f.projectId === null || f.projectId === 'global');
@@ -257,12 +255,13 @@ export default function CommandCenter() {
             ))}
           </div>
 
-          <p className="mt-7 text-center text-[13px] text-dim">
-            <span className="text-ink-2">{running}</span> tasks running ·{' '}
-            <span className="text-ink-2">{working}</span> runs working ·{' '}
-            <span className={pending.length ? 'text-warn' : 'text-ink-2'}>{pending.length}</span> approvals waiting
-            {cost && <>{' '}·{' '}{cost.costComplete ? '' : 'at least '}<span className="text-ink-2">${cost.costUsd.toFixed(2)}</span> spent in 24 h</>}
-          </p>
+          {/* The three counts that stood here are on the Inbox strip below and in the panel headers; only the
+              spend is on this screen once, so only the spend is left. */}
+          {cost && (
+            <p className="mt-7 text-center text-[13px] text-dim">
+              {cost.costComplete ? '' : 'at least '}<span className="text-ink-2">${cost.costUsd.toFixed(2)}</span> spent in 24 h
+            </p>
+          )}
         </section>
 
         {/* The inbox: what needs you, what is working, what finished since you last looked. */}
@@ -293,7 +292,7 @@ export default function CommandCenter() {
             flush
           >
             {pending.length === 0 ? (
-              <Empty icon={<ShieldCheck className="size-6" />} title="You are all caught up" hint="Nothing is waiting for your signature." />
+              <Empty icon={<ShieldCheck className="size-6" />} title="You are all caught up" />
             ) : (
               <div className="divide-y divide-line/60">
                 {pending.map((a) => (
@@ -361,7 +360,7 @@ export default function CommandCenter() {
             flush
           >
             {live.length === 0 ? (
-              <Empty title="No agent is working" hint="Dispatch a plan and its run starts here, in a worktree of its own." />
+              <Empty title="No agent is working" hint="Dispatch a plan to start one." />
             ) : (
               <div className="divide-y divide-line/60">
                 {live.map((r) => (
@@ -388,7 +387,7 @@ export default function CommandCenter() {
             flush
           >
             {feed.length === 0 ? (
-              <Empty title="Nothing has happened yet" hint="Compiling a plan, onboarding a project or deciding an approval shows up here." />
+              <Empty title="Nothing has happened yet" />
             ) : <div className="divide-y divide-line/60">
               {feed.map((e) => (
                 <div key={e.id} className="flex items-start gap-3.5 px-5 py-3">

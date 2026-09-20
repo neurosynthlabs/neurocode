@@ -1481,10 +1481,16 @@ async def _pause(db: Database, ref: str, step_n: int, *, title: str, tool: str, 
         approval_ref = await approvals.next_ref()
         # One step may stop more than once — a question, then a rule asking about what the answer led to —
         # so the gate's own ref is part of its id.
+        #
+        # `run_id` and `seq` are the same two facts the ref already carries, kept where the database can
+        # use them: the link so a deleted run takes its gates with it and every reader can find them by
+        # key instead of by matching text, and the number so gates written in one transaction have an
+        # order without a regular expression in the sort. `run_ref` stays — it is the label people read.
         s.add(Approval(id=f"ap-{run.ref.lower()}-{step_n}-{approval_ref.split('-')[-1]}", ref=approval_ref,
                        title=title, agent=step.agent if step else "", tool=tool, risk=risk, status="pending",
                        project_id=run.project_id, payload=payload, reason=reason,
-                       run_ref=run.ref, step=step_n))
+                       run_ref=run.ref, run_id=run.id, step=step_n,
+                       seq=int(approval_ref.rsplit("-", 1)[-1])))
         if step is not None:
             step.status, step.detail = "waiting", f"Waiting for you · {approval_ref}"
             if question:

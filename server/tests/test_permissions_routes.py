@@ -72,15 +72,18 @@ async def answered(session: AsyncSession, client: AsyncClient, tmp_path: Path) -
                              m.RunStep(n=2, kind="handoff", label="Your approval")], conflicts=[]))
     await session.flush()
     now = utcnow()
+    # Each one carries `run_id`, as every gate the runtime writes does: who gave a standing answer is
+    # read by joining the gate to its run on the link, not on the ref it prints.
     session.add_all([
         m.Approval(id="ap-g1", ref="APPR-8001", title="Run `make test`", tool="Bash(make test)", status="approved",
-                   project_id="gate-a", run_ref="RUN-8001", step=1, decided_at=now - timedelta(hours=2),
-                   decided_by=owner_id),
+                   project_id="gate-a", run_id="r-gate", run_ref="RUN-8001", step=1,
+                   decided_at=now - timedelta(hours=2), decided_by=owner_id),
         m.Approval(id="ap-g2", ref="APPR-8002", title="Run `make test`", tool="Bash(make test)", status="denied",
-                   project_id="gate-a", run_ref="RUN-8001", step=1, decided_at=now - timedelta(hours=1)),
+                   project_id="gate-a", run_id="r-gate", run_ref="RUN-8001", step=1,
+                   decided_at=now - timedelta(hours=1)),
         m.Approval(id="ap-g3", ref="APPR-8003", title="Accept RUN-8001", tool="Merge(neurocode/x)",
-                   status="approved", project_id="gate-a", run_ref="RUN-8001", step=2, decided_at=now,
-                   decided_by=owner_id),
+                   status="approved", project_id="gate-a", run_id="r-gate", run_ref="RUN-8001", step=2,
+                   decided_at=now, decided_by=owner_id),
     ])
     await session.flush()
 

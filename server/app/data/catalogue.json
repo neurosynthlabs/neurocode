@@ -2,139 +2,225 @@
   "permissions": [
     {
       "id": "plans:compile",
-      "group": "Work",
+      "group": "Build",
+      "module": "Build",
+      "sub": "Planning",
+      "verb": "write",
       "label": "Compile requirements",
-      "description": "Turn a requirement into a plan and its task."
+      "description": "Author the work: turn a requirement into a plan and its task, and design a Blueprint."
     },
     {
       "id": "plans:decide",
-      "group": "Work",
+      "group": "Build",
+      "module": "Build",
+      "sub": "Planning",
+      "verb": "decide",
       "label": "Steer plans",
       "description": "Answer or defer a plan’s questions, re-compile it and dispatch it."
     },
     {
       "id": "tasks:write",
-      "group": "Work",
+      "group": "Build",
+      "module": "Build",
+      "sub": "Planning",
+      "verb": "write",
       "label": "Move tasks",
       "description": "Change a task’s status and tick its checklist."
     },
     {
       "id": "runs:run",
-      "group": "Work",
+      "group": "Build",
+      "module": "Build",
+      "sub": "Execution",
+      "verb": "write",
       "label": "Run agents",
       "description": "Start an agent run in its own worktree, stop it, and discard its branch."
     },
     {
       "id": "sessions:chat",
-      "group": "Work",
+      "group": "Build",
+      "module": "Build",
+      "sub": "Execution",
+      "verb": "use",
       "label": "Use sessions",
       "description": "Ask in a session and let it read this project’s code with the tools."
     },
     {
+      "id": "sessions:read",
+      "group": "Build",
+      "module": "Build",
+      "sub": "Execution",
+      "verb": "use",
+      "label": "Read other people’s sessions",
+      "description": "Open a session someone else started, and its transcript, files and export. Your own are always yours."
+    },
+    {
       "id": "workflows:write",
-      "group": "Work",
+      "group": "Build",
+      "module": "Build",
+      "sub": "Execution",
+      "verb": "write",
       "label": "Write workflows",
       "description": "Create, edit and archive workflows. Running one needs the plan permissions."
     },
     {
       "id": "approvals:decide",
-      "group": "Gates",
+      "group": "Governance",
+      "module": "Governance",
+      "verb": "decide",
       "label": "Approve gated actions",
       "description": "Sign or refuse migrations, deploys and other high-risk actions."
     },
     {
       "id": "runs:merge",
-      "group": "Gates",
+      "group": "Build",
+      "module": "Build",
+      "sub": "Delivery",
+      "verb": "decide",
       "label": "Merge a run",
       "description": "Merge an accepted run’s branch into the repository on this machine."
     },
     {
+      "id": "ops:read",
+      "group": "Build",
+      "module": "Build",
+      "sub": "Delivery",
+      "verb": "use",
+      "label": "See this machine’s delivery",
+      "description": "The DevOps screen: services, checks, deliveries, logs and containers on the machine the API runs on."
+    },
+    {
       "id": "decisions:make",
-      "group": "Gates",
+      "group": "Build",
+      "module": "Build",
+      "sub": "Quality",
+      "verb": "decide",
       "label": "Give final verdicts",
-      "description": "Accept a review or send it back, and open or cancel the production gate."
+      "description": "Accept a review or send it back, open or cancel the production gate, and mark a test as expected to fail."
     },
     {
       "id": "rules:manage",
-      "group": "Gates",
+      "group": "Governance",
+      "module": "Governance",
+      "verb": "admin",
       "label": "Write tool rules",
       "description": "Allow, ask or deny what agents, sessions and tools may do — edits, commands, web access and MCP calls — for the workspace or one project."
     },
     {
       "id": "memory:write",
       "group": "Knowledge",
+      "module": "Knowledge",
+      "verb": "write",
       "label": "Curate memory",
       "description": "Add, pin and archive facts, and settle conflicts between them."
     },
     {
       "id": "ai:use",
       "group": "Knowledge",
+      "module": "Knowledge",
+      "sub": "Thinking",
+      "verb": "use",
       "label": "Use AI features",
       "description": "Ask memory, brainstorm, and extract facts from text."
     },
     {
       "id": "evals:write",
-      "group": "Knowledge",
+      "group": "Build",
+      "module": "Build",
+      "sub": "Quality",
+      "verb": "write",
       "label": "Write evals",
       "description": "Author eval suites and their cases, and override a result."
     },
     {
       "id": "projects:onboard",
-      "group": "Platform",
+      "group": "Home",
+      "module": "Home",
+      "verb": "write",
       "label": "Onboard projects",
       "description": "Clone or read a repository and measure it."
     },
     {
       "id": "mcp:manage",
       "group": "Platform",
+      "module": "Platform",
+      "sub": "Connections",
+      "verb": "admin",
       "label": "Manage tools",
       "description": "Register MCP servers."
     },
     {
       "id": "agents:manage",
-      "group": "Platform",
+      "group": "Build",
+      "module": "Build",
+      "sub": "Execution",
+      "verb": "admin",
       "label": "Manage custom agents",
       "description": "Write the workspace's and projects' own agents: their prompts, lanes and the tools they may ask for — never more than the tool rules allow."
     },
     {
       "id": "settings:write",
       "group": "Platform",
+      "module": "Platform",
+      "sub": "Extensions",
+      "verb": "write",
       "label": "Change screen settings",
       "description": "Switch skills, plugins, hooks, commands and models on or off."
     },
     {
       "id": "users:manage",
       "group": "Admin",
+      "module": "Admin",
+      "verb": "admin",
       "label": "Manage people",
       "description": "Create accounts, assign roles, reset passwords and disable access."
     },
     {
       "id": "roles:manage",
       "group": "Admin",
+      "module": "Admin",
+      "verb": "admin",
       "label": "Manage roles",
       "description": "Create and edit custom roles."
     },
     {
       "id": "teams:manage",
       "group": "Admin",
+      "module": "Admin",
+      "verb": "admin",
       "label": "Manage teams",
       "description": "Create teams and choose their members."
     },
     {
       "id": "audit:read",
       "group": "Admin",
+      "module": "Admin",
+      "verb": "use",
       "label": "Read the audit log",
       "description": "See who signed in and who changed access, keys or settings."
     },
     {
+      "id": "people:read",
+      "group": "Admin",
+      "module": "Admin",
+      "verb": "use",
+      "label": "See who is in the workspace",
+      "description": "The directory: names, roles and teams. Changing any of them needs Manage people."
+    },
+    {
       "id": "workspace:admin",
       "group": "Admin",
+      "module": "Admin",
+      "verb": "admin",
       "label": "Administer the workspace",
       "description": "The workspace name, AI providers and keys, and resetting data."
     },
     {
       "id": "machine:access",
-      "group": "Admin",
+      "group": "Build",
+      "module": "Build",
+      "sub": "Execution",
+      "verb": "use",
       "label": "Use this machine",
       "description": "Browse and open folders on the machine the API runs on, edit files there, open a terminal, and run or debug a project."
     }
@@ -167,7 +253,10 @@
         "teams:manage",
         "audit:read",
         "workspace:admin",
-        "machine:access"
+        "machine:access",
+        "ops:read",
+        "sessions:read",
+        "people:read"
       ]
     },
     {
@@ -196,7 +285,10 @@
         "roles:manage",
         "teams:manage",
         "audit:read",
-        "workspace:admin"
+        "workspace:admin",
+        "ops:read",
+        "sessions:read",
+        "people:read"
       ]
     },
     {
@@ -219,7 +311,9 @@
         "agents:manage",
         "settings:write",
         "workflows:write",
-        "evals:write"
+        "evals:write",
+        "ops:read",
+        "sessions:read"
       ]
     },
     {
@@ -233,14 +327,19 @@
         "memory:write",
         "ai:use",
         "sessions:chat",
-        "evals:write"
+        "evals:write",
+        "ops:read",
+        "sessions:read"
       ]
     },
     {
       "id": "viewer",
       "name": "Viewer",
       "description": "Reads everything and changes nothing.",
-      "permissions": []
+      "permissions": [
+        "ops:read",
+        "sessions:read"
+      ]
     }
   ],
   "agents": [

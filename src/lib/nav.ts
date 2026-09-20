@@ -1,3 +1,9 @@
+/**
+ * The product's own map. This file is one half of a pair: the other is
+ * `server/app/data/catalogue.json`, where every permission names the `module` and `sub` it belongs
+ * to — these exact words. A right filed under a module the sidebar does not have is a right nobody
+ * can find, so a test holds the two against each other (server/tests/test_rights_by_module.py).
+ */
 export type NavSection = 'Home' | 'Build' | 'Knowledge' | 'Platform' | 'Governance' | 'Admin';
 
 export interface NavItem {
@@ -30,7 +36,7 @@ export const NAV: NavItem[] = [
   { section: 'Build', sub: 'Quality',    to: '/review',    label: 'Review',          icon: 'ScanEye',       keywords: 'code review solid findings approve changes' },
   { section: 'Build', sub: 'Quality',    to: '/evals',     label: 'Evals',           icon: 'Gauge',         keywords: 'benchmark score regression quality judge' },
   { section: 'Build', sub: 'Delivery',   to: '/git',       label: 'Git & Worktrees', icon: 'GitMerge',      keywords: 'branches merge pr diff commits isolation' },
-  { section: 'Build', sub: 'Delivery',   to: '/devops',    label: 'DevOps',          icon: 'Rocket',        keywords: 'docker ci cd deploy environments logs secrets' },
+  { section: 'Build', sub: 'Delivery',   to: '/devops',    label: 'DevOps',          icon: 'Rocket',        perm: ['ops:read'],      keywords: 'docker ci cd deploy environments logs secrets' },
 
   { section: 'Knowledge', to: '/memory',       label: 'Memory',            icon: 'Brain',   keywords: 'facts decisions recall long term human preferences extract add from text' },
   { section: 'Knowledge', to: '/knowledge',    label: 'Knowledge',         icon: 'Library', keywords: 'documents pdf meeting notes tickets ingestion rag' },
@@ -41,7 +47,7 @@ export const NAV: NavItem[] = [
 
   { section: 'Platform', sub: 'Extensions',  to: '/skills',   label: 'Skills',          icon: 'Sparkles',    keywords: 'capability packs procedures triggers reusable' },
   { section: 'Platform', sub: 'Extensions',  to: '/commands', label: 'Commands',        icon: 'SquareSlash', keywords: 'slash custom shortcuts macros' },
-  { section: 'Platform', sub: 'Extensions',  to: '/hooks',    label: 'Hooks',           icon: 'Webhook',     keywords: 'pretooluse posttooluse events automation guard' },
+  { section: 'Platform', sub: 'Extensions',  to: '/hooks',    label: 'Hooks',           icon: 'Webhook',     perm: ['settings:write'], keywords: 'pretooluse posttooluse events automation guard' },
   { section: 'Platform', sub: 'Extensions',  to: '/plugins',  label: 'Plugins',         icon: 'Blocks',      keywords: 'marketplace install packs extensions' },
   { section: 'Platform', sub: 'Connections', to: '/mcp',      label: 'MCP & Tools',     icon: 'Plug',        keywords: 'model context protocol servers filesystem sql playwright' },
   { section: 'Platform', sub: 'Connections', to: '/models',   label: 'Models & Router', icon: 'Cpu',         keywords: 'lanes groq cerebras gemini deepseek routing keys local ollama' },
@@ -51,9 +57,9 @@ export const NAV: NavItem[] = [
   { section: 'Governance', to: '/sessions',    label: 'Sessions',     icon: 'History',     keywords: 'checkpoints rewind resume fork transcript' },
   { section: 'Governance', to: '/settings',    label: 'Settings',     icon: 'Settings',    keywords: 'general appearance notifications preferences' },
 
-  { section: 'Admin', to: '/admin/users',     label: 'People',              icon: 'Users',        perm: ['users:manage', 'teams:manage'], keywords: 'users accounts invite members disable reset password' },
+  { section: 'Admin', to: '/admin/users',     label: 'People',              icon: 'Users',        perm: ['people:read', 'users:manage', 'teams:manage'], keywords: 'users accounts invite members disable reset password' },
   { section: 'Admin', to: '/admin/roles',     label: 'Roles & permissions', icon: 'KeyRound',     perm: ['roles:manage', 'users:manage'], keywords: 'rbac access control custom role grant' },
-  { section: 'Admin', to: '/admin/teams',     label: 'Teams',               icon: 'UsersRound',   perm: ['teams:manage', 'users:manage'], keywords: 'groups squads members' },
+  { section: 'Admin', to: '/admin/teams',     label: 'Teams',               icon: 'UsersRound',   perm: ['people:read', 'teams:manage', 'users:manage'], keywords: 'groups squads members' },
   { section: 'Admin', to: '/admin/ai',        label: 'AI providers',        icon: 'BrainCircuit', perm: ['workspace:admin'],              keywords: 'deepseek ollama api key model routing offline test connection' },
   { section: 'Admin', to: '/admin/audit',     label: 'Audit log',           icon: 'FileClock',    perm: ['audit:read'],                   keywords: 'security sign in history who changed access' },
   { section: 'Admin', to: '/admin/workspace', label: 'Workspace',           icon: 'Building2',    perm: ['workspace:admin'],              keywords: 'name organisation reset data' },

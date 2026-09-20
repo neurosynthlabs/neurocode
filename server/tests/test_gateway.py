@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -19,7 +20,15 @@ import pytest
 
 from app.ai import gateway as gateway_module
 from app.ai import lanes
-from app.ai.gateway import Gateway, NoModel, OutOfBudget, ProviderError, Stopped, extract_json
+from app.ai.gateway import (
+    Gateway,
+    LaneTooSlow,
+    NoModel,
+    OutOfBudget,
+    ProviderError,
+    Stopped,
+    extract_json,
+)
 from app.ai.ledger import MemoryLedger
 from app.secrets import Secrets
 
@@ -32,6 +41,10 @@ class Provider:
         self.replies: list[tuple[int, Any]] = []
         self.sent: list[dict[str, Any]] = []
         self.models = ["qwen2.5-coder:7b"]
+        #: Seconds of silence before a whole answer, and between the pieces of a streamed one. A
+        #: provider that goes soft does not stop sending — that is why a socket timeout never fires.
+        self.stall = 0.0
+        self.drip = 0.0
         provider = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -50,6 +63,8 @@ class Provider:
                 size = int(self.headers.get("Content-Length") or 0)
                 provider.sent.append(json.loads(self.rfile.read(size)))
                 status, body = provider.replies.pop(0)
+                if provider.stall:
+                    time.sleep(provider.stall)
                 if isinstance(body, list):
                     self.send_response(status)
                     self.send_header("Content-Type", "text/event-stream")
@@ -58,6 +73,8 @@ class Provider:
                         try:
                             self.wfile.write(chunk.encode() + b"\n")
                             self.wfile.flush()
+                            if provider.drip:
+                                time.sleep(provider.drip)
                         except OSError:                   # the reader hung up: it was stopped
                             return
                     return
@@ -270,3 +287,168 @@ def test_thinking_is_said_in_each_lanes_own_words():
     assert lanes.thinking(store, "chat") == "max"
     assert lanes.thinking(store, "review") == "high"            # an unknown level falls back to the default
     assert lanes.thinking(store, "brainstorm") == "off"
+
+
+# ── slow, not wrong: the wall clock and the breaker ──────────────
+
+def _two_free_lanes(provider: Provider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Gateway:
+    """Groq and Cerebras, both pointed at the local server, so a chain really has somewhere to go."""
+    for lane in lanes.LANES:
+        if lane.env:
+            monkeypatch.delenv(lane.env, raising=False)
+    monkeypatch.setenv("NEUROCODE_COMPILER", "free")
+    secrets = Secrets(tmp_path / "secrets.json")
+    secrets.set("groq_api_key", "test-key")
+    secrets.set("cerebras_api_key", "test-key")
+    return Gateway(MemoryLedger({"ai.lane.groq": {"baseUrl": provider.url},
+                                 "ai.lane.cerebras": {"baseUrl": provider.url}}), secrets)
+
+
+def test_a_lane_that_dribbles_for_ever_is_cut_off_by_the_wall_clock(gateway: Gateway, provider: Provider,
+                                                                    monkeypatch: pytest.MonkeyPatch):
+    """The socket timeout was never the limit: every piece that arrives resets it.
+
+    A provider that keeps sending, slowly, used to hold the call open for as long as it liked — and
+    with it the request, the session at "thinking" and the connection that request was holding."""
+    monkeypatch.setattr(gateway_module, "LANE_SECONDS", 0.4)
+    provider.drip = 0.05
+    provider.replies.append((200, sse(*({"choices": [{"delta": {"content": "."}}]} for _ in range(400)))))
+
+    started = time.monotonic()
+    with pytest.raises(ProviderError) as failed:
+        gateway.ask(ASK, extract_json, feature="chat", on_delta=lambda *_: None)
+    assert time.monotonic() - started < 5            # not 400 × 0.05 seconds, and not 120 either
+    assert "LaneTooSlow" in str(failed.value) and "0.4 seconds" in str(failed.value)
+    assert issubclass(LaneTooSlow, TimeoutError)
+
+
+def test_a_lane_that_did_not_answer_rests_and_says_so_instead_of_being_chosen_again(
+        gateway: Gateway, provider: Provider):
+    """The breaker used to know one thing only: a key the provider refused. A lane that is simply not
+    answering was recorded, forgotten, and asked first again on the very next call."""
+    provider.replies.append((503, {"error": "upstream is down"}))
+    with pytest.raises(ProviderError):
+        gateway.ask(ASK, extract_json, feature="compile")
+
+    blocked = gateway.why_not(gateway.lane("deepseek"))
+    assert blocked is not None and "HTTP 503" in blocked and "trying it again in" in blocked
+    assert [row for row in gateway.report() if row["id"] == "deepseek"][0]["ready"] is False
+    assert gateway.chain() == []                     # so the router does not offer it
+    assert gateway.status()["lanes"] == 0
+
+    with pytest.raises(NoModel):                     # and nothing asks it again while it rests
+        gateway.ask(ASK, extract_json, feature="compile")
+    assert len(provider.sent) == 1
+
+
+def test_a_lane_answering_too_many_calls_a_minute_rests_too(gateway: Gateway, provider: Provider):
+    """A 429 is the provider saying "not now" — resting it is what it asked for."""
+    provider.replies.append((429, {"error": "rate limit exceeded"}))
+    with pytest.raises(ProviderError):
+        gateway.ask(ASK, extract_json, feature="compile")
+    assert "rate-limiting this key" in (gateway.why_not(gateway.lane("deepseek")) or "")
+
+
+def test_a_refusal_about_the_request_leaves_the_lane_where_it_is(gateway: Gateway, provider: Provider):
+    """A 400 is about what we sent. Resting the lane for it would punish the only lane that answers."""
+    provider.replies += [(400, {"error": {"message": "this conversation is longer than the context"}}),
+                         (200, completion('{"ok": true}'))]
+    with pytest.raises(ProviderError):
+        gateway.ask(ASK, extract_json, feature="agent")
+    assert gateway.why_not(gateway.lane("deepseek")) is None
+    assert gateway.ask(ASK, extract_json, feature="agent").data == {"ok": True}
+
+
+def test_a_lane_that_answers_the_test_call_stops_resting(gateway: Gateway, provider: Provider):
+    """Admin → AI providers presses Test. A lane that answers it is well, whatever it did a minute ago."""
+    provider.replies += [(500, {"error": "boom"}), (200, completion('{"ok": true}'))]
+    with pytest.raises(ProviderError):
+        gateway.ask(ASK, extract_json, feature="compile")
+    assert gateway.why_not(gateway.lane("deepseek")) is not None
+    assert gateway.test("deepseek")["ok"] is True
+    assert gateway.why_not(gateway.lane("deepseek")) is None
+
+
+def test_the_chain_stops_when_its_budget_is_spent_rather_than_asking_every_lane(
+        provider: Provider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Three lanes each allowed their own minutes is not a fallback, it is a queue a person waits in."""
+    monkeypatch.setattr(gateway_module, "LANE_SECONDS", 0.4)
+    monkeypatch.setattr(gateway_module, "CHAIN_SECONDS", 0.5)
+    monkeypatch.setattr(gateway_module, "LEAST_SECONDS", 0.2)
+    gw = _two_free_lanes(provider, tmp_path, monkeypatch)
+    assert len(gw.chain(limit=3)) >= 2                       # there really is a second lane to skip
+    provider.stall = 1.5
+    provider.replies += [(200, completion('{"ok": true}')), (200, completion('{"ok": true}'))]
+
+    started = time.monotonic()
+    with pytest.raises(ProviderError) as failed:
+        gw.ask(ASK, extract_json, feature="compile")
+    assert time.monotonic() - started < 3
+    assert "no time left to ask another lane" in str(failed.value)
+    assert len(provider.sent) == 1                           # the second lane was never opened
+
+
+def test_with_no_model_the_rules_still_answer_when_the_chain_runs_out_of_time(
+        provider: Provider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """`run` has an honest offline answer, so a spent budget reaches it rather than raising."""
+    monkeypatch.setattr(gateway_module, "LANE_SECONDS", 0.3)
+    monkeypatch.setattr(gateway_module, "CHAIN_SECONDS", 0.4)
+    monkeypatch.setattr(gateway_module, "LEAST_SECONDS", 0.2)
+    gw = _two_free_lanes(provider, tmp_path, monkeypatch)
+    provider.stall = 1.5
+    provider.replies += [(200, completion('{"ok": true}')), (200, completion('{"ok": true}'))]
+
+    result = gw.run(ASK, extract_json, lambda: {"by": "rules"}, feature="compile")
+    assert result.data == {"by": "rules"} and result.provider.id == "rules"
+    assert result.fallback is not None and "no time left to ask another lane" in result.fallback
+
+
+# ── the cost of choosing a lane ──────────────────────────────────
+
+class Counting(MemoryLedger):
+    """A ledger that says how often it was really asked."""
+
+    def __init__(self, settings: dict[str, Any] | None = None) -> None:
+        super().__init__(settings)
+        self.reads = 0
+
+    def setting(self, key: str, default: Any = None) -> Any:
+        self.reads += 1
+        return super().setting(key, default)
+
+
+def test_choosing_a_lane_reads_each_setting_once_and_not_once_per_question(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Settling eight lanes, asking each whether it is switched off and what it has spent was dozens
+    of round trips for one question, and 350 for the Models & Router screen — all through the
+    gateway's own two-connection pool, which is what made that screen and four working agents wait on
+    each other."""
+    monkeypatch.delenv("NEUROCODE_COMPILER", raising=False)
+    for lane in lanes.LANES:
+        if lane.env:
+            monkeypatch.delenv(lane.env, raising=False)
+    counted = Counting({"ai.lane.deepseek": {"baseUrl": "http://nowhere"}})
+    gw = Gateway(counted, Secrets(tmp_path / "s.json"))
+
+    gw.chain(role=lanes.WRITE)
+    once = counted.reads
+    assert once <= len(lanes.IDS) + 4              # a read per lane, and the few keys beside them
+
+    gw.chain(role=lanes.WRITE)
+    gw.report()
+    gw.status()
+    assert counted.reads == once                   # the same rows, not asked again
+
+
+def test_a_lane_an_admin_saves_is_the_lane_the_next_call_uses(tmp_path: Path,
+                                                              monkeypatch: pytest.MonkeyPatch):
+    """Remembering is only safe if a write is seen at once: Admin → AI providers saves through the
+    same object, so the row it replaced is dropped rather than believed for another two seconds."""
+    monkeypatch.delenv("NEUROCODE_COMPILER", raising=False)
+    gw = Gateway(MemoryLedger(), Secrets(tmp_path / "s.json"))
+    assert gw.lane("deepseek").model == "deepseek-flash"
+    gw.store.save_setting("ai.lane.deepseek", {"model": "deepseek-v4-pro"})
+    assert gw.lane("deepseek").model == "deepseek-v4-pro"
+    assert gw.preference() == "auto"
+    gw.store.save_setting("ai.preference", "free")
+    assert gw.preference() == "free"

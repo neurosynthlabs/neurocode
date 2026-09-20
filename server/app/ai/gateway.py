@@ -9,6 +9,12 @@ Two things follow from having many lanes. A call that fails moves to the next la
 straight to the offline rules. And agents working at the same time are *spread* across lanes, so four
 agents are four providers answering at once, not four requests queued behind one rate limit.
 
+Slow counts as failed. Every call carries a **wall-clock budget** — one lane's, and the whole chain's
+— because a socket timeout is per read and a provider that dribbles a byte at a time resets it for
+ever. And a lane that fails for its own reasons rather than this request's — no answer, a refused
+connection, a 429, a 5xx — is **rested** for a minute instead of being chosen first again on the very
+next call, and says so on Models & Router rather than still reading "ready".
+
 A call may also **stream**: given `on_delta`, the provider's answer and its reasoning arrive as they are
 written, and `stop` can end it halfway. Only the real provider calls stream — a stand-in, or a lane with
 no streaming shape, answers whole, and the result says it did (`streamed`). Either way the ledger gets
@@ -29,14 +35,14 @@ from typing import Any, Generic, TypeVar
 
 from ..secrets import Secrets
 from . import lanes
-from .ledger import Ledger
+from .ledger import Ledger, Remembered
 
 log = logging.getLogger(__name__)
 from .lanes import CHAT, PLAN, REVIEW, WRITE, Lane
 
 T = TypeVar("T")
-__all__ = ["CHAT", "PLAN", "REVIEW", "WRITE", "Gateway", "NoModel", "OutOfBudget", "Provider", "ProviderError",
-           "Reply", "Result", "Stopped", "clip", "extract_json"]
+__all__ = ["CHAT", "PLAN", "REVIEW", "WRITE", "Gateway", "LaneTooSlow", "NoModel", "OutOfBudget", "Provider",
+           "ProviderError", "Reply", "Result", "Stopped", "clip", "extract_json"]
 
 # "auto" spreads over every usable lane; "free" refuses to spend money; "local" never leaves this
 # machine; "rules" asks no model at all; a lane's own id pins every call to it.
@@ -81,6 +87,18 @@ class ProviderError(RuntimeError):
         self.body = body
 
 
+class LaneTooSlow(TimeoutError):
+    """This lane spent its whole wall-clock budget and had not finished.
+
+    `urlopen`'s timeout is per socket operation, not a deadline: a provider that sends one byte every
+    thirty seconds resets it every time and is never cut off. The budget below is the real limit, and
+    a lane that hits it is sick rather than wrong — the caller rests it and asks the next lane."""
+
+    def __init__(self, seconds: float) -> None:
+        super().__init__(f"it had not finished after {seconds:g} seconds")
+        self.seconds = seconds
+
+
 class OutOfBudget(RuntimeError):
     """The model spent its whole token budget reasoning and wrote no answer.
 
@@ -102,12 +120,54 @@ class Stopped(RuntimeError):
         self.reply = reply
 
 
-def _post(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+#: How long one lane may take to answer, and how long a whole chain of lanes may take, before the
+#: caller stops waiting. A person watching a session tires long before a socket does.
+LANE_SECONDS = 90.0
+CHAIN_SECONDS = 180.0
+#: With less than this left of the chain's budget, the next lane is not worth opening a socket for:
+#: it would be cut off before it finished, and the person would have waited for nothing.
+LEAST_SECONDS = 1.0
+#: How long a lane rests after a failure that is about the lane rather than about the request — a
+#: timeout, a refused connection, a 429, a 5xx. Short, because a provider that went soft usually
+#: comes back; long enough that a chain of three lanes does not pick the sick one first every turn.
+COOLDOWN_SECONDS = 60.0
+
+
+class _Budget:
+    """One lane's wall clock. Every read is bounded by what is left of it, so the total really is.
+
+    Handed around rather than a plain number of seconds: the point is the deadline, and a per-socket
+    timeout re-derived from it is the only way `urllib` can be made to respect one."""
+
+    def __init__(self, seconds: float | None = None) -> None:
+        self.seconds = float(seconds) if seconds else LANE_SECONDS
+        self.until = time.monotonic() + self.seconds
+
+    def left(self) -> float:
+        left = self.until - time.monotonic()
+        if left <= 0:
+            raise LaneTooSlow(self.seconds)
+        return left
+
+
+def _read(response: Any, clock: _Budget) -> bytes:
+    """The whole body, in pieces, so a provider that dribbles is cut off at the deadline rather than
+    resetting the socket timeout with every byte it sends."""
+    out = bytearray()
+    while True:
+        clock.left()
+        piece = response.read(65_536)
+        if not piece:
+            return bytes(out)
+        out += piece
+
+
+def _post(url: str, payload: dict[str, Any], headers: dict[str, str], clock: _Budget) -> dict[str, Any]:
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST",
                                  headers={"Content-Type": "application/json", **headers})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read())
+        with urllib.request.urlopen(req, timeout=clock.left()) as r:
+            return json.loads(_read(r, clock))
     except urllib.error.HTTPError as e:  # the body says why: a bad key, no balance, an unknown model
         raise ProviderError(e.code, e.read()[:200].decode(errors="replace")) from e
 
@@ -176,9 +236,10 @@ def call_openai(messages: list[dict[str, str]], cfg: dict[str, Any]) -> Reply:
     body = _body(messages, cfg, stream=False)
     url = f"{cfg['baseUrl']}/chat/completions"
     headers = {"Authorization": f"Bearer {cfg['key']}"}
+    clock = _Budget(cfg.get("seconds"))
     for _ in range(len(OPTIONAL) + 1):
         try:
-            out = _post(url, body, headers, 120)
+            out = _post(url, body, headers, clock)
             break
         except ProviderError as e:  # a field this lane does not take: ask again without it
             if (name := _refusal(e, body)) is None:
@@ -197,12 +258,12 @@ def call_openai(messages: list[dict[str, str]], cfg: dict[str, Any]) -> Reply:
 Delta = Callable[[str, str], None]
 
 
-def _lines(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float):
+def _lines(url: str, payload: dict[str, Any], headers: dict[str, str], clock: _Budget):
     """The response's lines as they arrive — a context manager, so a stop closes the socket."""
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST",
                                  headers={"Content-Type": "application/json", **headers})
     try:
-        return urllib.request.urlopen(req, timeout=timeout)
+        return urllib.request.urlopen(req, timeout=clock.left())
     except urllib.error.HTTPError as e:
         raise ProviderError(e.code, e.read()[:200].decode(errors="replace")) from e
 
@@ -246,9 +307,10 @@ def stream_openai(messages: list[dict[str, str]], cfg: dict[str, Any], on_delta:
     body = _body(messages, cfg, stream=True)
     url = f"{cfg['baseUrl']}/chat/completions"
     headers = {"Authorization": f"Bearer {cfg['key']}", "Accept": "text/event-stream"}
+    clock = _Budget(cfg.get("seconds"))
     for _ in range(len(OPTIONAL) + 1):
         try:
-            response = _lines(url, body, headers, 120)
+            response = _lines(url, body, headers, clock)
             break
         except ProviderError as e:
             if (name := _refusal(e, body)) is None:
@@ -258,6 +320,7 @@ def stream_openai(messages: list[dict[str, str]], cfg: dict[str, Any], on_delta:
     with response:
         for raw in response:
             got.check()
+            clock.left()           # a lane that trickles for ever is a lane that never finishes
             line = raw.decode(errors="replace").strip()
             if not line.startswith("data:"):
                 continue                      # a keep-alive comment, or the blank line between events
@@ -278,18 +341,21 @@ def stream_openai(messages: list[dict[str, str]], cfg: dict[str, Any], on_delta:
 def embed_openai(texts: list[str], cfg: dict[str, Any]) -> tuple[list[list[float]], int]:
     """Vectors for a batch of texts, in the shape every OpenAI-compatible lane speaks."""
     out = _post(f"{cfg['baseUrl']}/embeddings", {"model": cfg["embed"], "input": texts},
-                {"Authorization": f"Bearer {cfg['key']}"}, 120)
+                {"Authorization": f"Bearer {cfg['key']}"}, _Budget(cfg.get("seconds") or 120))
     return [row["embedding"] for row in out["data"]], (out.get("usage") or {}).get("prompt_tokens", 0)
 
 
 def embed_ollama(texts: list[str], cfg: dict[str, Any]) -> tuple[list[list[float]], int]:
-    out = _post(f"{cfg['url']}/api/embed", {"model": cfg["embed"], "input": texts}, {}, 300)
+    out = _post(f"{cfg['url']}/api/embed", {"model": cfg["embed"], "input": texts}, {},
+                _Budget(cfg.get("seconds") or 300))
     return out["embeddings"], out.get("prompt_eval_count", 0)
 
 
 def call_ollama(messages: list[dict[str, str]], cfg: dict[str, Any]) -> Reply:
+    # The local lane gets longer by default: it loads a model off this machine's disk before it starts.
     body = _post(f"{cfg['url']}/api/chat", {"model": cfg["model"], "messages": messages, "format": "json",
-                                            "stream": False, "options": {"temperature": 0.2}}, {}, 300)
+                                            "stream": False, "options": {"temperature": 0.2}}, {},
+                 _Budget(cfg.get("seconds") or 300))
     message = body.get("message") or {}
     # A thinking model on Ollama puts its reasoning in `message.thinking`; it is shown when it is there.
     return Reply(message.get("content") or "", {"in": body.get("prompt_eval_count", 0),
@@ -300,12 +366,14 @@ def call_ollama(messages: list[dict[str, str]], cfg: dict[str, Any]) -> Reply:
 def stream_ollama(messages: list[dict[str, str]], cfg: dict[str, Any], on_delta: Delta,
                   stop: Callable[[], bool] | None = None) -> Reply:
     """Ollama streams one JSON object a line, and counts the tokens in the last one (`done: true`)."""
+    clock = _Budget(cfg.get("seconds") or 300)
     response = _lines(f"{cfg['url']}/api/chat", {"model": cfg["model"], "messages": messages, "format": "json",
-                                                 "stream": True, "options": {"temperature": 0.2}}, {}, 300)
+                                                 "stream": True, "options": {"temperature": 0.2}}, {}, clock)
     got = _Collect(on_delta, stop)
     with response:
         for raw in response:
             got.check()
+            clock.left()
             if not raw.strip():
                 continue
             chunk = json.loads(raw)
@@ -369,10 +437,51 @@ def _ms(t0: float) -> int:
     return round((time.monotonic() - t0) * 1000)
 
 
+def _int(value: Any) -> int:
+    """A count as a whole number, whatever a provider sent. A token count arriving as `"1200"`, as a
+    float, or not at all is not worth losing a ledger line over — and `int()` alone raises on the
+    first two. What cannot be read as a number at all is no count, which is zero."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _out_of_time(reason: str | None) -> str:
+    """What to say when the lanes left are not worth starting: the chain's budget is spent.
+
+    The reason the last lane gave is kept in front of it — "groq failed (…)" and then "and there was
+    no time left to ask another" is the whole story; either half alone is a puzzle."""
+    spent = f"no lane answered within {CHAIN_SECONDS:g} seconds"
+    return f"{reason}, and there was no time left to ask another lane" if reason else spent
+
+
+def _sick(e: Exception) -> str | None:
+    """Why this failure is the *lane's* and not this request's — or None when it is the request's.
+
+    The difference decides whether the lane rests. A model that wrote invalid JSON, or thought past
+    its budget, will very likely do better on the next prompt; a lane that did not answer at all, or
+    that is rate-limiting the key, or whose provider returned a 5xx, will do the same thing again in
+    a second's time, and choosing it first every turn is how one soft provider makes every session
+    slow. A 4xx that is not a 429 is about what we sent, so the lane keeps its place."""
+    if isinstance(e, ProviderError):
+        if e.status == 429:
+            return "it is rate-limiting this key"
+        return f"its provider answered HTTP {e.status}" if e.status >= 500 else None
+    if isinstance(e, LaneTooSlow):
+        return f"it did not answer within {e.seconds:g} seconds"
+    if isinstance(e, (TimeoutError, OSError)):   # URLError, a refused connection, a dropped socket
+        return "it is not answering"
+    return None
+
+
 class Gateway:
     def __init__(self, ledger: Ledger, secrets: Secrets) -> None:
-        self.store, self.secrets = ledger, secrets
+        # Wrapped, not used raw: routing asks the same handful of settings dozens of times to answer
+        # one question, and every one of them was a round trip (see `ledger.Remembered`).
+        self.store, self.secrets = Remembered(ledger), secrets
         self._rejected: dict[str, str] = {}          # lane id → fingerprint of the key it refused
+        self._resting: dict[str, tuple[float, str]] = {}   # lane id → until when, and why it is resting
         self._recent: dict[str, list[float]] = {}    # lane id → when it was called, this last minute
         self._ollama_seen: tuple[float, str, bool] = (-1e9, "", False)
         self._turn = 0                               # so two agents starting together get two lanes
@@ -402,10 +511,12 @@ class Gateway:
         """Every feature's thinking level, as it stands — for Models & Router."""
         return {feature: self.thinking(feature) for feature in lanes.THINKING_FEATURES}
 
-    def _asked(self, lane_id: str, feature: str) -> dict[str, Any]:
-        """The provider call's configuration for this feature: the lane's, plus how hard to think."""
+    def _asked(self, lane_id: str, feature: str, seconds: float | None = None) -> dict[str, Any]:
+        """The provider call's configuration for this feature: the lane's, how hard to think, and how
+        long it may take — what is left of the chain's budget, so three lanes cannot each spend it."""
         lane = self.lane(lane_id)
-        return {**self.config(lane_id), "thinking": self.thinking(feature), "thinks": lane.thinks if lane else ""}
+        return {**self.config(lane_id), "thinking": self.thinking(feature),
+                "thinks": lane.thinks if lane else "", "seconds": seconds}
 
     def deepseek(self) -> dict[str, Any]:
         cfg = self.config("deepseek")
@@ -426,7 +537,31 @@ class Gateway:
         return bool(key) and self._rejected.get(lane_id) == _fp(key)
 
     def forget_rejection(self, lane_id: str | None = None) -> None:
-        self._rejected.pop(lane_id, None) if lane_id else self._rejected.clear()
+        """A key or an address was just changed, so give the lane a clean slate — both the refused key
+        and the rest it was put on. The thing that made it sick may be exactly what was edited."""
+        if lane_id:
+            self._rejected.pop(lane_id, None)
+            self._resting.pop(lane_id, None)
+        else:
+            self._rejected.clear()
+            self._resting.clear()
+
+    def resting(self, lane_id: str) -> str | None:
+        """Why this lane is being left alone for a moment, in words, or None when it is not.
+
+        The breaker only ever knew about a rejected key, so a lane that had gone quiet or was
+        answering 5xx was chosen first again on the very next call and every screen still called it
+        ready. This is the other half: a lane that failed for its own reasons says so until it is
+        worth trying again."""
+        until, why = self._resting.get(lane_id, (0.0, ""))
+        left = until - time.monotonic()
+        if left <= 0:
+            self._resting.pop(lane_id, None)
+            return None
+        return f"{why} — trying it again in {max(1, round(left))}s"
+
+    def _rest(self, lane_id: str, why: str) -> None:
+        self._resting[lane_id] = (time.monotonic() + COOLDOWN_SECONDS, why)
 
     def ollama_ready(self) -> bool:
         """Is an Ollama server up with the configured model pulled? Remembered for 30 seconds."""
@@ -461,6 +596,10 @@ class Gateway:
         """Why this lane cannot take the next call — or None, meaning it can."""
         if not lanes.enabled(self.store, lane.id):
             return "switched off"
+        # Before the key and the allowances, because a lane that is not answering is not answering
+        # whatever its key says — and this is the one the admin screen most needs to see.
+        if (rest := self.resting(lane.id)) is not None:
+            return rest
         if lane.api == "ollama":
             return None if self.ollama_ready() else "no model pulled on this machine"
         if lane.needs_key and not lanes.key_of(lane, self.secrets):
@@ -545,9 +684,10 @@ class Gateway:
 
     # ── calls ────────────────────────────────────────────────────
     def _call(self, provider: Provider, messages: list[dict[str, str]], feature: str,
-              on_delta: Delta | None, stop: Callable[[], bool] | None) -> Reply:
+              on_delta: Delta | None, stop: Callable[[], bool] | None,
+              seconds: float | None = None) -> Reply:
         """The provider call itself: streamed when asked for and the lane's real call is in place."""
-        cfg = self._asked(provider.id, feature)
+        cfg = self._asked(provider.id, feature, seconds)
         real, streaming = STREAMS.get(provider.id, (None, None))
         if on_delta is not None and streaming is not None and CALLS.get(provider.id) is real:
             return streaming(messages, cfg, on_delta, stop)
@@ -555,7 +695,8 @@ class Gateway:
 
     def _try(self, provider: Provider, messages: list[dict[str, str]], parse: Callable[[str], T], feature: str,
              actor: str | None, project: str | None, agent: str = "", run_id: str | None = None,
-             on_delta: Delta | None = None, stop: Callable[[], bool] | None = None) -> Result[T] | str:
+             on_delta: Delta | None = None, stop: Callable[[], bool] | None = None,
+             seconds: float | None = None) -> Result[T] | str:
         """One lane, one attempt. Returns the answer, or the reason it could not be used.
 
         A stop is not a failure of the lane, so it is not handed to the next one: it is ledgered with the
@@ -563,7 +704,7 @@ class Gateway:
         t0, reply = time.monotonic(), Reply("")
         self._recent.setdefault(provider.id, []).append(time.monotonic())
         try:
-            reply = self._call(provider, messages, feature, on_delta, stop)
+            reply = self._call(provider, messages, feature, on_delta, stop, seconds)
             data = parse(reply.text)
         except Stopped as stopped:
             self._record(feature, provider, False, _ms(t0), stopped.reply.usage, actor, project,
@@ -574,6 +715,8 @@ class Gateway:
                 key = lanes.key_of(self.lane(provider.id), self.secrets) if self.lane(provider.id) else None
                 if key:
                     self._rejected[provider.id] = _fp(key)
+            elif (ill := _sick(e)) is not None:
+                self._rest(provider.id, ill)
             if isinstance(e, OutOfBudget) and e.reply is not None:
                 reply = e.reply
             reason = f"{provider.model} failed ({type(e).__name__}: {str(e)[:200]})"
@@ -591,9 +734,14 @@ class Gateway:
         """Ask the best lane and validate its answer. A lane that fails hands the call to the next one;
         when every lane is spent or silent, the rules stand in and say so. Every attempt is ledgered."""
         t0, reason = time.monotonic(), None
+        until = t0 + CHAIN_SECONDS
         for candidate in self.chain(role=role, lane=lane, avoid=avoid):
+            left = until - time.monotonic()
+            if left <= LEAST_SECONDS:
+                reason = _out_of_time(reason)
+                break
             out = self._try(Provider(candidate.id, candidate.model), messages, parse, feature, actor,
-                            project, agent, run_id)
+                            project, agent, run_id, seconds=min(LANE_SECONDS, left))
             if isinstance(out, str):
                 reason = out
                 continue
@@ -617,12 +765,16 @@ class Gateway:
         chain = self.chain(role=role, lane=lane, avoid=avoid)
         if not chain:
             raise NoModel("No model is configured. Add a free key in Admin → AI providers, or pull an Ollama model.")
-        reason = ""
+        reason, until = "", time.monotonic() + CHAIN_SECONDS
         for n, candidate in enumerate(chain):
+            left = until - time.monotonic()
+            if left <= LEAST_SECONDS:
+                reason = _out_of_time(reason)
+                break
             if n and on_delta is not None:
                 on_delta("restart", candidate.id)
             out = self._try(Provider(candidate.id, candidate.model), messages, parse, feature, actor,
-                            project, agent, run_id, on_delta, stop)
+                            project, agent, run_id, on_delta, stop, min(LANE_SECONDS, left))
             if isinstance(out, str):
                 reason = out
                 continue
@@ -652,6 +804,8 @@ class Gateway:
         except Exception as e:
             if isinstance(e, ProviderError) and e.status in (401, 403) and cfg["key"]:
                 self._rejected[chosen.id] = _fp(cfg["key"])
+            elif (ill := _sick(e)) is not None:
+                self._rest(chosen.id, ill)
             self._record("embed", provider, False, _ms(t0), {}, actor, project, f"{type(e).__name__}: {str(e)[:160]}")
             raise
         self._record("embed", provider, True, _ms(t0), {"in": tokens, "out": 0}, actor, project)
@@ -674,25 +828,40 @@ class Gateway:
                  {"role": "user", "content": "ping"}], {**cfg, "thinking": "off", "thinks": lane.thinks}))
             usage = reply.usage
             extract_json(reply.text)
+            # It just answered, so whatever it was resting from is over: an admin pressing Test is the
+            # fastest honest way to bring a lane back before its minute is up.
             self._rejected.pop(lane_id, None)
+            self._resting.pop(lane_id, None)
             self._record("test", provider, True, _ms(t0), usage, actor, None)
             return {"ok": True, "ms": _ms(t0), "detail": f"{cfg['model']} answered."}
         except Exception as e:  # report whatever went wrong; this is a diagnostic
             if isinstance(e, ProviderError) and e.status in (401, 403) and cfg["key"]:
                 self._rejected[lane_id] = _fp(cfg["key"])
+            elif (ill := _sick(e)) is not None:
+                self._rest(lane_id, ill)
             detail = (str(e) or type(e).__name__)[:200]
             self._record("test", provider, False, _ms(t0), usage, actor, None, detail)
             return {"ok": False, "ms": _ms(t0), "detail": detail}
 
     def _record(self, feature: str, provider: Provider, ok: bool, ms: int, usage: Usage, actor: str | None,
                 project: str | None, error: str = "", agent: str = "", run_id: str | None = None) -> None:
-        """One line in the usage ledger. The ledger must never break the feature it measures."""
+        """One line in the usage ledger. The ledger must never break the feature it measures.
+
+        The counts are a provider's word, and a provider is occasionally wrong: a negative token count,
+        or a cached part reported larger than the whole it came out of. The ledger's table now refuses
+        both outright, so believing one of these would not price the call wrongly — it would lose the
+        line entirely, which is the quieter and worse of the two failures. Each count is taken down to
+        the nearest number that can be true before it is written: never below zero, and a part never
+        larger than its whole. Nothing is invented; an impossible figure is read as the floor.
+        """
+        counted = {k: max(0, _int(usage.get(k))) for k in ("in", "out", "cached", "reasoning")}
         try:
-            self.store.record(feature=feature, lane=provider.id, model=provider.model, ok=ok, ms=ms,
-                              tokens_in=int(usage.get("in") or 0), tokens_out=int(usage.get("out") or 0),
+            self.store.record(feature=feature, lane=provider.id, model=provider.model, ok=ok,
+                              ms=max(0, int(ms)),
+                              tokens_in=counted["in"], tokens_out=counted["out"],
                               user_id=actor, project_id=project, agent=agent, error=error, run_id=run_id,
-                              tokens_cached=int(usage.get("cached") or 0),
-                              tokens_reasoning=int(usage.get("reasoning") or 0))
+                              tokens_cached=min(counted["cached"], counted["in"]),
+                              tokens_reasoning=min(counted["reasoning"], counted["out"]))
         except Exception as e:                   # noqa: BLE001 — a ledger outage must not fail the call
             # ...but it must not vanish either. Swallowed in silence, a refused insert looked exactly
             # like a feature that was never used, and the usage screen said so.

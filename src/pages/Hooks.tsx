@@ -66,9 +66,8 @@ function LiveHooks() {
 
           <Panel className="accent-left" eyebrow="Shown, never run" title="NeuroCode does not run hooks">
             <p className="max-w-4xl text-[13.5px] leading-relaxed text-ink-2">
-              A hook is shell that Claude Code runs on its own events, whether the model likes it or not. NeuroCode's agents
-              run nothing but a project's test command, with your approval, so no hook listed here ever fires inside NeuroCode.
-              Claude Code keeps no log this app can read, so how often each one fires is not shown rather than guessed.
+              Claude Code runs these on its own events. NeuroCode never fires one, and can read no record of when
+              Claude Code did.
             </p>
           </Panel>
 

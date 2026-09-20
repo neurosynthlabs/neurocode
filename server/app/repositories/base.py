@@ -12,15 +12,16 @@ part in one transaction and fail together.
 """
 from __future__ import annotations
 
-import zlib
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
-from sqlalchemy import ColumnElement, Integer, Select, cast, delete, func, select
+from sqlalchemy import ColumnElement, Integer, Select, cast, delete, func, literal_column, select, update
+from sqlalchemy.dialects.postgresql import insert as upsert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..data.base import Base
+from ..models.identity import RefCounter
 
 M = TypeVar("M", bound=Base)
 
@@ -55,6 +56,29 @@ class Page(Generic[M]):
     @property
     def next_offset(self) -> int | None:
         return self.offset + self.limit if self.more else None
+
+
+def fence(column: Any, hidden: Collection[str]) -> list[ColumnElement[bool]]:
+    """What keeps a restricted project's rows out of a list that crosses projects.
+
+    `hidden` is the answer `api.deps.unseen_by` gives: the restricted projects this person holds no
+    grant in. Two things follow from saying it in SQL rather than filtering the rows afterwards. A
+    page of 200 is 200 rows the person may see, so `offset` keeps walking the same list it started
+    on instead of skipping at every page; and a `total` taken beside it counts those rows and no
+    others, so the figure on the screen is about the list under it.
+
+    A row belonging to no project at all stays: the workspace's own facts, its gates and its
+    decisions belong to everyone. `project_id NOT IN (…)` alone would drop them, because in SQL a
+    null is not "not in" anything — the same trap `routes_system._readable` names for the activity
+    log. On a column that cannot be null the `IS NULL` arm simply never matches.
+
+    Spliced into a `where` as a list rather than ANDed with a constant, so a workspace where nothing
+    is restricted — which is every workspace until somebody restricts something — runs exactly the
+    statement it ran before, and an Owner or Admin, whom `unseen_by` never narrows, does too.
+    """
+    if not hidden:
+        return []
+    return [column.is_(None) | column.not_in(sorted(hidden))]
 
 
 def bounded(limit: int | None) -> int:
@@ -128,23 +152,60 @@ class Repository(Generic[M]):
         return (await self.session.execute(select(1).select_from(self.model).where(*where).limit(1))
                 ).scalar_one_or_none() is not None
 
-    async def next_ref(self, column: Any, prefix: str) -> str:
-        """The next reference of its kind: the highest number any ref carries, plus one.
+    async def next_ref(self, column: Any, prefix: str, *, floor: int = 0) -> str:
+        """The next reference of its kind: one row in `ref_counters`, bumped by one statement.
 
-        Worked out by the database rather than by reading every ref into Python — and taken under a
-        lock, because "read the maximum, then insert it" is a race however fast the read is. Two
-        requests arriving together both saw the same maximum and both tried to claim it; the unique
-        index then failed the second one, so a perfectly ordinary second click became a 500.
+        It used to be `max(regexp_replace(ref, …))` over the whole table, under a per-prefix advisory
+        lock — a regular expression evaluated on every row ever written, on the path a person waits on
+        while a run starts. At a hundred thousand runs that was about a tenth of a second, and it grew
+        with the workspace's whole history; two agents dispatched together queued for the lock as well.
 
-        The lock is per kind of reference and is held only to the end of this transaction, so tasks
-        and runs never wait on each other and nothing can be left locked by a request that died.
+        `INSERT … ON CONFLICT DO UPDATE … RETURNING` is atomic on its own, so the advisory lock is
+        gone. The row it touches stays locked to the end of this transaction, which is what still makes
+        two requests asking at the same moment take turns rather than both claiming the same number —
+        but they take turns over one row, not over a scan.
+
+        `floor` is a number the kind never goes below, whatever the counter says.
+
+        The old scan survives in one place: seeding a counter that does not exist yet. A workspace
+        migrated, restored or imported with references already in it must not start again at 1, and a
+        prefix the migration's seed never named — `EVAL-`, or one a later feature adds — has no row
+        until the first ref is asked for. `xmax = 0` is how Postgres says "this row was inserted, not
+        updated", which is the only way to tell the two apart from inside one statement. The look-up
+        that follows is the same idea with the same answer: it is one probe of the unique index the ref
+        already has, and it is what keeps this honest when something writes rows behind the counter's
+        back.
         """
-        key = zlib.crc32(prefix.encode()) - 2 ** 31              # advisory keys are signed 32-bit
-        await self.session.execute(select(func.pg_advisory_xact_lock(key)))
+        bump = (upsert(RefCounter).values(prefix=prefix, next=floor + 1)
+                .on_conflict_do_update(index_elements=[RefCounter.prefix],
+                                       set_={"next": func.greatest(RefCounter.next, floor) + 1})
+                .returning(RefCounter.next, literal_column("(xmax = 0)").label("born")))
+        number, born = (await self.session.execute(bump)).one()
+        if born:
+            number = await self._seed_ref_counter(column, prefix, floor)
+        ref = f"{prefix}{int(number)}"
+        if await self.exists(column == ref):
+            # Rows written without asking the counter: a workspace carried over from the old stack by
+            # `scripts/import-sqlite.py`, or a fixture loaded straight into the tables. One indexed
+            # look-up against the unique index catches it — and the counter is then brought up to what
+            # the table really holds, so it is caught once and never again.
+            ref = f"{prefix}{await self._seed_ref_counter(column, prefix, floor)}"
+        return ref
+
+    async def _seed_ref_counter(self, column: Any, prefix: str, floor: int) -> int:
+        """A counter's number, taken from the refs the table already carries — the only scan left here.
+
+        Reached twice in the life of a prefix at most: when its row is born, and if a ref it handed out
+        turned out to be taken already. Either way the row is locked by the statement that just touched
+        it, so a second request asking for this prefix waits and then reads what this one wrote.
+        """
         digits = func.nullif(func.regexp_replace(column, r"\D", "", "g"), "")
-        highest = (await self.session.execute(
-            select(func.coalesce(func.max(cast(digits, Integer)), 0)))).scalar_one()
-        return f"{prefix}{int(highest) + 1}"
+        highest = int((await self.session.execute(
+            select(func.coalesce(func.max(cast(digits, Integer)), 0)))).scalar_one())
+        number = max(highest, floor) + 1
+        await self.session.execute(
+            update(RefCounter).where(RefCounter.prefix == prefix).values(next=number))
+        return number
 
     # ── writing ──────────────────────────────────────────────────
     async def add(self, obj: M) -> M:

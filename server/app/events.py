@@ -13,6 +13,11 @@ from typing import Any
 class Bus:
     def __init__(self) -> None:
         self.queues: dict[asyncio.Queue[tuple[str, Any]], asyncio.AbstractEventLoop] = {}
+        #: How many events each reader was too slow to take. A tab that falls behind loses events —
+        #: it always has — but losing them in silence is what made a stale screen look like a wrong
+        #: one: nothing dropped, so nothing reconnected, so nothing ever put it right. Counted here
+        #: and read by the stream, which tells that reader to load the workspace again.
+        self.missed: dict[asyncio.Queue[tuple[str, Any]], int] = {}
         self.listeners: list[Callable[[str, Any], None]] = []
 
     def subscribe(self) -> asyncio.Queue[tuple[str, Any]]:
@@ -22,6 +27,11 @@ class Bus:
 
     def unsubscribe(self, q: asyncio.Queue[tuple[str, Any]]) -> None:
         self.queues.pop(q, None)
+        self.missed.pop(q, None)
+
+    def missed_by(self, q: asyncio.Queue[tuple[str, Any]]) -> int:
+        """What this reader has missed since it last asked, and start counting again."""
+        return self.missed.pop(q, 0)
 
     def listen(self, fn: Callable[[str, Any], None]) -> None:
         """A synchronous listener, for tests and for anything that must see every event in order."""
@@ -36,9 +46,8 @@ class Bus:
             except RuntimeError:  # the loop behind that tab is gone
                 self.queues.pop(q, None)
 
-    @staticmethod
-    def _offer(q: asyncio.Queue[tuple[str, Any]], item: tuple[str, Any]) -> None:
+    def _offer(self, q: asyncio.Queue[tuple[str, Any]], item: tuple[str, Any]) -> None:
         try:
             q.put_nowait(item)
         except asyncio.QueueFull:  # a tab that stopped reading loses events; it never blocks the API
-            pass
+            self.missed[q] = self.missed.get(q, 0) + 1

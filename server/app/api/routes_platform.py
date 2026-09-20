@@ -7,6 +7,9 @@ the whole list rather than one per project.
 Onboarding a repository — cloning, scanning, indexing — still runs on the old stack; it moves with the
 runtime in its own phase.
 
+A project that has been restricted is not in this list for anyone but the people it names — and asking
+for it by id answers 404 rather than 403, because whether a project exists is itself something to know.
+
 A project's sources are here too: the folders and repositories it holds beside its first one. Adding
 one onboards it through the same pipeline as a project; the list says where each one is on this
 machine only to someone who may browse the machine.
@@ -27,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai.gateway import Gateway
 from ..data.engine import Database
-from ..models import McpServer
+from ..models import McpServer, Project
 from ..repositories import ActivityRepository, NotFound, ProjectRepository
 from ..repositories.code import CodeIndexRepository
 from ..repositories.platform import McpRepository
@@ -138,10 +141,26 @@ def _ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
-@router.get("/projects", dependencies=[Depends(current_person)])
-async def projects(open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
+async def visible(pid: str, who: Person, open_session: AsyncSession) -> Project:
+    """The project, when it exists for this person at all.
+
+    A restricted project somebody holds no grant in answers 404, not 403: "there is a project here
+    you may not open" is itself something they were never told. An open project — every project
+    until someone restricts one — is simply the project.
+    """
+    found = await ProjectRepository(open_session).get(pid)
+    if found is None or not who.may_see(pid, found.restricted):
+        raise NotFound(f"project {pid}")
+    return found
+
+
+@router.get("/projects")
+async def projects(who: Person = Depends(current_person),
+                   open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
+    """Every project this person may see. A restricted one appears only to the people listed on it,
+    and to the Owners and Admins a restriction never locks out."""
     repo = ProjectRepository(open_session)
-    found = await repo.all_ordered()
+    found = [p for p in await repo.all_ordered() if who.may_see(p.id, p.restricted)]
     counts = await repo.task_counts()
     ids = [p.id for p in found]
     indexes = await CodeIndexRepository(open_session).for_projects(ids)
@@ -152,12 +171,11 @@ async def projects(open_session: AsyncSession = Depends(session)) -> list[dict[s
             for p in found]
 
 
-@router.get("/projects/{pid}", dependencies=[Depends(current_person)])
-async def project(pid: str, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+@router.get("/projects/{pid}")
+async def project(pid: str, who: Person = Depends(current_person),
+                  open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     repo = ProjectRepository(open_session)
-    found = await repo.get(pid)
-    if found is None:
-        raise NotFound(f"project {pid}")
+    found = await visible(pid, who, open_session)
     counts = await repo.task_counts()
     return project_json(found, tasks=counts.get(pid),
                         index=await CodeIndexRepository(open_session).summary(pid),
@@ -175,9 +193,7 @@ def _may_see_the_machine(who: Person) -> bool:
 async def project_sources(pid: str, who: Person = Depends(current_person),
                           open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
     """Every source of the project, the first one first (`id` null), then the rest in their order."""
-    found = await ProjectRepository(open_session).get(pid)
-    if found is None:
-        raise NotFound(f"project {pid}")
+    found = await visible(pid, who, open_session)
     show = _may_see_the_machine(who)
     first = checkout(found)
     out = [source_json(found, None, root=str(first) if first else None, show_root=show)] if found.source_kind else []
@@ -248,11 +264,13 @@ async def reindex_source(pid: str, source_id: int, jobs: BackgroundTasks,
 
 
 # ── projects a project reads from ────────────────────────────────
-@router.get("/projects/{pid}/references", dependencies=[Depends(current_person)])
-async def project_references(pid: str, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+@router.get("/projects/{pid}/references")
+async def project_references(pid: str, who: Person = Depends(current_person),
+                             open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     """`{references, referencedBy, readAtMost, max}`: the projects this one reads from, and those that
     read from it — each `{id, project: {id, name, status, understoodPct}, note, createdAt}`. Retrieval
     and grounding search the first `readAtMost` of `references` beside the project's own pieces."""
+    await visible(pid, who, open_session)
     return await ReferenceService(open_session).listing(pid)
 
 
@@ -283,16 +301,15 @@ async def remove_reference(pid: str, reference_id: int, request: Request,
     return {"ok": True, "id": reference_id, "referencedId": other.id}
 
 
-@router.get("/projects/{pid}/instructions", dependencies=[Depends(current_person)])
+@router.get("/projects/{pid}/instructions")
 async def project_instructions(pid: str, target: list[str] = Query(default_factory=list, max_length=50),
+                               who: Person = Depends(current_person),
                                open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     """The instruction files at the project's checkout root, read now: which were read, their size and
     sha1, which rules applied, what an `@import` was refused and why, and whether the cap cut the text.
     With `target` (repeatable), a rule scoped by `paths:` says whether it would apply to those files.
     A project with no code on this machine answers with no files, not an error."""
-    found = await ProjectRepository(open_session).get(pid)
-    if found is None:
-        raise NotFound(f"project {pid}")
+    found = await visible(pid, who, open_session)
     return instructions.as_json(await instructions.for_project(found, target, session=open_session))
 
 

@@ -6,6 +6,7 @@ import {
 } from '@/components/os';
 import { request } from '@/lib/api';
 import { useData } from '@/lib/data';
+import { FEED_CAP } from '@/lib/feed';
 import { useRemote } from '@/lib/remote';
 import { useAuth } from '@/lib/auth';
 import { useProject } from '@/lib/project-context';
@@ -20,8 +21,6 @@ const KIND_ICON = { human: User, agent: Bot, system: Cpu };
 const KIND_TONE = { human: 'brand', agent: 'ok', system: 'violet' } as const;
 const KINDS = ['human', 'agent', 'system'] as const;
 const newest = (events: ActivityEvent[]) => events.reduce((n, e) => Math.max(n, Number(e.id) || 0), 0);
-/** The feed holds the newest rows only (the server's ceiling), so no figure on this page is counted from it. */
-const FEED = 500;
 
 /** GET /activity/summary: the figures over the whole log, counted by the server. `through` is the newest
     event they include; anything the stream brought after it is added here, and nothing twice. */
@@ -36,7 +35,7 @@ interface ActivitySummary {
 }
 
 export default function Activity() {
-  const { activity, projects } = useData();
+  const { activity, projects, capped } = useData();
   const { user } = useAuth();
   const { projectId, project } = useProject();
   // What was already in the log when the page opened. Anything after it arrived on the stream, and is marked.
@@ -77,9 +76,13 @@ export default function Activity() {
 
   const grouped = useMemo(() => {
     const m = new Map<string, ActivityEvent[]>();
+    // Pushed into the day's own array rather than rebuilt from it: this runs again on every keystroke
+    // in the search box, and rebuilding once per event made a busy day's feed stutter as you typed.
     list.forEach((e) => {
       const d = dayKey(e.at);
-      m.set(d, [...(m.get(d) ?? []), e]);
+      const day = m.get(d);
+      if (day) day.push(e);
+      else m.set(d, [e]);
     });
     return [...m.values()].map((events) => [dayLabel(events[0].at), events] as const);
   }, [list]);
@@ -108,13 +111,15 @@ export default function Activity() {
     };
   }, [summary.data, all, user]);
   const waiting = summary.error ?? 'counting…';
-  const cut = activity.length >= FEED;
+  // True when the tab does not hold the whole log: the first load stopped at the server's page, or the
+  // stream has since pushed the feed to its ceiling here. Either way the figures come from the server.
+  const cut = capped.activity || activity.length >= FEED_CAP;
 
   return (
     <Page>
       <PageHeader
         title="Activity"
-        subtitle="Every decision, run and approval — in order. This is the audit trail and the reason the system feels alive."
+        subtitle="Every decision, run and approval, in order."
         actions={
           <label className="flex items-center gap-2 text-[13px] text-soft">
             <Switch checked={!frozen} onCheckedChange={(on) => setFrozen(on ? null : activity)} />

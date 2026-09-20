@@ -236,8 +236,9 @@ class ResearchService:
                                    project_id=project_id)
         return await self._row(report.id)
 
-    async def newest(self, project_id: str | None, *, limit: int | None, offset: int) -> list[ReportRow]:
-        return await self.reports.newest(project_id, limit=limit, offset=offset)
+    async def newest(self, project_id: str | None, *, limit: int | None, offset: int,
+                     hidden: frozenset[str] = frozenset()) -> list[ReportRow]:
+        return await self.reports.newest(project_id, limit=limit, offset=offset, hidden=hidden)
 
     async def detail(self, ref: str) -> ResearchReport:
         report = await self.reports.by_ref(ref)

@@ -46,9 +46,12 @@ class MemoryService:
         self.activity = ActivityRepository(session)
 
     async def search(self, q: str = "", *, category: str | None = None, project: str | None = None,
-                     include_archived: bool = False) -> list[MemoryFact]:
+                     include_archived: bool = False,
+                     hidden: frozenset[str] = frozenset()) -> list[MemoryFact]:
+        """`hidden` is passed by the Memory screen's route and nowhere else: what a model retrieves
+        is already cut to the project it is working in, and has no person to be narrowed by."""
         return await self.facts.search(q, category=category, project=project,
-                                       include_archived=include_archived)
+                                       include_archived=include_archived, hidden=hidden)
 
     async def add(self, new: list[NewFact], *, project_id: str | None, by: str,
                   source: str = "") -> list[MemoryFact]:

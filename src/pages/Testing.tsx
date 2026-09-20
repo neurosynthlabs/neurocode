@@ -493,9 +493,6 @@ function Coverage({ report }: { report: TestingReport }) {
           These are the lines each project's own runner reported executing, read from the report it wrote during its latest
           tested run. NeuroCode instruments nothing, so a directory missing here was not measured — not untested.
         </p>
-        <p className="mt-3 border-t border-line pt-2.5 text-[12.5px] text-dim">
-          It is not the coverage bars on Projects: those say how much of the code the index could read, not how much of it the tests run.
-        </p>
       </Panel>
     </div>
   );
@@ -507,16 +504,20 @@ function History({ lines, onOpen }: { lines: TestHistoryLine[]; onOpen: (ref: st
   }
   return (
     <Panel flush>
-      <DataTable head={['Run', 'Project', 'Triggered by', 'Branch', 'Duration', 'Pass rate', 'Commit', 'When']}>
+      {/* Eight columns are a sideways strip on a phone. What a person scans for — which run, and whether it
+          passed — stays; the rest come back as the screen gets wider, and the row opens the whole run. */}
+      <DataTable head={['Run', { label: 'Project', hideBelow: 'md' }, { label: 'Triggered by', hideBelow: 'lg' },
+        { label: 'Branch', hideBelow: 'lg' }, { label: 'Duration', hideBelow: 'sm' }, 'Pass rate',
+        { label: 'Commit', hideBelow: 'xl' }, { label: 'When', hideBelow: 'sm' }]}>
         {lines.map((r) => {
           const pct = rate(r.passed, r.total);
           return (
             <Row key={r.runRef} onClick={() => onOpen(r.runRef)}>
               <Cell mono className="text-brand">{r.runRef}</Cell>
-              <Cell className="text-[12.5px]">{r.projectName}</Cell>
-              <Cell className="text-[12.5px]">{r.trigger}{r.role === 'check' ? <span className="text-dim"> · tests only</span> : null}</Cell>
-              <Cell mono className="text-dim">{r.branch}</Cell>
-              <Cell className="tnum">{seconds(r.ms)}</Cell>
+              <Cell hideBelow="md" className="text-[12.5px]">{r.projectName}</Cell>
+              <Cell hideBelow="lg" className="text-[12.5px]">{r.trigger}{r.role === 'check' ? <span className="text-dim"> · tests only</span> : null}</Cell>
+              <Cell hideBelow="lg" mono className="text-dim">{r.branch}</Cell>
+              <Cell hideBelow="sm" className="tnum">{seconds(r.ms)}</Cell>
               <Cell>
                 {pct === null ? (
                   <span className="flex items-center gap-2">
@@ -530,8 +531,8 @@ function History({ lines, onOpen }: { lines: TestHistoryLine[]; onOpen: (ref: st
                   </span>
                 )}
               </Cell>
-              <Cell mono className="text-dim">{r.sha ? r.sha.slice(0, 7) : '—'}</Cell>
-              <Cell className="text-dim">{ago(r.at)}</Cell>
+              <Cell hideBelow="xl" mono className="text-dim">{r.sha ? r.sha.slice(0, 7) : '—'}</Cell>
+              <Cell hideBelow="sm" className="text-dim">{ago(r.at)}</Cell>
             </Row>
           );
         })}

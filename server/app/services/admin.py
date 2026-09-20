@@ -29,10 +29,16 @@ ID_LENGTH = 40
 
 
 def catalogue() -> list[dict[str, Any]]:
-    """Every permission this workspace knows about, each carrying the group a screen files it under.
-    The catalogue is the application's, read from `data/catalogue.json`, so no workspace can drift
-    from what the API enforces."""
-    return [{"id": p.id, "group": p.group, "label": p.label, "description": p.description}
+    """Every permission this workspace knows about, each filed where the product itself files it: the
+    module and sub-module the sidebar shows, and the verb — use, write, decide or admin — that says
+    what holding it lets someone do. The catalogue is the application's, read from
+    `data/catalogue.json`, so no workspace can drift from what the API enforces.
+
+    `group` repeats the module for one release: a browser still holding the old bundle reads that and
+    nothing else, and a right it cannot file is a right that vanishes off the access screen.
+    """
+    return [{"id": p.id, "group": p.group, "module": p.module, "sub": p.sub, "verb": p.verb,
+             "label": p.label, "description": p.description}
             for p in PERMISSIONS]
 
 

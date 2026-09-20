@@ -36,7 +36,7 @@ from ..ai.gateway import Gateway, extract_json
 from ..data.base import utcnow
 from ..models import Approval, Run, RunLog, TasteRule, TasteSignal, User
 from ..repositories import ActivityRepository, NotFound
-from ..repositories.base import bounded
+from ..repositories.base import bounded, fence
 from .errors import Refused, needs_a_model
 
 log = logging.getLogger(__name__)
@@ -431,13 +431,16 @@ class TasteService:
             counts[status_] = n
         return list((await self.session.execute(stmt)).scalars()), counts
 
-    async def signal_counts(self, project_id: str | None) -> dict[str, Any]:
+    async def signal_counts(self, project_id: str | None,
+                            hidden: frozenset[str] = frozenset()) -> dict[str, Any]:
         """How many signals there are by kind, and how many no distillation has read. A project's are its
-        own; the workspace counts every one."""
+        own; the workspace counts every one it may — a signal is a moment from somebody's work in a
+        project, so the workspace's count leaves out the projects this person may not see."""
         stmt = select(TasteSignal.kind, TasteSignal.distilled, func.count()).group_by(TasteSignal.kind,
                                                                                      TasteSignal.distilled)
         if project_id is not None:
             stmt = stmt.where(TasteSignal.project_id == project_id)
+        stmt = stmt.where(*fence(TasteSignal.project_id, hidden))
         by_kind = dict.fromkeys(KINDS, 0)
         unread = total = 0
         for kind, distilled, n in (await self.session.execute(stmt)).all():
@@ -447,8 +450,9 @@ class TasteService:
         return {"total": total, "unread": unread, "byKind": by_kind}
 
     async def signals(self, project_id: str | None, *, kind: str | None = None, unread: bool | None = None,
-                      limit: int | None = None, offset: int = 0) -> list[TasteSignal]:
-        stmt = select(TasteSignal)
+                      limit: int | None = None, offset: int = 0,
+                      hidden: frozenset[str] = frozenset()) -> list[TasteSignal]:
+        stmt = select(TasteSignal).where(*fence(TasteSignal.project_id, hidden))
         if project_id is not None:
             stmt = stmt.where(TasteSignal.project_id == project_id)
         if kind is not None:

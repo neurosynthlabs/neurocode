@@ -43,8 +43,17 @@ export default function People() {
     <Page>
       <PageHeader
         title="People"
-        subtitle="Everyone signs in with their own account, and their roles decide what they can change. Every change here lands in the audit log."
-        actions={<Button size="sm" onClick={() => setAdding(true)} disabled={!manage}><Plus className="size-3.5" />Add person</Button>}
+        subtitle={manage
+          ? 'Everyone signs in with their own account, and their roles decide what they can change. Every change here lands in the audit log.'
+          : 'Everyone signs in with their own account, and their roles decide what they can change. Changing any of it needs “Manage people” (users:manage).'}
+        actions={(
+          <Button
+            size="sm" onClick={() => setAdding(true)} disabled={!manage}
+            title={manage ? undefined : 'Adding someone needs “Manage people” (users:manage).'}
+          >
+            <Plus className="size-3.5" />Add person
+          </Button>
+        )}
       />
       <PageBody>
         {error ? <LoadError error={error} onRetry={reload} /> : !data ? <Loading /> : (
@@ -74,7 +83,15 @@ export default function People() {
                     <Cell><StatusText state={p.status} /></Cell>
                     <Cell className="text-[13px] whitespace-nowrap text-soft">{when(p.lastLoginAt)}</Cell>
                     <Cell className="text-right">
-                      {manage && <Button size="xs" variant="ghost" onClick={(e) => { e.stopPropagation(); setEditing(p); }}>Edit</Button>}
+                      {/* Disabled, never gone: a button that vanishes teaches nothing, and someone who
+                          may see the directory should still learn what editing it would take. */}
+                      <Button
+                        size="xs" variant="ghost" disabled={!manage}
+                        title={manage ? undefined : 'Changing someone needs “Manage people” (users:manage).'}
+                        onClick={(e) => { e.stopPropagation(); setEditing(p); }}
+                      >
+                        Edit
+                      </Button>
                     </Cell>
                   </Row>
                 ))}

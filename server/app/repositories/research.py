@@ -18,7 +18,7 @@ from sqlalchemy import ColumnElement, Select, and_, exists, func, select
 from sqlalchemy.orm import lazyload
 
 from ..models import Chunk, ResearchAngle, ResearchCitation, ResearchReport
-from .base import Repository, bounded
+from .base import Repository, bounded, fence
 from .retrieval import ChunkRepository
 
 
@@ -64,9 +64,10 @@ class ResearchRepository(Repository[ResearchReport]):
         return select(ResearchReport, angles, with_citation).options(lazyload(ResearchReport.angles))
 
     async def newest(self, project_id: str | None = None, *, limit: int | None = None,
-                     offset: int = 0) -> list[ReportRow]:
+                     offset: int = 0, hidden: frozenset[str] = frozenset()) -> list[ReportRow]:
         where: list[ColumnElement[bool]] = [ResearchReport.project_id == project_id] if project_id else []
-        stmt = (self._counted().where(*where).order_by(ResearchReport.created_at.desc())
+        stmt = (self._counted().where(*where, *fence(ResearchReport.project_id, hidden))
+                .order_by(ResearchReport.created_at.desc())
                 .limit(bounded(limit)).offset(max(0, offset)))
         return [ReportRow(report, int(angles or 0), int(cited or 0))
                 for report, angles, cited in (await self.session.execute(stmt)).all()]

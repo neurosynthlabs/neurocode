@@ -98,6 +98,41 @@ class UserRole(Base):
     role: Mapped[Role] = relationship(lazy="selectin")
 
 
+class ProjectRole(Base):
+    """This person wears this workspace role, but only inside this project.
+
+    There is no second vocabulary of roles and no second matrix to learn: a project grant names one of the
+    roles the workspace already has. It can only narrow — the permissions that count inside a restricted
+    project are the person's own, cut to what these roles carry — so a grant can never hand out more than
+    someone was given at the workspace.
+    """
+
+    __tablename__ = "project_roles"
+    __table_args__ = (Index("ix_project_roles_user_project", "user_id", "project_id"),)
+
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    #: RESTRICT, as user_roles does: a role somebody wears somewhere cannot be deleted out from under them.
+    role_id: Mapped[str] = mapped_column(ForeignKey("roles.id", ondelete="RESTRICT"), primary_key=True)
+    granted_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 nullable=False)
+
+
+class RefCounter(Base):
+    """The last number handed out for each reference prefix — RUN-, PLAN-, APPR- and the rest.
+
+    Every new run, plan, gate and session needs the next number, and reading it as `max(...)` over the table
+    meant a scan of every row ever written, under a lock, on the path a person waits on. One row per prefix,
+    bumped in a single statement, is the whole of it.
+    """
+
+    __tablename__ = "ref_counters"
+
+    prefix: Mapped[str] = mapped_column(String(20), primary_key=True)
+    next: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+
+
 class Team(Base, Mixin):
     __tablename__ = "teams"
 

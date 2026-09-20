@@ -32,7 +32,7 @@ from ..services.identity import Person
 from ..services.knowledge import MemoryService, NewFact
 from ..services.runs import resume as resume_run
 from ..services.work import Actor, PlanQuestions, TaskService
-from .deps import current_person, database, gateway, hand_off, require, session
+from .deps import current_person, database, gateway, hand_off, must_see, require, session, unseen_by
 
 router = APIRouter()
 TaskStatus = Literal["backlog", "planning", "in_progress", "review", "blocked", "done"]
@@ -86,40 +86,64 @@ def _actor(who: Person) -> Actor:
 
 
 # ── tasks ────────────────────────────────────────────────────────
-@router.get("/tasks", dependencies=[Depends(current_person)])
+@router.get("/tasks")
 async def tasks(project: str | None = None, limit: int | None = None, offset: int = 0,
+                who: Person = Depends(current_person),
                 open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
-    page = await TaskRepository(open_session).board(project, limit=limit, offset=offset)
+    """The board across every project this person may see.
+
+    A restricted project's tasks are cut in the query and not out of the answer, so a page is the
+    size it was asked for and `offset` keeps walking the same list. A task carries a title and a
+    reference, which is exactly what a closed project was closed to stop telling people.
+    """
+    page = await TaskRepository(open_session).board(project, limit=limit, offset=offset,
+                                                    hidden=await unseen_by(who, open_session))
     return [task_json(t) for t in page.items]
 
 
-@router.get("/tasks/{ref}", dependencies=[Depends(current_person)])
-async def task(ref: str, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+@router.get("/tasks/{ref}")
+async def task(ref: str, who: Person = Depends(current_person),
+               open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     found = await TaskRepository(open_session).by_ref(ref)
     if found is None:
         raise NotFound(f"task {ref}")
+    await must_see(who, open_session, found.project_id, f"task {ref}")
     return task_json(found)
+
+
+async def _task(ref: str, who: Person, open_session: AsyncSession) -> None:
+    """The fence a write reached by a bare reference needs: the list hides the task, so guessing at
+    `TASK-…` must not be the way round it. 404, the same answer the read gives."""
+    found = await TaskRepository(open_session).by_ref(ref)
+    if found is not None:
+        await must_see(who, open_session, found.project_id, f"task {ref}")
 
 
 @router.patch("/tasks/{ref}")
 async def move_task(ref: str, body: StatusIn, who: Person = Depends(require("tasks:write")),
                     open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    await _task(ref, who, open_session)
     return task_json(await TaskService(open_session).move(ref, body.status, _actor(who)))
 
 
 @router.post("/tasks/{ref}/checklist/{item_id}")
 async def check_item(ref: str, item_id: str, body: DoneIn, who: Person = Depends(require("tasks:write")),
                      open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    await _task(ref, who, open_session)
     return task_json(await TaskService(open_session).tick(ref, item_id, body.done, _actor(who)))
 
 
 # ── approvals: the human gate ────────────────────────────────────
-@router.get("/approvals", dependencies=[Depends(current_person)])
+@router.get("/approvals")
 async def approvals(status: str | None = None, limit: int | None = None, offset: int = 0,
+                    who: Person = Depends(current_person),
                     open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
+    """The inbox, of the projects this person may see. A gate raised for the workspace itself
+    carries no project and is everybody's."""
     repo = ApprovalRepository(open_session)
-    page = (await repo.pending(limit=limit, offset=offset) if status == "pending"
-            else await repo.newest(limit=limit, offset=offset))
+    hidden = await unseen_by(who, open_session)
+    page = (await repo.pending(limit=limit, offset=offset, hidden=hidden) if status == "pending"
+            else await repo.newest(limit=limit, offset=offset, hidden=hidden))
     return [approval_json(a) for a in page.items]
 
 
@@ -135,6 +159,11 @@ async def decide(ref: str, decision: Literal["approve", "deny"], jobs: Backgroun
     the run sat at "waiting" for ever. Every run stopped at its first gate — the first test run in a
     project, or your signature on the diff — and never went further.
     """
+    # A gate of a project this person may not see is not theirs to answer: deciding it would resume
+    # a run inside that project. The gate is read first only to learn which project it belongs to.
+    waiting = await ApprovalRepository(open_session).by_ref(ref)
+    if waiting is not None:
+        await must_see(who, open_session, waiting.project_id, f"approval {ref}")
     answered = await ApprovalService(open_session).decide(
         ref, decision, by_id=who.id, by_name=who.name, scope=body.scope if body else None,
         answer=body.answer if body else None, who=who, ip=request.client.host if request.client else "")
@@ -145,18 +174,22 @@ async def decide(ref: str, decision: Literal["approve", "deny"], jobs: Backgroun
 
 
 # ── plans ────────────────────────────────────────────────────────
-@router.get("/plans", dependencies=[Depends(current_person)])
+@router.get("/plans")
 async def plans(project: str | None = None, limit: int | None = None, offset: int = 0,
+                who: Person = Depends(current_person),
                 open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
-    page = await PlanRepository(open_session).newest(project, limit=limit, offset=offset)
+    page = await PlanRepository(open_session).newest(project, limit=limit, offset=offset,
+                                                     hidden=await unseen_by(who, open_session))
     return [plan_json(p) for p in page.items]
 
 
-@router.get("/plans/{ref}", dependencies=[Depends(current_person)])
-async def plan(ref: str, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+@router.get("/plans/{ref}")
+async def plan(ref: str, who: Person = Depends(current_person),
+               open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     found = await PlanRepository(open_session).by_ref(ref)
     if found is None:
         raise NotFound(f"plan {ref}")
+    await must_see(who, open_session, found.project_id, f"plan {ref}")
     return plan_json(found)
 
 
@@ -173,6 +206,9 @@ async def settle_question(ref: str, index: int, body: AnswerIn,
     found = await plans_repo.by_ref(ref)
     if found is None:
         raise NotFound(f"plan {ref}")
+    # Answering a question is a read of the plan before it is a write to it, and it writes the answer
+    # into the project's memory. A plan of a project this person may not see is not there for them.
+    await must_see(who, open_session, found.project_id, f"plan {ref}")
     open_questions = await plans_repo.open_questions(found.id)
     if not 0 <= index < len(open_questions):
         raise NotFound(f"open question #{index} of {ref}")
@@ -189,10 +225,11 @@ async def settle_question(ref: str, index: int, body: AnswerIn,
 
 
 # ── final decisions and screen settings ─────────────────────────
-@router.get("/decisions", dependencies=[Depends(current_person)])
-async def decisions(open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
+@router.get("/decisions")
+async def decisions(who: Person = Depends(current_person),
+                    open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
     repo = DecisionRepository(open_session)
-    found = await repo.all_ordered()
+    found = await repo.all_ordered(hidden=await unseen_by(who, open_session))
     names = await repo.names(found)
     return [decision_json(d, by=names.get(d.by_user_id or "")) for d in found]
 

@@ -16,7 +16,7 @@ from sqlalchemy import ColumnElement, and_, exists, extract, func, or_, select
 from sqlalchemy.orm import aliased
 
 from ..models import Agent, AiCall, Plan, Run, RunConflict, RunStep, Task, WorkflowDefinition
-from .base import MAX_LIMIT, Repository
+from .base import MAX_LIMIT, Repository, fence
 
 #: The roles whose run is the one a person started.
 LEAD_ROLES = ("solo", "integration")
@@ -70,8 +70,11 @@ class WorkflowRepository(Repository[WorkflowDefinition]):
     model = WorkflowDefinition
 
     # ── the definitions ──────────────────────────────────────────
-    async def active(self) -> list[WorkflowDefinition]:
+    async def active(self, *, hidden: frozenset[str] = frozenset()) -> list[WorkflowDefinition]:
+        """The library. A workflow written for one project carries its id and is cut with it; the
+        workspace's own carry none and belong to everyone."""
         return await self.list(WorkflowDefinition.archived.is_(False),
+                               *fence(WorkflowDefinition.project_id, hidden),
                                order_by=WorkflowDefinition.name, limit=MAX_WORKFLOWS)
 
     async def by_name(self, name: str) -> WorkflowDefinition | None:

@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import time
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,22 @@ MAX_DOC_CHUNKS = MAX_CHUNKS // 4
 MAX_DOC_FILES = 2_000     # documents the Knowledge screen walks the checkout for
 HISTORY_COMMITS = 1_000   # how far back one `git log` pass looks for a document's last commit
 GIT_TIMEOUT = 20
+DELETE_BATCH = 2_000      # ids per DELETE when a build finds chunks nothing builds any more
+
+
+@dataclass(slots=True)
+class Replaced:
+    """What bringing one scope's chunks up to what was just built came to.
+
+    `fresh` is the only thing the embedding model ever sees: a chunk whose text did not change keeps
+    the vector it already had, so a rebuild of a project nobody edited costs nothing at all.
+    """
+
+    total: int                              #: chunks the scope holds now
+    fresh: list[Chunk] = field(default_factory=list)   #: new or changed, and therefore not embedded yet
+    gone: int = 0                           #: deleted, because nothing built them this time
+    embedded: int = 0                       #: left untouched, and already carrying a vector
+
 
 # What links a document to the rest of the workspace, and nothing more: a name in backticks, a word
 # shaped like code (camelCase or snake_case), and a reference like TASK-492. A word that matches none
@@ -402,14 +419,53 @@ class RetrievalService:
         return [{"kind": "memory", "ref": f.ref, "path": f.category, "line": 0, "title": f.title,
                  "body": _clip(f"{f.title}\n{f.body}\n{f.reason}")} for f in facts]
 
-    async def _replace(self, project_id: str | None, rows: list[dict[str, Any]]) -> list[Chunk]:
-        """A scope's chunks are replaced inside the caller's transaction: no half-built index."""
-        await self.session.execute(delete(Chunk).where(
-            Chunk.project_id == project_id if project_id else Chunk.project_id.is_(None)))
-        made = [Chunk(project_id=project_id, **row) for row in rows]
-        self.session.add_all(made)
+    async def _replace(self, project_id: str | None, rows: list[dict[str, Any]]) -> Replaced:
+        """Bring a scope's chunks to what was just built, inside the caller's transaction.
+
+        It used to delete the scope and write every chunk again. That is the same answer, and it costs
+        the whole of it every time: a file nobody touched had its chunk deleted, written again, entered
+        again into the full-text index and again into the HNSW vector index, and — because a new row has
+        no embedding — sent to the embedding model again and paid for again. The indexes never gave the
+        space back either: eight rebuilds of the same three thousand chunks took `ix_chunks_embedding`
+        from 2.4 MB to about 6.9 MB, where it stayed.
+
+        So the built rows are compared with the stored ones by `(kind, ref)`, which is the pair the
+        table is already unique on, and only what actually differs is written: what is gone is deleted,
+        what is new is inserted, and a chunk whose text changed is updated and loses its embedding,
+        because that embedding described text that is no longer there. A chunk that only moved — same
+        text, a different line or title — is corrected without being re-embedded.
+        """
+        scope = Chunk.project_id == project_id if project_id else Chunk.project_id.is_(None)
+        stored = {(c.kind, c.ref): c for c in (await self.session.execute(select(Chunk).where(scope))).scalars()}
+        fresh: list[Chunk] = []
+        seen: set[tuple[str, str]] = set()
+        still_embedded = 0
+        for row in rows:
+            key = (row["kind"], row["ref"])
+            if key in seen:
+                continue                    # the same ref built twice: the table's own unique rule, kept early
+            seen.add(key)
+            held = stored.get(key)
+            if held is None:
+                made = Chunk(project_id=project_id, **row)
+                self.session.add(made)
+                fresh.append(made)
+            elif held.body != row["body"]:
+                for field, value in row.items():
+                    setattr(held, field, value)
+                held.embedding, held.dim, held.model = None, 0, ""
+                fresh.append(held)
+            else:
+                for field in ("path", "title", "line"):
+                    if getattr(held, field) != row[field]:
+                        setattr(held, field, row[field])
+                if held.embedding is not None:
+                    still_embedded += 1
+        gone = [c.id for key, c in stored.items() if key not in seen]
+        for start in range(0, len(gone), DELETE_BATCH):
+            await self.session.execute(delete(Chunk).where(Chunk.id.in_(gone[start:start + DELETE_BATCH])))
         await self.session.flush()
-        return made
+        return Replaced(total=len(seen), fresh=fresh, gone=len(gone), embedded=still_embedded)
 
     async def _embed(self, chunks: list[Chunk], project_id: str) -> tuple[int, str, str, str]:
         lane = self.gateway.embed_lane()
@@ -465,13 +521,16 @@ class RetrievalService:
         made = await self._replace(project_id, rows)
         remembered = await self._replace(None, await self._memory_chunks())
 
-        embedded, model, lane, note = await self._embed([*made, *remembered], project_id)
+        # Only what is new or has changed goes to the embedding model; what was already embedded and
+        # still says the same thing is counted, not sent again.
+        embedded, model, lane, note = await self._embed([*made.fresh, *remembered.fresh], project_id)
+        embedded += made.embedded + remembered.embedded
         ms = round((time.monotonic() - t0) * 1000)
         run = await self.session.get(RetrievalRun, project_id) or RetrievalRun(project_id=project_id)
         # Set every time, not left to the column default: a default only fires on the first insert,
         # so a rebuilt index would keep telling the screen it was built days ago.
         run.finished_at = utcnow()
-        run.ms, run.chunks, run.embedded = ms, len(made) + len(remembered), embedded
+        run.ms, run.chunks, run.embedded = ms, made.total + remembered.total, embedded
         run.model, run.lane, run.note = model, lane, note
         self.session.add(run)
         await self.session.flush()

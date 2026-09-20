@@ -36,7 +36,8 @@ VIEWER = {"email": "vik@example.com", "password": "another good password"}
 HEADERS = {"X-NC-Client": "test"}
 #: Every route in this family, with the method that reaches it — used to prove one rule holds for all.
 GUARDED = (("GET", "/admin/database"), ("POST", "/admin/database/backup"), ("POST", "/admin/database/check"),
-           ("POST", "/admin/database/optimize"), ("POST", "/admin/reset"), ("GET", "/admin/ai"),
+           ("POST", "/admin/database/optimize"), ("GET", "/admin/database/retention"),
+           ("POST", "/admin/database/prune"), ("POST", "/admin/reset"), ("GET", "/admin/ai"),
            ("PUT", "/admin/ai"), ("POST", "/admin/ai/test"))
 
 
@@ -218,6 +219,53 @@ async def test_optimizing_runs_outside_the_request_and_says_what_it_did(live_adm
     assert done["beforeBytes"] > 0 and done["afterBytes"] > 0 and done["ms"] >= 0
     for step in done["did"]:
         assert step["ok"] is True, f"{step['step']} did not run: {step['detail']}"
+
+
+# ── how long history is kept ─────────────────────────────────────
+async def test_the_history_screen_says_exactly_how_many_rows_would_go(client: AsyncClient,
+                                                                      session: AsyncSession):
+    """The button says a number somebody counted, not "old rows" — and a history kept for good says so
+    rather than reporting a figure it would never act on."""
+    from datetime import UTC, datetime, timedelta
+
+    from app import models as m
+
+    run = m.Run(id="r-retention", ref="RUN-9100", project_id="erp", branch="b", worktree="/nowhere",
+                repo="/nowhere", base="abc1234", requested_by="Rajat")
+    session.add(run)
+    await session.flush()
+    old = datetime.now(UTC) - timedelta(days=400)
+    session.add_all([m.RunLog(run_id=run.id, level="info", line=f"old {n}", at=old) for n in range(5)])
+    session.add(m.RunLog(run_id=run.id, level="info", line="today"))
+    await session.flush()
+
+    report = (await client.get("/admin/database/retention")).json()
+    by_table = {t["table"]: t for t in report["tables"]}
+    assert by_table["run_logs"]["rows"] == 5 and by_table["run_logs"]["days"] > 0
+    assert by_table["run_logs"]["label"] == "Run output"
+    assert by_table["run_logs"]["setting"] == "NEUROCODE_RUN_LOG_DAYS"
+    assert by_table["ai_calls"]["days"] == 0 and by_table["ai_calls"]["cutoff"] is None
+    assert report["rows"] == sum(t["rows"] for t in report["tables"])
+    assert "audit_log" not in by_table            # append-only: nothing may delete from it, at any setting
+
+
+async def test_pruning_runs_outside_the_request_and_says_what_it_removed(live_admin):
+    """Like the vacuum, against a committed workspace: the deleting happens on its own connection and
+    commits as it goes, which is the whole reason nothing else waits behind it."""
+    client = live_admin
+    done = (await client.post("/admin/database/prune")).json()
+
+    assert set(done) >= {"at", "ms", "tables", "removed"}
+    assert done["removed"] >= 0 and done["ms"] >= 0
+    by_table = {t["table"]: t for t in done["tables"]}
+    assert set(by_table) == {"run_logs", "activity", "ai_calls", "schedule_fires", "memory_hits",
+                             "login_attempts"}
+    assert by_table["ai_calls"]["note"] == "kept" and by_table["ai_calls"]["removed"] == 0
+
+    # Every chore an administrator asks for is written down, with what it came to.
+    trail = (await client.get("/admin/audit", params={"limit": "20"})).json()
+    line = next(e for e in trail if e["action"] == "database.prune")
+    assert line["target"] == "history" and line["detail"]["removed"] == done["removed"]
 
 
 # ── emptying the workspace ───────────────────────────────────────

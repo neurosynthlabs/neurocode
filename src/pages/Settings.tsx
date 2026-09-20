@@ -64,7 +64,7 @@ export default function Settings() {
     <Page>
       <PageHeader
         title="Settings"
-        subtitle="How NeuroCode looks in this browser, where its data lives, and the one reset that empties the workspace."
+        subtitle="Appearance, where the data lives, and reset."
       />
 
       <PageBody>

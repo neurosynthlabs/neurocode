@@ -29,7 +29,7 @@ export default function Git() {
   if (project?.source) return <LiveGit project={project} />;
   return (
     <Page>
-      <PageHeader title="Git & Worktrees" subtitle="Every run works in a worktree on its own branch; nothing reaches your checkout until you merge it." />
+      <PageHeader title="Git & Worktrees" />
       <PageBody>
         <Empty
           icon={<FolderGit2 className="size-6" />}
@@ -81,7 +81,7 @@ function LiveGit({ project }: { project: Project }) {
     <Page>
       <PageHeader
         title="Git & Worktrees"
-        subtitle={`Read from ${project.name}'s repository on this machine. Every run works in a worktree on its own branch; nothing reaches your checkout until you merge it.`}
+        subtitle={`Read from ${project.name}'s repository on this machine.`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Segmented

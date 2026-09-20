@@ -198,26 +198,32 @@ export default function Tasks() {
         {tasks.length > 0 && view === 'table' && (
           <Panel flush>
             {list.length === 0 ? <Empty title="No task matches" /> : (
-              <DataTable head={['Ref', 'Task', 'Project', 'Status', 'Priority', 'Risk', 'Layers', 'Agents', 'Files', 'Run', 'Updated']}>
+              // Eleven columns do not fit a phone: below each width the ones that are not what the screen is
+              // for step out, and the row still opens the task with all of them.
+              <DataTable head={['Ref', 'Task', { label: 'Project', hideBelow: 'md' }, 'Status',
+                { label: 'Priority', hideBelow: 'sm' }, { label: 'Risk', hideBelow: 'md' },
+                { label: 'Layers', hideBelow: 'lg' }, { label: 'Agents', hideBelow: 'lg' },
+                { label: 'Files', hideBelow: 'xl' }, { label: 'Run', hideBelow: 'md' },
+                { label: 'Updated', hideBelow: 'sm' }]}>
                 {list.map((t) => {
                   const run = latestRun.get(t.ref);
                   return (
                   <Row key={t.id} onClick={() => setOpenRef(t.ref)}>
                     <Cell mono>{t.ref}</Cell>
                     <Cell className="font-medium text-ink">{t.title}</Cell>
-                    <Cell className="text-dim">{projectLabel(projects, t.projectId)}</Cell>
+                    <Cell hideBelow="md" className="text-dim">{projectLabel(projects, t.projectId)}</Cell>
                     <Cell><span className="flex items-center gap-1.5"><Dot state={t.status} /><span className="capitalize">{t.status.replace('_', ' ')}</span></span></Cell>
-                    <Cell><Tag tone={PRIO_TONE[t.priority]}>{t.priority}</Tag></Cell>
-                    <Cell><RiskPill risk={t.risk} bare /></Cell>
-                    <Cell className="text-[12.5px] text-dim">{t.layers.join(' · ')}</Cell>
-                    <Cell className="text-[12.5px]">{t.agents.length ? t.agents.map((a) => agentName(catalogue, a)).join(', ') : <span className="text-dim">none named</span>}</Cell>
-                    <Cell className="tnum">{t.files}</Cell>
-                    <Cell>
+                    <Cell hideBelow="sm"><Tag tone={PRIO_TONE[t.priority]}>{t.priority}</Tag></Cell>
+                    <Cell hideBelow="md"><RiskPill risk={t.risk} bare /></Cell>
+                    <Cell hideBelow="lg" className="text-[12.5px] text-dim">{t.layers.join(' · ')}</Cell>
+                    <Cell hideBelow="lg" className="text-[12.5px]">{t.agents.length ? t.agents.map((a) => agentName(catalogue, a)).join(', ') : <span className="text-dim">none named</span>}</Cell>
+                    <Cell hideBelow="xl" className="tnum">{t.files}</Cell>
+                    <Cell hideBelow="md">
                       {run
                         ? <span className="flex items-center gap-2"><BlockBar pct={progress(run)} width={10} /><span className="tnum text-[12px]">{progress(run)}%</span></span>
                         : <span className="text-[12px] text-dim">not dispatched</span>}
                     </Cell>
-                    <Cell className="text-dim">{ago(t.updatedAt)}</Cell>
+                    <Cell hideBelow="sm" className="text-dim">{ago(t.updatedAt)}</Cell>
                   </Row>
                   );
                 })}

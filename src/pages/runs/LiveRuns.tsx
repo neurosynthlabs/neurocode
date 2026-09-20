@@ -34,6 +34,11 @@ const stepKind = (r: RuntimeRun, s: RunStep) =>
 const accepted = (r: RunDoc) => r.status === 'done' && r.steps.some((s) => s.kind === 'handoff' && s.status === 'done');
 const failed = (e: unknown) => (e instanceof ApiError ? e.message : 'The local API did not answer.');
 const progress = (r: RunDoc) => Math.round((100 * r.steps.filter(done).length) / Math.max(1, r.steps.length));
+/* The ceiling on the live output. A run that talks for an hour used to stream into a list with no
+   ceiling at all — every line copied the whole array, and every run watched in the session stayed in
+   memory until the tab was closed. What falls off the top is not lost: it is in the run's own record,
+   which this screen reads again whenever the run is opened. */
+const LIVE_LINES = 2000;
 
 export function LiveRuns() {
   const { runs, approvals, onRunLog, cancelRun, discardRun, mergeRun } = useData();
@@ -61,12 +66,28 @@ export function LiveRuns() {
   const logBox = useRef<HTMLDivElement>(null);
   const diff = useRemote(showDiff && run ? `diff:${run.ref}:${run.diff.commits}` : null, () => api.runDiff(run?.ref ?? ''));
 
-  useEffect(() => onRunLog((line) => setStreamed((m) => ({ ...m, [line.runRef]: [...(m[line.runRef] ?? []), line] }))), [onRunLog]);
+  useEffect(
+    () => onRunLog((line) => setStreamed((m) => ({ ...m, [line.runRef]: [...(m[line.runRef] ?? []), line].slice(-LIVE_LINES) }))),
+    [onRunLog],
+  );
+
+  // Lines arrive for every run that is working, not only the one on screen, and every run watched in a
+  // session used to stay in memory until the tab was closed. Only the open run's buffer is kept; the
+  // others' output is on the server, and this screen reads it back when that run is opened.
+  // Adjusted during render rather than in an effect, so the dropped lines are never painted.
+  const openRef = run?.ref ?? null;
+  const [watching, setWatching] = useState<string | null>(null);
+  if (openRef && watching !== openRef) {
+    setWatching(openRef);
+    setStreamed((m) => (m[openRef] ? { [openRef]: m[openRef] } : {}));
+  }
 
   const logs = useMemo(() => {
     const seen = new Set<number>();
     return [...(detail.data?.logs ?? []), ...(streamed[run?.ref ?? ''] ?? [])].filter((l) => !seen.has(l.id) && seen.add(l.id));
   }, [detail.data, streamed, run?.ref]);
+  // What is actually put in the DOM. The count in the panel's eyebrow stays the whole run's.
+  const shown = logs.length > LIVE_LINES ? logs.slice(-LIVE_LINES) : logs;
 
   useEffect(() => {
     if (follow && logBox.current) logBox.current.scrollTop = logBox.current.scrollHeight;
@@ -150,7 +171,7 @@ export function LiveRuns() {
   if (!run) {
     return (
       <Page>
-        <PageHeader title="Live Runs" subtitle="Every run works in a git worktree of its own, on its own branch. Nothing runs on your working tree, and nothing is merged without you." />
+        <PageHeader title="Live Runs" subtitle="One git worktree and branch per run." />
         <PageBody>
           <Empty
             icon={<FolderGit2 className="size-6" />} title="No run yet"
@@ -183,7 +204,7 @@ export function LiveRuns() {
     <Page>
       <PageHeader
         title="Live Runs"
-        subtitle="Every run works in a git worktree of its own, on its own branch. The model proposes file contents; nothing it says is ever executed."
+        subtitle="One git worktree and branch per run."
         actions={
           <>
             {can('runs:run') && (working || run.status === 'waiting') && (
@@ -380,7 +401,10 @@ export function LiveRuns() {
             >
               <div ref={logBox} className="max-h-[320px] min-h-[160px] overflow-y-auto bg-base px-4 py-2.5 font-mono text-[12.5px] leading-[1.6]">
                 {detail.loading && logs.length === 0 && <span className="text-dim">loading…</span>}
-                {logs.map((l) => (
+                {shown.length < logs.length && (
+                  <div className="pb-1 text-dim">Earlier output is in the run&rsquo;s record.</div>
+                )}
+                {shown.map((l) => (
                   <div key={l.id} className="flex gap-2.5">
                     <span className="shrink-0 text-dim">{clock(l.at)}</span>
                     <span className={cn('w-2.5 shrink-0 text-center', LEVEL_TONE[l.level])}>{LEVEL_MARK[l.level]}</span>

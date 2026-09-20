@@ -8,6 +8,10 @@ Everything that shapes a session goes through here too: answering a tool call's 
 resumes the answer), editing a question and regenerating an answer (new turns; the old ones stay),
 forking, export and import, "Make this a plan", uploads, and the composer's `@` mentions — the one route
 not under /sessions, since what it looks up belongs to a project.
+
+Whose sessions these are: your own, always. Someone else's — its turns, its files, its export — needs
+`sessions:read`, because a transcript is where a person's own code and whatever they pasted end up in
+plain text.
 """
 from __future__ import annotations
 
@@ -24,14 +28,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..ai.gateway import Gateway
 from ..data.engine import Database
 from ..repositories import ChatRepository, NotFound, ProjectRepository
+from ..repositories.base import fence
 from ..models import Chat
 from ..schemas import chat_json, chat_message_json, plan_json, task_json
 from ..services import chat as chat_service
 from ..services.chat import MAX_ATTACHED, MAX_QUESTION, ChatService
 from ..services.custom_agents import CustomAgentService
+from ..services.errors import Denied
 from ..services.identity import Person
 from ..services.sessions import MAX_IMAGE_UPLOAD, SessionShapes, upload_json
-from .deps import current_person, database, gateway, hand_off, require, session
+from .deps import (current_person, database, gateway, hand_off, must_see, require, scoped, session,
+                   unseen_by)
 
 router = APIRouter()
 sessions_router = APIRouter(prefix="/sessions")
@@ -103,10 +110,45 @@ async def _name_of(open_session: AsyncSession, project_id: str) -> str:
     return project.name if project else project_id
 
 
-@sessions_router.get("", dependencies=[Depends(current_person)])
+async def readable(ref: str, who: Person, open_session: AsyncSession) -> Chat:
+    """The session behind this ref, when this person may read it.
+
+    Your own sessions are always yours. Someone else's is the most private thing in the workspace —
+    a transcript holds the code the model was handed and whatever was pasted into it — so opening one
+    needs `sessions:read`. The refusal names that right rather than hiding the session, because a
+    colleague's session plainly exists and pretending otherwise teaches nobody what to ask for.
+
+    `started_by` is the name a session was started under, which is what the row carries.
+    """
+    chat = await ChatRepository(open_session).by_ref(ref)
+    if chat is None:
+        raise NotFound(f"session {ref}")
+    # A session of a restricted project is answered before the right is weighed, and with 404 rather
+    # than the refusal below: `sessions:read` would tell somebody there is a session here to read.
+    await must_see(who, open_session, chat.project_id, f"session {ref}")
+    if chat.started_by != who.name and not who.can("sessions:read"):
+        raise Denied("sessions:read", "open a session someone else started")
+    return chat
+
+
+@sessions_router.get("")
 async def sessions(project: str | None = None, limit: int | None = None, offset: int = 0,
+                   who: Person = Depends(current_person),
                    open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
-    page = await ChatRepository(open_session).newest(project, limit=limit, offset=offset)
+    """Your own sessions; everyone else's too with “Read other people's sessions” (`sessions:read`).
+
+    The cut is made in the query, not in the answer, so the page and its total are the truth about
+    the list this person is actually being shown.
+    """
+    chats = ChatRepository(open_session)
+    hidden = await unseen_by(who, open_session)
+    if who.can("sessions:read"):
+        page = await chats.newest(project, limit=limit, offset=offset, hidden=hidden)
+    else:
+        mine: list[Any] = [Chat.started_by == who.name, *fence(Chat.project_id, hidden)]
+        if project:
+            mine.append(Chat.project_id == project)
+        page = await chats.page(*mine, order_by=Chat.last_at.desc(), limit=limit, offset=offset)
     names = {p.id: p.name for p in await ProjectRepository(open_session).all_ordered()}
     waiting = await chat_service.waiting_on(open_session, [c.id for c in page.items])
     return [chat_json(c, project_name=names.get(c.project_id, c.project_id), waiting=waiting.get(c.id))
@@ -121,14 +163,14 @@ async def create(body: SessionIn, who: Person = Depends(require("sessions:chat")
     return chat_json(chat, project_name=await _name_of(open_session, chat.project_id))
 
 
-@sessions_router.get("/{ref}", dependencies=[Depends(current_person)])
-async def session_detail(ref: str, after: int = 0,
+@sessions_router.get("/{ref}")
+async def session_detail(ref: str, after: int = 0, who: Person = Depends(current_person),
                          open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
-    """The session and its turns. `after` is the last message id you hold, for catching up."""
+    """The session and its turns. `after` is the last message id you hold, for catching up.
+
+    Your own always; someone else's with `sessions:read`."""
     chats = ChatRepository(open_session)
-    chat = await chats.by_ref(ref)
-    if chat is None:
-        raise NotFound(f"session {ref}")
+    chat = await readable(ref, who, open_session)
     messages = await chats.messages(chat.id, after)
     project = await ProjectRepository(open_session).get(chat.project_id)
     # The instruction files its model is handed, read the way the answering loop reads them.
@@ -233,11 +275,13 @@ async def fork(ref: str, body: ForkIn, who: Person = Depends(require("sessions:c
     return await _json(open_session, made)
 
 
-@sessions_router.get("/{ref}/export", dependencies=[Depends(current_person)])
-async def export(ref: str, format: Literal["md", "json"] = "md", open_session: AsyncSession = Depends(session),
+@sessions_router.get("/{ref}/export")
+async def export(ref: str, format: Literal["md", "json"] = "md", who: Person = Depends(current_person),
+                 open_session: AsyncSession = Depends(session),
                  gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """`{filename, mime, text}`: the screen makes the download from it. JSON holds every turn, replaced
-    ones included; Markdown the current line."""
+    ones included; Markdown the current line. Your own always; someone else's with `sessions:read`."""
+    await readable(ref, who, open_session)
     return await SessionShapes(open_session, gw).export(ref, format)
 
 
@@ -266,11 +310,14 @@ async def upload(ref: str, body: UploadIn, who: Person = Depends(require("sessio
     return upload_json(await SessionShapes(open_session, gw).upload(ref, body.name, body.mime, body.data, who))
 
 
-@sessions_router.get("/{ref}/files/{file_id}", dependencies=[Depends(current_person)])
-async def uploaded(ref: str, file_id: int, open_session: AsyncSession = Depends(session),
+@sessions_router.get("/{ref}/files/{file_id}")
+async def uploaded(ref: str, file_id: int, who: Person = Depends(current_person),
+                   open_session: AsyncSession = Depends(session),
                    gw: Gateway = Depends(gateway)) -> Response:
     """An upload's bytes, for its chip. Only the types an upload may be are ever served, never sniffed,
-    and never as a page: a text file comes back as plain text whatever it claims to be."""
+    and never as a page: a text file comes back as plain text whatever it claims to be. A file someone
+    else attached is read under the same right their transcript is."""
+    await readable(ref, who, open_session)
     found = await SessionShapes(open_session, gw).file(ref, file_id)
     mime = found.mime if found.mime in chat_service.IMAGE_TYPES else "text/plain; charset=utf-8"
     return Response(found.data, media_type=mime, headers={
@@ -278,10 +325,13 @@ async def uploaded(ref: str, file_id: int, open_session: AsyncSession = Depends(
         "Content-Security-Policy": "default-src 'none'; sandbox"})
 
 
-@router.get("/projects/{pid}/mentions", dependencies=[Depends(current_person)])
+@router.get("/projects/{pid}/mentions", dependencies=[Depends(scoped())])
 async def mentions(pid: str, q: str = Query(default="", max_length=120),
                    open_session: AsyncSession = Depends(session), gw: Gateway = Depends(gateway)) -> dict[str, Any]:
-    """What the composer's `@` offers for this project: files, symbols, facts and plans."""
+    """What the composer's `@` offers for this project: files, symbols, facts and plans.
+
+    Asked inside the project, because the answer is the project: its file names, its symbols and the
+    first line of its facts. A restricted project somebody is not listed on answers 404 here too."""
     return {"items": await SessionShapes(open_session, gw).mentions(pid, q)}
 
 

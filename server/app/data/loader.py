@@ -19,7 +19,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import (
@@ -35,6 +35,7 @@ from ..models import (
     Plan,
     PlanQuestion,
     PlanStep,
+    Pref,
     Project,
     Role,
     RolePermission,
@@ -65,6 +66,17 @@ def count(value: Any) -> int:
     except ValueError:
         return 0
     return int(n * SIZES.get((m.group(2) or "").lower(), 1))
+
+
+def ref_number(ref: str) -> int | None:
+    """The number in a reference — `APPR-118` → 118 — or nothing if it carries none.
+
+    Kept beside the ref on the row so the inbox can order gates written in the same second without a
+    regular expression in the sort. A carried-in ref that is not `PREFIX-<n>` simply has no number,
+    and a gate with none sorts last rather than being given one it never had.
+    """
+    digits = re.search(r"(\d+)\s*$", ref or "")
+    return int(digits.group(1)) if digits else None
 
 
 #: "2 min ago", "3 h ago", "6 d ago" — how the old document store wrote times, back when these were
@@ -181,12 +193,20 @@ async def load_seed(session: AsyncSession, data: dict[str, Any]) -> dict[str, in
     written["plans"] = len(data.get("plans", []))
     await session.flush()
 
+    # `seq` is the number the ref was built from, kept on the row so the inbox can order gates written
+    # in the same second without a regular expression in its sort.
+    #
+    # `run_id` — the link every gate the runtime writes now carries — is left where it falls, which is
+    # null. A load empties the projects and writes them again, and a run belongs to a project, so by the
+    # time these rows are written this workspace has no runs at all for a carried-in gate to point at:
+    # anything set here would be pointing at nothing. `run_ref` is kept as what it is, the label the
+    # gate arrived with.
     for row in data.get("approvals", []):
         session.add(Approval(
             id=row["id"], ref=row["ref"], title=row["title"], agent=row.get("agent", ""),
             tool=row.get("tool", ""), risk=row.get("risk", "LOW"), status=row.get("status", "pending"),
             project_id=row.get("projectId"), payload=row.get("payload", ""), reason=row.get("reason", ""),
-            run_ref=row.get("runRef"), step=row.get("step"),
+            run_ref=row.get("runRef"), step=row.get("step"), seq=ref_number(row["ref"]),
         ))
     written["approvals"] = len(data.get("approvals", []))
 
@@ -239,9 +259,60 @@ async def load_seed(session: AsyncSession, data: dict[str, Any]) -> dict[str, in
     return written
 
 
+#: A right added in a release is a fence around a door that was open before it. A custom role that
+#: could walk through that door yesterday must still be able to today — so each new right names, once,
+#: which roles already held what it now fences: `None` means every custom role could.
+#:
+#: Each entry is applied at most once per workspace, under its own mark in `prefs`, because the
+#: alternative is worse than doing nothing: an admin who deliberately takes `ops:read` off a custom
+#: role would find it back after the next restart, and would never be able to take it off at all.
+#: Forward-only, so a mark is never removed once written.
+UPGRADES: tuple[tuple[str, str, tuple[str, ...] | None], ...] = (
+    ("w3.ops:read", "ops:read", None),
+    ("w3.sessions:read", "sessions:read", None),
+    ("w3.people:read", "people:read", ("users:manage", "teams:manage")),
+)
+
+#: Which of the upgrades above this workspace has already been through.
+UPGRADE_MARKS = "access.upgrades"
+
+
+async def upgrade_custom_roles(session: AsyncSession) -> list[str]:
+    """Carry custom roles over a new right, once, and say which upgrades this start applied.
+
+    `sync_roles` writes the built-in roles again from the catalogue, so they pick up a new right for
+    free. Nothing writes the custom roles — that is the point of them — so a right that fences
+    something they could already reach has to be handed to them here, or the release quietly takes
+    access away from the one workspace that took the trouble to define its own roles.
+    """
+    marks = await session.get(Pref, UPGRADE_MARKS)
+    done = set(marks.value.get("applied", [])) if marks else set()
+    applied: list[str] = []
+    for mark, permission, implied_by in UPGRADES:
+        if mark in done:
+            continue
+        holders = select(Role.id).where(Role.builtin.is_(False))
+        if implied_by is not None:
+            holders = holders.where(Role.id.in_(
+                select(RolePermission.role_id).where(RolePermission.permission.in_(implied_by))))
+        already = select(RolePermission.role_id).where(RolePermission.permission == permission)
+        for role_id in (await session.execute(holders.where(Role.id.not_in(already)))).scalars():
+            session.add(RolePermission(role_id=role_id, permission=permission))
+        applied.append(mark)
+    if applied:
+        if marks is None:
+            marks = Pref(id=UPGRADE_MARKS, value={"applied": []})
+            session.add(marks)
+        # JSONB is replaced whole rather than mutated in place: SQLAlchemy does not see a list append.
+        marks.value = {"applied": sorted(done | set(applied))}
+        await session.flush()
+    return applied
+
+
 async def sync_roles(session: AsyncSession) -> int:
     """Built-in roles, re-read from the catalogue on every start, so a new permission lands on upgrade.
-    A custom role someone made is left exactly as it is."""
+    A custom role someone made is left exactly as it is — except for the one-off carry-over in
+    `upgrade_custom_roles`, which hands it the rights that now fence doors it could already open."""
     for n, row in enumerate(ROLES):
         role = await session.get(Role, row.id)
         if role is None:
@@ -257,6 +328,7 @@ async def sync_roles(session: AsyncSession) -> int:
         for permission in dict.fromkeys(row.permissions):
             session.add(RolePermission(role_id=role.id, permission=permission))
     await session.flush()
+    await upgrade_custom_roles(session)
     return len(ROLES)
 
 

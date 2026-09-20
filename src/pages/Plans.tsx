@@ -8,7 +8,7 @@ import {
 import { Button } from '@/components/ui/button';
 import {
   Page, PageHeader, PageBody, Panel, Tag, RiskPill, Mono, ListRow, Empty,
-  BlockBar, SectionTitle, KV, Bar,
+  BlockBar, SectionTitle, KV, Bar, Segmented,
 } from '@/components/os';
 import { inFlight, useData } from '@/lib/data';
 import { ApiError, type RunDoc } from '@/lib/api';
@@ -109,6 +109,9 @@ export default function Plans() {
   const wanted = useSearchParams()[0].get('ref');
   // ?ref= (⌘K) opens a plan, also when this screen is already showing; a click picks another until the link changes.
   const [picked, setPicked] = useState<{ link: string | null; ref: string } | null>(null);
+  // Which half of the detail column is shown, under the steps. Not a setting anyone reloads into: it
+  // starts on the plan every time, because the plan is what the screen is for.
+  const [detailTab, setDetailTab] = useState<'plan' | 'evidence'>('plan');
   const sel = (picked && picked.link === wanted ? picked.ref : null) ?? wanted ?? plans[0]?.ref ?? '';
   // An answer being typed belongs to one plan's question, so opening another plan never shows it.
   const [typing, setTyping] = useState<{ plan: string; index: number; text: string } | null>(null);
@@ -307,7 +310,7 @@ export default function Plans() {
     <Page>
       <PageHeader
         title="Plans"
-        subtitle="The requirement compiler. A requirement in your own words goes in; an evidenced implementation plan comes out, with the open questions it refuses to guess at."
+        subtitle="Requirements, compiled into plans you shape and dispatch."
         actions={<Button size="sm" onClick={() => nav('/tasks')}><Play className="size-3.5" />Open the board</Button>}
       />
 
@@ -483,151 +486,173 @@ export default function Plans() {
             </Panel>
           </div>
 
-          {/* Confidence + questions */}
-          <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <Panel eyebrow="How sure the compiler said it is" title={p.confidence === null ? 'Confidence: not compiled' : `Confidence: ${p.confidence}%`}>
-              {p.confidence !== null && (
-                <Bar pct={p.confidence} tone={p.confidence >= 85 ? 'ok' : p.confidence >= 70 ? 'warn' : 'danger'} height="h-1.5" />
-              )}
-              <SectionTitle className="mt-3 mb-1.5">Evidence</SectionTitle>
-              <div className="space-y-1">
-                {p.compiler ? (
-                  <>
-                    <KV k="Memory consulted" v={p.cited?.length ? p.cited.join(' · ') : 'nothing matched'} />
-                    <KV k="Files named" v={p.affectedFiles.length} />
-                    <KV k="Database objects named" v={p.affectedDb.length} />
-                    <KV k="Compiled by" v={p.compiler.model} />
-                  </>
-                ) : (
-                  <p className="text-[12.5px] text-soft">
-                    Steps written by {workflow ? `the ${workflow} workflow` : 'a workflow'}, not compiled — nothing was read or weighed to write them.
-                  </p>
-                )}
-              </div>
-              <SectionTitle className="mt-3 mb-1.5">Unknown</SectionTitle>
-              <p className={cn('text-[12.5px]', open > 0 ? 'text-warn' : 'text-dim')}>
-                {open > 0
-                  ? `${open} open question${open > 1 ? 's' : ''} the compiler would not guess at.`
-                  : 'No question was left open.'}
-              </p>
-            </Panel>
-
-            <Panel eyebrow="The plan refuses to guess" title={<span className="flex items-center gap-1.5"><HelpCircle className="size-3.5 text-warn" />Open questions</span>} flush>
-              {open === 0 ? (
-                <Empty title="No open questions" hint="Everything this plan needed is documented or decided." />
-              ) : (
-                <div className="divide-y divide-line">
-                  {p.openQuestions.map((q, i) => (
-                    <div key={`${p.ref}-${q}`} className="px-3.5 py-2.5">
-                      <p className="text-[13px] text-ink-2">{q}</p>
-                      {draft?.index === i ? (
-                        <form
-                          className="mt-2 space-y-1.5"
-                          onSubmit={(e) => { e.preventDefault(); if (draft.text.trim()) settle(i, draft.text.trim()); }}
-                        >
-                          <textarea
-                            autoFocus
-                            rows={2}
-                            value={draft.text}
-                            onChange={(e) => setDraft({ index: i, text: e.target.value })}
-                            aria-label={`Answer: ${q}`}
-                            placeholder="Your answer becomes a business rule in memory…"
-                            className="w-full resize-none rounded-sm border border-line bg-base px-2.5 py-1.5 text-[13px] text-ink placeholder:text-dim focus-visible:border-brand focus-visible:outline-none"
-                          />
-                          <div className="flex gap-1.5">
-                            <Button size="xs" type="submit" disabled={!draft.text.trim()}><Check className="size-3" />Save answer</Button>
-                            <Button size="xs" type="button" variant="ghost" onClick={() => setDraft(null)}>Cancel</Button>
-                          </div>
-                        </form>
-                      ) : (
-                        <div className="mt-1.5 flex gap-1.5">
-                          <Button size="xs" variant="outline" onClick={() => setDraft({ index: i, text: '' })}>Answer</Button>
-                          <Button size="xs" variant="ghost" onClick={() => settle(i, null)}>Defer</Button>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-              {(p.answered?.length || p.deferred?.length) ? (
-                <div className="space-y-1.5 border-t border-line px-3.5 py-2.5">
-                  {p.answered?.map((a) => (
-                    <p key={a.q} className="text-[12.5px] text-soft">
-                      <Check className="mr-1 inline size-3 text-ok" /><span className="text-ink-2">{a.q}</span> → {a.a}
-                    </p>
-                  ))}
-                  {p.deferred?.map((q) => <p key={q} className="text-[12.5px] text-dim">Deferred: {q}</p>)}
-                </div>
-              ) : null}
-            </Panel>
-          </div>
-
-          <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <Panel eyebrow="What the compiler was handed" title={<span className="flex items-center gap-1.5"><BookOpen className="size-3.5 text-brand" />Grounded in</span>} flush>
-              <GroundedIn p={g} />
-            </Panel>
-
-            <Panel eyebrow={g.criteriaEdited ? 'Edited by a person · a re-compile keeps them' : 'What done means · proposed by the compiler'}
-              title={<span className="flex items-center gap-1.5"><ListChecks className="size-3.5 text-brand" />Acceptance criteria</span>}
-              actions={!underway && !editingCriteria && can('plans:decide') ? (
-                <Button size="xs" variant="ghost" onClick={() => setCriteriaDraft({ plan: p.ref, text: criteria.join('\n') })}>
-                  <Pencil className="size-3" />Edit
-                </Button>
-              ) : undefined}
-              flush>
-              {editingCriteria ? (
-                <form className="space-y-1.5 px-3.5 py-2.5"
-                  onSubmit={(e) => { e.preventDefault(); void saveCriteria(editingCriteria.text); }}>
-                  <textarea autoFocus rows={5} value={editingCriteria.text}
-                    onChange={(e) => setCriteriaDraft({ plan: p.ref, text: e.target.value })}
-                    aria-label="Acceptance criteria, one per line"
-                    placeholder="One checkable sentence per line…"
-                    className="w-full resize-y rounded-sm border border-line bg-base px-2.5 py-1.5 text-[13px] text-ink placeholder:text-dim focus-visible:border-brand focus-visible:outline-none" />
-                  <p className="text-[11.5px] text-dim">One per line, up to 12. Blank lines are dropped.</p>
-                  <div className="flex gap-1.5">
-                    <Button size="xs" type="submit" disabled={working !== null}><Check className="size-3" />{working === 'criteria' ? 'Saving…' : 'Save criteria'}</Button>
-                    <Button size="xs" type="button" variant="ghost" onClick={() => setCriteriaDraft(null)}>Cancel</Button>
-                  </div>
-                </form>
-              ) : criteria.length === 0 ? (
-                <p className="px-3.5 py-3 text-[13px] text-dim">
-                  {underway ? 'None were set before it was dispatched.' : 'None yet. A compile proposes them; you can write your own before dispatch.'}
-                </p>
-              ) : (
-                <div className="divide-y divide-line">
-                  {criteria.map((c, i) => (
-                    <div key={c} className="flex items-start gap-2.5 px-3.5 py-1.5">
-                      <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[11.5px] text-dim">{i + 1}</span>
-                      <span className="text-[13px] text-ink-2">{c}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Panel>
-          </div>
-
-          <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <CommentsPanel
-              p={p} shapeable={shapeable} loading={comments.loading} error={comments.error} onRetry={comments.reload}
-              thread={thread} writing={writing?.stepId === null ? writing : null} working={working}
-              onWrite={() => setCommentDraft({ plan: p.ref, stepId: null, kind: 'comment', body: '' })}
-              onChange={setCommentDraft} onSave={saveComment} onCancel={() => setCommentDraft(null)}
-              onResolve={resolveComment} onRevise={revise}
+          {/* Twelve panels one under the other put the dispatch bar four screens below the steps. Nothing
+              here is cut: what the decision needs — how sure it is, what it still asks, what done means, and
+              what was said about it — stays under Plan, and what a person reads once, about where the plan
+              came from, moves one click away. Both groups hold the same panels, word for word. */}
+          <div className="mt-4">
+            <Segmented
+              options={[{ id: 'plan', label: 'Plan' }, { id: 'evidence', label: 'Evidence & history' }]}
+              value={detailTab}
+              onChange={setDetailTab}
             />
-            <RevisionsPanel p={p} />
           </div>
 
-          <Panel className="mt-3" eyebrow="Verification" title={<span className="flex items-center gap-1.5"><FlaskConical className="size-3.5 text-brand" />Test plan</span>} flush>
-            {p.testPlan.length === 0 && <p className="px-3.5 py-3 text-[13px] text-dim">No test plan was written for this plan.</p>}
-            <div className="divide-y divide-line">
-              {p.testPlan.map((t, i) => (
-                <div key={i} className="flex items-start gap-2.5 px-3.5 py-1.5">
-                  <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[11.5px] text-dim">{i + 1}</span>
-                  <span className="text-[13px] text-ink-2">{t}</span>
+          {detailTab === 'plan' && (
+            <>
+            <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+              <Panel title={p.confidence === null ? 'Confidence: not compiled' : `Confidence: ${p.confidence}%`}>
+                {p.confidence !== null && (
+                  <Bar pct={p.confidence} tone={p.confidence >= 85 ? 'ok' : p.confidence >= 70 ? 'warn' : 'danger'} height="h-1.5" />
+                )}
+                <SectionTitle className="mt-3 mb-1.5">Evidence</SectionTitle>
+                <div className="space-y-1">
+                  {p.compiler ? (
+                    <>
+                      <KV k="Memory consulted" v={p.cited?.length ? p.cited.join(' · ') : 'nothing matched'} />
+                      <KV k="Files named" v={p.affectedFiles.length} />
+                      <KV k="Database objects named" v={p.affectedDb.length} />
+                      <KV k="Compiled by" v={p.compiler.model} />
+                    </>
+                  ) : (
+                    <p className="text-[12.5px] text-soft">
+                      Steps written by {workflow ? `the ${workflow} workflow` : 'a workflow'}, not compiled — nothing was read or weighed to write them.
+                    </p>
+                  )}
                 </div>
-              ))}
+                <SectionTitle className="mt-3 mb-1.5">Unknown</SectionTitle>
+                <p className={cn('text-[12.5px]', open > 0 ? 'text-warn' : 'text-dim')}>
+                  {open > 0
+                    ? `${open} open question${open > 1 ? 's' : ''} the compiler would not guess at.`
+                    : 'No question was left open.'}
+                </p>
+              </Panel>
+
+              <Panel title={<span className="flex items-center gap-1.5"><HelpCircle className="size-3.5 text-warn" />Open questions</span>} flush>
+                {open === 0 ? (
+                  <Empty title="No open questions" />
+                ) : (
+                  <div className="divide-y divide-line">
+                    {p.openQuestions.map((q, i) => (
+                      <div key={`${p.ref}-${q}`} className="px-3.5 py-2.5">
+                        <p className="text-[13px] text-ink-2">{q}</p>
+                        {draft?.index === i ? (
+                          <form
+                            className="mt-2 space-y-1.5"
+                            onSubmit={(e) => { e.preventDefault(); if (draft.text.trim()) settle(i, draft.text.trim()); }}
+                          >
+                            <textarea
+                              autoFocus
+                              rows={2}
+                              value={draft.text}
+                              onChange={(e) => setDraft({ index: i, text: e.target.value })}
+                              aria-label={`Answer: ${q}`}
+                              placeholder="Your answer becomes a business rule in memory…"
+                              className="w-full resize-none rounded-sm border border-line bg-base px-2.5 py-1.5 text-[13px] text-ink placeholder:text-dim focus-visible:border-brand focus-visible:outline-none"
+                            />
+                            <div className="flex gap-1.5">
+                              <Button size="xs" type="submit" disabled={!draft.text.trim()}><Check className="size-3" />Save answer</Button>
+                              <Button size="xs" type="button" variant="ghost" onClick={() => setDraft(null)}>Cancel</Button>
+                            </div>
+                          </form>
+                        ) : (
+                          <div className="mt-1.5 flex gap-1.5">
+                            <Button size="xs" variant="outline" onClick={() => setDraft({ index: i, text: '' })}>Answer</Button>
+                            <Button size="xs" variant="ghost" onClick={() => settle(i, null)}>Defer</Button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {(p.answered?.length || p.deferred?.length) ? (
+                  <div className="space-y-1.5 border-t border-line px-3.5 py-2.5">
+                    {p.answered?.map((a) => (
+                      <p key={a.q} className="text-[12.5px] text-soft">
+                        <Check className="mr-1 inline size-3 text-ok" /><span className="text-ink-2">{a.q}</span> → {a.a}
+                      </p>
+                    ))}
+                    {p.deferred?.map((q) => <p key={q} className="text-[12.5px] text-dim">Deferred: {q}</p>)}
+                  </div>
+                ) : null}
+              </Panel>
             </div>
-          </Panel>
+
+              <div className="mt-3">
+              <Panel eyebrow={g.criteriaEdited ? 'Edited by a person · a re-compile keeps them' : 'What done means · proposed by the compiler'}
+                title={<span className="flex items-center gap-1.5"><ListChecks className="size-3.5 text-brand" />Acceptance criteria</span>}
+                actions={!underway && !editingCriteria && can('plans:decide') ? (
+                  <Button size="xs" variant="ghost" onClick={() => setCriteriaDraft({ plan: p.ref, text: criteria.join('\n') })}>
+                    <Pencil className="size-3" />Edit
+                  </Button>
+                ) : undefined}
+                flush>
+                {editingCriteria ? (
+                  <form className="space-y-1.5 px-3.5 py-2.5"
+                    onSubmit={(e) => { e.preventDefault(); void saveCriteria(editingCriteria.text); }}>
+                    <textarea autoFocus rows={5} value={editingCriteria.text}
+                      onChange={(e) => setCriteriaDraft({ plan: p.ref, text: e.target.value })}
+                      aria-label="Acceptance criteria, one per line"
+                      placeholder="One checkable sentence per line…"
+                      className="w-full resize-y rounded-sm border border-line bg-base px-2.5 py-1.5 text-[13px] text-ink placeholder:text-dim focus-visible:border-brand focus-visible:outline-none" />
+                    <p className="text-[11.5px] text-dim">One per line, up to 12. Blank lines are dropped.</p>
+                    <div className="flex gap-1.5">
+                      <Button size="xs" type="submit" disabled={working !== null}><Check className="size-3" />{working === 'criteria' ? 'Saving…' : 'Save criteria'}</Button>
+                      <Button size="xs" type="button" variant="ghost" onClick={() => setCriteriaDraft(null)}>Cancel</Button>
+                    </div>
+                  </form>
+                ) : criteria.length === 0 ? (
+                  <p className="px-3.5 py-3 text-[13px] text-dim">
+                    {underway ? 'None were set before it was dispatched.' : 'None yet. A compile proposes them; you can write your own before dispatch.'}
+                  </p>
+                ) : (
+                  <div className="divide-y divide-line">
+                    {criteria.map((c, i) => (
+                      <div key={c} className="flex items-start gap-2.5 px-3.5 py-1.5">
+                        <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[11.5px] text-dim">{i + 1}</span>
+                        <span className="text-[13px] text-ink-2">{c}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Panel>
+              </div>
+
+              <div className="mt-3">
+              <CommentsPanel
+                p={p} shapeable={shapeable} loading={comments.loading} error={comments.error} onRetry={comments.reload}
+                thread={thread} writing={writing?.stepId === null ? writing : null} working={working}
+                onWrite={() => setCommentDraft({ plan: p.ref, stepId: null, kind: 'comment', body: '' })}
+                onChange={setCommentDraft} onSave={saveComment} onCancel={() => setCommentDraft(null)}
+                onResolve={resolveComment} onRevise={revise}
+              />
+              </div>
+            </>
+          )}
+
+          {detailTab === 'evidence' && (
+            <>
+              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+              <Panel eyebrow="What the compiler was handed" title={<span className="flex items-center gap-1.5"><BookOpen className="size-3.5 text-brand" />Grounded in</span>} flush>
+                <GroundedIn p={g} />
+              </Panel>
+
+              <RevisionsPanel p={p} />
+              </div>
+
+            <Panel className="mt-3" eyebrow="Verification" title={<span className="flex items-center gap-1.5"><FlaskConical className="size-3.5 text-brand" />Test plan</span>} flush>
+              {p.testPlan.length === 0 && <p className="px-3.5 py-3 text-[13px] text-dim">No test plan was written for this plan.</p>}
+              <div className="divide-y divide-line">
+                {p.testPlan.map((t, i) => (
+                  <div key={i} className="flex items-start gap-2.5 px-3.5 py-1.5">
+                    <span className="tnum mt-px w-4 shrink-0 text-right font-mono text-[11.5px] text-dim">{i + 1}</span>
+                    <span className="text-[13px] text-ink-2">{t}</span>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+            </>
+          )}
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <Button size="sm" disabled={underway || open > 0 || working !== null} onClick={dispatch}>

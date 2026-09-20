@@ -17,12 +17,15 @@ from __future__ import annotations
 
 import asyncio
 import glob
+import logging
 import os
 import re
 import shutil
 import subprocess
 import time
-from datetime import UTC, datetime
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -30,7 +33,7 @@ from typing import Any
 from sqlalchemy import delete, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from ..models import (
     ActivityEvent,
@@ -55,9 +58,14 @@ from ..models import (
     TasteSignal,
     WorkflowDefinition,
 )
+from ..data.base import utcnow
 from ..data.changes import announce
+from ..data.engine import Database
+from ..repositories.identity import AuditRepository
 from ..settings import SERVER_DIR, Settings, settings as get_settings
 from .errors import Refused
+
+log = logging.getLogger(__name__)
 
 #: The newest this many copies are kept; older ones are removed as a new one is made.
 KEEP_BACKUPS = 20
@@ -73,6 +81,13 @@ BLOAT_FLOOR = 1_000
 #: queue the whole application behind an ACCESS EXCLUSIVE lock; a busy table is reported, not waited on.
 LOCK_WAIT = "2s"
 BACKUP_TIMEOUT = 600
+#: The most DELETE statements one prune of one table will issue. At the default chunk that is two
+#: million rows in a pass — a year of arrears — and then it stops and says so, rather than running for
+#: an hour because a setting was changed from "keep everything" to ninety days on a very old workspace.
+MAX_PRUNE_STATEMENTS = 400
+#: Where the daily prune records the day it last ran, so a restart does not prune twice and two API
+#: processes do not both prune.
+PRUNED_KEY = "maintenance.pruned"
 
 #: What a workspace holds, under the names the screens have always counted it by. The left-hand side
 #: is the old document store's vocabulary; the right is where those rows live now.
@@ -100,6 +115,33 @@ EMPTIED: tuple[Any, ...] = (Project, MemoryFact, Chunk, ActivityEvent, Approval,
 #: standing "allowed" and ran its test command without anyone being asked. Emptying the workspace is
 #: the only thing that deletes a project, and it takes every one of these with it.
 PER_PROJECT_SETTINGS: tuple[str, ...] = ("runtime.tests.",)
+
+
+@dataclass(frozen=True, slots=True)
+class History:
+    """One table that only ever grows, and the setting that says how long it is kept.
+
+    What is *not* here is as deliberate as what is. Sessions and their turns are a conversation someone
+    can still read, not a log; a test failure and an eval result are findings, and a screen lists them.
+    And the audit log cannot be pruned at all, by anyone, at any setting: the database itself refuses a
+    DELETE on it, which is the point of an append-only record.
+    """
+
+    table: str
+    column: str
+    setting: str
+    label: str
+    note: str
+
+
+HISTORIES: tuple[History, ...] = (
+    History("run_logs", "at", "run_log_days", "Run output", "every line the agents' runs printed"),
+    History("activity", "at", "activity_days", "Activity", "the workspace's story, as the feed shows it"),
+    History("ai_calls", "at", "ledger_days", "Usage ledger", "every model call, and what it cost"),
+    History("schedule_fires", "at", "fire_days", "Routine fires", "each time a routine fired, and what came of it"),
+    History("memory_hits", "at", "recall_days", "Recalls", "each time a remembered fact was used"),
+    History("login_attempts", "at", "login_attempt_days", "Sign-in attempts", "every sign-in tried, right or wrong"),
+)
 
 
 def _ms(since: float) -> int:
@@ -479,6 +521,88 @@ class MaintenanceService:
                 await conn.execute(text("RESET lock_timeout"))
         return {"beforeBytes": before, "afterBytes": await self.size(), "ms": _ms(started), "did": did}
 
+    # ── keeping only as much history as was asked for ────────────
+    def _cutoff(self, days: int) -> datetime | None:
+        """The moment before which rows of this kind are past their keeping. `None` means keep them."""
+        return datetime.now(UTC) - timedelta(days=days) if days else None
+
+    async def retention(self) -> list[dict[str, Any]]:
+        """Each history: how long it is kept, and how many rows are older than that.
+
+        Counted for real, one statement per table — not estimated from the planner, which is describing
+        a table as it was when it was last analysed. This is the figure a person reads on the button
+        *before* pressing it, and the rule the whole product is held to is that a number on a screen was measured or is
+        not there. It is also why the count and the deleting are two separate asks: what the button
+        says is what was true when it was drawn, and what comes back afterwards is what really went.
+        """
+        out: list[dict[str, Any]] = []
+        for history in HISTORIES:
+            days = int(getattr(self.config, history.setting))
+            cutoff = self._cutoff(days)
+            rows = int(await self._scalar(
+                f"SELECT count(*) FROM {_q(history.table)} WHERE {_q(history.column)} < :cutoff",
+                cutoff=cutoff)) if cutoff else 0
+            out.append({"table": history.table, "label": history.label, "note": history.note,
+                        "setting": f"NEUROCODE_{history.setting.upper()}", "days": days,
+                        "cutoff": cutoff.isoformat(timespec="seconds") if cutoff else None, "rows": rows})
+        return out
+
+    async def prune(self, engine: AsyncEngine) -> dict[str, Any]:
+        """Remove what is past its keeping, a few thousand rows at a time.
+
+        One `DELETE … WHERE at < cutoff` over a year of run output is a single statement holding row
+        locks on millions of rows for minutes, inside one transaction, with everything that writes a
+        log line queued behind it — which is how a tidying-up becomes an outage. So it is chunked by
+        `ctid`, each chunk its own committed statement on a connection of its own, with the same short
+        lock deadline the vacuum uses: anything holding a table is reported, not waited on.
+
+        Nothing is vacuumed here. The rows are gone, but the space they held goes back to the operating
+        system only when something vacuums, which is the other button on this screen and says so.
+        """
+        started = time.monotonic()
+        plan = await self.retention()
+        done: list[dict[str, Any]] = []
+        async with engine.connect() as conn:
+            await conn.execution_options(isolation_level="AUTOCOMMIT")
+            await conn.execute(text("SELECT set_config('lock_timeout', :wait, false)"), {"wait": LOCK_WAIT})
+            try:
+                # `retention()` answers in the order of HISTORIES, so each row has its own table beside it
+                # without the table's column name having to travel out to the screen and back.
+                for history, row in zip(HISTORIES, plan, strict=True):
+                    done.append(await self._prune_one(conn, history, row))
+            finally:
+                # As after a reindex: the connection goes back to the pool, and without this every
+                # later request on it would inherit a two-second lock timeout.
+                await conn.execute(text("RESET lock_timeout"))
+        return {"at": _now(), "ms": _ms(started), "tables": done,
+                "removed": sum(int(d["removed"]) for d in done)}
+
+    async def _prune_one(self, conn: AsyncConnection, history: History, row: dict[str, Any]) -> dict[str, Any]:
+        """One table's share of the prune. Never raises: a table that cannot be touched right now is a
+        line on the screen saying why, not a failed chore that leaves the other five undone."""
+        if not row["days"] or not row["rows"]:
+            return {**row, "removed": 0, "note": "kept" if not row["days"] else "nothing older"}
+        # Worked out again rather than read back off the plan, which carries it as words for the screen:
+        # the database is asked with a moment, not with a string that happens to look like one.
+        cutoff = self._cutoff(int(row["days"]))
+        chunk, removed, statements = self.config.prune_rows, 0, 0
+        # No ORDER BY: any `chunk` of the rows past the cutoff will do, and two of these tables have no
+        # index on time alone — asking for the oldest first would make each statement sort the table.
+        statement = text(
+            f"DELETE FROM {_q(history.table)} WHERE ctid IN ("
+            f"  SELECT ctid FROM {_q(history.table)} WHERE {_q(history.column)} < :cutoff LIMIT :chunk)")
+        while statements < MAX_PRUNE_STATEMENTS:
+            try:
+                result = await conn.execute(statement, {"cutoff": cutoff, "chunk": chunk})
+            except DBAPIError as refused:
+                return {**row, "removed": removed, "note": _why(refused)}
+            statements += 1
+            removed += int(result.rowcount or 0)
+            if int(result.rowcount or 0) < chunk:
+                return {**row, "removed": removed, "note": ""}
+        return {**row, "removed": removed,
+                "note": f"stopped after {removed:,} rows — the rest goes on the next pass"}
+
     # ── emptying the workspace ───────────────────────────────────
     async def empty(self) -> dict[str, int]:
         """Delete the work, keep the people. Returns what is left, counted for real.
@@ -506,3 +630,50 @@ class MaintenanceService:
             counted[name] = int(await self._scalar(
                 f"SELECT count(*) FROM {_q(model.__tablename__)}"))
         return counted
+
+
+class Housekeeping:
+    """The daily prune: the same chore the button on Admin → Database runs, taken once a day on its own.
+
+    It has no loop of its own. The routines' scheduler already wakes every thirty seconds, and a second
+    timer would be one more thing to start, stop and reason about; `tick()` is cheap enough to call on
+    every one of those wakes and answers `None` on all but the first of a day.
+
+    The day is claimed before anything is deleted, with one statement against the workspace's own
+    settings: whoever's `INSERT … ON CONFLICT DO UPDATE … WHERE` actually changes the row is the one
+    that prunes. That is what makes three API processes — or one restarted three times in a morning —
+    prune once between them rather than once each.
+    """
+
+    def __init__(self, db: Database, *, config: Settings | None = None,
+                 clock: Callable[[], datetime] = utcnow) -> None:
+        self.db, self.config, self.clock = db, config or get_settings(), clock
+
+    async def claim(self, session: AsyncSession, day: str) -> bool:
+        """Today's prune, claimed for this process — true at most once a day, across every process."""
+        claimed = (await session.execute(text(
+            "INSERT INTO settings (key, value) VALUES (:key, jsonb_build_object('day', CAST(:day AS text))) "
+            "ON CONFLICT (key) DO UPDATE SET value = jsonb_build_object('day', CAST(:day AS text)) "
+            "WHERE coalesce(settings.value ->> 'day', '') < CAST(:day AS text) "
+            "RETURNING key"), {"key": PRUNED_KEY, "day": day})).scalar_one_or_none()
+        return claimed is not None
+
+    async def tick(self) -> dict[str, Any] | None:
+        """Prune if today's prune is still going; otherwise nothing at all, and nothing said."""
+        if not self.config.prune_daily:
+            return None
+        day = self.clock().date().isoformat()
+        async with self.db.session() as claiming:
+            if not await self.claim(claiming, day):
+                return None
+        async with self.db.session() as working:
+            pruned = await MaintenanceService(working, self.config).prune(self.db.engine)
+            # In the audit log with no name against it, which is exactly what it is: nobody asked for
+            # this one, the settings did. A prune that found nothing is not worth a line.
+            if pruned["removed"]:
+                await AuditRepository(working).record(
+                    action="database.prune", user_id=None, target="history",
+                    detail={"removed": pruned["removed"],
+                            "tables": {t["table"]: t["removed"] for t in pruned["tables"] if t["removed"]}})
+        log.info("housekeeping: removed %d row(s) of history", pruned["removed"])
+        return pruned

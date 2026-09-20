@@ -18,12 +18,41 @@ from pathlib import Path
 PATH = Path(__file__).resolve().parent / "catalogue.json"
 
 
+#: Where rights live, in the sidebar's own words: every module, and the sub-modules under it.
+#: This is one half of a pair — the other is `NavSection` and the `sub` values in src/lib/nav.ts.
+#: A right filed under a module a person cannot find on the sidebar is a right nobody will grant.
+MODULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Home", ()),
+    ("Build", ("Planning", "Execution", "Quality", "Delivery")),
+    ("Knowledge", ("Thinking",)),
+    ("Platform", ("Extensions", "Connections")),
+    ("Governance", ()),
+    ("Admin", ()),
+)
+
+#: What a right lets someone do, in four words. The columns of the Roles matrix.
+VERBS: tuple[str, ...] = ("use", "write", "decide", "admin")
+
+
 @dataclass(frozen=True, slots=True)
 class Permission:
+    """One right, filed where the product itself would file it.
+
+    `group` is the module's own name again. It is kept for one release so a browser still holding the
+    old bundle — which reads `group` and nothing else — files the right somewhere sensible instead of
+    dropping it off the access screen.
+    """
+
     id: str
-    group: str
+    module: str
+    sub: str | None
+    verb: str
     label: str
     description: str
+
+    @property
+    def group(self) -> str:
+        return self.module
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,13 +84,24 @@ class RosterAgent:
 
 def _read() -> tuple[tuple[Permission, ...], tuple[BuiltinRole, ...], tuple[RosterAgent, ...]]:
     raw = json.loads(PATH.read_text())
-    permissions = tuple(Permission(p["id"], p["group"], p["label"], p["description"])
+    permissions = tuple(Permission(p["id"], p["module"], p.get("sub"), p["verb"], p["label"], p["description"])
                         for p in raw["permissions"])
     roles = tuple(BuiltinRole(r["id"], r["name"], r["description"], tuple(r["permissions"]))
                   for r in raw["roles"])
     agents = tuple(RosterAgent(a["id"], a["name"], a["role"], a["icon"], a["autonomy"], tuple(a["tools"]),
                                tuple(a["skills"]), tuple(a["guardrails"]), a["systemPrompt"])
                    for a in raw["agents"])
+    subs = dict(MODULES)
+    for p in permissions:
+        # A misspelt module puts a right in a row of the matrix nobody can find — the same class of
+        # failure as a misspelt permission below, and it deserves the same refusal to start.
+        if p.module not in subs:
+            raise ValueError(f"catalogue.json: {p.id} names unknown module {p.module!r}")
+        if p.sub is not None and p.sub not in subs[p.module]:
+            raise ValueError(f"catalogue.json: {p.id} names unknown sub-module {p.sub!r} of {p.module}")
+        if p.verb not in VERBS:
+            raise ValueError(f"catalogue.json: {p.id} names unknown verb {p.verb!r}")
+
     known = {p.id for p in permissions}
     for role in roles:
         # A misspelt permission in a built-in role would grant nothing and look as though it did —

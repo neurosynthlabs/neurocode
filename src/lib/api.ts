@@ -1,3 +1,6 @@
+import { walkPages } from '@/lib/paging';
+// The sidebar's own sections: a right names the one it is filed under, in these exact words.
+import type { NavSection } from '@/lib/nav';
 import type {
   ActivityEvent, ApprovalRequest, Confidence, ConflictResolution, McpServer, MemoryCategory, MemoryConflict, MemoryFact, Plan,
   Project, Risk, Task, TaskStatus,
@@ -62,6 +65,15 @@ export interface McpInput {
 /* ── people and access ────────────────────────────────────────── */
 export interface AuthUser {
   id: string; email: string; name: string; status: 'active' | 'disabled'; roles: string[]; permissions: string[];
+  /**
+   * What this person holds *inside* one project, where a project narrows their workspace rights:
+   * project id → the rights left to them there. A project that is not listed narrows nothing, so
+   * everything in `permissions` applies. It can only ever take rights away, never add one.
+   *
+   * Optional because an API older than per-project rights does not send it, and "not sent" must read
+   * as "nothing is narrowed" rather than as "everything is".
+   */
+  projectRights?: Record<string, string[]>;
 }
 export interface Workspace { name: string }
 export interface AuthStatus {
@@ -80,7 +92,18 @@ export interface Person {
   id: string; email: string; name: string; status: 'active' | 'disabled'; roles: string[]; teams: string[];
   lastLoginAt: string | null; createdAt: string;
 }
-export interface PermissionDef { id: string; label: string; group: string; description: string }
+/** What holding a right lets someone do — the four columns of the Roles matrix, as the server files
+    them (server/app/data/catalogue.py names the same four). */
+export type PermissionVerb = 'use' | 'write' | 'decide' | 'admin';
+/**
+ * A right as the catalogue declares it, filed where the product itself files it: the sidebar module
+ * and sub-module it lives under, and the verb that says what it lets someone do. `group` repeats the
+ * module and is kept for one release, for a browser holding an older bundle.
+ */
+export interface PermissionDef {
+  id: string; label: string; group: string; description: string;
+  module: NavSection; sub: string | null; verb: PermissionVerb;
+}
 /** The product's own catalogue: what exists before anyone has made anything. */
 export interface Catalogue {
   permissions: PermissionDef[];
@@ -471,30 +494,30 @@ export interface Loaded<T> {
 export const PAGE_MAX = 500;
 export const LOAD_CAP = 5_000;
 
-/**
- * Every page of a paged list, until a short page says there is no more, or the ceiling. Paging by offset
- * over a table that is being written can repeat a row when one is added between two pages, so rows are
- * kept once each, in the order they came.
- */
-async function everyPage<T extends { id: string }>(path: string, params: Record<string, string> = {}): Promise<Loaded<T>> {
-  const found = new Map<string, T>();
-  const page = (offset: number, limit: number) =>
-    request<T[]>(`${path}?${new URLSearchParams({ ...params, limit: String(limit), offset: String(offset) })}`,
-      { signal: AbortSignal.timeout(15_000) });
-  for (let offset = 0; offset < LOAD_CAP; offset += PAGE_MAX) {
-    const rows = await page(offset, PAGE_MAX);
-    rows.forEach((r) => { if (!found.has(r.id)) found.set(r.id, r); });
-    if (rows.length < PAGE_MAX) return { items: [...found.values()], capped: false };
-  }
-  // A last page that was exactly full proves nothing: one row past the ceiling says whether any is left.
-  return { items: [...found.values()], capped: (await page(LOAD_CAP, 1)).length > 0 };
-}
+/** How many pages are asked for at a time once the first one comes back full (see walkPages). */
+const PAGES_AT_ONCE = 3;
+
+/** Every page of a paged list. The walk itself is in `@/lib/paging`, where it can be tested on its own. */
+const everyPage = <T extends { id: string }>(path: string, params: Record<string, string> = {}): Promise<Loaded<T>> =>
+  walkPages<T>(
+    (offset, limit) =>
+      request<T[]>(`${path}?${new URLSearchParams({ ...params, limit: String(limit), offset: String(offset) })}`,
+        { signal: AbortSignal.timeout(15_000) }),
+    { pageMax: PAGE_MAX, loadCap: LOAD_CAP, pagesAtOnce: PAGES_AT_ONCE },
+  );
 
 /** A list the server answers in one go, up to a fixed ceiling of its own: reaching it may mean more rows exist. */
 const upTo = (ceiling: number) => <T,>(items: T[]): Loaded<T> => ({ items, capped: items.length >= ceiling });
 
 /** How the change stream is doing. `reconnecting`: it dropped, and what changed meanwhile is not replayed. */
 export type StreamState = 'open' | 'reconnecting';
+/**
+ * Why the workspace has to be loaded again. All three mean the same thing to the caller — what is on
+ * screen may no longer be true — and differ only in what happened:
+ * `reopened` the stream dropped and came back, `reset` the workspace was emptied, `missed` this reader
+ * was too slow and the server dropped events on the way to it.
+ */
+export type ResyncReason = 'reopened' | 'reset' | 'missed';
 /* After the connection closes for good (the stream answered with an error status, which EventSource
    hides), it is opened again after this long — unless the session turns out to be gone. */
 const REOPEN_MS = 5_000;
@@ -656,7 +679,8 @@ export const api = {
    * outright (an error status, most often a 401 once the session has ended) is closed for good by the
    * browser, which never says why: the session is asked about, and a person no longer signed in is
    * signed out; otherwise the stream is opened again a little later. The server's `reset` event (the
-   * workspace was emptied, which no per-document change can describe) is a resync too.
+   * workspace was emptied, which no per-document change can describe) is a resync too, and so is its
+   * `resync` event, which is how a reader that fell too far behind is told that events went past it.
    */
   stream(on: {
     activity: (e: ActivityEvent) => void;
@@ -664,7 +688,7 @@ export const api = {
     log?: (l: RunLogEvent) => void;
     chat?: (m: ChatEvent) => void;
     state?: (s: StreamState) => void;
-    resync?: (why: 'reopened' | 'reset') => void;
+    resync?: (why: ResyncReason) => void;
   }): () => void {
     let es: EventSource | null = null;
     let stopped = false;
@@ -683,6 +707,13 @@ export const api = {
       source.addEventListener('run', (m) => on.log?.(data<RunLogEvent>(m)));
       source.addEventListener('chat', (m) => on.chat?.(data<ChatEvent>(m)));
       source.addEventListener('reset', () => on.resync?.('reset'));
+      // The server's own resync frame. It sends one when this reader fell behind — its queue filled and
+      // events went past it — which nothing about the connection would ever have told us: the socket is
+      // healthy and the screens are quietly stale. A reason this bundle does not know is read the same
+      // way, because that is exactly what it means: something happened that we did not see.
+      source.addEventListener('resync', (m) => {
+        on.resync?.(data<{ why?: string }>(m).why === 'reset' ? 'reset' : 'missed');
+      });
       source.addEventListener('open', () => {
         on.state?.('open');
         if (dropped) {

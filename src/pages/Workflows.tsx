@@ -139,7 +139,7 @@ function LiveWorkflows() {
     <Page>
       <PageHeader
         title="Workflows"
-        subtitle="Write the steps once — which agent does what. Each run becomes an ordinary plan: a worktree per agent, the merge, the project’s own tests behind your approval, a review, and your signature."
+        subtitle="Write the steps once — which agent does what."
         actions={(
           <div className="flex flex-wrap items-center gap-2">
             {mayWrite && <Button size="sm" variant="outline" onClick={() => setEditing('new')}><Plus className="size-3.5" />New workflow</Button>}

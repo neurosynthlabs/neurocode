@@ -4,7 +4,7 @@
    boxes in boxes, capsule tags, slim meters, sentence-case labels.
    Built on the shadcn token contract so every theme repaints them.
    ═══════════════════════════════════════════════════════════════ */
-import { useId, type CSSProperties, type ReactNode } from 'react';
+import { useId, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import type { Risk } from '@/types';
 
@@ -266,14 +266,36 @@ export function KV({ k, v, mono, wrap }: { k: string; v: ReactNode; mono?: boole
 }
 
 /* ── Table: hairlines and sentence-case headers ───────────────── */
-export function DataTable({ head, children, className }: { head: (string | ReactNode)[]; children: ReactNode; className?: string }) {
+/** Where a column may drop out. A wide table on a phone becomes a strip two columns wide that has to be
+    dragged sideways to read; a column that is not the point of the screen says so and leaves at that
+    width. Nothing is hidden above it, and the row still opens the whole record. */
+export type Breakpoint = 'sm' | 'md' | 'lg' | 'xl';
+/** Tailwind reads whole class names out of the source, so each one is written out rather than built. */
+const HIDDEN_BELOW: Record<Breakpoint, string> = {
+  sm: 'hidden sm:table-cell',
+  md: 'hidden md:table-cell',
+  lg: 'hidden lg:table-cell',
+  xl: 'hidden xl:table-cell',
+};
+const hiddenBelow = (b?: Breakpoint) => (b ? HIDDEN_BELOW[b] : undefined);
+
+/** A column header that narrows out. A plain header stays as it is. */
+export interface Column { label: ReactNode; hideBelow?: Breakpoint }
+const isColumn = (h: ReactNode | Column): h is Column =>
+  typeof h === 'object' && h !== null && !('$$typeof' in h) && 'label' in h;
+
+export function DataTable({ head, children, className }: { head: (ReactNode | Column)[]; children: ReactNode; className?: string }) {
   return (
     <div className={cn('w-full overflow-x-auto', className)}>
       <table className="w-full text-left">
         <thead>
           <tr className="border-b border-line/60">
             {head.map((h, i) => (
-              <th key={i} className="px-4 py-2.5 text-[12.5px] font-medium whitespace-nowrap text-dim first:pl-5 last:pr-5">{h}</th>
+              <th key={i}
+                  className={cn('px-4 py-2.5 text-[12.5px] font-medium whitespace-nowrap text-dim first:pl-5 last:pr-5',
+                    isColumn(h) && hiddenBelow(h.hideBelow))}>
+                {isColumn(h) ? h.label : h}
+              </th>
             ))}
           </tr>
         </thead>
@@ -283,15 +305,27 @@ export function DataTable({ head, children, className }: { head: (string | React
   );
 }
 
+/** A table row. With `onClick` it is the thing that opens the row's subject, so it is a real control:
+    reachable by Tab, opened by Enter or Space, and ringed while it holds focus — the way `ListRow` is.
+    A key pressed on a control inside the row (a button, a link, a switch) is that control's own. */
 export function Row({ children, onClick, active, className }: {
   children: ReactNode; onClick?: () => void; active?: boolean; className?: string;
 }) {
   return (
     <tr
       onClick={onClick}
+      {...(onClick && {
+        tabIndex: 0,
+        role: 'button',
+        onKeyDown: (e: KeyboardEvent<HTMLTableRowElement>) => {
+          if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
+          e.preventDefault();
+          onClick();
+        },
+      })}
       className={cn(
         'row-hover border-b border-line/50 last:border-0',
-        onClick && 'cursor-pointer',
+        onClick && 'cursor-pointer focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--os-brand)]',
         active && 'bg-surface-2',
         className,
       )}
@@ -301,12 +335,13 @@ export function Row({ children, onClick, active, className }: {
   );
 }
 
-export function Cell({ children, className, mono, colSpan }: {
-  children?: ReactNode; className?: string; mono?: boolean; colSpan?: number;
+export function Cell({ children, className, mono, colSpan, hideBelow }: {
+  children?: ReactNode; className?: string; mono?: boolean; colSpan?: number; hideBelow?: Breakpoint;
 }) {
   return (
     <td colSpan={colSpan}
-        className={cn('px-4 py-3 align-middle text-[13.5px] text-ink-2 first:pl-5 last:pr-5', mono && 'font-mono text-[12.5px]', className)}>
+        className={cn('px-4 py-3 align-middle text-[13.5px] text-ink-2 first:pl-5 last:pr-5', mono && 'font-mono text-[12.5px]',
+          hiddenBelow(hideBelow), className)}>
       {children}
     </td>
   );

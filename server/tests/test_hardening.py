@@ -24,6 +24,7 @@ from app.api.app import create_api
 from app.data.loader import sync_roles, when
 from app.models import ActivityEvent, AuditEntry, MemoryConflict, MemoryFact, Plan, Project
 from app.services.knowledge import MemoryService
+from app.settings import Settings
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
 HEADERS = {"X-NC-Client": "test"}
@@ -189,8 +190,12 @@ async def test_a_brand_new_workspace_holds_the_catalogue_and_nothing_else(sessio
         n = (await session.execute(text(f'SELECT count(*) FROM "{table}"'))).scalar_one()
         if n:
             held[table] = n
+    # `prefs` holds one row the product wrote about itself, not about this workspace: which of the
+    # one-off carry-overs for custom roles this database has been through. A brand-new workspace has
+    # no custom roles, so it goes through all of them at once and has nothing to show for it.
     assert held == {"roles": len(catalogue.ROLES), "agents": len(catalogue.AGENTS),
-                    "role_permissions": sum(len(r.permissions) for r in catalogue.ROLES)}
+                    "role_permissions": sum(len(r.permissions) for r in catalogue.ROLES),
+                    "prefs": 1}
     names = (await session.execute(text("SELECT id, name FROM agents"))).all()
     assert dict(names) == {a.id: a.name for a in catalogue.AGENTS}
 
@@ -451,3 +456,180 @@ async def test_nothing_a_person_types_becomes_query_syntax(seeded: AsyncSession)
     parsed = (await seeded.execute(sql_select(sql_cast(tsquery("tax & rounding | !drop :* ') --", "any"), Text)))
               ).scalar_one()
     assert parsed == "'tax' | 'round' | 'drop'"
+
+
+# ── what a person is told when something has gone wrong ──────────
+
+#: A database on a server that is there, with a name that is not. `ping` fails; nothing hangs.
+NOWHERE = "postgresql+asyncpg://neurocode:neurocode@127.0.0.1:5432/neurocode_does_not_exist"
+
+
+async def test_health_answers_that_the_database_is_down_instead_of_failing_with_it(
+        settings: Settings, tmp_path: Path):
+    """It computed `ok = await db.ping()` and then asked the gateway for its status anyway — and the
+    gateway reads its lanes from the settings table, through the same database. So the one route
+    whose job is to say "Postgres is not running" was the one route that could not say it: a
+    plain-text 500, which the web app can only report as "HTTP 500"."""
+    from app.data.engine import Database
+
+    config = settings.model_copy(update={"database_url": NOWHERE, "secrets_path": tmp_path / "s.json"})
+    api = create_api(db=Database(url=NOWHERE, config=config), config=config)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=api), base_url="http://api") as c:
+            answered = await c.get("/health")
+    finally:
+        api.state.ledger.close()
+        await api.state.db.close()
+
+    assert answered.status_code == 200
+    body = answered.json()
+    assert body["ok"] is False and body["counts"] == {}
+    assert "neurocode_does_not_exist" in body["db"]
+    assert body["compiler"]["provider"] == "unknown"
+    assert "not answering" in body["compiler"]["note"]
+
+
+async def test_the_router_probe_cannot_take_health_down_with_it():
+    """Even with the database up, anything the gateway raises is the gateway's news, not liveness's."""
+    from types import SimpleNamespace
+
+    from app.api.app import _compiler
+
+    class Unreachable:
+        def status(self) -> dict[str, str]:
+            raise RuntimeError("could not connect")
+
+    app = SimpleNamespace(state=SimpleNamespace(gateway=Unreachable()))
+    assert (await _compiler(app, ok=True))["provider"] == "unknown"
+
+
+@pytest_asyncio.fixture
+async def breakable(seeded: AsyncSession) -> AsyncIterator[AsyncClient]:
+    """The real API with three routes that fail in the three ways nobody writes a handler for."""
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.exc import TimeoutError as PoolTimeout
+
+    api = create_api(db=None)
+
+    async def use_the_test_session() -> AsyncIterator[AsyncSession]:
+        yield seeded
+
+    api.dependency_overrides[deps.session] = use_the_test_session
+
+    @api.get("/broken/unexpected")
+    async def _unexpected() -> None:
+        raise RuntimeError("a dict changed size during iteration")
+
+    @api.get("/broken/pool")
+    async def _pool() -> None:
+        raise PoolTimeout("QueuePool limit of size 5 overflow 10 reached, connection timed out")
+
+    @api.get("/broken/database")
+    async def _database() -> None:
+        raise OperationalError("SELECT 1", {}, Exception("server closed the connection unexpectedly"))
+
+    # The response is sent and *then* the exception is re-raised, so the server's log keeps it. That
+    # is the real behaviour under uvicorn; here it would reach the test instead of the assertions.
+    transport = ASGITransport(app=api, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://api", headers=HEADERS) as c:
+        yield c
+
+
+async def test_an_unexpected_failure_reaches_a_person_as_words_and_not_internal_server_error(
+        breakable: AsyncClient):
+    """Starlette's own answer is the plain-text body `Internal Server Error`; the web app reads
+    `detail` out of the body, fails, and shows a toast saying "HTTP 500" and nothing else."""
+    answered = await breakable.get("/broken/unexpected")
+    assert answered.status_code == 500
+    assert answered.headers["content-type"].startswith("application/json")
+    detail = answered.json()["detail"]
+    assert "/broken/unexpected" in detail and "RuntimeError" in detail
+
+
+async def test_a_full_connection_pool_ends_in_words_rather_than_a_bare_500(breakable: AsyncClient):
+    answered = await breakable.get("/broken/pool")
+    assert answered.status_code == 503
+    assert "busy" in answered.json()["detail"] and "try again" in answered.json()["detail"]
+
+
+async def test_postgres_going_away_mid_request_says_which_thing_to_check(breakable: AsyncClient):
+    answered = await breakable.get("/broken/database")
+    assert answered.status_code == 503
+    assert "Postgres is running" in answered.json()["detail"]
+
+
+# ── work nobody is doing ─────────────────────────────────────────
+
+async def test_a_session_left_thinking_by_a_restart_is_put_right_and_says_why(seeded: AsyncSession):
+    """`chat.think` clears the status in its own `finally`, which a killed process never runs — and
+    answering is a background job that takes minutes, so this is the ordinary case, not the rare one.
+    The Command Center's "what is working" and the Sessions list both read that status, and nothing
+    in the UI could clear it: the session pulsed at the person forever."""
+    from app.api.app import reconcile_interrupted
+    from app.models import Chat, ChatMessage
+
+    project = (await seeded.execute(select(Project.id))).scalars().first()
+    seeded.add(Chat(id="c-int", ref="SESS-INT", project_id=project, title="Half an answer",
+                    status="thinking"))
+    await seeded.flush()
+
+    counted = await reconcile_interrupted(seeded)
+    assert counted["sessions"] >= 1
+
+    chat = await seeded.get(Chat, "c-int")
+    await seeded.refresh(chat)
+    assert chat.status == "idle"
+    said = (await seeded.execute(
+        select(ChatMessage).where(ChatMessage.chat_id == "c-int"))).scalars().all()
+    assert len(said) == 1 and said[0].role == "note"
+    assert "restarted" in said[0].body and "ask again" in said[0].body
+
+
+# ── a decision is final, and the database is what makes it so ────
+
+async def test_two_approvals_of_one_gate_cannot_both_go_through(schema: str):
+    """A read, an `if`, then a write is not a guard under READ COMMITTED: a double click on Approve,
+    or a browser retrying the POST, had both requests read `pending`, both pass the check, and both
+    hand off a resume of the same run — the gated step run twice.
+
+    A real commit is the whole point, so this runs against its own database and clears up after."""
+    import asyncio
+
+    from app.data.engine import Database
+    from app.models import Approval
+    from app.services.errors import Refused
+    from app.services.gates import ApprovalService
+
+    db = Database(url=schema)
+    try:
+        async with db.session() as s:
+            s.add(Project(id="gate", name="Gate Test"))
+            await s.flush()
+            s.add(Approval(id="a-gate", ref="APPR-GATE", title="Run the project's tests",
+                           project_id="gate", status="pending"))
+
+        async def approve_again() -> str:
+            async with db.session() as s:
+                return (await ApprovalService(s).decide("APPR-GATE", "approve", by_id=None,
+                                                        by_name="Rajat")).status
+
+        async with db.session() as first:
+            await ApprovalService(first).decide("APPR-GATE", "approve", by_id=None, by_name="Rajat")
+            second = asyncio.create_task(approve_again())
+            await asyncio.sleep(0.3)
+            assert not second.done(), "the second Approve read the gate as pending and went ahead"
+        # The first has committed now, so the second wakes, reads what it wrote, and refuses.
+        with pytest.raises(Refused) as refused:
+            await second
+        assert "already approved" in str(refused.value)
+
+        async with db.session() as s:
+            decided = (await s.execute(text(
+                "SELECT status FROM approvals WHERE ref = 'APPR-GATE'"))).scalar_one()
+            assert decided == "approved"
+    finally:
+        async with db.session() as s:
+            await s.execute(text("DELETE FROM activity WHERE project_id = 'gate'"))
+            await s.execute(text("DELETE FROM approvals WHERE project_id = 'gate'"))
+            await s.execute(text("DELETE FROM projects WHERE id = 'gate'"))
+        await db.close()

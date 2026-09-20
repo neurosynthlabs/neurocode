@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { useData } from '@/lib/data';
+import { useDataActions } from '@/lib/data';
 import { gateKind, runtimeApi, type GateScope } from '@/lib/live/runtime';
 import type { ApprovalRequest } from '@/types';
 
@@ -34,7 +34,9 @@ const SCOPE_SAID: Record<GateScope, string> = {
 
 export function GateActions({ approval }: { approval: ApprovalRequest }) {
   const { can } = useAuth();
-  const { decide: record } = useData();
+  // This is a row of buttons on somebody else's screen; it reads nothing of the workspace, so it takes
+  // the actions alone and does not re-render while a run streams.
+  const { decide: record } = useDataActions();
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
   const [words, setWords] = useState('');

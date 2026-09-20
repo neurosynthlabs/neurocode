@@ -2,7 +2,9 @@
 
 One rule runs through all of it — **a decision is final**. An approval that was already answered
 cannot be answered again, and a decision that was recorded cannot be quietly re-recorded. Those were
-`if` statements in two different route handlers before; here each is one method, said once.
+`if` statements in two different route handlers before; here each is one method, said once — and the
+approval's is the database's lock on the row rather than an `if` at all, because two Approve posts
+arriving together both read `pending` and both got past an `if`.
 
 A run's gates are not all yes-or-no. When a tool rule asks about a command or about files an agent
 wants to write, the answer is "Allow once", "Allow for this run" (kept on the run as a grant), "Always
@@ -15,11 +17,12 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..data.base import utcnow
 from ..models import Approval, Decision, Pref
-from ..repositories import ActivityRepository, ApprovalRepository, NotFound, ProjectRepository, RunRepository
+from ..repositories import ActivityRepository, NotFound, ProjectRepository, RunRepository
 from ..repositories.platform import ToolRuleRepository
 from ..repositories.runtime import ResultsRepository
 from ..schemas.work import GATE_OPTIONS, gate_kind, test_rule_json, when
@@ -51,8 +54,30 @@ async def _known_project(session: AsyncSession, project_id: str | None) -> None:
 class ApprovalService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
-        self.approvals = ApprovalRepository(session)
         self.activity = ActivityRepository(session)
+
+    async def _claim(self, ref: str) -> Approval:
+        """The gate, with its row held for the rest of this transaction.
+
+        "A decision is final" was a read, a check and a write in three steps, which under READ
+        COMMITTED is not a guard at all: two Approve posts — a double click, or a browser retrying on
+        a flaky connection — both read `pending`, both passed the check, and both handed off a resume
+        of the same run. The run then ran the gated step twice: the same test command twice, or the
+        same edit committed into the worktree twice. It is timing-dependent, so it comes back as "the
+        run did the step twice and I don't know why" and never reproduces.
+
+        Locking the row makes the transition itself the guard. The second caller waits here until the
+        first has committed and then reads what the first wrote — `approved`, not `pending` — so it
+        refuses in the same words as any late decision. `populate_existing` because the row may
+        already be in this session from an earlier read, and a stale copy of it would defeat the
+        whole point.
+        """
+        approval = (await self.session.execute(
+            select(Approval).where(Approval.ref == ref).with_for_update()
+            .execution_options(populate_existing=True))).scalar_one_or_none()
+        if approval is None:
+            raise NotFound(f"approval {ref}")
+        return approval
 
     async def decide(self, ref: str, decision: str, *, by_id: str, by_name: str, scope: str | None = None,
                      answer: str | None = None, who: Person | None = None, ip: str = "") -> Approval:
@@ -63,9 +88,7 @@ class ApprovalService:
         for it, and checked before anything is decided, so a refused answer leaves the gate pending."""
         if decision not in ("approve", "deny"):
             raise Refused("A gate is approved or denied.", status=422)
-        approval = await self.approvals.by_ref(ref)
-        if approval is None:
-            raise NotFound(f"approval {ref}")
+        approval = await self._claim(ref)
         if approval.status != "pending":
             raise Refused(f"{ref} was already {approval.status} — a decision is final.")
         kind = gate_kind(approval.tool)
@@ -153,8 +176,9 @@ class RuleService:
     def __init__(self, session: AsyncSession) -> None:
         self.results = ResultsRepository(session)
 
-    async def rules(self, *, limit: int | None = None, offset: int = 0) -> list[dict[str, Any]]:
-        answers = await self.results.standing_answers(limit=limit, offset=offset)
+    async def rules(self, *, limit: int | None = None, offset: int = 0,
+                    hidden: frozenset[str] = frozenset()) -> list[dict[str, Any]]:
+        answers = await self.results.standing_answers(limit=limit, offset=offset, hidden=hidden)
         projects = [project for project, _ in answers]
         # Only a project whose code is on this machine has a command to find; asking for one with no
         # source would look in whatever directory the server happens to run from.

@@ -5,7 +5,9 @@ active Owner cannot be removed, nobody disables their own account, only an Owner
 role, a new password ends every other session. A route's job is now to say who is asking and turn a
 refusal into a status code.
 
-Nothing in this file knows what HTTP is, and nothing in it writes SQL.
+Nothing in this file knows what HTTP is. The two queries it does write — the sign-in lock-out window
+and a person's project grants — are asked of the session directly because both are part of deciding
+who is asking, which is this file's whole job.
 """
 from __future__ import annotations
 
@@ -13,7 +15,8 @@ import asyncio
 
 import re
 import secrets as pysecrets
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
@@ -21,7 +24,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..data.base import utcnow
-from ..models import LoginAttempt, Session as SessionRow, User as UserRow
+from ..models import (LoginAttempt, Project, ProjectRole, RolePermission,
+                      Session as SessionRow, User as UserRow)
 from ..repositories import AuditRepository, RoleRepository, SessionRepository, UserRepository
 from ..settings import Settings, settings as get_settings
 from .errors import Denied, Refused
@@ -43,6 +47,13 @@ EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 WINDOW = timedelta(minutes=5)
 
 
+#: The rights a project grant can never take away. An Owner who restricts a project must still be able
+#: to unrestrict it, and the audit log must still cover every project — otherwise a restricted project
+#: becomes a room in the workspace that the workspace cannot get back into.
+NEVER_NARROWED = frozenset({"workspace:admin", "users:manage", "roles:manage", "teams:manage",
+                            "audit:read"})
+
+
 @dataclass(frozen=True)
 class Person:
     """Who is asking, as the rest of the app sees them. The same shape the screens already read."""
@@ -53,6 +64,10 @@ class Person:
     status: str
     roles: tuple[str, ...]
     permissions: frozenset[str]
+    #: The restricted projects this person holds a grant in, and what that grant carries. Empty in
+    #: every workspace until somebody restricts a project, which is the point of the flag.
+    #: `compare=False`: a mapping is not hashable, and a Person is compared by who they are.
+    project_rights: Mapping[str, frozenset[str]] = field(default_factory=dict, compare=False)
 
     def can(self, *perms: str) -> bool:
         return all(p in self.permissions for p in perms)
@@ -61,9 +76,34 @@ class Person:
         if permission not in self.permissions:
             raise Denied(permission, what)
 
+    def in_project(self, project_id: str, restricted: bool) -> frozenset[str]:
+        """What this person may do inside one project. A grant narrows; it can never widen.
+
+        An open project is the workspace set, unchanged — which is every project on the day this
+        ships. A restricted one is that set cut to what the grant carries, so nobody ever gains a
+        right from a project they did not already hold across the workspace, and reviewing somebody's
+        access stays one screen. What `NEVER_NARROWED` names survives either way.
+        """
+        if not restricted:
+            return self.permissions
+        kept = self.permissions & NEVER_NARROWED
+        granted = self.project_rights.get(project_id)
+        return kept if granted is None else frozenset((self.permissions & granted) | kept)
+
+    def may_see(self, project_id: str, restricted: bool) -> bool:
+        """Whether this project exists at all for this person.
+
+        A restricted project somebody holds no grant in answers 404 rather than 403, because "there
+        is a project here you may not open" is itself something they were not told.
+        """
+        return (not restricted or project_id in self.project_rights
+                or bool(self.permissions & NEVER_NARROWED))
+
     def public(self) -> dict[str, Any]:
         return {"id": self.id, "email": self.email, "name": self.name, "status": self.status,
-                "roles": list(self.roles), "permissions": sorted(self.permissions)}
+                "roles": list(self.roles), "permissions": sorted(self.permissions),
+                # Only the restricted projects; an open one is absent, meaning "the workspace set".
+                "projectRights": {pid: sorted(held) for pid, held in sorted(self.project_rights.items())}}
 
 
 class IdentityService:
@@ -85,7 +125,27 @@ class IdentityService:
             return None
         return Person(row.id, row.email, row.name, row.status,
                       tuple(await self.users.role_ids(user_id)),
-                      frozenset(await self.users.permissions(user_id)))
+                      frozenset(await self.users.permissions(user_id)),
+                      await self.project_rights(user_id))
+
+    async def project_rights(self, user_id: str) -> dict[str, frozenset[str]]:
+        """This person's grants in the restricted projects they are listed in.
+
+        One indexed query, and in almost every workspace it returns nothing: a project is open to
+        everyone until somebody restricts it, and only a restricted project narrows anything. The
+        join is an outer one on purpose — a grant naming a role that carries no permissions is still
+        a grant, and the person is still listed on that project.
+        """
+        stmt = (select(ProjectRole.project_id, RolePermission.permission)
+                .join(Project, Project.id == ProjectRole.project_id)
+                .outerjoin(RolePermission, RolePermission.role_id == ProjectRole.role_id)
+                .where(ProjectRole.user_id == user_id, Project.restricted.is_(True)))
+        found: dict[str, set[str]] = {}
+        for project_id, permission in (await self.session.execute(stmt)).all():
+            held = found.setdefault(project_id, set())
+            if permission is not None:
+                held.add(permission)
+        return {pid: frozenset(held) for pid, held in found.items()}
 
     async def need(self, user_id: str) -> Person:
         found = await self.person(user_id)

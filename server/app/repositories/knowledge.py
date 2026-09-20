@@ -13,7 +13,7 @@ from sqlalchemy import ColumnElement, and_, delete, func, or_, select
 
 from ..data.base import utcnow
 from ..models import Chunk, MemoryConflict, MemoryFact, MemoryHit
-from .base import Page, Repository, bounded
+from .base import Page, Repository, bounded, fence
 from .words import Mode, tsquery
 
 
@@ -25,14 +25,18 @@ class MemoryRepository(Repository[MemoryFact]):
 
     async def search(self, q: str = "", *, category: str | None = None, project: str | None = None,
                      include_archived: bool = False, limit: int | None = None,
-                     mode: Mode = "all") -> list[MemoryFact]:
+                     mode: Mode = "all", hidden: frozenset[str] = frozenset()) -> list[MemoryFact]:
         """Words if there are any, otherwise everything that matches the filters — pinned first.
 
         `mode` is the difference between a search box and a question. Someone typing into the box
         means every word ("all"); someone asking "where does invoice rounding happen, and why there?"
         does not, and requiring all of it returns nothing at all. Ask memory passes "any".
+
+        `hidden` is the Memory screen's fence: a fact filed under a project this person may not see
+        is not searchable to them. It is empty everywhere a model is the one asking, because what a
+        plan or a session retrieves is already cut to the one project it is working in.
         """
-        where: list[ColumnElement[bool]] = []
+        where: list[ColumnElement[bool]] = [*fence(MemoryFact.project_id, hidden)]
         if not include_archived:
             where.append(MemoryFact.archived.is_(False))
         if category:
@@ -77,14 +81,19 @@ class MemoryRepository(Repository[MemoryFact]):
         await self.session.flush()
         return fact
 
-    async def stats(self, *, project: str | None = None, retired_days: int = 30) -> MemoryStats:
+    async def stats(self, *, project: str | None = None, retired_days: int = 30,
+                    hidden: frozenset[str] = frozenset()) -> MemoryStats:
         """Counted by the database, not from a page of rows: the facts held (in all, pinned, in the
         workspace's own memory), each category's share with its recalls and last use, and how many facts
         were archived within the last `retired_days` days.
 
         `project` scopes it the way the screen scopes its list: "global" is the workspace's own facts, a
-        project id is that project's facts together with the workspace's, and None is everything."""
-        where: list[ColumnElement[bool]] = []
+        project id is that project's facts together with the workspace's, and None is everything.
+
+        "Everything" means everything this person may read: the figures are counted over the same rows
+        `search` returns, or the screen's header would say 412 above a list that can only ever show
+        380 — and the difference is a headcount of a project nobody told them about."""
+        where: list[ColumnElement[bool]] = [*fence(MemoryFact.project_id, hidden)]
         if project == "global":
             where.append(MemoryFact.project_id.is_(None))
         elif project:
@@ -154,10 +163,14 @@ class MemoryHitRepository(Repository[MemoryHit]):
         """A row per fact. The caller has already made them distinct: one answer, one hit per fact."""
         await self.add_all([MemoryHit(fact_id=f.id, feature=feature, ref=context) for f in facts])
 
-    async def recent(self, limit: int | None = None) -> list[Recall]:
+    async def recent(self, limit: int | None = None,
+                     *, hidden: frozenset[str] = frozenset()) -> list[Recall]:
+        """A recall carries the fact's own title, so it is fenced by the fact's project — the join
+        this statement already makes, not a new one."""
         size = min(bounded(limit), HITS_CEILING)
         stmt = (select(MemoryFact.ref, MemoryFact.title, MemoryHit.feature, MemoryHit.ref, MemoryHit.at)
                 .join(MemoryFact, MemoryFact.id == MemoryHit.fact_id)
+                .where(*fence(MemoryFact.project_id, hidden))
                 .order_by(MemoryHit.at.desc(), MemoryHit.id.desc()).limit(size))
         return [Recall(ref, title, feature, context, at)
                 for ref, title, feature, context, at in (await self.session.execute(stmt)).all()]

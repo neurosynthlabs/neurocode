@@ -23,6 +23,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -41,8 +42,8 @@ class Run(Base, Mixin):
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     ref: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    task_id: Mapped[str | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"))
-    plan_id: Mapped[str | None] = mapped_column(ForeignKey("plans.id", ondelete="SET NULL"))
+    task_id: Mapped[str | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"), index=True)
+    plan_id: Mapped[str | None] = mapped_column(ForeignKey("plans.id", ondelete="SET NULL"), index=True)
     status: Mapped[str] = mapped_column(RunStatus, nullable=False, server_default="queued")
 
     #: solo: one agent. agent: one of several working at once. integration: the run that merges them.
@@ -141,7 +142,7 @@ class RunStep(Base):
     question: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     answer: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     #: For a merge step: the agent run whose branch it brings in.
-    child_run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id", ondelete="SET NULL"))
+    child_run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id", ondelete="SET NULL"), index=True)
 
     run: Mapped[Run] = relationship(back_populates="steps", foreign_keys=[run_id])
 
@@ -217,7 +218,8 @@ class RunLog(Base):
     """A line a run wrote, as it wrote it. There are a lot of these, so they are their own table."""
 
     __tablename__ = "run_logs"
-    __table_args__ = (Index("ix_run_logs_run_id_id", "run_id", "id"),)
+    #: A run's own lines, and the machine-wide timeline DevOps shows, which orders by time alone.
+    __table_args__ = (Index("ix_run_logs_run_id_id", "run_id", "id"), Index("ix_run_logs_at_id", "at", "id"))
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), nullable=False)
@@ -231,7 +233,10 @@ class Chat(Base, Mixin):
     """A conversation that can act: you ask, it reaches for a tool, it answers."""
 
     __tablename__ = "chats"
-    __table_args__ = (Index("ix_chats_project_id_last_at", "project_id", "last_at"),)
+    __table_args__ = (Index("ix_chats_project_id_last_at", "project_id", "last_at"),
+                      # Deleting a session makes Postgres look for its forks, once per row: partial, because
+                      # almost every session is nobody's parent.
+                      Index("ix_chats_parent_id", "parent_id", postgresql_where=text("parent_id IS NOT NULL")))
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     ref: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
@@ -267,7 +272,11 @@ class ChatMessage(Base):
     """One turn: your question, a tool call with what it found, an answer, or a note."""
 
     __tablename__ = "chat_messages"
-    __table_args__ = (Index("ix_chat_messages_chat_id_id", "chat_id", "id"),)
+    __table_args__ = (Index("ix_chat_messages_chat_id_id", "chat_id", "id"),
+                      # The same, for the turn a summary replaced: without it, deleting one session reads
+                      # every message in the workspace, once per turn it deletes.
+                      Index("ix_chat_messages_superseded_by", "superseded_by",
+                            postgresql_where=text("superseded_by IS NOT NULL")))
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)

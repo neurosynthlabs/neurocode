@@ -28,7 +28,7 @@ from ..models import (
     TestFailure,
     User,
 )
-from .base import MAX_LIMIT, Page, Repository, bounded
+from .base import MAX_LIMIT, Page, Repository, bounded, fence
 
 
 class RunRepository(Repository[Run]):
@@ -38,9 +38,10 @@ class RunRepository(Repository[Run]):
         return await self.one(Run.ref == ref)
 
     async def newest(self, project_id: str | None = None, *, limit: int | None = None,
-                     offset: int = 0) -> Page[Run]:
+                     offset: int = 0, hidden: frozenset[str] = frozenset()) -> Page[Run]:
         where: list[ColumnElement[bool]] = [Run.project_id == project_id] if project_id else []
-        return await self.page(*where, order_by=Run.created_at.desc(), limit=limit, offset=offset)
+        return await self.page(*where, *fence(Run.project_id, hidden),
+                               order_by=Run.created_at.desc(), limit=limit, offset=offset)
 
     async def children_of(self, run_ids: list[str]) -> dict[str, list[Run]]:
         """parent id → its agent runs. One statement for a whole list of runs, not one per run."""
@@ -103,9 +104,10 @@ class ChatRepository(Repository[Chat]):
         return await self.one(Chat.ref == ref)
 
     async def newest(self, project_id: str | None = None, *, limit: int | None = None,
-                     offset: int = 0) -> Page[Chat]:
+                     offset: int = 0, hidden: frozenset[str] = frozenset()) -> Page[Chat]:
         where: list[ColumnElement[bool]] = [Chat.project_id == project_id] if project_id else []
-        return await self.page(*where, order_by=Chat.last_at.desc(), limit=limit, offset=offset)
+        return await self.page(*where, *fence(Chat.project_id, hidden),
+                               order_by=Chat.last_at.desc(), limit=limit, offset=offset)
 
     async def messages(self, chat_id: str, after: int = 0, *, limit: int = 500) -> list[ChatMessage]:
         stmt = (select(ChatMessage).where(ChatMessage.chat_id == chat_id, ChatMessage.id > after)
@@ -165,11 +167,16 @@ class ResultsRepository(Repository[TestFailure]):
         return int(row[0]), int(row[1])
 
     # ── read by the Testing screen ───────────────────────────────
-    async def onboarded(self, project_id: str | None, *, limit: int = 50) -> list[Project]:
-        """Projects with code on this machine — the only ones that have tests to run."""
+    async def onboarded(self, project_id: str | None, *, limit: int = 50,
+                        hidden: frozenset[str] = frozenset()) -> list[Project]:
+        """Projects with code on this machine — the only ones that have tests to run.
+
+        The whole Testing report is keyed on the ids this returns, so fencing the projects here
+        fences the failures, the history, the coverage and the standing answers with them."""
         where: list[ColumnElement[bool]] = [Project.source_kind.is_not(None)]
         if project_id:
             where.append(Project.id == project_id)
+        where += fence(Project.id, hidden)
         stmt = select(Project).where(*where).order_by(Project.name).limit(min(limit, MAX_LIMIT))
         return list((await self.session.execute(stmt)).scalars())
 
@@ -181,12 +188,15 @@ class ResultsRepository(Repository[TestFailure]):
         rows = (await self.session.execute(select(Setting).where(Setting.key.in_(keys)))).scalars()
         return {keys[row.key]: str(row.value) for row in rows}
 
-    async def standing_answers(self, *, limit: int | None = None,
-                               offset: int = 0) -> list[tuple[Project, Setting]]:
+    async def standing_answers(self, *, limit: int | None = None, offset: int = 0,
+                               hidden: frozenset[str] = frozenset()) -> list[tuple[Project, Setting]]:
         """Every project's kept answer to the test gate, with the setting that holds it — the row the
-        runtime reads before it runs a command, so what is listed is exactly what is applied."""
+        runtime reads before it runs a command, so what is listed is exactly what is applied.
+
+        Every row names a project, so a project this person may not see has no row here either."""
         stmt = (select(Project, Setting)
                 .join(Setting, Setting.key == func.concat("runtime.tests.", Project.id))
+                .where(*fence(Project.id, hidden))
                 .order_by(Project.name).limit(bounded(limit)).offset(max(0, offset)))
         return [(project, setting) for project, setting in (await self.session.execute(stmt)).all()]
 
@@ -200,8 +210,12 @@ class ResultsRepository(Repository[TestFailure]):
         another's moment."""
         if not project_ids:
             return {}
+        # Joined on the gate's own `run_id`, not on the ref it prints. The refs matched as text until
+        # every writer kept the link (services/runs.py, data/loader.py) and the old rows were backfilled;
+        # now the join is a key with an index under it, and a gate whose run has been deleted is gone
+        # with it rather than left pointing at a name that may be handed out again.
         stmt = (select(Approval.project_id, Approval.status, User.name, Approval.decided_at)
-                .join(Run, Run.ref == Approval.run_ref)
+                .join(Run, Run.id == Approval.run_id)
                 .join(RunStep, and_(RunStep.run_id == Run.id, RunStep.n == Approval.step, RunStep.kind == "test"))
                 .join(User, User.id == Approval.decided_by)
                 .where(Approval.project_id.in_(project_ids), Approval.status.in_(("approved", "denied")))

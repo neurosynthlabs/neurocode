@@ -89,21 +89,21 @@ function LiveSkills() {
           <StatGrid cols={5}>
             <Stat label="Skills" value={all.length} sub={`${enabled.length} enabled`} icon={<Sparkles className="size-3" />} />
             <Stat label="Loads 24h" value={loads.toLocaleString()} sub={project ? `across ${sessions} session${sessions === 1 ? '' : 's'} on ${project.name}` : 'sessions belong to a project, and there is none yet'} icon={<Zap className="size-3" />} />
-            <Stat label="If always loaded" value={fmtTokens(ifAlwaysOn)} tone="danger" sub={sessions ? `${fmtTokens(standing)} tokens × ${sessions} sessions` : `${fmtTokens(standing)} tokens a session`} />
-            <Stat label="Actually loaded" value={fmtTokens(loaded)} tone="ok" sub="tokens sessions read in 24h" />
+            <Stat label="If always loaded" value={fmtTokens(ifAlwaysOn)} tone="danger" sub={sessions ? `est. ${fmtTokens(standing)} tokens × ${sessions} sessions` : `est. ${fmtTokens(standing)} tokens a session`} />
+            <Stat label="Actually loaded" value={fmtTokens(loaded)} tone="ok" sub="est. tokens sessions read in 24h" />
             <Stat label="Context saved" value={sessions && loads && ifAlwaysOn ? `${Math.round((1 - loaded / ifAlwaysOn) * 100)}%` : '—'} tone={loads ? 'ok' : undefined}
               sub={!sessions ? 'no session in 24h to compare' : !loads ? 'no skill loaded in 24h' : 'estimated tokens (characters ÷ 4)'} icon={<Gauge className="size-3" />} />
           </StatGrid>
 
-          <Panel className="accent-left" eyebrow="How sessions use them" title="A description in the prompt, the body only on request">
+          {/* "Never run" is the fact the cut paragraph carried that nothing else on this screen did: a skill
+              is text handed to a model, not something this app executes. It stays, in two words. */}
+          <Panel className="accent-left" eyebrow="Read, never run" title="A description in the prompt, the body only on request">
             <p className="max-w-4xl text-[13.5px] leading-relaxed text-ink-2">
               {all.length} skills are here. {!project
                 ? 'No project is onboarded, so no NeuroCode session has run to load one.'
                 : sessions === 0 || loads === 0
                   ? `No NeuroCode session on ${project.name} has loaded one in the last 24 hours.`
                   : `${sessions} session${sessions === 1 ? '' : 's'} on ${project.name} loaded ${(loads / sessions).toFixed(1)} on average in the last 24 hours.`}
-              {' '}The model reads each enabled skill's description and decides for itself when to load one; nothing here runs a skill.
-              Switching one off leaves it out of NeuroCode sessions — Claude Code keeps its own.
             </p>
             {r.data.unreadable.length > 0 && (
               <p className="mt-2 text-[12.5px] text-warn">Front matter could not be read in {r.data.unreadable.join(', ')}.</p>
@@ -132,9 +132,14 @@ function LiveSkills() {
             ) : <div className="min-w-0 flex-1"><Empty title="Nothing selected" hint="Widen the filters to pick a skill." /></div>}
           </div>
 
-          <SectionTitle>Cost of always-on vs loaded on request</SectionTitle>
+          {/* Every figure in this table is `tokens` × a count, and `tokens` is the server's characters ÷ 4 —
+              a guess, not a measurement. The caption says so once, for the whole table, rather than each
+              column reading like a price. */}
+          <SectionTitle right={<span className="text-[12px] text-dim">estimated tokens, characters ÷ 4</span>}>
+            Always-on vs loaded on request
+          </SectionTitle>
           <Panel flush>
-            <DataTable head={['Skill', 'Scope', 'Tokens', 'Loads 24h', 'Cost if always on', 'Cost as loaded']}>
+            <DataTable head={['Skill', 'Scope', 'Tokens', 'Loads 24h', 'Tokens if always on', 'Tokens as loaded']}>
               {[...all].sort((a, b) => b.tokens - a.tokens).slice(0, 10).map((x) => (
                 <Row key={x.id}>
                   <Cell className="font-medium text-ink">{x.name}</Cell>
@@ -165,7 +170,8 @@ function LiveSkillDetail({ skill: s, projectId, projectName: name, sessions, on,
       <Panel
         eyebrow={`${s.scope} · ${s.project === 'all' ? 'every project' : name ?? s.project}${version ? ` · ${/^\d/.test(version) ? 'v' : ''}${version}` : ''}`}
         title={<span className="flex items-center gap-2">{s.name}<Mono tone="brand">{s.slug}</Mono></span>}
-        actions={<Switch checked={on} disabled={!canSwitch} aria-label={`Use ${s.name} in NeuroCode sessions`} onCheckedChange={onSwitch} />}
+        actions={<Switch checked={on} disabled={!canSwitch} aria-label={`Use ${s.name} in NeuroCode sessions`}
+          title="Off leaves it out of NeuroCode sessions. Claude Code keeps its own." onCheckedChange={onSwitch} />}
       >
         <p className="text-[13.5px] leading-relaxed text-ink-2">{s.description || <span className="text-dim">No description in its front matter.</span>}</p>
         <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 border-t border-line pt-2.5 xl:grid-cols-4">

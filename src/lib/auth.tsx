@@ -26,6 +26,15 @@ interface AuthCtx {
   can: (...perms: string[]) => boolean;
   /** True when the user holds at least one of them. */
   canAny: (...perms: string[]) => boolean;
+  /**
+   * The same question, asked inside one project. A project is open to the whole workspace until
+   * somebody restricts it, and an open one answers exactly as `can` does — which is every project
+   * until someone restricts one. Inside a restricted project a person's rights are their own, cut
+   * to what their grant there carries, so this can only ever say no where `can` said yes.
+   *
+   * The API is still the fence. This only spares the round trip and the flicker.
+   */
+  canIn: (projectId: string | null | undefined, ...perms: string[]) => boolean;
   /** Whether this person may use the machine the API runs on: the permission, and a server that opens it
    *  at all. A hosted server answers every machine route with 404, so a screen asks this before offering
    *  a folder, a terminal, a run or a debugger. */
@@ -117,12 +126,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const perms = useMemo(() => new Set(user?.permissions ?? []), [user]);
   const can = useCallback((...p: string[]) => p.every((x) => perms.has(x)), [perms]);
   const canAny = useCallback((...p: string[]) => p.some((x) => perms.has(x)), [perms]);
+  // Only the restricted projects this person holds a grant in. A project that is not in here is open,
+  // and an open project is the workspace set — which is why the absence means "yes, as usual".
+  const projectRights = useMemo(() => {
+    const held = (user as (AuthUser & { projectRights?: Record<string, string[]> }) | null)?.projectRights;
+    return new Map(Object.entries(held ?? {}).map(([id, list]) => [id, new Set(list)]));
+  }, [user]);
+  const canIn = useCallback((projectId: string | null | undefined, ...p: string[]) => {
+    const narrowed = projectId ? projectRights.get(projectId) : undefined;
+    return narrowed ? p.every((x) => narrowed.has(x)) : p.every((x) => perms.has(x));
+  }, [perms, projectRights]);
   const machine = can('machine:access') && session.machineAccess;
   const roleNames = useMemo(() => (user?.roles ?? []).map((id) => roleName(catalogue, id)).join(', '), [user, catalogue]);
 
   const value = useMemo<AuthCtx>(
-    () => ({ state, user, workspace, offlineReason, can, canAny, machine, roleNames, login, logout, refresh }),
-    [state, user, workspace, offlineReason, can, canAny, machine, roleNames, login, logout, refresh],
+    () => ({ state, user, workspace, offlineReason, can, canAny, canIn, machine, roleNames, login, logout, refresh }),
+    [state, user, workspace, offlineReason, can, canAny, canIn, machine, roleNames, login, logout, refresh],
   );
   return <C.Provider value={value}>{children}</C.Provider>;
 }

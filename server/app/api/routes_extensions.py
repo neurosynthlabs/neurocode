@@ -5,6 +5,11 @@ minute ago shows up without anything being imported; the switches themselves are
 `PUT /prefs/{key}` like every other screen setting. A key the screen sends back is looked up among what
 discovery found — it is never turned into a path.
 
+Skills, commands and plugins are catalogues — a name and a description — and every role is meant to read
+them. A hook is not: it is a command line configured on this machine, and the redaction that takes the
+secret-looking parts out of one is a best effort, not a fence. So the hooks list alone asks for
+`settings:write`, the right that already governs switching hooks on and off.
+
 `projectId` may be left out. A new workspace has no project, and the Claude home on this machine is real
 before one exists, so without it the screens read that home alone and count no session.
 """
@@ -16,7 +21,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..services.extensions import ExtensionService
-from .deps import current_person, session
+from .deps import current_person, require, session
 
 router = APIRouter(prefix="/extensions", dependencies=[Depends(current_person)])
 
@@ -40,7 +45,7 @@ async def commands(project_id: str | None = PROJECT, open_session: AsyncSession 
     return await ExtensionService(open_session).commands(project_id)
 
 
-@router.get("/hooks")
+@router.get("/hooks", dependencies=[Depends(require("settings:write"))])
 async def hooks(project_id: str | None = PROJECT, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     """The hooks Claude Code would run here, with anything that looks like a secret taken out."""
     return await ExtensionService(open_session).hooks(project_id)

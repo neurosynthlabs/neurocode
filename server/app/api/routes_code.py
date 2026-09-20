@@ -1,9 +1,12 @@
 """The code index over HTTP: a summary, a lazy file tree, search, one file, impact and the graph.
 
-Same paths and same JSON as before. Reading needs nothing but a session; rebuilding the index or the
-retrieval chunks needs `projects:onboard`, because both read the checkout on disk and both take long
-enough that they answer 202 and finish in the background — with a database session of their own, since
-this request's transaction is closed by the time they run.
+Same paths and same JSON as before. Every route here is asked *inside* its project: reading needs a
+session and a project this person may see — a restricted one they are not listed on answers 404, the
+same as asking for the project itself — and rebuilding the index or the retrieval chunks needs
+`projects:onboard` **there**, so a grant that narrows what somebody may do in one project narrows
+this too. Both rebuilds read the checkout on disk and both take long enough that they answer 202 and
+finish in the background — with a database session of their own, since this request's transaction is
+closed by the time they run.
 """
 from __future__ import annotations
 
@@ -22,7 +25,7 @@ from ..services.code import INDEXING, CodeService, checkout
 from ..services.errors import Refused
 from ..services.identity import Person
 from ..services.retrieval import BUILDING, RetrievalService
-from .deps import current_person, database, gateway, hand_off, require, session
+from .deps import database, gateway, hand_off, scoped, session
 
 router = APIRouter(prefix="/projects/{pid}/code")
 
@@ -30,24 +33,24 @@ router = APIRouter(prefix="/projects/{pid}/code")
 MAX_HITS = 20
 
 
-@router.get("", dependencies=[Depends(current_person)])
+@router.get("", dependencies=[Depends(scoped())])
 async def summary(pid: str, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     """What the index holds. A project nobody has indexed answers `indexed: false`, not an error."""
     return await CodeService(open_session).summary(pid)
 
 
-@router.get("/files", dependencies=[Depends(current_person)])
+@router.get("/files", dependencies=[Depends(scoped())])
 async def files(pid: str, dir: str = "", open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     return await CodeService(open_session).tree(pid, dir)
 
 
-@router.get("/search", dependencies=[Depends(current_person)])
+@router.get("/search", dependencies=[Depends(scoped())])
 async def search(pid: str, q: str = "",
                  open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
     return await CodeService(open_session).search(pid, q)
 
 
-@router.get("/file", dependencies=[Depends(current_person)])
+@router.get("/file", dependencies=[Depends(scoped())])
 async def file(pid: str, path: str, source: bool = False,
                open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     """One file's relations, and its source only when asked for.
@@ -59,19 +62,19 @@ async def file(pid: str, path: str, source: bool = False,
     return await CodeService(open_session).file(pid, path, source=source)
 
 
-@router.get("/impact", dependencies=[Depends(current_person)])
+@router.get("/impact", dependencies=[Depends(scoped())])
 async def impact(pid: str, path: str | None = None, module: str | None = None,
                  obj: str | None = Query(default=None, alias="object"),
                  open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     return await CodeService(open_session).impact(pid, path=path, module=module, obj=obj)
 
 
-@router.get("/graph", dependencies=[Depends(current_person)])
+@router.get("/graph", dependencies=[Depends(scoped())])
 async def graph(pid: str, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     return await CodeService(open_session).graph(pid)
 
 
-@router.get("/retrieval", dependencies=[Depends(current_person)])
+@router.get("/retrieval", dependencies=[Depends(scoped())])
 async def retrieval(pid: str, q: str = "", limit: int = 8,
                     open_session: AsyncSession = Depends(session),
                     gw: Gateway = Depends(gateway)) -> dict[str, Any]:
@@ -85,14 +88,14 @@ async def retrieval(pid: str, q: str = "", limit: int = 8,
     return {**await service.summary(pid), "q": q, "results": found, "counts": counts}
 
 
-@router.get("/retrieval/docs", dependencies=[Depends(current_person)])
+@router.get("/retrieval/docs", dependencies=[Depends(scoped())])
 async def retrieval_docs(pid: str, open_session: AsyncSession = Depends(session),
                          gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """The repository's own writing: what retrieval holds of it, and what on disk it does not hold yet."""
     return await CodeService(open_session).docs(pid, gw)
 
 
-@router.get("/retrieval/doc", dependencies=[Depends(current_person)])
+@router.get("/retrieval/doc", dependencies=[Depends(scoped())])
 async def retrieval_doc(pid: str, path: str, open_session: AsyncSession = Depends(session),
                         gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """One document, its sections, and the symbols, files and refs it names that really exist."""
@@ -101,7 +104,7 @@ async def retrieval_doc(pid: str, path: str, open_session: AsyncSession = Depend
 
 @router.post("/retrieval/build", status_code=202)
 async def build_retrieval(pid: str, jobs: BackgroundTasks,
-                          who: Person = Depends(require("projects:onboard")),
+                          who: Person = Depends(scoped("projects:onboard")),
                           open_session: AsyncSession = Depends(session),
                           db: Database = Depends(database),
                           gw: Gateway = Depends(gateway)) -> dict[str, bool]:
@@ -128,7 +131,7 @@ async def _build_retrieval(db: Database, gw: Gateway, pid: str) -> None:
 
 
 @router.post("/reindex", status_code=202)
-async def reindex(pid: str, jobs: BackgroundTasks, who: Person = Depends(require("projects:onboard")),
+async def reindex(pid: str, jobs: BackgroundTasks, who: Person = Depends(scoped("projects:onboard")),
                   open_session: AsyncSession = Depends(session), db: Database = Depends(database),
                   gw: Gateway = Depends(gateway)) -> dict[str, bool]:
     """Read the code again. Answered the moment the job is queued, not when it finishes."""

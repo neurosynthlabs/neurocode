@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..repositories import NotFound
 from ..repositories.knowledge import HITS_CEILING, ConflictRepository, MemoryHitRepository, MemoryRepository
 from ..schemas import conflict_json, fact_json
 from ..schemas.knowledge import recall_json
@@ -24,7 +25,7 @@ from ..services.identity import Person
 from ..services.knowledge import MemoryService, NewFact
 from ..services.taste import CEILING as TASTE_CEILING
 from ..services.taste import MAX_RULE, TasteService, rule_json, signal_json
-from .deps import current_person, gateway, require, session
+from .deps import current_person, gateway, must_see, require, session, unseen_by
 
 router = APIRouter()
 #: The window the screen's "retired" figure covers.
@@ -63,21 +64,29 @@ class FactsIn(BaseModel):
     facts: list[FactIn] = Field(min_length=1, max_length=20)
 
 
-@router.get("/memory", dependencies=[Depends(current_person)])
+@router.get("/memory")
 async def memory(q: str = "", category: Category | None = None, project: str | None = None,
-                 include_archived: bool = False,
+                 include_archived: bool = False, who: Person = Depends(current_person),
                  open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
+    """What memory holds, of the projects this person may see. The workspace's own facts are
+    everybody's; a fact filed under a restricted project is not searchable outside it."""
     found = await MemoryService(open_session).search(q, category=category, project=project,
-                                                     include_archived=include_archived)
+                                                     include_archived=include_archived,
+                                                     hidden=await unseen_by(who, open_session))
     return [fact_json(f) for f in found]
 
 
-@router.get("/memory/stats", dependencies=[Depends(current_person)])
+@router.get("/memory/stats")
 async def memory_stats(project: str | None = Query(default=None, max_length=60),
+                       who: Person = Depends(current_person),
                        open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     """The Memory screen's figures, counted by the database. They were counted from the list, which is
-    a page of at most a few hundred facts, so a large memory read as a small one."""
-    found = await MemoryRepository(open_session).stats(project=project, retired_days=RETIRED_DAYS)
+    a page of at most a few hundred facts, so a large memory read as a small one.
+
+    Counted over the same facts the list beside them can show, or the header says a number the screen
+    cannot reach — and the difference is the size of a project nobody told this person about."""
+    found = await MemoryRepository(open_session).stats(project=project, retired_days=RETIRED_DAYS,
+                                                       hidden=await unseen_by(who, open_session))
     return {"held": found.held, "pinned": found.pinned, "global": found.workspace,
             "recalled24h": found.recalled_24h, "retired": found.retired, "retiredDays": RETIRED_DAYS,
             "byCategory": {category: {"held": c.held, "pinned": c.pinned, "recalled24h": c.recalled_24h,
@@ -95,9 +104,19 @@ async def add_facts(body: FactsIn, who: Person = Depends(require("memory:write")
     return [fact_json(f) for f in added]
 
 
+async def _fact(ref: str, who: Person, open_session: AsyncSession) -> None:
+    """A fact reached by its reference: one filed under a project this person may not see is not
+    there, so pinning or archiving it answers 404 rather than telling them it exists."""
+    found = await MemoryRepository(open_session).by_ref(ref)
+    if found is None:
+        raise NotFound(f"fact {ref}")
+    await must_see(who, open_session, found.project_id, f"fact {ref}")
+
+
 @router.post("/memory/{ref}/pin")
 async def pin(ref: str, body: PinIn, who: Person = Depends(require("memory:write")),
               open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    await _fact(ref, who, open_session)
     return fact_json(await MemoryService(open_session).pin(ref, body.pinned, who.name))
 
 
@@ -105,14 +124,17 @@ async def pin(ref: str, body: PinIn, who: Person = Depends(require("memory:write
 async def archive(ref: str, who: Person = Depends(require("memory:write")),
                   open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     """Archived, never deleted — a fact that turned out to be wrong is still evidence."""
+    await _fact(ref, who, open_session)
     return fact_json(await MemoryService(open_session).archive(ref, who.name))
 
 
-@router.get("/memory/hits", dependencies=[Depends(current_person)])
-async def hits(limit: int = Query(default=50, ge=1, le=HITS_CEILING),
+@router.get("/memory/hits")
+async def hits(limit: int = Query(default=50, ge=1, le=HITS_CEILING), who: Person = Depends(current_person),
                open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
-    """The latest recalls, newest first: which fact, which feature used it, for what, and when."""
-    return [recall_json(h) for h in await MemoryHitRepository(open_session).recent(limit)]
+    """The latest recalls, newest first: which fact, which feature used it, for what, and when — of
+    the facts this person may read, since a recall quotes the fact's title."""
+    return [recall_json(h) for h in await MemoryHitRepository(open_session).recent(
+        limit, hidden=await unseen_by(who, open_session))]
 
 
 @router.get("/memory/conflicts", dependencies=[Depends(current_person)])
@@ -156,10 +178,11 @@ class RuleChange(BaseModel):
     status: Literal["active", "retired"] | None = None
 
 
-@router.get("/taste/rules", dependencies=[Depends(current_person)])
+@router.get("/taste/rules")
 async def taste_rules(project: str | None = Query(default=None, max_length=60),
                       status: Literal["proposed", "active", "retired"] | None = None,
                       limit: int = Query(default=100, ge=1, le=TASTE_CEILING), offset: int = Query(default=0, ge=0),
+                      who: Person = Depends(current_person),
                       open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     """The rules in view — a project's own and the workspace's, or the workspace's alone — proposed first,
     then active, then retired, the best supported first; with the counts by status and the signals'
@@ -169,17 +192,20 @@ async def taste_rules(project: str | None = Query(default=None, max_length=60),
     rules, counts = await taste.rules(scope, status=status, limit=limit, offset=offset)
     names = await taste.names([r.adopted_by for r in rules])
     return {"items": [rule_json(r, names) for r in rules], "counts": counts,
-            "signals": await taste.signal_counts(scope)}
+            "signals": await taste.signal_counts(scope, await unseen_by(who, open_session))}
 
 
-@router.get("/taste/signals", dependencies=[Depends(current_person)])
+@router.get("/taste/signals")
 async def taste_signals(project: str | None = Query(default=None, max_length=60), kind: TasteKind | None = None,
                         unread: bool | None = None,
                         limit: int = Query(default=50, ge=1, le=TASTE_CEILING), offset: int = Query(default=0, ge=0),
+                        who: Person = Depends(current_person),
                         open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
-    """The signals, newest first: what each moment was, in a line, with what it was built from."""
+    """The signals, newest first: what each moment was, in a line, with what it was built from — of
+    the projects this person may see. A signal quotes a rework note or a plan edit verbatim."""
     taste = TasteService(open_session)
-    found = await taste.signals(_scope(project), kind=kind, unread=unread, limit=limit, offset=offset)
+    found = await taste.signals(_scope(project), kind=kind, unread=unread, limit=limit, offset=offset,
+                                hidden=await unseen_by(who, open_session))
     names = await taste.names([s.by_user_id for s in found])
     return [signal_json(s, names) for s in found]
 

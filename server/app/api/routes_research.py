@@ -22,7 +22,7 @@ from ..services import research as research_jobs
 from ..services.identity import Person
 from ..services.research import MAX_QUESTION, ResearchService
 from ..services.web import SECRET as WEB_SECRET
-from .deps import current_person, database, gateway, hand_off, require, session
+from .deps import current_person, database, gateway, hand_off, must_see, require, session, unseen_by
 
 router = APIRouter(prefix="/research")
 
@@ -37,11 +37,13 @@ class ResearchIn(BaseModel):
     web: bool = False
 
 
-@router.get("", dependencies=[Depends(current_person)])
+@router.get("")
 async def reports(project: str | None = None, limit: int = Query(default=50, ge=1),
-                  offset: int = Query(default=0, ge=0),
+                  offset: int = Query(default=0, ge=0), who: Person = Depends(current_person),
                   open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
-    rows = await ResearchService(open_session).newest(project, limit=min(limit, MAX_LIST), offset=offset)
+    """The reports this person may read: a question asked of a restricted project is not one."""
+    rows = await ResearchService(open_session).newest(project, limit=min(limit, MAX_LIST), offset=offset,
+                                                      hidden=await unseen_by(who, open_session))
     return [report_row_json(row) for row in rows]
 
 
@@ -55,9 +57,12 @@ async def start(body: ResearchIn, jobs: BackgroundTasks, who: Person = Depends(r
     return report_row_json(row)
 
 
-@router.get("/{ref}", dependencies=[Depends(current_person)])
-async def report(ref: str, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
-    return report_json(await ResearchService(open_session).detail(ref))
+@router.get("/{ref}")
+async def report(ref: str, who: Person = Depends(current_person),
+                 open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    found = await ResearchService(open_session).detail(ref)
+    await must_see(who, open_session, found.project_id, f"research {ref}")
+    return report_json(found)
 
 
 @router.post("/{ref}/cancel")

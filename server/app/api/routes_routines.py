@@ -39,7 +39,7 @@ from ..services.schedules import (
     fire_json,
 )
 from ..schemas.work import when
-from .deps import current_person, database, gateway, hand_off, require, session
+from .deps import current_person, database, gateway, hand_off, must_see, require, session, unseen_by
 
 router = APIRouter(tags=["routines"])
 
@@ -79,13 +79,17 @@ def _page(page: Any, items: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 # ── routines ─────────────────────────────────────────────────────
-@router.get("/schedules", dependencies=[Depends(current_person)])
+@router.get("/schedules")
 async def routines(project: str | None = Query(default=None, max_length=40),
                    limit: int = Query(default=100, ge=1), offset: int = Query(default=0, ge=0),
+                   who: Person = Depends(current_person),
                    open_session: AsyncSession = Depends(session), gw: Gateway = Depends(gateway)) -> dict[str, Any]:
-    """Every routine, by name, with its next minute, its last fire and why it would not fire now, if so."""
+    """Every routine this person may see, by name, with its next minute, its last fire and why it
+    would not fire now, if so. The total is counted over the same rows, so the screen's "of 12" is
+    about the list under it."""
     service = RoutineService(open_session, gw)
-    page = await service.listed(project=project, limit=min(limit, MAX_LIST), offset=offset)
+    page = await service.listed(project=project, limit=min(limit, MAX_LIST), offset=offset,
+                                hidden=await unseen_by(who, open_session))
     return _page(page, await service.documents(page.items))
 
 
@@ -111,18 +115,24 @@ async def create(body: RoutineIn, who: Person = Depends(require(WRITE)), open_se
     return await service.document(made)
 
 
-@router.get("/schedules/{schedule_id}", dependencies=[Depends(current_person)])
-async def routine(schedule_id: str, open_session: AsyncSession = Depends(session),
+@router.get("/schedules/{schedule_id}")
+async def routine(schedule_id: str, who: Person = Depends(current_person),
+                  open_session: AsyncSession = Depends(session),
                   gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     service = RoutineService(open_session, gw)
-    return await service.document(await service.get(schedule_id))
+    found = await service.get(schedule_id)
+    await must_see(who, open_session, found.project_id, f"routine {schedule_id}")
+    return await service.document(found)
 
 
-@router.get("/schedules/{schedule_id}/fires", dependencies=[Depends(current_person)])
+@router.get("/schedules/{schedule_id}/fires")
 async def fires(schedule_id: str, limit: int = Query(default=20, ge=1), offset: int = Query(default=0, ge=0),
+                who: Person = Depends(current_person),
                 open_session: AsyncSession = Depends(session), gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Its fires, newest first: what triggered each, what it started, and what became of it."""
     service = RoutineService(open_session, gw)
+    await must_see(who, open_session, (await service.get(schedule_id)).project_id,
+                   f"routine {schedule_id}")
     page = await service.fires(schedule_id, limit=min(limit, MAX_LIST), offset=offset)
     states = await service.run_states([f.run_ref for f in page.items])
     return _page(page, [fire_json(f, states.get(f.run_ref or "")) for f in page.items])
@@ -219,8 +229,9 @@ async def webhook(schedule_id: str, request: Request, jobs: BackgroundTasks,
 # ── the inbox ────────────────────────────────────────────────────
 @router.get("/inbox")
 async def inbox(who: Person = Depends(current_person), open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
-    """What needs you, what is working, and what finished since you last marked the inbox seen."""
-    return await InboxService(open_session).read(who.id)
+    """What needs you, what is working, and what finished since you last marked the inbox seen —
+    of the projects you may see. Every part is read from the work itself, so every part is fenced."""
+    return await InboxService(open_session).read(who.id, hidden=await unseen_by(who, open_session))
 
 
 @router.post("/inbox/seen")

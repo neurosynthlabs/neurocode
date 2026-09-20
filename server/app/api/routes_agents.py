@@ -20,7 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai.gateway import Gateway
 from ..data.engine import Database
-from ..repositories import ProjectRepository
+from ..repositories import NotFound, ProjectRepository
+from ..repositories.reviews import CodeReviewRepository
 from ..schemas import chat_json, plan_json, task_json
 from ..services import chat as chat_service
 from ..services import reviews as review_service
@@ -28,7 +29,7 @@ from ..services.custom_agents import MAX_AGENT_STEPS, MAX_NAME, MAX_PROMPT, MAX_
 from ..services.custom_agents import CustomAgentService, Draft
 from ..services.identity import Person
 from ..services.reviews import ReviewService
-from .deps import current_person, database, gateway, hand_off, require, session
+from .deps import current_person, database, gateway, hand_off, must_see, require, scoped, session
 
 router = APIRouter(tags=["agents"])
 
@@ -72,12 +73,17 @@ class ReviewIn(BaseModel):
 
 
 # ── custom agents ────────────────────────────────────────────────
-@router.get("/agents/custom", dependencies=[Depends(current_person)])
+@router.get("/agents/custom")
 async def custom_agents(project: str | None = Query(default=None, max_length=40),
+                        who: Person = Depends(current_person),
                         open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     """Every agent beside the roster for one project (or the workspace alone): the stored ones, the files
     its checkout declares, with where each came from, what it may use, which lose their name to a nearer
-    one, and what they have really done."""
+    one, and what they have really done.
+
+    The project is named in the query rather than the path, so `scoped` cannot reach it: asked about
+    one this person may not see, the answer is the same 404 the project itself gives."""
+    await must_see(who, open_session, project, f"project {project}")
     return await CustomAgentService(open_session).catalogue(project)
 
 
@@ -111,7 +117,7 @@ async def try_agent(body: TryIn, who: Person = Depends(require("sessions:chat"))
 
 
 # ── reviews on demand ────────────────────────────────────────────
-@router.get("/projects/{pid}/review/targets", dependencies=[Depends(current_person)])
+@router.get("/projects/{pid}/review/targets", dependencies=[Depends(scoped())])
 async def review_targets(pid: str, source: str = Query(default="", max_length=60),
                          open_session: AsyncSession = Depends(session),
                          gw: Gateway = Depends(gateway)) -> dict[str, Any]:
@@ -122,7 +128,7 @@ async def review_targets(pid: str, source: str = Query(default="", max_length=60
 
 @router.post("/projects/{pid}/review", status_code=202)
 async def request_review(pid: str, body: ReviewIn, jobs: BackgroundTasks,
-                         who: Person = Depends(require("runs:run")),
+                         who: Person = Depends(scoped("runs:run")),
                          open_session: AsyncSession = Depends(session), db: Database = Depends(database),
                          gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Ask for a review of a branch, the working tree or a range of commits. It is read in the background."""
@@ -135,16 +141,31 @@ async def request_review(pid: str, body: ReviewIn, jobs: BackgroundTasks,
     return out
 
 
-@router.get("/projects/{pid}/reviews", dependencies=[Depends(current_person)])
+@router.get("/projects/{pid}/reviews", dependencies=[Depends(scoped())])
 async def reviews(pid: str, limit: int | None = Query(default=None, ge=0), offset: int = Query(default=0, ge=0),
                   open_session: AsyncSession = Depends(session), gw: Gateway = Depends(gateway)) -> dict[str, Any]:
-    """The project's reviews on demand, newest first, paged."""
+    """The project's reviews on demand, newest first, paged.
+
+    The list names the project in its path, so the fence is `scoped()` and not a set of hidden ids:
+    a restricted project somebody holds no grant in answers 404 here, exactly as the project itself
+    does — its reviews, their branches and their findings included."""
     return await ReviewService(open_session, gw).listed(pid, limit=limit, offset=offset)
 
 
-@router.get("/reviews/{ref}", dependencies=[Depends(current_person)])
-async def review(ref: str, open_session: AsyncSession = Depends(session),
+async def _readable(ref: str, who: Person, open_session: AsyncSession) -> None:
+    """A review reached by its own reference names no project in its path, so its project is read
+    from the review and weighed here: one of a project this person may not see is not there."""
+    found = await CodeReviewRepository(open_session).by_ref(ref)
+    if found is None:
+        raise NotFound(f"review {ref}")
+    await must_see(who, open_session, found.project_id, f"review {ref}")
+
+
+@router.get("/reviews/{ref}")
+async def review(ref: str, who: Person = Depends(current_person),
+                 open_session: AsyncSession = Depends(session),
                  gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    await _readable(ref, who, open_session)
     return await ReviewService(open_session, gw).one(ref)
 
 
@@ -158,6 +179,7 @@ async def review_to_session(ref: str, jobs: BackgroundTasks, who: Person = Depen
                             gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """"Send to a session": a new session on the project, asked to go through the findings against the code.
     Its question is kept now; the answer arrives on the stream."""
+    await _readable(ref, who, open_session)
     chat = await ReviewService(open_session, gw).to_session(ref, who)
     project = await ProjectRepository(open_session).get(chat.project_id)
     out = chat_json(chat, project_name=project.name if project else chat.project_id)
@@ -171,5 +193,6 @@ async def review_to_plan(ref: str, who: Person = Depends(require("plans:compile"
                          gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """"Make a plan from these findings": compiled like any requirement — 409 with no model, 502 when every
     lane failed — and waiting in Plans for a person before anything runs."""
+    await _readable(ref, who, open_session)
     plan, task = await ReviewService(open_session, gw).to_plan(ref, who)
     return {**plan_json(plan, task_ref=task.ref), "task": task_json(task)}

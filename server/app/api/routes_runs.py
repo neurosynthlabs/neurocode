@@ -22,7 +22,7 @@ from ..schemas import run_json, run_log_json
 from ..services.identity import Person
 from ..services import runs as runtime
 from ..services.runs import RunService
-from .deps import current_person, database, gateway, hand_off, require, session
+from .deps import current_person, database, gateway, hand_off, must_see, require, session, unseen_by
 
 router = APIRouter(prefix="/runs")
 
@@ -65,28 +65,39 @@ def _one(run: Run, context: dict[str, dict[str, Any]]) -> dict[str, Any]:
                     plan_ref=context["plans"].get(run.plan_id or ""))
 
 
-@router.get("", dependencies=[Depends(current_person)])
+@router.get("")
 async def runs(project: str | None = None, limit: int | None = None, offset: int = 0,
+               who: Person = Depends(current_person),
                open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
-    page = await RunRepository(open_session).newest(project, limit=limit, offset=offset)
+    """Every run this person may see — a run names its project, its task and its branch."""
+    page = await RunRepository(open_session).newest(project, limit=limit, offset=offset,
+                                                    hidden=await unseen_by(who, open_session))
     context = await _context(open_session, page.items)
     return [_one(r, context) for r in page.items]
 
 
-@router.get("/{ref}", dependencies=[Depends(current_person)])
-async def run(ref: str, after: int = 0, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+@router.get("/{ref}")
+async def run(ref: str, after: int = 0, who: Person = Depends(current_person),
+              open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     """The run and its output. `after` is the last log id you hold, for catching up after a reconnect."""
     found = await RunRepository(open_session).by_ref(ref)
     if found is None:
         raise NotFound(f"run {ref}")
+    await must_see(who, open_session, found.project_id, f"run {ref}")
     context = await _context(open_session, [found])
     logs = await RunLogRepository(open_session).after(found.id, after)
     return {**_one(found, context), "logs": [run_log_json(line) for line in logs]}
 
 
-@router.get("/{ref}/diff", dependencies=[Depends(current_person)])
-async def diff(ref: str, open_session: AsyncSession = Depends(session),
+@router.get("/{ref}/diff")
+async def diff(ref: str, who: Person = Depends(current_person),
+               open_session: AsyncSession = Depends(session),
                gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """The real diff — the project's own code. Closed with the run it belongs to."""
+    found = await RunRepository(open_session).by_ref(ref)
+    if found is None:
+        raise NotFound(f"run {ref}")
+    await must_see(who, open_session, found.project_id, f"run {ref}")
     return await RunService(open_session, gw).diff(ref)
 
 

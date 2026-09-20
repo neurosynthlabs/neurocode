@@ -19,7 +19,7 @@ from ..schemas import run_json
 from ..services import runs as runtime
 from ..services.identity import Person
 from ..services.testing import TestingService
-from .deps import current_person, database, gateway, hand_off, require, session
+from .deps import current_person, database, gateway, hand_off, must_see, require, session, unseen_by
 
 router = APIRouter()
 
@@ -42,16 +42,21 @@ async def _started(open_session: AsyncSession, jobs: BackgroundTasks, db: Databa
     return body
 
 
-@router.get("/testing", dependencies=[Depends(current_person)])
-async def report(project: str | None = None,
+@router.get("/testing")
+async def report(project: str | None = None, who: Person = Depends(current_person),
                  open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
-    """Every onboarded project's suite, the failures of its latest tested run, history and coverage."""
-    return await TestingService(open_session).report(project)
+    """Every onboarded project's suite this person may see, the failures of its latest tested run,
+    history and coverage — a failing test names a file and a line of the project's own code."""
+    return await TestingService(open_session).report(project, hidden=await unseen_by(who, open_session))
 
 
-@router.get("/testing/failures/{failure_id}", dependencies=[Depends(current_person)])
-async def failure(failure_id: int, open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
-    return await TestingService(open_session).failure(failure_id)
+@router.get("/testing/failures/{failure_id}")
+async def failure(failure_id: int, who: Person = Depends(current_person),
+                  open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    """One failure, with its whole log. Of a project this person may not see, it is not there."""
+    found = await TestingService(open_session).failure(failure_id)
+    await must_see(who, open_session, str(found.get("projectId") or ""), f"test failure {failure_id}")
+    return found
 
 
 @router.post("/testing/failures/{failure_id}/rerun")

@@ -169,7 +169,6 @@ function RunReviews({ tabs }: { tabs: ReactNode }) {
           <Empty
             icon={<ScanEye className="size-6" />}
             title="No run has been reviewed yet"
-            hint="When an agent run finishes its tests, its diff is read by a different model — or by rules, labelled as such — and the findings land here for your signature."
           />
         </PageBody>
       </Page>

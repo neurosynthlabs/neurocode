@@ -68,10 +68,11 @@ class TestingService:
         return found
 
     # ── reading ──────────────────────────────────────────────────
-    async def report(self, project_id: str | None = None) -> dict[str, Any]:
+    async def report(self, project_id: str | None = None, *,
+                     hidden: frozenset[str] = frozenset()) -> dict[str, Any]:
         if project_id:
             await self.project(project_id)
-        projects = await self.results.onboarded(project_id)
+        projects = await self.results.onboarded(project_id, hidden=hidden)
         ids = [p.id for p in projects]
         names = {p.id: p.name for p in projects}
 

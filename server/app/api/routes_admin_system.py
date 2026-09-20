@@ -120,6 +120,40 @@ async def optimize_database(request: Request, who: Person = Depends(require("wor
     return done
 
 
+# ── how long history is kept ─────────────────────────────────────
+@router.get("/database/retention", dependencies=[Depends(require("workspace:admin"))])
+async def retention(chores: MaintenanceService = Depends(maintenance)) -> dict[str, Any]:
+    """Each history table, how long it is kept, and exactly how many rows are past that.
+
+    Read before the button is pressed, so what a person agrees to is a number somebody counted rather
+    than "old rows". Counting is a statement per table; the screen asks for it when it is opened.
+    """
+    tables = await chores.retention()
+    return {"tables": tables, "rows": sum(int(t["rows"]) for t in tables)}
+
+
+@router.post("/database/prune")
+async def prune_database(request: Request, who: Person = Depends(require("workspace:admin")),
+                         chores: MaintenanceService = Depends(maintenance),
+                         db: Database = Depends(database),
+                         open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
+    """Remove the history that is past its keeping, a few thousand rows to a statement.
+
+    The request's own transaction is let go first, as the vacuum's is: the deleting happens on a
+    connection of its own, committing as it goes, so nothing about it is held open by a browser that
+    walked away. The audit line follows in a transaction of its own, whatever went.
+    """
+    await open_session.rollback()
+    done = await chores.prune(db.engine)
+    async with db.session() as writing:
+        await AuditRepository(writing).record(
+            action="database.prune", user_id=who.id, target="history",
+            detail={"removed": done["removed"],
+                    "tables": {t["table"]: t["removed"] for t in done["tables"] if t["removed"]}},
+            ip=_ip(request))
+    return done
+
+
 # ── emptying the workspace ───────────────────────────────────────
 @router.post("/reset")
 async def reset(request: Request, x_confirm: str | None = Header(default=None),

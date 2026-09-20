@@ -89,7 +89,7 @@ function BlueprintList() {
     <Page>
       <PageHeader
         title="Blueprints"
-        subtitle="Design a new system before it is built: say what it is, start from a template that fits, shape it layer by layer, and scaffold it into a repository that agents fill in — behind your signature."
+        subtitle="Design a system before it is built, then scaffold it."
         actions={<>
           {importer.element}
           <Button size="sm" variant="outline" disabled={!canDesign} onClick={importer.open} title={canDesign ? 'Import a blueprint or template (JSON or YAML)' : 'Needs the plans:compile permission'}>
@@ -138,7 +138,6 @@ function Rows({ list, canDesign, onNew, onRetry }: {
     return (
       <Panel>
         <Empty icon={<Compass className="size-6" />} title="No blueprint yet"
-          hint="A blueprint is a system designed before it is built: a few questions, a template ranked by your answers, an architecture you edit layer by layer, and a scaffold agents write for you to sign."
           action={canDesign && <Button size="sm" onClick={onNew}><Plus className="size-3.5" />Design a new system</Button>} />
       </Panel>
     );

@@ -561,7 +561,7 @@ export default function Sessions() {
     <Page>
       <PageHeader
         title="Sessions"
-        subtitle="You ask; it reads the code with tools and answers from what it found. The web and MCP tools ask you first. Every turn is written down before anything else happens, so nothing is lost on a reload."
+        subtitle="Ask about the code; it answers from what its tools found."
         actions={mayChat && (
           <div className="flex items-center gap-2">
             <input ref={importFile} type="file" accept="application/json,.json" hidden
@@ -602,7 +602,7 @@ export default function Sessions() {
           {!session ? (
             <div className="flex min-w-0 flex-1 items-center justify-center rounded-xl border border-line bg-surface">
               <Empty icon={<Bot className="size-6" />} title="No session yet"
-                hint="Start one on a project, or import one exported as JSON. It can search the code, read files, trace what depends on what, search memory — and, when you allow it, read the web and call MCP tools." />
+                hint="Start one on a project, or import one exported as JSON." />
             </div>
           ) : (
             <div className="flex min-w-0 flex-1 flex-col gap-3">

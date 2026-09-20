@@ -165,8 +165,13 @@ def _shape(session: Session, _context: Any) -> None:
     for name, objs in by_model.items():
         try:
             docs = _docs(session, name, objs)
-        except Exception as e:                       # noqa: BLE001 — announcing must not fail a write
-            log.debug("could not serialise %d %s for the stream: %s", len(objs), name, e)
+        except Exception:                            # noqa: BLE001 — announcing must not fail a write
+            # Warning, not debug, and with the ids: a document that cannot be shaped is a card on
+            # every open tab that silently stops updating, and at debug there was no trace of it
+            # anywhere a person could look — the screen was wrong and the log was clean.
+            log.warning("could not shape %d %s for the stream, so %s did not reach the open tabs: %s",
+                        len(objs), name, COLLECTIONS[name],
+                        ", ".join(str(getattr(o, "id", "?")) for o in objs[:10]), exc_info=True)
             continue
         pending.extend(("change", {"op": "put", "collection": COLLECTIONS[name], "doc": doc}) for doc in docs)
 

@@ -72,6 +72,10 @@ ROUTERS = (routes_auth.router, routes_work.router, routes_plans.router, routes_k
 
 #: What a row that was in flight when the process died says about itself afterwards.
 INTERRUPTED = "interrupted: the server restarted"
+#: The same thing said to the person reading the session, where a status word is not enough: the
+#: question is still there and asking it again works, which is the only thing they need to know.
+INTERRUPTED_ANSWER = ("The server restarted while this answer was being written, so it never "
+                      "finished. Nothing was lost — ask again to carry on.")
 
 
 async def reconcile_interrupted(open_session: AsyncSession) -> dict[str, int]:
@@ -84,6 +88,14 @@ async def reconcile_interrupted(open_session: AsyncSession) -> dict[str, int]:
 
     A `waiting` run is the exception, and is left alone: it is parked on a person's approval, not on a
     process, and deciding that approval resumes it after a restart exactly as before.
+
+    Sessions belong in the same list and were missing from it. `chat.think` sets a session to
+    `thinking` and only clears it in its own `finally`, which does not run when the process is killed
+    mid-answer — the common case, since answering is a background job that can take minutes. The
+    Command Center's "what is working" and the pulsing dot on the Sessions list read that status, so
+    one restart left a session working forever with nothing in the UI able to clear it. It is set back
+    to idle here, and each one gets a turn of its own saying what happened, the same honesty the runs
+    path already has.
     """
     params = {"why": INTERRUPTED}
     runs = (await open_session.execute(text(
@@ -106,7 +118,15 @@ async def reconcile_interrupted(open_session: AsyncSession) -> dict[str, int]:
         "  UPDATE research_angles SET status = 'failed', error = :why "
         "  WHERE status = 'running' AND report_id IN (SELECT id FROM gone)) "
         "SELECT id FROM gone"), params)).all()
-    return {"runs": len(runs), "evals": len(evals), "research": len(research)}
+    sessions = (await open_session.execute(text(
+        "WITH gone AS ("
+        "  UPDATE chats SET status = 'idle', last_at = now() "
+        "  WHERE status = 'thinking' RETURNING id) "
+        "INSERT INTO chat_messages(chat_id, role, body, detail) "
+        "SELECT id, 'note', :said, 'interrupted' FROM gone RETURNING chat_id"),
+        {**params, "said": INTERRUPTED_ANSWER})).all()
+    return {"runs": len(runs), "evals": len(evals), "research": len(research),
+            "sessions": len(sessions)}
 
 
 async def start_up_chores(open_session: AsyncSession) -> tuple[int, dict[str, int]]:
@@ -132,6 +152,32 @@ async def start_up_chores(open_session: AsyncSession) -> tuple[int, dict[str, in
     return gone, await reconcile_interrupted(open_session)
 
 
+#: What `/health` says about the models when it could not ask. Every answer the gateway could give is
+#: read from the settings table, so with the database down there is nothing true to say about a lane.
+NO_COMPILER = {"provider": "unknown", "model": "",
+               "note": "The router could not be read: its settings live in the database, which is not "
+                       "answering."}
+
+
+async def _compiler(app: FastAPI, ok: bool) -> dict[str, Any]:
+    """What is answering for the models — asked only when there is a database to ask.
+
+    The gateway's status walks its lanes, and every lane is settled from the settings table through
+    the gateway's own blocking pool. With Postgres unreachable that raised, and `/health` — the one
+    route whose whole job is to say the database is down — came back as a plain-text 500 instead. The
+    web app reads `{ok: false}` to say "the API is up, its database is not"; a 500 is the one answer
+    it cannot use.
+    """
+    if not ok:
+        return dict(NO_COMPILER)
+    try:
+        # Asking the gateway means asking whether a key works, which is a blocking check.
+        return await asyncio.to_thread(app.state.gateway.status)
+    except Exception as e:                       # noqa: BLE001 — liveness answers, whatever else is wrong
+        log.warning("/health could not read the router: %s", e)
+        return dict(NO_COMPILER)
+
+
 async def _on_start(app: FastAPI) -> None:
     """The start-up chores, in a transaction of their own.
 
@@ -148,7 +194,35 @@ async def _on_start(app: FastAPI) -> None:
         log.info("removed %d expired session(s)", gone)
     for what, n in interrupted.items():
         if n:
-            log.info("marked %d interrupted %s failed", n, what)
+            log.info("reconciled %d interrupted %s", n, what)
+
+
+#: How often the housekeeping loop wakes. The chore under it happens once a day — this is only how
+#: soon after a start the day's prune is taken, and how long a stopped server's turn waits. Five
+#: minutes costs one statement against one row; a tighter loop would buy nothing a person can see.
+HOUSEKEEPING_SECONDS = 300.0
+
+
+async def _housekeep(db: Database, cfg: Settings, every: float = HOUSEKEEPING_SECONDS) -> None:
+    """The daily prune, run from this process — the one thing `Housekeeping` was missing.
+
+    It has no loop of its own by design, so this is it: a wake, a claim, and almost always nothing.
+    Only whoever wins the claim prunes, so three API processes — or one restarted three times in a
+    morning — still prune once between them. A pass that fails is said once and tried again on the
+    next wake: history that outlives its keeping by an hour is not worth ending a loop over.
+    """
+    from ..services.maintenance import Housekeeping
+    keeper = Housekeeping(db, config=cfg)
+    down = False
+    while True:
+        try:
+            await keeper.tick()
+            down = False
+        except Exception as e:                   # noqa: BLE001 — a pass must never end the loop
+            if not down:
+                log.warning("housekeeping: skipped a pass: %s", e)
+            down = True
+        await asyncio.sleep(every)
 
 
 def create_api(db: Database | None = None, *, config: Settings | None = None) -> FastAPI:
@@ -166,7 +240,17 @@ def create_api(db: Database | None = None, *, config: Settings | None = None) ->
             from ..services.schedules import Scheduler
             scheduler = Scheduler(app.state.db, app.state.gateway)
             clock = asyncio.create_task(scheduler.run())
+        # And beside it, the housekeeping the retention settings promise. Without this the daily prune
+        # was written, tested and never once run: the screen's "Remove 12,480 rows" button was the only
+        # way history ever shrank. NEUROCODE_PRUNE_DAILY=false is the off switch, and then there is no
+        # loop at all rather than one that wakes for ever to decide it has nothing to do.
+        chores: asyncio.Task[None] | None = None
+        if cfg.prune_daily:
+            chores = asyncio.create_task(_housekeep(app.state.db, cfg))
         yield
+        if chores is not None:
+            chores.cancel()
+            await asyncio.gather(chores, return_exceptions=True)
         if clock is not None and scheduler is not None:
             clock.cancel()
             await asyncio.gather(clock, return_exceptions=True)
@@ -233,8 +317,6 @@ def create_api(db: Database | None = None, *, config: Settings | None = None) ->
                     "WHERE n_live_tup > 0 ORDER BY relname"))
                 counts = {name: int(n) for name, n in rows.all()}
         where = cfg.database_url.rsplit("@", 1)[-1].replace("+asyncpg", "")
-        return {"ok": ok, "db": where, "counts": counts,
-                # Asking the gateway means asking whether a key works, which is a blocking check.
-                "compiler": await asyncio.to_thread(app.state.gateway.status)}
+        return {"ok": ok, "db": where, "counts": counts, "compiler": await _compiler(app, ok)}
 
     return app

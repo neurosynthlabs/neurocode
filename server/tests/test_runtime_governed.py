@@ -602,9 +602,11 @@ async def lab(session: AsyncSession, client: AsyncClient, tmp_path: Path) -> dic
                m.RunStep(n=5, kind="handoff", label="Your approval")],
         conflicts=[]))
     await session.flush()
+    # `run_id` as well as `run_ref`: a gate is found by its link now, the way every gate the runtime
+    # writes carries one, so a gate built by hand without it is one the inbox cannot see.
     session.add(m.Approval(id="ap-run-8401-3-8401", ref="APPR-8401", title="Run `make test` — a tool rule asks first",
                            tool="Command(make test)", risk="MEDIUM", status="pending", project_id="gov-lab",
-                           run_ref="RUN-8401", step=3, payload="command make test"))
+                           run_id="r-RUN-8401", run_ref="RUN-8401", step=3, payload="command make test"))
     await session.flush()
     return {"root": root, "tree": tree, "one": one, "two": two}
 
@@ -653,7 +655,7 @@ async def test_always_allow_writes_an_audited_project_rule_and_needs_rules_manag
     run.review = {**run.review, "asks": {"3": {"tool": "command", "subjects": ["make test"], "rules": []}}}
     session.add(m.Approval(id="ap-run-8401-3-8402", ref="APPR-8402", title="Run `make test` — a tool rule asks first",
                            tool="Command(make test)", risk="MEDIUM", status="pending", project_id="gov-lab",
-                           run_ref="RUN-8401", step=3))
+                           run_id="r-RUN-8401", run_ref="RUN-8401", step=3))
     await session.flush()
     assert (await client.post("/approvals/APPR-8402/approve", json={"scope": "project"})).status_code == 200
     made = (await session.execute(select(ToolRule).where(ToolRule.project_id == "gov-lab"))).scalar_one()
@@ -668,7 +670,7 @@ async def test_answering_an_agent_s_question_over_http_keeps_the_answer_and_reme
     step.question = "Which rounding mode?"
     session.add(m.Approval(id="ap-run-8401-3-8403", ref="APPR-8403", title="Backend Engineer asks: Which rounding mode?",
                            tool="Ask(Backend Engineer)", risk="LOW", status="pending", project_id="gov-lab",
-                           run_ref="RUN-8401", step=3, payload="Which rounding mode?"))
+                           run_id="r-RUN-8401", run_ref="RUN-8401", step=3, payload="Which rounding mode?"))
     await session.flush()
     empty = await client.post("/approvals/APPR-8403/approve", json={"answer": "   "})
     assert empty.status_code == 422

@@ -15,7 +15,7 @@ from .identity import (
     Setting,
     Team,
     TeamMember,
-    User,
+    ProjectRole, RefCounter, User,
     UserRole,
     Workspace,
 )
@@ -74,5 +74,5 @@ __all__ = [
     "RetrievalRun", "Role", "RolePermission", "Run",
     "RunConflict", "RunLog", "RunStep", "Session", "Setting", "Task", "TaskAgent", "Team", "TeamMember",
     "TestCoverage", "TestExpectation", "TestFailure",
-    "User", "UserRole", "Workspace", "WorkflowDefinition", "WorkflowStep",
+    "ProjectRole", "RefCounter", "User", "UserRole", "Workspace", "WorkflowDefinition", "WorkflowStep",
 ]

@@ -88,6 +88,24 @@ class Settings(BaseSettings):
     lockout_seconds: int = Field(default=30, ge=0)
     login_attempts: int = Field(default=5, ge=1)
 
+    # ── how long history is kept ─────────────────────────────────
+    #: These tables only ever grow: a run writes hundreds of log lines, a five-minute routine fires a
+    #: hundred thousand times a year, and nothing ever deleted a row of any of them. `0` means keep
+    #: everything, which is the honest default for the two the product calls history rather than noise
+    #: — the usage ledger behind every budget, and the audit log, which is append-only in the database
+    #: itself and can therefore never be pruned at all.
+    run_log_days: int = Field(default=90, ge=0, le=3650)
+    activity_days: int = Field(default=365, ge=0, le=3650)
+    ledger_days: int = Field(default=0, ge=0, le=3650)
+    fire_days: int = Field(default=365, ge=0, le=3650)
+    recall_days: int = Field(default=365, ge=0, le=3650)
+    login_attempt_days: int = Field(default=90, ge=0, le=3650)
+    #: Rows per DELETE. Small enough that no statement holds a lock long enough for a person to notice,
+    #: large enough that a year of arrears still clears in one pass.
+    prune_rows: int = Field(default=5_000, ge=100, le=100_000)
+    #: Prune once a day from the scheduler, as well as from the button on Admin → Database.
+    prune_daily: bool = True
+
     # ── models ───────────────────────────────────────────────────
     #: auto | free | local | rules | a lane id. The environment pinning it wins over the workspace setting.
     compiler: str = ""

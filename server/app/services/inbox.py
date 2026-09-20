@@ -40,6 +40,7 @@ from ..models import (
     Task,
     User,
 )
+from ..repositories.base import fence
 from ..schemas.work import gate_kind, when
 from .chat import PERMISSION
 from .schedules import FIRING_FOR
@@ -73,8 +74,8 @@ class InboxService:
         return list((await self.session.execute(stmt.limit(SHOWN))).all())
 
     # ── needs you ────────────────────────────────────────────────
-    async def _needs_you(self) -> tuple[list[dict[str, Any]], int]:
-        gates = select(Approval).where(Approval.status == "pending")
+    async def _needs_you(self, hidden: frozenset[str]) -> tuple[list[dict[str, Any]], int]:
+        gates = select(Approval).where(Approval.status == "pending", *fence(Approval.project_id, hidden))
         items = []
         for (a,) in await self._rows(gates.order_by(Approval.created_at.desc(), Approval.id.desc())):
             kind = {"question": "question", "signature": "signature"}.get(gate_kind(a.tool), "approval")
@@ -83,7 +84,8 @@ class InboxService:
         cards = (select(ChatMessage, Chat.ref, Chat.title, Chat.project_id)
                  .join(Chat, Chat.id == ChatMessage.chat_id)
                  .where(ChatMessage.tool == PERMISSION, ChatMessage.superseded_by.is_(None),
-                        ChatMessage.arguments["state"].astext == "pending"))
+                        ChatMessage.arguments["state"].astext == "pending",
+                        *fence(Chat.project_id, hidden)))
         for message, ref, title, project_id in await self._rows(cards.order_by(ChatMessage.id.desc())):
             asked = message.arguments or {}
             subject = str(asked.get("subject") or "")[:160]
@@ -93,64 +95,77 @@ class InboxService:
         return _newest(items), await self._count(gates) + await self._count(cards)
 
     # ── working ──────────────────────────────────────────────────
-    async def _working(self) -> tuple[list[dict[str, Any]], int]:
-        runs = select(Run).where(Run.parent_id.is_(None), Run.status.in_(("queued", "running")))
+    async def _working(self, hidden: frozenset[str]) -> tuple[list[dict[str, Any]], int]:
+        runs = select(Run).where(Run.parent_id.is_(None), Run.status.in_(("queued", "running")),
+                                 *fence(Run.project_id, hidden))
         items = [_item("run", r.ref, r.requirement[:200] or r.ref, at=r.created_at, project_id=r.project_id,
                        detail=f"{r.status} · {r.agent or r.role}", runRef=r.ref)
                  for (r,) in await self._rows(runs.order_by(Run.created_at.desc(), Run.id.desc()))]
-        chats = select(Chat).where(Chat.status == "thinking")
+        chats = select(Chat).where(Chat.status == "thinking", *fence(Chat.project_id, hidden))
         items += [_item("session", c.ref, c.title or c.ref, at=c.last_at, project_id=c.project_id,
                         detail="thinking", sessionRef=c.ref)
                   for (c,) in await self._rows(chats.order_by(Chat.last_at.desc()))]
         # A fire older than FIRING_FOR was left by a process that stopped; it is not working on anything.
         fires = (select(ScheduleFire, Schedule.name, Schedule.project_id)
                  .join(Schedule, Schedule.id == ScheduleFire.schedule_id)
-                 .where(ScheduleFire.outcome == "firing", ScheduleFire.at > self.clock() - FIRING_FOR))
+                 .where(ScheduleFire.outcome == "firing", ScheduleFire.at > self.clock() - FIRING_FOR,
+                        *fence(Schedule.project_id, hidden)))
         items += [_item("routine", f.schedule_id, name, at=f.at, project_id=project_id,
                         detail=f"firing · {f.trigger}", scheduleId=f.schedule_id)
                   for f, name, project_id in await self._rows(fires.order_by(ScheduleFire.at.desc()))]
         return _newest(items), await self._count(runs) + await self._count(chats) + await self._count(fires)
 
     # ── done since ───────────────────────────────────────────────
-    async def _done(self, since: datetime) -> tuple[list[dict[str, Any]], int]:
-        runs = select(Run).where(Run.parent_id.is_(None), Run.status.in_(FINISHED), Run.finished_at > since)
+    async def _done(self, since: datetime, hidden: frozenset[str]) -> tuple[list[dict[str, Any]], int]:
+        runs = select(Run).where(Run.parent_id.is_(None), Run.status.in_(FINISHED), Run.finished_at > since,
+                                 *fence(Run.project_id, hidden))
         items = [_item("run", r.ref, r.requirement[:200] or r.ref, at=r.finished_at, project_id=r.project_id,
                        detail=r.status, runRef=r.ref, status=r.status)
                  for (r,) in await self._rows(runs.order_by(Run.finished_at.desc(), Run.id.desc()))]
         plans = (select(Plan.ref, Plan.created_at, Plan.project_id, Plan.status, Task.title)
-                 .outerjoin(Task, Task.id == Plan.task_id).where(Plan.created_at > since))
+                 .outerjoin(Task, Task.id == Plan.task_id)
+                 .where(Plan.created_at > since, *fence(Plan.project_id, hidden)))
         items += [_item("plan", ref, title or ref, at=at, project_id=project_id, detail=f"compiled · {status}")
                   for ref, at, project_id, status, title in
                   await self._rows(plans.order_by(Plan.created_at.desc(), Plan.id.desc()))]
         fires = (select(ScheduleFire, Schedule.name, Schedule.project_id)
                  .join(Schedule, Schedule.id == ScheduleFire.schedule_id)
-                 .where(ScheduleFire.outcome.in_(("fired", "refused", "failed")), ScheduleFire.at > since))
+                 .where(ScheduleFire.outcome.in_(("fired", "refused", "failed")), ScheduleFire.at > since,
+                        *fence(Schedule.project_id, hidden)))
         items += [_item("routine", f.schedule_id, name, at=f.at, project_id=project_id,
                         detail=f"{f.outcome} · {f.detail}"[:240], scheduleId=f.schedule_id, runRef=f.run_ref,
                         status=f.outcome)
                   for f, name, project_id in await self._rows(fires.order_by(ScheduleFire.at.desc()))]
-        reviews = select(CodeReview).where(CodeReview.status.in_(("done", "failed")), CodeReview.finished_at > since)
+        reviews = select(CodeReview).where(CodeReview.status.in_(("done", "failed")),
+                                           CodeReview.finished_at > since,
+                                           *fence(CodeReview.project_id, hidden))
         items += [_item("review", c.ref, c.source or c.ref, at=c.finished_at, project_id=c.project_id,
                         detail=c.status, status=c.status)
                   for (c,) in await self._rows(reviews.order_by(CodeReview.finished_at.desc()))]
         research = select(ResearchReport).where(ResearchReport.status.in_(FINISHED),
-                                                ResearchReport.finished_at > since)
+                                                ResearchReport.finished_at > since,
+                                                *fence(ResearchReport.project_id, hidden))
         items += [_item("research", r.ref, r.question[:200], at=r.finished_at, project_id=r.project_id,
                         detail=r.status, status=r.status)
                   for (r,) in await self._rows(research.order_by(ResearchReport.finished_at.desc()))]
         evals = (select(EvalRun, EvalSuite.name).join(EvalSuite, EvalSuite.id == EvalRun.suite_id)
-                 .where(EvalRun.status.in_(FINISHED), EvalRun.finished_at > since))
+                 .where(EvalRun.status.in_(FINISHED), EvalRun.finished_at > since,
+                        *fence(EvalSuite.project_id, hidden)))
         items += [_item("eval", e.ref, str(name), at=e.finished_at, detail=e.status, status=e.status)
                   for e, name in await self._rows(evals.order_by(EvalRun.finished_at.desc()))]
         total = sum([await self._count(q) for q in (runs, plans, fires, reviews, research, evals)])
         return _newest(items), total
 
-    async def read(self, user_id: str) -> dict[str, Any]:
+    async def read(self, user_id: str, *, hidden: frozenset[str] = frozenset()) -> dict[str, Any]:
+        """`hidden` is the projects this person may not see. Every part of the inbox is cut by it in
+        its own query, counts included — the count beside each part is the whole truth about the rows
+        that part could list, and a truth that included work in a project nobody told them about
+        would be a number they cannot reconcile with the list under it."""
         seen = (await self.session.execute(select(User.last_seen_at).where(User.id == user_id))).scalar_one_or_none()
         since = seen or self.clock() - FIRST_LOOK
-        needs, needs_n = await self._needs_you()
-        working, working_n = await self._working()
-        done, done_n = await self._done(since)
+        needs, needs_n = await self._needs_you(hidden)
+        working, working_n = await self._working(hidden)
+        done, done_n = await self._done(since, hidden)
         return {"needsYou": needs, "working": working, "doneSince": done,
                 "counts": {"needsYou": needs_n, "working": working_n, "doneSince": done_n},
                 "since": when(since), "sinceVisit": seen is not None}

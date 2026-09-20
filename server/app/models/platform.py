@@ -128,6 +128,13 @@ class AiCall(Base):
         # Partial: most calls belong to no run (compiling, asking memory, sessions), and an index over
         # their nulls would be most of the index while answering nothing anyone asks.
         Index("ix_ai_calls_run_id", "run_id", postgresql_where=text("run_id IS NOT NULL")),
+        # DevOps shows the calls that failed, newest first, and they are a small part of the ledger.
+        Index("ix_ai_calls_at_failed", "at", postgresql_where=text("NOT ok")),
+        Index("ix_ai_calls_project_id", "project_id", postgresql_where=text("project_id IS NOT NULL")),
+        # A provider that reports something impossible is recorded at the honest floor, not believed: a
+        # negative count or a cached part larger than the whole would price a call that never happened.
+        CheckConstraint("ms >= 0 AND tokens_in >= 0 AND tokens_out >= 0 AND tokens_cached >= 0 AND tokens_reasoning >= 0", name="counts_not_negative"),
+        CheckConstraint("tokens_cached <= tokens_in AND tokens_reasoning <= tokens_out", name="parts_fit_their_whole"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)

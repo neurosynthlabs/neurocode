@@ -50,7 +50,7 @@ from ..data.changes import announce
 from ..data.engine import Database
 from ..models import Plan, Project, Run, Schedule, ScheduleFire, User, WorkflowDefinition
 from ..repositories import ActivityRepository, AuditRepository, NotFound, Page
-from ..repositories.base import bounded
+from ..repositories.base import bounded, fence
 from ..schemas.work import when
 from .errors import Refused
 from .identity import IdentityService, Person
@@ -278,8 +278,12 @@ class RoutineService:
             raise NotFound(f"routine {schedule_id}")
         return found
 
-    async def listed(self, *, project: str | None, limit: int | None, offset: int) -> Page[Schedule]:
+    async def listed(self, *, project: str | None, limit: int | None, offset: int,
+                     hidden: frozenset[str] = frozenset()) -> Page[Schedule]:
+        """Every routine, or one project's. `hidden` drops the ones belonging to a project this
+        person may not see — out of the rows and out of the total, which the screen shows."""
         where = [Schedule.project_id == project] if project else []
+        where += fence(Schedule.project_id, hidden)
         size = bounded(limit)
         total = (await self.session.execute(select(func.count()).select_from(Schedule).where(*where))).scalar_one()
         rows = (await self.session.execute(select(Schedule).where(*where)

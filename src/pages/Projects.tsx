@@ -281,7 +281,7 @@ export default function Projects() {
     <Page>
       <PageHeader
         title="Projects"
-        subtitle="Every project keeps its own memory, rules and architecture graph. Context never leaks between them."
+        subtitle="Each project keeps its own memory, rules and graph."
         actions={<Button size="sm" onClick={() => setNewOpen(true)}><Plus className="size-3.5" />New project</Button>}
       >
         <div className="flex flex-wrap items-center gap-2 pb-3">
@@ -312,7 +312,7 @@ export default function Projects() {
       <PageBody className="space-y-5">
         {projects.length === 0 ? (
           <Empty icon={<FolderGit2 className="size-6" />} title="No projects yet"
-            hint="Open a folder on this machine, import an archive, clone a repository or start an empty one. NeuroCode reads it before it changes anything."
+            hint="Open a folder, import an archive, clone a repository, or start empty."
             action={<Button size="sm" variant="outline" onClick={() => setNewOpen(true)}>New project</Button>} />
         ) : list.length === 0 ? (
           <Empty title="No project matches those filters" hint="Clear the search or widen the kind/status filter." />

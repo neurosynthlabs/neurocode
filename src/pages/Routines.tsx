@@ -85,7 +85,7 @@ export default function Routines() {
     <Page>
       <PageHeader
         title="Routines"
-        subtitle="Put a requirement or a workflow on a cadence, behind a webhook, or on Run now. Each fire compiles and dispatches a plan as you would, so the project’s first test run still waits for your approval and every run stops at your signature. Nothing merges unattended. Times are UTC."
+        subtitle="Requirements and workflows on a cadence, a webhook, or Run now. Times are UTC."
         actions={mayWrite && (
           <Button size="sm" onClick={() => setEditing('new')} disabled={!withCode.length}
             title={withCode.length ? undefined : 'No project has code on this machine yet'}>

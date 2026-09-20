@@ -225,8 +225,10 @@ async def reviewed(session: AsyncSession, client: AsyncClient, tmp_path: Path,
                m.RunStep(n=3, kind="handoff", label="Your approval", status="waiting")],
         conflicts=[]))
     await session.flush()
+    # With its link as well as its label: the gate a run is waiting on is found by `run_id` now.
     session.add(m.Approval(id="ap-rw", ref="APPR-7001", title="Accept RUN-7001", tool=f"Merge({OLD_BRANCH})",
-                           risk="HIGH", status="pending", project_id=REWORK_PID, run_ref="RUN-7001", step=3))
+                           risk="HIGH", status="pending", project_id=REWORK_PID, run_id="r-RUN-7001",
+                           run_ref="RUN-7001", step=3))
     await session.flush()
 
     started: list[tuple[Any, ...]] = []

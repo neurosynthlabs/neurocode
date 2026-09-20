@@ -33,6 +33,7 @@ import {
   unreachable,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { addEvent } from '@/lib/feed';
 import { permissionLabel, useAccess } from '@/lib/access';
 import { memoryApi, type ConflictInput } from '@/lib/live/knowledge';
 import { LAUNCH_PERMISSION, mcpApi } from '@/lib/live/mcp';
@@ -88,7 +89,8 @@ interface Domain {
 /** Per collection: true when its load stopped at the server's ceiling, so older rows may exist that the store does not hold. */
 export type Capped = Readonly<Record<keyof Domain, boolean>>;
 
-export interface DataCtx extends Domain {
+/** What the store holds: the workspace itself, and how the connection to it is doing. */
+export interface DataState extends Domain {
   /** `live` once the workspace has loaded; `offline` when the API could not be reached. */
   mode: DataMode;
   /**
@@ -100,9 +102,17 @@ export interface DataCtx extends Domain {
   capped: Capped;
   /** What went wrong reaching the API, in words, while `mode` is `offline`. */
   offlineReason: string | null;
+  health: Health | null;
+}
+
+/**
+ * What can be done to it. Every one of these keeps the same identity for the life of the provider, which
+ * is why they are handed out on their own context: a dialog or a button that only acts has nothing to
+ * re-render for when a run writes a log line somewhere else.
+ */
+export interface DataActions {
   /** Loads the workspace again from the start: the retry on the not-connected screen. */
   reconnect: () => void;
-  health: Health | null;
   decide: (ref: string, decision: Decision) => Promise<boolean>;
   moveTask: (ref: string, status: TaskStatus) => Promise<boolean>;
   toggleCheck: (ref: string, itemId: string) => Promise<boolean>;
@@ -122,8 +132,13 @@ export interface DataCtx extends Domain {
   /** Needs a model: with none configured the server refuses, and the toast carries its words. */
   compile: (requirement: string, projectId: string) => Promise<Plan | null>;
   recompile: (ref: string) => Promise<Plan | null>;
-  /** Refs ranked by the server's full-text search, best first. */
-  searchMemory: (q: string, signal?: AbortSignal) => Promise<string[]>;
+  /**
+   * The facts the server's full-text search found, ranked best first — whole documents, not refs.
+   * Search reads the database, which holds every fact; the store holds only the newest page of them,
+   * so a match older than that page has nothing here to be looked up in. Scoping them to a project
+   * and a category is the screen's own work.
+   */
+  searchMemory: (q: string, signal?: AbortSignal) => Promise<MemoryFact[]>;
   /** Empties the workspace (the server takes a backup first). People, roles and keys stay. */
   /** The backup and what was removed, or null when nothing was emptied. */
   reset: () => Promise<ResetResult | null>;
@@ -151,7 +166,11 @@ export interface DataCtx extends Domain {
   onChat: (listener: (message: ChatEvent) => void) => () => void;
 }
 
-const C = createContext<DataCtx | null>(null);
+/** What `useData()` hands back: the workspace and everything that can be done to it, as one object. */
+export type DataCtx = DataState & DataActions;
+
+const StateC = createContext<DataState | null>(null);
+const ActionsC = createContext<DataActions | null>(null);
 
 /** What the store holds before the server has said anything: nothing. */
 const EMPTY: Domain = {
@@ -260,9 +279,11 @@ function applyChange(d: Domain, c: Change): Domain {
 /** A plan that has started: dispatched, or with a step already past `todo`. */
 export const inFlight = (p: Plan) => p.status === 'dispatched' || p.steps.some((s) => s.state !== 'todo');
 
-/** An activity line added to the feed once: the stream and a reload can both carry the same one. */
-const withEvent = (d: Domain, ev: ActivityEvent): Domain =>
-  d.activity.some((e) => e.id === ev.id) ? d : { ...d, activity: [ev, ...d.activity] };
+/** An activity line into the feed, once and under its ceiling (see `@/lib/feed`). */
+const withEvent = (d: Domain, ev: ActivityEvent): Domain => {
+  const activity = addEvent(d.activity, ev);
+  return activity === d.activity ? d : { ...d, activity };
+};
 
 const patch = <T extends { ref: string }>(list: T[], ref: string, fields: Partial<T>): T[] =>
   list.map((x) => (x.ref === ref ? { ...x, ...fields } : x));
@@ -703,10 +724,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     [put, drop, commit, permitted],
   );
 
-  const searchMemory = useCallback(
-    async (q: string, signal?: AbortSignal) => (await api.memory(q, signal)).map((f) => f.ref),
-    [],
-  );
+  const searchMemory = useCallback((q: string, signal?: AbortSignal) => api.memory(q, signal), []);
 
   const ask = useCallback(
     async (question: string, projectId?: string) => {
@@ -812,15 +830,18 @@ export function DataProvider({ children }: { children: ReactNode }) {
     return done;
   }, [permitted, reconnect]);
 
-  const value = useMemo<DataCtx>(
+  /* Two contexts, not one. The workspace changes on every streamed line, and one context carrying both
+     the workspace and the thirty actions on it re-rendered every reader of either — the sidebar, the top
+     bar, the palette and whatever screen was open — for a fact written on a screen nobody had open. The
+     actions never change, so a component that only acts sits on a value that never moves. */
+  const state = useMemo<DataState>(
+    () => ({ ...domain, mode, reconnecting, capped, offlineReason, health }),
+    [domain, mode, reconnecting, capped, offlineReason, health],
+  );
+
+  const actions = useMemo<DataActions>(
     () => ({
-      ...domain,
-      mode,
-      reconnecting,
-      capped,
-      offlineReason,
       reconnect,
-      health,
       decide,
       moveTask,
       toggleCheck,
@@ -851,13 +872,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       onChat,
     }),
     [
-      domain,
-      mode,
-      reconnecting,
-      capped,
-      offlineReason,
       reconnect,
-      health,
       decide,
       moveTask,
       toggleCheck,
@@ -888,13 +903,28 @@ export function DataProvider({ children }: { children: ReactNode }) {
       onChat,
     ],
   );
-  return <C.Provider value={value}>{children}</C.Provider>;
+
+  return (
+    <ActionsC.Provider value={actions}>
+      <StateC.Provider value={state}>{children}</StateC.Provider>
+    </ActionsC.Provider>
+  );
 }
 
-export function useData() {
-  const ctx = useContext(C);
-  if (!ctx) throw new Error('useData must be used inside <DataProvider>');
-  return ctx;
+/** The workspace and every action on it. A component that reads none of the workspace should use
+    `useDataActions` instead, so a change on another screen does not re-render it. */
+export function useData(): DataCtx {
+  const state = useContext(StateC);
+  const actions = useDataActions();
+  if (!state) throw new Error('useData must be used inside <DataProvider>');
+  return useMemo(() => ({ ...state, ...actions }), [state, actions]);
+}
+
+/** Only what can be done to the workspace. This value never changes, so reading it costs no renders. */
+export function useDataActions(): DataActions {
+  const actions = useContext(ActionsC);
+  if (!actions) throw new Error('useDataActions must be used inside <DataProvider>');
+  return actions;
 }
 
 const isMap = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);

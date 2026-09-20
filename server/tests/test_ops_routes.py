@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -323,3 +323,75 @@ async def test_devops_shows_the_folders_the_runtime_really_uses(client: AsyncCli
     monkeypatch.delenv("NEUROCODE_REPOS_DIR")
     defaults = Settings(_env_file=None)
     assert defaults.repos_dir == SERVER_DIR / ".repos" and defaults.worktrees_dir == SERVER_DIR / ".worktrees"
+
+
+async def test_each_source_of_the_timeline_is_cut_before_the_three_are_merged(client: AsyncClient,
+                                                                              session: AsyncSession):
+    """The newest hundred lines used to be found by reading every run log, every activity row and every
+    failed model call ever written and sorting the lot. Each source carries its own LIMIT now, and the
+    answer is the same one: the newest of the three, in order."""
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    run = _run("RUN-970", status="running")
+    session.add(run)
+    await session.flush()
+    # Tomorrow, so these are the newest lines the timeline holds whatever else the fixture wrote.
+    at = datetime.now(UTC) + timedelta(days=1)
+    session.add_all([m.RunLog(run_id=run.id, level="err", line=f"run line {n}",
+                              at=at + timedelta(minutes=n)) for n in range(4)])
+    session.add_all([m.AiCall(feature="chat", lane="groq", model="llama", ok=False, error=f"HTTP 5{n}",
+                              at=at + timedelta(minutes=30 + n)) for n in range(4)])
+    await session.flush()
+
+    asked: list[str] = []
+
+    def watch(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001, ANN202
+        asked.append(statement)
+
+    event.listen(Engine, "before_cursor_execute", watch)
+    try:
+        body = (await client.get("/ops/logs", params={"level": "err", "limit": 3})).json()
+    finally:
+        event.remove(Engine, "before_cursor_execute", watch)
+
+    timeline = next(s for s in asked if "UNION ALL" in s)
+    # One LIMIT for every branch, and one more for the merge: nothing is read in full and sorted after.
+    assert timeline.count("LIMIT $") == timeline.count("UNION ALL") + 2
+    assert [line["text"] for line in body["lines"]] == ["chat · llama · HTTP 53", "chat · llama · HTTP 52",
+                                                        "chat · llama · HTTP 51"]
+
+
+async def test_the_timeline_orders_by_the_number_in_a_line_id_not_by_its_text(client: AsyncClient,
+                                                                              session: AsyncSession):
+    """'run:999999' sorts after 'run:1000000' as text and before it as a number, and the id is what
+    breaks a tie when two lines share a moment. Sorted as text, the older line came first and the
+    cursor stepped past the newer one."""
+    run = _run("RUN-971", status="running")
+    session.add(run)
+    await session.flush()
+    together = datetime.now(UTC) + timedelta(days=2)          # newer than anything else in the timeline
+    session.add_all([m.RunLog(id=999_999, run_id=run.id, level="err", line="older", at=together),
+                     m.RunLog(id=1_000_000, run_id=run.id, level="err", line="newer", at=together)])
+    await session.flush()
+
+    seen: list[str] = []
+    before = None
+    for _ in range(4):
+        params = {"level": "err", "limit": 1, **({"before": before} if before else {})}
+        page = (await client.get("/ops/logs", params=params)).json()
+        seen += [line["text"] for line in page["lines"] if line["text"] in ("older", "newer")]
+        before = page["next"]
+        if not before:
+            break
+    assert seen == ["newer", "older"]         # newest first, and neither one skipped
+
+
+async def test_a_cursor_that_names_no_line_is_refused_in_words(client: AsyncClient):
+    """The number in the cursor reaches the database as a number, so anything else is a 422 with a
+    sentence, not a driver error on a screen somebody opened because something was already wrong."""
+    moment = datetime(2026, 9, 17, tzinfo=UTC).isoformat()
+    for cursor in (f"{moment}|nonsense", f"{moment}|run:", f"{moment}|run:12345678901234567890", moment):
+        answer = await client.get("/ops/logs", params={"before": cursor})
+        assert answer.status_code == 422, cursor
+        assert "cursor" in answer.json()["detail"]

@@ -168,11 +168,8 @@ export default function Mcp() {
 
             <Panel className="border-warn/30 accent-left" eyebrow="Enforced on every call" title="Tool output is untrusted input">
               <p className="text-[13.5px] leading-relaxed text-ink-2">
-                A web page, an issue or a database row can contain text addressed to an agent. No agent calls MCP tools
-                yet; a person can try one here. An untrusted server's command is never launched and none of its tools is
-                called. A tool is called only on a server its last check found connected, after the tool rules
-                (Permissions → Tool rules) and, where no rule covers it, the server's default effect. What a tool answers
-                is shown to you and never stored.
+                An untrusted server is never launched and none of its tools is called. A checked server's tool runs only
+                under the tool rules (Permissions → Tool rules), and what it answers is shown to you, never stored.
               </p>
               {untrusted.length > 0 && (
                 <div className="mt-2.5 flex flex-wrap gap-1">

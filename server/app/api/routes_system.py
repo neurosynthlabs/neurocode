@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Collection
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai import lanes
@@ -40,7 +43,7 @@ from ..schemas.system import (
 )
 from ..schemas.work import activity_json
 from ..services.identity import Person
-from .deps import current_person, gateway, session
+from .deps import current_person, gateway, session, unseen_by
 
 router = APIRouter()
 
@@ -125,30 +128,79 @@ async def models(open_session: AsyncSession = Depends(session),
             "routes": routes_json(now["chains"], now["embed"], feature_lines, offline_reviews, now["thinking"])}
 
 
-@router.get("/activity", dependencies=[Depends(current_person)])
-async def activity(limit: int = 200, offset: int = 0,
+def _readable(hidden: Collection[str]) -> Any:
+    """Every event but the ones belonging to a project this person may not see.
+
+    A row with no project at all is the workspace's own story — someone signed in, a role changed —
+    and belongs to everyone. `project_id NOT IN (…)` alone would drop those, because in SQL a null is
+    not "not in" anything.
+    """
+    return ActivityEvent.project_id.is_(None) | ActivityEvent.project_id.not_in(sorted(hidden))
+
+
+@router.get("/activity")
+async def activity(limit: int = 200, offset: int = 0, who: Person = Depends(current_person),
                    open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
-    """The story of the workspace, newest first.
+    """The story of the workspace, newest first — of the part of it this person may read.
+
+    A restricted project's lines are cut in the query rather than out of the answer, so a page of 200
+    is 200 lines and not "200 minus the ones you cannot see", and `offset` keeps walking the same
+    list it started on.
 
     Listed rather than paged: the answer is a plain array, so the COUNT(*) a page would run to fill in
     a total nobody reads is a full scan of the busiest table in the workspace on every poll.
     """
+    hidden = await unseen_by(who, open_session)
+    where = [_readable(hidden)] if hidden else []
     events = await ActivityRepository(open_session).list(
-        order_by=ActivityEvent.seq.desc(), limit=max(1, min(limit, FEED_CAP)), offset=offset)
+        *where, order_by=ActivityEvent.seq.desc(), limit=max(1, min(limit, FEED_CAP)), offset=offset)
     return [activity_json(event) for event in events]
+
+
+async def _figures_without(open_session: AsyncSession, hidden: Collection[str], *, person: str,
+                           day_start: datetime, top: int = 20) -> dict[str, Any]:
+    """The log's figures, counted over what this person may read.
+
+    `ActivityRepository.summary` counts every row, which is the right answer for everyone who may
+    read every row. For somebody a project is closed to it is not: a total that includes lines they
+    will never be shown is a number they cannot reconcile with the feed in front of them, and it
+    tells them how busy a project they were never told about is. Same single pass, same grouping
+    sets, one WHERE more — and only taken when something really is hidden.
+    """
+    e = ActivityEvent
+    readable = _readable(hidden)
+    rows = (await open_session.execute(select(
+        e.actor_kind,
+        func.count(),
+        func.count().filter(e.at >= day_start),
+        func.count().filter(e.actor_kind == "human", e.actor == person),
+        func.coalesce(func.max(e.seq), 0),
+    ).select_from(e).where(readable).group_by(text("GROUPING SETS ((), (actor_kind))")))).all()
+    whole = next((r for r in rows if r[0] is None), (None, 0, 0, 0, 0))
+    agents = (await open_session.execute(
+        select(e.actor, func.count().label("n")).where(readable, e.actor_kind == "agent")
+        .group_by(e.actor).order_by(func.count().desc(), e.actor).limit(top))).all()
+    return {"total": int(whole[1]), "today": int(whole[2]), "mine": int(whole[3]),
+            "through": int(whole[4]),
+            "byKind": {str(r[0]): int(r[1]) for r in rows if r[0] is not None},
+            "agents": [{"name": name, "events": int(n)} for name, n in agents]}
 
 
 @router.get("/activity/summary")
 async def activity_summary(who: Person = Depends(current_person),
                            open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
-    """The log's figures over every row, not over the newest page a screen holds.
+    """The log's figures over every row this person may read, not over the newest page a screen holds.
 
     "Today" is the UTC day, the same for everyone who asks. `through` is the newest event counted, so a
-    screen following the stream adds only events after it.
+    screen following the stream adds only events after it — and the stream drops what these figures
+    leave out, so the two agree.
     """
     now = utcnow()
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    figures = await ActivityRepository(open_session).summary(person=who.name, day_start=day_start)
+    hidden = await unseen_by(who, open_session)
+    figures = (await _figures_without(open_session, hidden, person=who.name, day_start=day_start)
+               if hidden else
+               await ActivityRepository(open_session).summary(person=who.name, day_start=day_start))
     return {**figures, "dayStart": day_start.isoformat()}
 
 

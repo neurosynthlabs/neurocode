@@ -143,7 +143,12 @@ def project_json(project: Project, *, tasks: dict[str, int] | None = None,
     """`work` and `lines` are computed, not stored: a count that is kept is a count that drifts.
     `sources` is the project's further sources; given, the document carries every source in order
     (`sources: [{id, label, kind, status, role}]`, the first with id null). `references` is the ids of
-    the projects it reads from, in the order they were added."""
+    the projects it reads from, in the order they were added.
+
+    `restricted` says the project is closed to everyone but the people listed on it. It is never what
+    hides a project — a document only reaches someone who may already see it — it is what lets the
+    card and the Access tab say so out loud, rather than leaving a person to wonder why a colleague
+    cannot find the project they were just sent."""
     counts = tasks or {}
     return {
         "id": project.id, "name": project.name, "codename": project.codename,
@@ -154,7 +159,7 @@ def project_json(project: Project, *, tasks: dict[str, int] | None = None,
         "lastActive": when(project.last_active_at), "coverage": project.coverage or [],
         "work": {"tasks": sum(counts.values()), "running": sum(counts.get(s, 0) for s in RUNNING),
                  "review": counts.get("review", 0), "blocked": counts.get("blocked", 0)},
-        "description": project.description,
+        "description": project.description, "restricted": project.restricted,
         **({"source": {"kind": project.source_kind, "repo": project.source_repo,
                        **({"branch": project.source_branch} if project.source_branch else {})}}
            if project.source_kind else {}),

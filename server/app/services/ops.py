@@ -280,8 +280,15 @@ def _docker_containers() -> dict[str, Any]:
 
 
 # ── the database's answers ───────────────────────────────────────
-#: How each source's lines are keyed in the one timeline — their id, as selected and as compared.
+#: How each source's lines are keyed in the one timeline: the id a page hands back, and the number
+#: behind it. The number is the source's own primary key — the thing an index can be ordered by, and
+#: the thing the text id only looks like ('run:9' sorts after 'run:10', which no index and no cursor
+#: ever agreed with).
 RUN_KEY, ACT_KEY, AI_KEY = "'run:' || l.id", "'act:' || a.seq", "'ai:' || c.id"
+RUN_N, ACT_N, AI_N = "l.id", "a.seq", "c.id"
+#: A cursor's key, as `logs` writes it. The digits are bounded because they reach the database as a
+#: number: a thirty-digit "id" is not a page to look for, it is something to refuse in words.
+CURSOR_KEY = re.compile(r"(?:run|act|ai):(\d{1,18})")
 
 
 @dataclass(slots=True)
@@ -372,9 +379,21 @@ class OpsReads:
             if run.plan_id else None
         return task, plan
 
-    async def logs(self, level: str | None, before: tuple[datetime, str] | None,
+    async def logs(self, level: str | None, before: tuple[datetime, int, str] | None,
                    limit: int) -> list[dict[str, Any]]:
         """Run output, the activity feed and failed model calls, newest first, as one timeline.
+
+        Each source is cut to `limit` lines of its own before the three are merged. Without that, the
+        hundred newest lines were found by reading every run log, every activity row and every failed
+        model call there had ever been and sorting the lot — 391 ms at 1.6 million rows on a screen
+        somebody opens because something is already wrong, and the same work again for every scroll.
+        Cutting each source first loses nothing: the newest `limit` of the whole are always inside the
+        newest `limit` of each part.
+
+        What makes that safe is the key. Every source is ordered by `(time, its own primary key)`, and
+        the merge uses the same pair, so each part is ordered exactly as the whole would order it. The
+        text id stays for the screen and for the cursor to name a line by, but nothing sorts by it any
+        more; it is only the last tie-break between two sources that share a moment and a number.
 
         The level is translated before it reaches SQL: `debug` is what a run logs as `tool`, which
         neither the activity feed nor the ledger ever writes, and asking an enum column for a value
@@ -382,42 +401,46 @@ class OpsReads:
         """
         params: dict[str, Any] = {"limit": min(max(1, limit), MAX_LOGS)}
         if before is not None:
-            params["before_t"], params["before_id"] = before
+            params["before_t"], params["before_n"], params["before_id"] = before
 
-        # A keyset on (time, id), at full precision. The cursor used to be the last line's time cut to the
-        # second and compared with `<`, so every line written in that second that did not fit on the page
-        # was on no page at all — and a run writes many lines a second.
-        def older(at: str, key: str) -> str:
-            # `key` is the same expression the branch selects as its id, so the comparison and the
-            # ORDER BY agree on what "before" means.
-            return f" AND ({at}, {key}) < (:before_t, :before_id)" if before is not None else ""
+        # A keyset on (time, number, id), at full precision. The cursor used to be the last line's time
+        # cut to the second and compared with `<`, so every line written in that second that did not fit
+        # on the page was on no page at all — and a run writes many lines a second.
+        def older(at: str, n: str, key: str) -> str:
+            # The same three expressions the branch is ordered by, so the comparison and the ORDER BY
+            # agree on what "before" means.
+            return f" AND ({at}, {n}, {key}) < (:before_t, :before_n, :before_id)" if before else ""
+
+        def branch(body: str, at: str, n: str) -> str:
+            return f"(SELECT {body} ORDER BY {at} DESC, {n} DESC LIMIT :limit)"
 
         # Run output answers every level; `debug` is its `tool` lines.
         run_level = "tool" if level == "debug" else level
         if run_level:
             params["run_level"] = run_level
-        branches = [
-            f"SELECT {RUN_KEY} AS id, l.at AS t, "
+        branches = [branch(
+            f"{RUN_KEY} AS id, {RUN_N} AS n, l.at AS t, "
             "       CASE l.level::text WHEN 'tool' THEN 'debug' ELSE l.level::text END AS level, "
             "       r.ref AS source, l.line AS text "
             "FROM run_logs l JOIN runs r ON r.id = l.run_id WHERE true"
-            + (" AND l.level::text = :run_level" if run_level else "") + older("l.at", RUN_KEY)]
+            + (" AND l.level::text = :run_level" if run_level else "")
+            + older("l.at", RUN_N, RUN_KEY), "l.at", RUN_N)]
         if level != "debug":
             act_filter = " AND a.level::text = :level" if level else ""
             if level:
                 params["level"] = level
-            branches.append(
-                f"SELECT {ACT_KEY}, a.at, a.level::text, a.actor, "
+            branches.append(branch(
+                f"{ACT_KEY}, {ACT_N}, a.at, a.level::text, a.actor, "
                 "       a.action || CASE WHEN a.detail = '' THEN '' ELSE ' · ' || a.detail END "
-                f"FROM activity a WHERE true{act_filter}{older('a.at', ACT_KEY)}")
+                f"FROM activity a WHERE true{act_filter}{older('a.at', ACT_N, ACT_KEY)}", "a.at", ACT_N))
         if level in (None, "err"):
-            branches.append(
-                f"SELECT {AI_KEY}, c.at, 'err', coalesce(nullif(c.lane, ''), 'gateway'), "
+            branches.append(branch(
+                f"{AI_KEY}, {AI_N}, c.at, 'err', coalesce(nullif(c.lane, ''), 'gateway'), "
                 "       c.feature || ' · ' || c.model || CASE WHEN c.error = '' THEN '' ELSE ' · ' || c.error END "
-                f"FROM ai_calls c WHERE NOT c.ok{older('c.at', AI_KEY)}")
+                f"FROM ai_calls c WHERE NOT c.ok{older('c.at', AI_N, AI_KEY)}", "c.at", AI_N))
         rows = (await self.session.execute(text(
             f"SELECT id, t, level, source, text FROM ({' UNION ALL '.join(branches)}) timeline "
-            "ORDER BY t DESC, id DESC LIMIT :limit"), params)).mappings().all()
+            "ORDER BY t DESC, n DESC, id DESC LIMIT :limit"), params)).mappings().all()
         return [dict(r) for r in rows]
 
     async def last_set(self, keys: list[str]) -> datetime | None:
@@ -436,8 +459,10 @@ class OpsReads:
             .order_by(User.name).limit(MAX_GATE))).scalars())
 
 
-def _cursor(value: str | None) -> tuple[datetime, str] | None:
-    """`<ISO time>|<line id>`, as `logs` hands it out. Anything else is refused in words, not a 500."""
+def _cursor(value: str | None) -> tuple[datetime, int, str] | None:
+    """`<ISO time>|<line id>`, as `logs` hands it out, taken apart into the three things it compares:
+    the moment, the number inside the id, and the id itself. Anything else is refused in words, not a
+    500 — the number in particular, which reaches the database as a number and not as text."""
     if not value:
         return None
     at, sep, key = value.partition("|")
@@ -445,9 +470,10 @@ def _cursor(value: str | None) -> tuple[datetime, str] | None:
         moment = datetime.fromisoformat(at)
     except ValueError:
         moment = None
-    if not sep or not key or moment is None:
+    found = CURSOR_KEY.fullmatch(key)
+    if not sep or moment is None or found is None:
         raise Refused("That is not a cursor this API handed out. Load the logs again from the newest.", status=422)
-    return (moment if moment.tzinfo else moment.replace(tzinfo=UTC), key)
+    return (moment if moment.tzinfo else moment.replace(tzinfo=UTC), int(found.group(1)), key)
 
 
 # ── what the screen asks for ─────────────────────────────────────

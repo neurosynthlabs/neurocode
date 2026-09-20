@@ -26,6 +26,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import CITEXT, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -59,6 +60,8 @@ class Project(Base, Mixin):
     status: Mapped[str] = mapped_column(ProjectStatus, nullable=False, server_default="active")
     description: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     repo: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    #: Open to the whole workspace until someone restricts it; then only its project_roles rows may see it.
+    restricted: Mapped[bool] = mapped_column(nullable=False, server_default="false")
 
     # Measured, not typed in: the onboarding scan and the code index write these.
     lines_count: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
@@ -304,7 +307,10 @@ class Approval(Base, Mixin):
     """A gate. Everything that needs a person's signature waits here."""
 
     __tablename__ = "approvals"
-    __table_args__ = (Index("ix_approvals_status_created_at", "status", "created_at"),)
+    __table_args__ = (Index("ix_approvals_status_created_at", "status", "created_at"),
+                      Index("ix_approvals_project_id", "project_id",
+                            postgresql_where=text("project_id IS NOT NULL")),
+                      Index("ix_approvals_run_id", "run_id", postgresql_where=text("run_id IS NOT NULL")))
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     ref: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
@@ -317,9 +323,13 @@ class Approval(Base, Mixin):
     payload: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     reason: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
 
-    #: The run this gate belongs to, when it came from one, and which of its steps is waiting.
+    #: The run this gate belongs to, when it came from one, and which of its steps is waiting. `run_ref` is
+    #: the label people read; `run_id` is the link the database keeps, so a deleted run takes its gates with it.
     run_ref: Mapped[str | None] = mapped_column(String(40))
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"))
     step: Mapped[int | None] = mapped_column(Integer)
+    #: The number in the ref, so gates written in one transaction have a stable order without reading the ref.
+    seq: Mapped[int | None] = mapped_column(Integer)
 
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     decided_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
@@ -351,7 +361,9 @@ class ActivityEvent(Base):
     """The product's story: who moved what, which agent did what. Streams to every open tab."""
 
     __tablename__ = "activity"
-    __table_args__ = (Index("ix_activity_project_id_at", "project_id", "at"),)
+    #: The feed reads by seq — the key it is actually ordered by — not by the time two rows can share.
+    __table_args__ = (Index("ix_activity_project_id_at", "project_id", "at"),
+                      Index("ix_activity_project_id_seq", "project_id", "seq"))
 
     seq: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False,
@@ -409,7 +421,10 @@ class ScheduleFire(Base):
     """One firing of a routine and what became of it."""
 
     __tablename__ = "schedule_fires"
-    __table_args__ = (CheckConstraint("trigger IN ('schedule', 'manual', 'webhook')", name="trigger"),)
+    #: A routine's own fires, newest first: the composite is what the screen pages by, and it covers the
+    #: schedule_id lookups on its own.
+    __table_args__ = (CheckConstraint("trigger IN ('schedule', 'manual', 'webhook')", name="trigger"),
+                      Index("ix_schedule_fires_schedule_id_at", "schedule_id", "at", "id"))
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     schedule_id: Mapped[str] = mapped_column(ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False, index=True)

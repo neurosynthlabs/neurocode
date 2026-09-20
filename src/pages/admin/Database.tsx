@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { DatabaseBackup, Loader2, ShieldCheck, Sparkles } from 'lucide-react';
+import { DatabaseBackup, Eraser, Loader2, ShieldCheck, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Bar, Cell, DataTable, Dot, KV, Mono, Page, PageBody, PageHeader, Panel, Row, Stat, StatGrid } from '@/components/os';
-import { api, type DatabaseCheck, type DatabaseInfo, type DatabaseOptimized } from '@/lib/api';
+import { api, request, type DatabaseCheck, type DatabaseInfo, type DatabaseOptimized } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { bytes } from '@/pages/code/format';
 import { attempt, useAdmin, when } from './load';
@@ -16,15 +16,41 @@ const WAL: Record<string, string> = {
   logical: 'logical: replica, plus row-level streaming to another system',
 };
 
+/** One table that only ever grows, how long it is kept, and how many rows are older than that —
+    counted by the server, so the button can say exactly what it would remove before it removes it. */
+interface HistoryTable {
+  table: string;
+  label: string;
+  note: string;
+  /** The environment variable that sets how long this one is kept. */
+  setting: string;
+  /** 0 means keep everything, and then `rows` is 0 whatever the table holds. */
+  days: number;
+  cutoff: string | null;
+  rows: number;
+}
+interface Retention { tables: HistoryTable[]; rows: number }
+/** What a prune actually did. `note` is empty when the table was finished, and says why when it was not. */
+interface Pruned { at: string; ms: number; removed: number; tables: (HistoryTable & { removed: number; note: string })[] }
+
 const loadDatabase = () => api.admin.database();
+/* These two live here rather than in `api.admin`: they are the whole of the History panel below, and
+   nothing else asks for them. Counting is a statement per table, and a prune walks a year of rows. */
+const loadRetention = () => request<Retention>('/admin/database/retention', { signal: AbortSignal.timeout(60_000) });
+const pruneHistory = () => request<Pruned>('/admin/database/prune', { method: 'POST', signal: AbortSignal.timeout(600_000) });
+
+/** "90 days", or "kept" when nothing is ever removed. */
+const kept = (days: number) => (days ? `${days} days` : 'kept');
 
 export default function DatabasePage() {
   const { can } = useAuth();
   const { data: db, error, reload } = useAdmin<DatabaseInfo>(loadDatabase);
+  const { data: history, reload: reloadHistory } = useAdmin<Retention>(loadRetention);
   const manage = can('workspace:admin');
-  const [busy, setBusy] = useState<'backup' | 'check' | 'optimize' | null>(null);
+  const [busy, setBusy] = useState<'backup' | 'check' | 'optimize' | 'prune' | null>(null);
   const [check, setCheck] = useState<DatabaseCheck | null>(null);
   const [optimized, setOptimized] = useState<DatabaseOptimized | null>(null);
+  const [pruned, setPruned] = useState<Pruned | null>(null);
 
   const backup = async () => {
     setBusy('backup');
@@ -47,6 +73,17 @@ export default function DatabasePage() {
     if (!result) return;
     setOptimized(result);
     toast.success('Optimized', { description: `${bytes(result.beforeBytes)} → ${bytes(result.afterBytes)} in ${(result.ms / 1000).toFixed(1)} s` });
+    reload();
+  };
+
+  const prune = async () => {
+    setBusy('prune');
+    const done = await attempt(() => pruneHistory(), 'Nothing was removed');
+    setBusy(null);
+    if (!done) return;
+    setPruned(done);
+    toast.success('History pruned', { description: `${done.removed.toLocaleString()} rows removed in ${(done.ms / 1000).toFixed(1)} s` });
+    reloadHistory();
     reload();
   };
 
@@ -127,6 +164,55 @@ export default function DatabasePage() {
                 </p>
               </Panel>
             </div>
+
+            <Panel flush title="History" eyebrow="What grows on its own, and how long it is kept">
+              <p className="px-5 pb-1 pt-0.5 text-[13px] leading-relaxed text-ink-2">
+                Run output, the feed, the ledger and the rest are only ever added to. Each is kept for as long as its
+                own setting says and pruned a day at a time; the ledger and the audit log are kept for good — the audit
+                log cannot be pruned at all, by anyone. Removing rows does not shrink the files on disk: Optimize &amp;
+                compact does that.
+              </p>
+              {!history ? (
+                <p className="px-5 py-3 text-[13px] text-soft">Counting what is past its keeping…</p>
+              ) : (
+                <DataTable head={['History', 'Kept for', 'Past that']}>
+                  {history.tables.map((t) => {
+                    const done = pruned?.tables.find((x) => x.table === t.table);
+                    return (
+                      <Row key={t.table}>
+                        <Cell>
+                          <span className="text-ink">{t.label}</span>
+                          <span className="block text-[12.5px] text-dim">{t.note} · <Mono>{t.table}</Mono></span>
+                        </Cell>
+                        <Cell className="whitespace-nowrap">
+                          <span className={t.days ? 'text-ink-2' : 'text-soft'}>{kept(t.days)}</span>
+                          <span className="block text-[12.5px] text-dim"><Mono>{t.setting}</Mono></span>
+                        </Cell>
+                        <Cell className="tnum whitespace-nowrap">
+                          {t.days ? t.rows.toLocaleString() : '—'}
+                          {done && done.removed > 0 && (
+                            <span className="block text-[12.5px] text-ok">{done.removed.toLocaleString()} removed</span>
+                          )}
+                          {done && done.note && <span className="block text-[12.5px] text-warn">{done.note}</span>}
+                        </Cell>
+                      </Row>
+                    );
+                  })}
+                </DataTable>
+              )}
+              <div className="flex flex-wrap items-center gap-3 border-t border-line/60 px-5 py-4">
+                <Button size="sm" variant="outline" onClick={() => void prune()}
+                  disabled={!manage || busy !== null || !history || history.rows === 0}>
+                  {busy === 'prune' ? <Loader2 className="size-3.5 animate-spin" /> : <Eraser className="size-3.5" />}
+                  {history && history.rows > 0 ? `Remove ${history.rows.toLocaleString()} rows` : 'Nothing to remove'}
+                </Button>
+                <span className="text-[12.5px] text-dim">
+                  {!history ? 'Counted before anything is removed.'
+                    : history.rows > 0 ? `Counted just now, across ${history.tables.filter((t) => t.rows > 0).length} tables. A few thousand rows go per statement, so nothing else waits on it.`
+                    : 'Nothing in any of them is past its keeping.'}
+                </span>
+              </div>
+            </Panel>
 
             <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
               <Panel flush title="Tables" eyebrow={`${rows.toLocaleString()} rows in all`}>

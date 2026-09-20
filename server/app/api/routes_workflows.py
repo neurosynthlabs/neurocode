@@ -17,7 +17,7 @@ from ..data.engine import Database
 from ..services import runs as runtime
 from ..services.identity import Person
 from ..services.workflows import MAX_STEPS, StepDraft, WorkflowDraft, WorkflowService
-from .deps import current_person, database, gateway, hand_off, require, session
+from .deps import current_person, database, gateway, hand_off, must_see, require, session, unseen_by
 
 router = APIRouter(prefix="/workflows")
 
@@ -46,11 +46,12 @@ class RunIn(BaseModel):
     input: str = Field(min_length=3, max_length=4000)
 
 
-@router.get("", dependencies=[Depends(current_person)])
-async def workflows(project: str | None = None, open_session: AsyncSession = Depends(session),
+@router.get("")
+async def workflows(project: str | None = None, who: Person = Depends(current_person),
+                    open_session: AsyncSession = Depends(session),
                     gw: Gateway = Depends(gateway)) -> list[dict[str, Any]]:
     """The library. `project` is where the phases are drawn for: its test command decides the Test phase."""
-    return await WorkflowService(open_session, gw).library(project)
+    return await WorkflowService(open_session, gw).library(project, await unseen_by(who, open_session))
 
 
 @router.get("/overview", dependencies=[Depends(current_person)])
@@ -59,10 +60,13 @@ async def overview(open_session: AsyncSession = Depends(session),
     return await WorkflowService(open_session, gw).overview()
 
 
-@router.get("/{workflow_id}", dependencies=[Depends(current_person)])
-async def workflow(workflow_id: str, project: str | None = None, open_session: AsyncSession = Depends(session),
+@router.get("/{workflow_id}")
+async def workflow(workflow_id: str, project: str | None = None, who: Person = Depends(current_person),
+                   open_session: AsyncSession = Depends(session),
                    gw: Gateway = Depends(gateway)) -> dict[str, Any]:
-    return await WorkflowService(open_session, gw).detail(workflow_id, project)
+    found = await WorkflowService(open_session, gw).detail(workflow_id, project)
+    await must_see(who, open_session, str(found.get("projectId") or ""), f"workflow {workflow_id}")
+    return found
 
 
 @router.post("", status_code=201)
