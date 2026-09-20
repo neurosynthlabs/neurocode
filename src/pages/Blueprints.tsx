@@ -179,7 +179,7 @@ interface Draft { base: string; name: string; answers: Answers; spec: Architectu
 
 function BlueprintPage({ id }: { id: string }) {
   const nav = useNavigate();
-  const { can } = useAuth();
+  const { can, machine } = useAuth();
   const [version, setVersion] = useState(0);
   const got = useRemote(`blueprint:${id}:${version}`, () => blueprintsApi.get(id));
   const catalogue = useRemote('blueprint-catalogue', blueprintsApi.catalogue);
@@ -281,8 +281,12 @@ function BlueprintPage({ id }: { id: string }) {
     );
   }
 
-  const canScaffold = canDesign && can('projects:onboard') && can('machine:access');
-  const why = canScaffold ? null : `Scaffolding needs ${[!canDesign && 'plans:compile', !can('projects:onboard') && 'projects:onboard', !can('machine:access') && 'machine:access'].filter(Boolean).join(', ')} — it makes folders on this machine and onboards a project.`;
+  const canScaffold = canDesign && can('projects:onboard') && machine;
+  const why = canScaffold
+    ? null
+    : !machine && can('machine:access')
+      ? 'Scaffolding makes folders on the machine the API runs on, and this server opens none: it was started with NEUROCODE_MACHINE_ACCESS=false.'
+      : `Scaffolding needs ${[!canDesign && 'plans:compile', !can('projects:onboard') && 'projects:onboard', !can('machine:access') && 'machine:access'].filter(Boolean).join(', ')} — it makes folders on this machine and onboards a project.`;
 
   return (
     <Page>

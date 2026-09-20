@@ -259,8 +259,8 @@ const exitWord = (t: TerminalDoc) => (t.status === 'running' ? 'Running' : t.exi
 
 /** The Run tab of the Workbench's bottom panel, for the project the Workbench shows. */
 export function RunPanel({ projectId }: { projectId: string | null }) {
-  const { can } = useAuth();
-  const allowed = can('machine:access');
+  const { machine } = useAuth();
+  const allowed = machine;
   const [configs, setConfigs] = useState<RunConfig[] | null>(null);
   const [runs, setRuns] = useState<TerminalDoc[]>([]);
   const [error, setError] = useState<{ status: number; message: string } | null>(null);

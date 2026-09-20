@@ -96,12 +96,17 @@ function store(key: string, value: unknown) {
 }
 
 export default function Workbench() {
-  const { can } = useAuth();
-  if (!can('machine:access')) {
+  const { can, machine } = useAuth();
+  if (!machine) {
     return (
       <Page>
-        <Empty icon={<ShieldAlert className="size-6" />} title="The Workbench opens folders on this machine"
-          hint="It reads and saves files, and opens terminals, on the machine the NeuroCode API runs on. That needs the “Use this machine” permission, which the Owner role holds." />
+        {can('machine:access') ? (
+          <Empty icon={<ShieldAlert className="size-6" />} title="This server opens no folders"
+            hint="The Workbench works on the machine the NeuroCode API runs on, and this API was started with NEUROCODE_MACHINE_ACCESS=false — so it opens no files, terminals, runs or debuggers. Run NeuroCode on your own machine for those; everything else here works either way." />
+        ) : (
+          <Empty icon={<ShieldAlert className="size-6" />} title="The Workbench opens folders on this machine"
+            hint="It reads and saves files, and opens terminals, on the machine the NeuroCode API runs on. That needs the “Use this machine” permission, which the Owner role holds." />
+        )}
       </Page>
     );
   }

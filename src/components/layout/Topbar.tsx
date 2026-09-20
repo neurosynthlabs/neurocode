@@ -43,14 +43,14 @@ export function Topbar({
   const [q, setQ] = useState('');
   const [folderOpen, setFolderOpen] = useState(false);
   const nav = useNavigate();
-  const { can } = useAuth();
+  const { can, machine } = useAuth();
   const { all: projects, project } = useProject();
   const { approvals, createProject } = useData();
   // Null while nothing is onboarded, which is how every workspace starts: the button then says so.
   const active = projects.find((p) => p.id === projectId) ?? project;
   const activeSources = active ? sourcesOf(active) : [];
   const pending = approvals.filter((a) => a.status === 'pending');
-  const workbench = can('machine:access');
+  const workbench = machine;
   const found = useMemo(() => projects.filter((p) => matches(p, q)), [projects, q]);
 
   const pick = (id: string, to?: string) => {

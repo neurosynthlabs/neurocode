@@ -43,7 +43,7 @@ export default function ProjectOverview() {
 
 function Overview({ p }: { p: Project }) {
   const nav = useNavigate();
-  const { can } = useAuth();
+  const { can, machine } = useAuth();
   const { catalogue } = useAccess();
   const { tasks, memory } = useData();
   const { setProjectId } = useProject();
@@ -119,7 +119,7 @@ function Overview({ p }: { p: Project }) {
         subtitle={p.description}
         actions={
           <>
-            {p.source && can('machine:access') && (
+            {p.source && machine && (
               <Button size="sm" variant="outline" onClick={() => openIn(`/workbench?project=${encodeURIComponent(p.id)}`)}><Code2 className="size-3.5" />Open in Workbench</Button>
             )}
             <Button size="sm" variant="outline" onClick={() => openIn('/code')}><ExternalLink className="size-3.5" />Code intelligence</Button>

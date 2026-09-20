@@ -40,14 +40,14 @@ const STATUS_WORD = { active: 'ready', onboarding: 'onboarding', failed: 'failed
  * appear there under its label. Adding, moving, renaming, re-indexing and removing need projects:onboard.
  */
 export function SourcesPanel({ p }: { p: Project }) {
-  const { can } = useAuth();
+  const { can, machine } = useAuth();
   const [version, setVersion] = useState(0);
   const summary = JSON.stringify(sourcesOf(p));
   const list = useRemote(p.source ? `sources:${p.id}:${summary}:${version}` : null, () => sourcesApi.list(p.id));
   const sources = list.data ?? [];
   const reload = () => setVersion((v) => v + 1);
   const mayChange = can('projects:onboard');
-  const browse = can('machine:access');
+  const browse = machine;
 
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<SourceInput>(NEW);

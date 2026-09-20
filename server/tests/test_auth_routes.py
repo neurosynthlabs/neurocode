@@ -37,7 +37,8 @@ async def client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
 
 async def test_a_fresh_workspace_asks_to_be_set_up(client: AsyncClient):
     status = (await client.get("/auth/status")).json()
-    assert status == {"needsSetup": True, "setupNeedsToken": False, "user": None, "workspace": None}
+    assert status == {"needsSetup": True, "setupNeedsToken": False, "user": None, "workspace": None,
+                      "machineAccess": True}
 
 
 async def test_a_server_with_a_setup_token_lets_only_its_holder_create_the_first_owner(client: AsyncClient,
@@ -53,6 +54,20 @@ async def test_a_server_with_a_setup_token_lets_only_its_holder_create_the_first
     made = await client.post("/auth/setup", json={**OWNER, "setupToken": " s3t-up-token "})
     assert made.status_code == 201
     assert (await client.get("/auth/status")).json()["setupNeedsToken"] is False
+
+
+async def test_a_server_that_opens_no_machine_says_so_before_a_screen_offers_a_folder(client: AsyncClient,
+                                                                                      monkeypatch):
+    """A hosted server answers every machine route with 404. The web app is told once, on the session, so the
+    Workbench, the folder pickers and Blueprint scaffolding say why instead of offering what cannot happen."""
+    monkeypatch.setattr(settings(), "machine_access", False)
+    assert (await client.get("/auth/status")).json()["machineAccess"] is False
+    made = await client.post("/auth/setup", json=OWNER)
+    assert made.status_code == 201 and made.json()["machineAccess"] is False
+    me = (await client.get("/auth/me")).json()
+    # The Owner still holds the permission — it is the server that opens nothing.
+    assert me["machineAccess"] is False and "machine:access" in me["user"]["permissions"]
+    assert (await client.get("/machine/places")).status_code == 404
 
 
 async def test_the_session_cookie_is_https_only_when_the_server_is_served_over_https(client: AsyncClient,

@@ -26,6 +26,10 @@ interface AuthCtx {
   can: (...perms: string[]) => boolean;
   /** True when the user holds at least one of them. */
   canAny: (...perms: string[]) => boolean;
+  /** Whether this person may use the machine the API runs on: the permission, and a server that opens it
+   *  at all. A hosted server answers every machine route with 404, so a screen asks this before offering
+   *  a folder, a terminal, a run or a debugger. */
+  machine: boolean;
   /** "Owner", "Engineer, Viewer"… named by the workspace's own catalogue. */
   roleNames: string;
   /** Throws an ApiError with the server's reason on a wrong password or a lockout. */
@@ -37,7 +41,11 @@ interface AuthCtx {
 
 const C = createContext<AuthCtx | null>(null);
 
-interface Session { state: AuthState; user: AuthUser | null; workspace: Workspace | null; offlineReason: string | null }
+interface Session {
+  state: AuthState; user: AuthUser | null; workspace: Workspace | null; offlineReason: string | null;
+  /** What the server said about opening its own machine; true until it says otherwise, as a local one does. */
+  machineAccess: boolean;
+}
 
 
 /** What the server says about this browser's session. */
@@ -46,16 +54,18 @@ async function readSession(): Promise<Session> {
     const s = await api.authStatus();
     return {
       state: s.needsSetup ? 'setup' : s.user ? 'signed-in' : 'signed-out',
-      user: s.user, workspace: s.workspace, offlineReason: null,
+      user: s.user, workspace: s.workspace, offlineReason: null, machineAccess: s.machineAccess !== false,
     };
   } catch (e) {
     console.error('[NeuroCode] GET /auth/status failed:', e);
-    return { state: 'offline', user: null, workspace: null, offlineReason: unreachable(e, '/auth/status') };
+    return { state: 'offline', user: null, workspace: null, offlineReason: unreachable(e, '/auth/status'),
+             machineAccess: true };
   }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<Session>({ state: 'loading', user: null, workspace: null, offlineReason: null });
+  const [session, setSession] = useState<Session>({ state: 'loading', user: null, workspace: null,
+    offlineReason: null, machineAccess: true });
   const { state, user, workspace, offlineReason } = session;
   const { catalogue } = useAccess();
   const current = useRef(state);
@@ -89,7 +99,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     const r = await api.login(email, password);
-    setSession({ state: 'signed-in', user: r.user, workspace: r.workspace, offlineReason: null });
+    setSession((s) => ({ ...s, state: 'signed-in', user: r.user, workspace: r.workspace, offlineReason: null,
+                         machineAccess: r.machineAccess !== false }));
   }, []);
 
   const logout = useCallback(async () => {
@@ -106,11 +117,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const perms = useMemo(() => new Set(user?.permissions ?? []), [user]);
   const can = useCallback((...p: string[]) => p.every((x) => perms.has(x)), [perms]);
   const canAny = useCallback((...p: string[]) => p.some((x) => perms.has(x)), [perms]);
+  const machine = can('machine:access') && session.machineAccess;
   const roleNames = useMemo(() => (user?.roles ?? []).map((id) => roleName(catalogue, id)).join(', '), [user, catalogue]);
 
   const value = useMemo<AuthCtx>(
-    () => ({ state, user, workspace, offlineReason, can, canAny, roleNames, login, logout, refresh }),
-    [state, user, workspace, offlineReason, can, canAny, roleNames, login, logout, refresh],
+    () => ({ state, user, workspace, offlineReason, can, canAny, machine, roleNames, login, logout, refresh }),
+    [state, user, workspace, offlineReason, can, canAny, machine, roleNames, login, logout, refresh],
   );
   return <C.Provider value={value}>{children}</C.Provider>;
 }

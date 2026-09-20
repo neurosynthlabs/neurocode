@@ -70,8 +70,10 @@ export interface AuthStatus {
   setupNeedsToken?: boolean;
   user: AuthUser | null;
   workspace: Workspace | null;
+  /** Whether this server opens the machine it runs on at all: false on a hosted one. */
+  machineAccess?: boolean;
 }
-export interface SignedIn { user: AuthUser; workspace: Workspace | null }
+export interface SignedIn { user: AuthUser; workspace: Workspace | null; machineAccess?: boolean }
 export interface SetupInput { workspace: string; name: string; email: string; password: string; setupToken?: string }
 
 export interface Person {

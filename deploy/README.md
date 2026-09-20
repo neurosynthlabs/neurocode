@@ -50,6 +50,9 @@ Owner — so nobody who finds the address first can claim the workspace. Add a m
 
 - **Machine access** (browsing the server's folders, a terminal, run and debug) is **off** here
   (`NEUROCODE_MACHINE_ACCESS=false`): turning it on gives whoever signs in as an Owner a shell on the server.
+  The web app is told, on the session, that this server opens nothing — so the Workbench, the folder pickers
+  and Blueprint scaffolding say why instead of offering a folder that cannot be opened. Everything else —
+  plans, runs on cloned repositories, sessions, memory, reviews, routines — works the same as locally.
 - **Backups:** Admin → Database → Back up now writes a `pg_dump` into the `data` volume. Copy one off the server
   now and then: `ssh -i ~/.ssh/neurocode_oci ubuntu@<ip> 'docker compose -f /opt/neurocode/deploy/docker-compose.yml exec -T api ls /data/backups'`.
 - **Logs:** `docker compose logs -f api` (or `web`, `db`) in `/opt/neurocode/deploy`.

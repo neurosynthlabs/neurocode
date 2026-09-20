@@ -53,7 +53,10 @@ def _cookie(response: Response, token: str) -> None:
 
 async def _me(open_session: AsyncSession, who: Person) -> dict[str, Any]:
     name = await WorkspaceRepository(open_session).name()
-    return {"user": who.public(), "workspace": {"name": name} if name else None}
+    # Whether this server opens the machine it runs on at all. A screen that offers a folder picker on a
+    # hosted server, where every machine route answers 404, would be offering something that cannot happen.
+    return {"user": who.public(), "workspace": {"name": name} if name else None,
+            "machineAccess": settings().machine_access}
 
 
 def _ip(request: Request) -> str:
@@ -69,7 +72,8 @@ async def status(who: Person | None = Depends(person_or_none),
     name = await WorkspaceRepository(open_session).name()
     needs = await identity.count() == 0
     return {"needsSetup": needs, "setupNeedsToken": needs and bool(settings().setup_token),
-            "user": who.public() if who else None, "workspace": {"name": name} if name else None}
+            "user": who.public() if who else None, "workspace": {"name": name} if name else None,
+            "machineAccess": settings().machine_access}
 
 
 @router.post("/setup", status_code=201)

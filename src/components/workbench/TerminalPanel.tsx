@@ -211,8 +211,8 @@ export function TerminalView({ terminalId, onMessage, className }: {
  * the Run tab's, so they are not listed here.
  */
 export function TerminalPanel({ projectId, cwd = null }: { projectId: string | null; cwd?: string | null }) {
-  const { can } = useAuth();
-  const allowed = can('machine:access');
+  const { machine } = useAuth();
+  const allowed = machine;
   const [list, setList] = useState<TerminalDoc[] | null>(null);
   const [error, setError] = useState<{ status: number; message: string } | null>(null);
   const [active, setActive] = useState<string | null>(null);

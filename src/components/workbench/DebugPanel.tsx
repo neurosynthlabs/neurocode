@@ -210,8 +210,8 @@ function Watches({ projectId, sessionId, frameId, pauseKey }: {
 
 /** The Debug tab of the Workbench's bottom panel. */
 export function DebugPanel({ projectId, breakpoints, onPausedAt, openFile, currentFile = null }: DebugPanelProps) {
-  const { can } = useAuth();
-  const allowed = can('machine:access');
+  const { machine } = useAuth();
+  const allowed = machine;
   const [configs, setConfigs] = useState<RunConfig[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);

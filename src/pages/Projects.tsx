@@ -103,7 +103,7 @@ const NO_SOURCE: SourceInput = { label: '', kind: 'git', repo: '', branch: 'main
 
 export default function Projects() {
   const nav = useNavigate();
-  const { can } = useAuth();
+  const { can, machine } = useAuth();
   const { projectId, setProjectId, all: projects } = useProject();
   const { createProject, memory } = useData();
   const [params, setParams] = useSearchParams();
@@ -131,7 +131,11 @@ export default function Projects() {
   const [extras, setExtras] = useState<SourceInput[]>([]);
   const [draft, setDraft] = useState<SourceInput>(NO_SOURCE);
   const [browsing, setBrowsing] = useState<'first' | 'extra' | 'archive' | 'into' | null>(null);
-  const browse = can('machine:access');
+  const browse = machine;
+  // A door that needs this machine is closed for one of two reasons, and they are not the same thing.
+  const offReason = can('machine:access')
+    ? 'This server opens no folders (NEUROCODE_MACHINE_ACCESS=false)'
+    : 'Needs the “Use this machine” permission';
 
   // The project navigator's "New project" lands here with ?new=1: the wizard is open until it is closed,
   // and closing it tidies the address.
@@ -512,7 +516,7 @@ export default function Projects() {
                         <Icon className={cn('mt-0.5 size-4 shrink-0', door === d.id ? 'text-brand' : 'text-dim')} />
                         <span className="min-w-0">
                           <span className="block text-[13.5px] font-medium text-ink">{d.title}</span>
-                          <span className="block text-[12px] text-dim">{off ? 'Needs the “Use this machine” permission' : d.hint}</span>
+                          <span className="block text-[12px] text-dim">{off ? offReason : d.hint}</span>
                         </span>
                       </button>
                     );
