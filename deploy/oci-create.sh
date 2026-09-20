@@ -113,11 +113,15 @@ if [ -z "$ID" ] || [ "$ID" = "null" ]; then
     size=$1
     cores=${size%%:*}; gb=${size##*:}
     AD=${ADS[$(( n % ${#ADS[@]} ))]}
+    # Capacity is held per fault domain, not per region: a domain with nothing free says so while its
+    # neighbour has room. Oracle picks one when you do not, and it picks the same one again — so ask each in
+    # turn instead.
+    FD=FAULT-DOMAIN-$(( (n % 3) + 1 ))
     n=$(( n + 1 ))
     # A flexible shape is asked for a size; a fixed one is what it is.
     if [ "$FLEX" = yes ]; then set -- --shape-config "{\"ocpus\":$cores,\"memoryInGBs\":$gb}"; else set --; fi
-    if out=$(oci compute instance launch --availability-domain "$AD" --compartment-id "$C" --display-name "$NAME" \
-             --shape "$SHAPE" "$@" \
+    if out=$(oci compute instance launch --availability-domain "$AD" --fault-domain "$FD" \
+             --compartment-id "$C" --display-name "$NAME" --shape "$SHAPE" "$@" \
              --image-id "$IMAGE" --subnet-id "$SUBNET" --assign-public-ip true \
              --metadata "{\"ssh_authorized_keys\":\"$PUBKEY\"}" \
              --wait-for-state RUNNING --query 'data.id' --raw-output 2>&1); then
@@ -125,10 +129,10 @@ if [ -z "$ID" ] || [ "$ID" = "null" ]; then
     fi
     if grep -qi 'TooManyRequests\|429' <<<"$out"; then
       WAIT=$(( WAIT * 2 )); [ "$WAIT" -gt 600 ] && WAIT=600
-      printf '\r  %s: Oracle is rate-limiting these requests — waiting %ds (try %d of %d)      ' "$AD" "$WAIT" "$try" "$TRIES"
+      printf '\r  Oracle is rate-limiting these requests — waiting %ds (try %d of %d)            ' "$WAIT" "$try" "$TRIES"
     elif grep -qi 'capacity' <<<"$out"; then
       WAIT=$(( WAIT > 120 ? WAIT - 60 : 60 ))
-      printf '\r  %s: no room for %s cores / %s GB — try %d of %d      ' "$AD" "$cores" "$gb" "$try" "$TRIES"
+      printf '\r  %s, %s: no room for %s cores / %s GB — try %d of %d      ' "${AD##*:}" "${FD##*-DOMAIN-}" "$cores" "$gb" "$try" "$TRIES"
     elif grep -qi 'LimitExceeded\|limit' <<<"$out"; then
       echo; echo "$out" >&2
       echo "This looks like a service limit rather than capacity: check Governance → Limits, Quotas and Usage for VM.Standard.A1.Flex in this region." >&2
