@@ -403,6 +403,19 @@ MAX_REFS = 4_000
 #: Constants one file may contribute. A generated table — Go's zerrors_linux_amd64.go holds thousands
 #: — would otherwise be most of the index, and none of it is what a person searches a repository for.
 MAX_CONSTANTS = 100
+#: The widest name kept, so one minified or generated file cannot carry a line of code as a symbol.
+MAX_NAME = 200
+#: How many tokens tree-sitter may have swept into one error before the file is left unread. Asking
+#: a query about an error costs time in the square of how wide it is: measured here, 20 000 tokens
+#: in one error take a quarter of a second to question, 50 000 take 1.6 s, 200 000 take 25 s — and a
+#: megabyte of unclosed brackets, which MAX_PARSE allows, is about twenty minutes of one worker with
+#: nothing able to stop it while the project still says it is being read. Real code is nowhere near
+#: this: of 4 000 .ts and .js files read to set this number, three in a hundred held an error at
+#: all, and the widest of those had swept up three tokens.
+MAX_ERROR_WIDTH = 10_000
+#: How many nodes the check below may look at. A file that takes more than this to check holds
+#: thousands of separate errors, which is not source code either.
+MAX_ERROR_STEPS = 10_000
 
 
 # ── grammars and queries, loaded once, lazily ────────────────────
@@ -519,8 +532,34 @@ def _refine(grammar: str, node: Node, kind: str, shape: Node | None) -> str | No
     return kind
 
 
+def _wrecked(root: Node) -> bool:
+    """Whether a tree came back too badly broken to be worth asking questions of — see MAX_ERROR_WIDTH.
+
+    Nearly free, because only the branches that hold an error are walked: `has_error` says which
+    those are, an error's own children are counted rather than visited, and a file that is one long
+    error is settled by looking at a single node.
+    """
+    steps = 0
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.is_error:
+            if node.child_count > MAX_ERROR_WIDTH:
+                return True
+            continue
+        for child in node.children:
+            steps += 1
+            if steps > MAX_ERROR_STEPS:
+                return True
+            if child.has_error:
+                stack.append(child)
+    return False
+
+
 def outline(grammar: str, source: bytes, *, component_names: bool = False, line_offset: int = 0) -> Outline | None:
-    """Read one file with its grammar. None when this machine has no such grammar.
+    """Read one file with its grammar. None when this machine has no such grammar, and None when the
+    file came back wrecked — a run of unclosed brackets, a binary named .ts — which is recorded the
+    same way: a file nothing here could read, so the rest of the project is still read.
 
     `component_names`: a .tsx/.jsx file, where a function or constant named in capitals is a React
     component. `line_offset`: the file is a block inside another (a Vue or Svelte script), so its
@@ -533,6 +572,8 @@ def outline(grammar: str, source: bytes, *, component_names: bool = False, line_
     _language, defs, flat = loaded
     tree = _parser(grammar).parse(source)
     root = tree.root_node
+    if root.has_error and _wrecked(root):
+        return None
     out = Outline()
 
     # Declarations, in the order they appear, each named under the type or module it sits in.
@@ -577,7 +618,9 @@ def outline(grammar: str, source: bytes, *, component_names: bool = False, line_
                 kind = "method"
         elif kind == "function" and "." in name:      # C++'s Shape::area, defined outside its class
             kind = "method"
-        if kind in CONTAINERS:
+        # A body is on the stack too, so that what it declares is dropped above rather than named as
+        # the file's own. It is never named under it: the guard `continue`s before any of that.
+        if kind in CONTAINERS or kind in ("function", "method"):
             stack.append((node.end_byte, declared, kind))
         if kind == "scope":
             continue
@@ -591,7 +634,7 @@ def outline(grammar: str, source: bytes, *, component_names: bool = False, line_
             if constants > MAX_CONSTANTS:
                 continue
         seen.add((name, line))
-        out.symbols.append((name[:200], kind, line,
+        out.symbols.append((name[:MAX_NAME], kind, line,
                             _exported(grammar, node, name, kind, inside[2] if inside else None),
                             _end(node) + line_offset))
 

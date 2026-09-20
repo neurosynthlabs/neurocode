@@ -20,8 +20,9 @@ The SQL box is the part that needs care, because a query language can do more th
   no writes, no ATTACH, no PRAGMA — so even a statement that got past the first-keyword check is refused
   by SQLite itself.
 
-Every call has a time limit (DuckDB is interrupted, SQLite's progress handler stops it) and every answer
-a ceiling on rows, so a query over a large file cannot hold the server.
+Every call has one time limit for the whole of it, however many statements it takes (DuckDB is
+interrupted, SQLite's progress handler stops it), and every answer a ceiling on rows, so a query over a
+large file cannot hold the server.
 """
 from __future__ import annotations
 
@@ -250,14 +251,35 @@ def _cut(error: Exception) -> str:
     return " ".join(lines)[:300]
 
 
+#: The clock of the call this thread is answering: the whole limit, and the moment it runs out.
+_clock = threading.local()
+
+
 @contextmanager
-def _turn() -> Iterator[None]:
+def _turn(seconds: float) -> Iterator[None]:
+    """A turn at reading, and the clock for everything read during it. The limit belongs to the whole
+    call, not to each statement: `describe` on a SQLite file runs one count per table, so a per-statement
+    limit would let one call hold a turn for tables × the limit while a browser that gave up long ago
+    waits for a free one — and `asyncio.to_thread` cannot take the thread back."""
     if not _turns.acquire(timeout=WAIT_SECONDS):
         raise Refused("The server is busy reading other data files. Try again in a moment.", status=429)
+    outer = getattr(_clock, "limit", None)
+    _clock.limit = (seconds, time.monotonic() + seconds)
     try:
         yield
     finally:
+        _clock.limit = outer
         _turns.release()
+
+
+def _spend() -> tuple[float, float]:
+    """How long the next statement may take — what is left of the call's limit — and the whole limit, for
+    the words of a refusal. A call that has spent it all is stopped here rather than starting one more."""
+    whole, ends = getattr(_clock, "limit", None) or (READ_SECONDS, time.monotonic() + READ_SECONDS)
+    left = ends - time.monotonic()
+    if left <= 0:
+        raise Refused(f"The query took longer than {whole:g} seconds and was stopped.", status=408)
+    return left, whole
 
 
 # ── DuckDB: CSV, TSV, Parquet, JSON Lines ───────────────────────
@@ -272,9 +294,9 @@ def _reader(file: DataFile) -> str:
 
 
 @contextmanager
-def _duck(file: DataFile) -> Iterator[duckdb.DuckDBPyConnection]:
+def _duck(file: DataFile, seconds: float) -> Iterator[duckdb.DuckDBPyConnection]:
     """A private in-memory DuckDB whose only way out is the file itself, locked that way."""
-    with _turn():
+    with _turn(seconds):
         con = duckdb.connect(":memory:", config={"threads": DUCK_THREADS, "memory_limit": DUCK_MEMORY,
                                                  "autoinstall_known_extensions": False,
                                                  "autoload_known_extensions": False})
@@ -311,8 +333,9 @@ def _deadline(stop: Callable[[], None], seconds: float) -> Iterator[threading.Ev
 
 
 def _duck_run(con: duckdb.DuckDBPyConnection, sql: str, params: list[Any] | None = None, *,
-              seconds: float = READ_SECONDS, many: int | None = None) -> tuple[list[Any], list[tuple]]:
-    """A statement under a time limit: its description and its rows (at most `many` when given)."""
+              many: int | None = None) -> tuple[list[Any], list[tuple]]:
+    """A statement inside the call's time limit: its description and its rows (at most `many` when given)."""
+    seconds, whole = _spend()
     with _deadline(con.interrupt, seconds) as fired:
         try:
             cur = con.execute(sql, params or [])
@@ -320,7 +343,7 @@ def _duck_run(con: duckdb.DuckDBPyConnection, sql: str, params: list[Any] | None
             return list(cur.description or []), rows
         except duckdb.Error as failed:
             if fired.is_set():
-                raise Refused(f"The query took longer than {seconds:g} seconds and was stopped.",
+                raise Refused(f"The query took longer than {whole:g} seconds and was stopped.",
                               status=408) from failed
             if isinstance(failed, duckdb.PermissionException):
                 raise Refused("A query here reads only this file, as the view `data`. Other files, URLs "
@@ -343,8 +366,8 @@ def _only_reading(action: int, *_: Any) -> int:
 
 
 @contextmanager
-def _lite(file: DataFile) -> Iterator[sqlite3.Connection]:
-    with _turn():
+def _lite(file: DataFile, seconds: float) -> Iterator[sqlite3.Connection]:
+    with _turn(seconds):
         try:
             con = sqlite3.connect(f"file:{quote(str(file.path))}?mode=ro", uri=True, check_same_thread=False)
         except sqlite3.Error as failed:
@@ -356,7 +379,8 @@ def _lite(file: DataFile) -> Iterator[sqlite3.Connection]:
 
 
 def _lite_run(con: sqlite3.Connection, sql: str, params: tuple[Any, ...] = (), *,
-              seconds: float = READ_SECONDS, many: int | None = None) -> tuple[list[Any], list[tuple]]:
+              many: int | None = None) -> tuple[list[Any], list[tuple]]:
+    seconds, whole = _spend()
     ends = time.monotonic() + seconds
     stopped = threading.Event()
 
@@ -377,7 +401,7 @@ def _lite_run(con: sqlite3.Connection, sql: str, params: tuple[Any, ...] = (), *
         raise Refused(_cut(failed), status=400) from failed
     except sqlite3.Error as failed:
         if stopped.is_set():
-            raise Refused(f"The query took longer than {seconds:g} seconds and was stopped.",
+            raise Refused(f"The query took longer than {whole:g} seconds and was stopped.",
                           status=408) from failed
         if "not authorized" in str(failed):
             raise Refused("A query here only reads: no writes, ATTACH or PRAGMA.", status=403) from failed
@@ -437,15 +461,21 @@ def describe(path: str, table: str | None = None) -> dict[str, Any]:
     these columns are."""
     file = open_file(path)
     if file.format == "sqlite":
-        with _lite(file) as con:
+        with _lite(file, READ_SECONDS) as con:
             tables = _lite_tables(con)
             if not tables:
                 return {**_base(file), "tables": [], "table": None, "columns": [], "rows": 0}
             name = _lite_table(con, table)
-            rows = next(t["rows"] for t in tables if t["name"] == name)
+            rows = next((t["rows"] for t in tables if t["name"] == name), None)
+            if rows is None:
+                # The list stops at MAX_TABLES, but a saved link or a script can still name a table past
+                # it, and the other questions answer for that table — so count it here rather than look
+                # for it in a list that does not reach so far.
+                _, counted = _lite_run(con, f"SELECT count(*) FROM {_ident(name)}")
+                rows = counted[0][0]
             return {**_base(file), "tables": tables, "table": name,
                     "columns": [c.json() for c in _lite_columns(con, name)], "rows": rows}
-    with _duck(file) as con:
+    with _duck(file, READ_SECONDS) as con:
         columns = _duck_columns(con)
         _, counted = _duck_run(con, "SELECT count(*) FROM data")
         return {**_base(file), "tables": None, "table": None, "columns": [c.json() for c in columns],
@@ -459,7 +489,7 @@ def rows(path: str, *, table: str | None = None, offset: int = 0, limit: int = 1
     limit = max(1, min(limit, MAX_PAGE))
     offset = max(0, offset)
     if file.format == "sqlite":
-        with _lite(file) as con:
+        with _lite(file, READ_SECONDS) as con:
             name = _lite_table(con, table)
             columns = _lite_columns(con, name)
             order = _order(columns, sort, desc)
@@ -467,11 +497,15 @@ def rows(path: str, *, table: str | None = None, offset: int = 0, limit: int = 1
             _, page = _lite_run(con, f"SELECT * FROM {_ident(name)}{order} LIMIT ? OFFSET ?", (limit, offset))
             total = counted[0][0]
     else:
-        with _duck(file) as con:
-            columns = _duck_columns(con)
-            order = _order(columns, sort, desc)
+        with _duck(file, READ_SECONDS) as con:
+            # The view holds the `read_csv(…)` call, not a snapshot, so every statement reads the file
+            # again. A file rewritten between two of them would put this page's cells under the other
+            # read's headers, so the headers are the page's own; `DESCRIBE` only vets `sort`, where a
+            # name that has just gone is at worst a 400.
+            order = _order(_duck_columns(con), sort, desc)
             _, counted = _duck_run(con, "SELECT count(*) FROM data")
-            _, page = _duck_run(con, f"SELECT * FROM data{order} LIMIT ? OFFSET ?", [limit, offset])
+            described, page = _duck_run(con, f"SELECT * FROM data{order} LIMIT ? OFFSET ?", [limit, offset])
+            columns = [Column(name=d[0], type=str(d[1]), kind=_duck_kind(str(d[1]))) for d in described]
             total = counted[0][0]
             name = None
     return {"table": name, "columns": [c.json() for c in columns],
@@ -494,7 +528,7 @@ def stats(path: str, *, table: str | None = None) -> dict[str, Any]:
     file = open_file(path)
     started = time.monotonic()
     if file.format == "sqlite":
-        with _lite(file) as con:
+        with _lite(file, READ_SECONDS) as con:
             name = _lite_table(con, table)
             columns = _lite_columns(con, name)
             shown = columns[:MAX_STAT_COLUMNS]
@@ -502,7 +536,7 @@ def stats(path: str, *, table: str | None = None) -> dict[str, Any]:
             approx = False
     else:
         name = None
-        with _duck(file) as con:
+        with _duck(file, READ_SECONDS) as con:
             columns = _duck_columns(con)
             shown = columns[:MAX_STAT_COLUMNS]
             _, counted = _duck_run(con, "SELECT count(*) FROM data")
@@ -540,23 +574,23 @@ def plot(path: str, column: str, *, table: str | None = None, bins: int = 20,
     file = open_file(path)
     bins = max(2, min(bins, MAX_BINS))
     if file.format == "sqlite":
-        with _lite(file) as con:
+        with _lite(file, READ_SECONDS) as con:
             name = _lite_table(con, table)
             columns = {c.name: c for c in _lite_columns(con, name)}
             target, measure = _plot_columns(columns, column, y)
 
             def ask(sql: str, params: list[Any]) -> list[tuple]:
-                return _lite_run(con, sql.replace("{t}", _ident(name)), tuple(params))[1]
+                return _lite_run(con, sql, tuple(params))[1]
 
-            return _plot(ask, target, measure, bins, sqlite=True)
-    with _duck(file) as con:
+            return _plot(ask, _ident(name), target, measure, bins, sqlite=True)
+    with _duck(file, READ_SECONDS) as con:
         columns = {c.name: c for c in _duck_columns(con)}
         target, measure = _plot_columns(columns, column, y)
 
         def ask(sql: str, params: list[Any]) -> list[tuple]:
-            return _duck_run(con, sql.replace("{t}", "data"), params)[1]
+            return _duck_run(con, sql, params)[1]
 
-        return _plot(ask, target, measure, bins, sqlite=False)
+        return _plot(ask, "data", target, measure, bins, sqlite=False)
 
 
 def _plot_columns(columns: dict[str, Column], column: str, y: str | None) -> tuple[Column, Column | None]:
@@ -575,14 +609,21 @@ def _plot_columns(columns: dict[str, Column], column: str, y: str | None) -> tup
     return target, measure
 
 
-def _plot(ask: Callable[[str, list[Any]], list[tuple]], target: Column, measure: Column | None, bins: int,
-          *, sqlite: bool) -> dict[str, Any]:
+def _plot(ask: Callable[[str, list[Any]], list[tuple]], t: str, target: Column, measure: Column | None,
+          bins: int, *, sqlite: bool) -> dict[str, Any]:
+    """The table goes into the SQL here, beside the column, and not by a later pass over the finished
+    text: a column may itself be named anything, and a name put through a second pass could be read as
+    something else — a column named like the table would be charted as the table's."""
     q = _ident(target.name)
     base = {"column": target.name, "type": target.type}
     if target.kind == "number":
         real = f"typeof({q}) IN ('integer', 'real')" if sqlite else f"isfinite({q}::DOUBLE)"
-        (lo, hi, n, total), = ask(f"SELECT min({q}), max({q}), count({q}), count(*) FROM {{t}} WHERE {real} "
-                                  f"OR {q} IS NULL", [])
+        # A row that is neither a number nor empty — text in a SQLite number column, a NaN or an infinity
+        # in a CSV — has no place on the axis, but it is still a row of the file. Only the values are
+        # narrowed, never `count(*)`, so the bars, the note under them and the row count in the header
+        # are all counting the same rows, and what is left out is said.
+        num = f"CASE WHEN {real} THEN {q} END"
+        (lo, hi, n, total), = ask(f"SELECT min({num}), max({num}), count({num}), count(*) FROM {t}", [])
         nulls = total - n
         if n == 0:
             return {**base, "kind": "histogram", "bins": [], "nulls": nulls, "total": total}
@@ -592,18 +633,18 @@ def _plot(ask: Callable[[str, list[Any]], list[tuple]], target: Column, measure:
                     "total": total}
         width = (hi - lo) / bins
         slot = f"CAST(floor((({q}) * 1.0 - ?) / ?) AS INTEGER)"
-        found = dict(ask(f"SELECT min({slot}, ?) AS b, count(*) FROM {{t}} WHERE {real} GROUP BY b"
+        found = dict(ask(f"SELECT min({slot}, ?) AS b, count(*) FROM {t} WHERE {real} GROUP BY b"
                          if sqlite else
-                         f"SELECT least({slot}, ?) AS b, count(*) FROM {{t}} WHERE {real} GROUP BY b",
+                         f"SELECT least({slot}, ?) AS b, count(*) FROM {t} WHERE {real} GROUP BY b",
                          [lo, width, bins - 1]))
         return {**base, "kind": "histogram", "nulls": nulls, "total": total,
                 "bins": [{"lo": lo + i * width, "hi": lo + (i + 1) * width, "count": found.get(i, 0)}
                          for i in range(bins)]}
     if target.kind == "date":
-        return _line(ask, target, measure, base, sqlite=sqlite)
+        return _line(ask, t, target, measure, base, sqlite=sqlite)
     shown = f"CAST({q} AS TEXT)" if sqlite else f"CAST({q} AS VARCHAR)"
-    (n, total, distinct), = ask(f"SELECT count({q}), count(*), count(DISTINCT {q}) FROM {{t}}", [])
-    top = ask(f"SELECT {shown} AS v, count(*) AS c FROM {{t}} WHERE {q} IS NOT NULL GROUP BY v "
+    (n, total, distinct), = ask(f"SELECT count({q}), count(*), count(DISTINCT {q}) FROM {t}", [])
+    top = ask(f"SELECT {shown} AS v, count(*) AS c FROM {t} WHERE {q} IS NOT NULL GROUP BY v "
               f"ORDER BY c DESC, v LIMIT ?", [TOP_VALUES])
     values = [{"value": cell(v), "count": c} for v, c in top]
     return {**base, "kind": "top", "values": values, "other": n - sum(v["count"] for v in values),
@@ -625,7 +666,7 @@ def _unit(span_days: float) -> str:
 _SQLITE_PERIOD = {"hour": 13, "day": 10, "month": 7, "year": 4}
 
 
-def _line(ask: Callable[[str, list[Any]], list[tuple]], target: Column, measure: Column | None,
+def _line(ask: Callable[[str, list[Any]], list[tuple]], t: str, target: Column, measure: Column | None,
           base: dict[str, Any], *, sqlite: bool) -> dict[str, Any]:
     q = _ident(target.name)
     value = f"avg({_ident(measure.name)})" if measure else "count(*)"
@@ -633,22 +674,22 @@ def _line(ask: Callable[[str, list[Any]], list[tuple]], target: Column, measure:
         # SQLite keeps dates as ISO text; a value that is not one (an epoch number, a typo) is left out.
         iso = f"{q} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]*'"
         (lo, hi, n, total), = ask(f"SELECT min({q}), max({q}), count(CASE WHEN {iso} THEN 1 END), count(*) "
-                                  f"FROM {{t}}", [])
+                                  f"FROM {t}", [])
         if not n:
             return {**base, "kind": "line", "unit": "day", "y": None, "points": [], "nulls": total, "total": total}
         span = (_parse_day(hi) - _parse_day(lo)).days if lo and hi else 0
         unit = _unit(span)
         width = _SQLITE_PERIOD[unit]
         period = f"replace(substr({q}, 1, {width}), ' ', 'T')"
-        got = ask(f"SELECT {period} AS p, {value} FROM {{t}} WHERE {iso} GROUP BY p ORDER BY p LIMIT ?",
+        got = ask(f"SELECT {period} AS p, {value} FROM {t} WHERE {iso} GROUP BY p ORDER BY p LIMIT ?",
                   [MAX_POINTS + 1])
     else:
         stamp = f"CAST({q} AS TIMESTAMP)"
-        (lo, hi, n, total), = ask(f"SELECT min({stamp}), max({stamp}), count({q}), count(*) FROM {{t}}", [])
+        (lo, hi, n, total), = ask(f"SELECT min({stamp}), max({stamp}), count({q}), count(*) FROM {t}", [])
         if not n:
             return {**base, "kind": "line", "unit": "day", "y": None, "points": [], "nulls": total, "total": total}
         unit = _unit((hi - lo).total_seconds() / 86400)
-        got = ask(f"SELECT date_trunc('{unit}', {stamp}) AS p, {value} FROM {{t}} WHERE {q} IS NOT NULL "
+        got = ask(f"SELECT date_trunc('{unit}', {stamp}) AS p, {value} FROM {t} WHERE {q} IS NOT NULL "
                   f"GROUP BY p ORDER BY p LIMIT ?", [MAX_POINTS + 1])
     return {**base, "kind": "line", "unit": unit, "y": measure.name if measure else None,
             "points": [{"t": cell(p), "value": _number(v)} for p, v in got[:MAX_POINTS]],
@@ -676,9 +717,9 @@ def query(path: str, sql: str) -> dict[str, Any]:
         if _first_word(text) not in ("SELECT", "WITH", "VALUES"):
             raise Refused("Only a SELECT (or WITH … SELECT) runs here; this view never changes the file.",
                           status=400)
-        with _lite(file) as con:
+        with _lite(file, QUERY_SECONDS) as con:
             con.set_authorizer(_only_reading)
-            described, got = _lite_run(con, text, seconds=QUERY_SECONDS, many=MAX_QUERY_ROWS + 1)
+            described, got = _lite_run(con, text, many=MAX_QUERY_ROWS + 1)
             columns = [{"name": d[0], "type": ""} for d in described]
     else:
         try:
@@ -690,8 +731,8 @@ def query(path: str, sql: str) -> dict[str, Any]:
         if statements[0].type != duckdb.StatementType.SELECT:
             raise Refused("Only a SELECT (or WITH … SELECT) runs here; this view never changes the file.",
                           status=400)
-        with _duck(file) as con:
-            described, got = _duck_run(con, text, seconds=QUERY_SECONDS, many=MAX_QUERY_ROWS + 1)
+        with _duck(file, QUERY_SECONDS) as con:
+            described, got = _duck_run(con, text, many=MAX_QUERY_ROWS + 1)
             columns = [{"name": d[0], "type": str(d[1])} for d in described]
     return {"columns": columns, "rows": [[cell(v) for v in r] for r in got[:MAX_QUERY_ROWS]],
             "truncated": len(got) > MAX_QUERY_ROWS, "cap": MAX_QUERY_ROWS,

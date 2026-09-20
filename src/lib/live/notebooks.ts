@@ -60,7 +60,11 @@ export interface KernelChoice {
 
 export interface KernelOptions {
   language: string;
-  /** What starting a kernel would use; null when nothing on this machine can run the notebook. */
+  /**
+   * What starting a kernel would use; null when nothing on this machine can run the notebook. Opening a
+   * notebook only looks — nothing is run to find these — so an interpreter found beside the notebook has
+   * no version in its displayName until the person starts it.
+   */
   choice: KernelChoice | null;
   available: KernelChoice[];
   /** What to install, in words, when choice is null. */

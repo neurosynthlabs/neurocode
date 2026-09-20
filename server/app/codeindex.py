@@ -184,7 +184,11 @@ def parse_sql(text: str) -> Parsed:
     p, line = Parsed(reads_as="T-SQL"), Lines(text)
     for m in SQL_DECL.finditer(text):
         at = line(m.start())
-        p.symbols.append((bare(m.group(2)), SQL_KIND[m.group(1).lower()], at, True, at))
+        # A pattern sees the CREATE and nothing else: where a four-hundred-line procedure ends is
+        # not something it can know. So the end line is left unknown — `end or None` at the write
+        # puts NULL in the column, which is what it is documented to hold — rather than repeating
+        # the first line, which would publish every declaration in the schema as one line long.
+        p.symbols.append((bare(m.group(2)), SQL_KIND[m.group(1).lower()], at, True, 0))
     p.complexity = len(BRANCHES.findall(text))
     return p
 
@@ -705,7 +709,12 @@ def walk(root: Path, excluded: list[str]) -> Iterator[tuple[str, str, bytes]]:
                 continue
             path = os.path.join(dirpath, name)
             try:
-                if os.path.getsize(path) > onboarding.MAX_BYTES:
+                # A link is not a file of this checkout. Followed, it would either read what lies
+                # outside — the boundary `services.code.resolve_in` keeps for every read by path, so
+                # the index would list names the Workbench then refuses to open — or index one file
+                # twice, once under each name, with its symbols and its fan-in counted twice.
+                # os.walk already refuses to enter a linked folder; this is the same rule for files.
+                if os.path.islink(path) or os.path.getsize(path) > onboarding.MAX_BYTES:
                     continue
                 with open(path, "rb") as fh:
                     data = fh.read()

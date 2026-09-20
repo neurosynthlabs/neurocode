@@ -274,8 +274,10 @@ class LanguageServer:
                     await self.request("shutdown", None, timeout=3)
                 with contextlib.suppress(Exception):
                     await self.notify("exit", None)
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(proc.wait(), timeout=3)
+                # It was asked to go, so it is given a moment to; one that was never asked — it never
+                # became ready, or it stopped speaking the protocol — has no reason to leave on its own.
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(proc.wait(), timeout=3)
             if proc.returncode is None:
                 with contextlib.suppress(ProcessLookupError, PermissionError):
                     os.killpg(proc.pid, 9)
@@ -353,11 +355,26 @@ class LanguageServer:
                 if not future.done():
                     future.set_exception(Refused(f"{self.name} has stopped.", status=409))
             if self.state in ("starting", "ready"):
-                self._fail(self._why("it exited") if self.state == "starting" else f"{self.name} exited.")
+                # Reading ends when the server exits, and also when what it prints stops being the
+                # protocol — then it is still running, and saying "exited" would be untrue.
+                here = self._proc is not None and self._proc.returncode is None
+                self._fail(self._why("it exited") if self.state == "starting" else
+                           f"{self.name} stopped answering." if here else f"{self.name} exited.")
 
     async def _drain(self) -> None:
+        """Keep reading stderr, so a server that logs a lot never blocks on a full pipe, and keep its
+        last lines. A line longer than the reader's limit makes readline raise; the reader has already
+        dropped what it read, so draining carries on with the rest — one line of a panic dump must not
+        cost the drain, and with it every answer this server would still have given."""
         assert self._proc is not None and self._proc.stderr is not None
-        while line := await self._proc.stderr.readline():
+        while True:
+            try:
+                line = await self._proc.stderr.readline()
+            except ValueError:
+                self._said.append("(a line too long to keep)")
+                continue
+            if not line:
+                return
             self._said.append(line.decode("utf-8", "replace").rstrip()[:300])
 
     async def _dispatch(self, message: dict[str, Any]) -> None:
@@ -472,7 +489,11 @@ class LanguageServers:
                 found.used = time.monotonic()
                 return found
         elif found is not None:
+            # Dropped here, so stopped here: a server whose reader gave up on what it printed is not
+            # alive to this client while its process is still running, and once it is out of `_all`
+            # nothing else — not the reaper, not close_all — can ever reach it again.
             self._all.pop(key, None)
+            await found.stop()
         pending = self._starting.get(key)
         if pending is None:
             argv = find(spec, root)

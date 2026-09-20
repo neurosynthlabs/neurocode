@@ -265,7 +265,8 @@ async def test_the_kernel_it_would_choose_and_what_to_install_when_none(client: 
     assert got.status_code == 200, got.text
     choice = got.json()["choice"]
     assert choice["source"] == "project" and choice["interpreter"] == str(python)
-    assert choice["displayName"] == f"Python {'.'.join(map(str, sys.version_info[:3]))} (.venv)"
+    # No version: opening a notebook does not run the interpreter to ask it for one.
+    assert choice["displayName"] == "Python (.venv)"
     assert got.json()["missing"] is None
 
     # An R notebook on a machine with no R kernel: nothing is started, and it says what to install.
@@ -276,6 +277,45 @@ async def test_the_kernel_it_would_choose_and_what_to_install_when_none(client: 
     assert started.status_code == 409 and "IRkernel" in started.json()["detail"]
     named = await client.post("/notebooks/kernels", json={"path": str(file), "kernel": "julia-1.10"})
     assert named.status_code == 404 and "julia-1.10" in named.json()["detail"]
+
+
+async def test_opening_a_notebook_runs_no_interpreter_and_starting_a_kernel_asks_it(
+        client: AsyncClient, root: Path, monkeypatch: pytest.MonkeyPatch):
+    """A `.venv/bin/python` is a file of the project — anything that can write one file in a project
+    folder writes it — so opening the notebook beside it must not run it. Only starting a kernel does."""
+    monkeypatch.setattr(nb, "installed_specs", dict)
+    project = root / "cloned"
+    marker = project / "it-ran"
+    python = project / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text(f'#!/bin/sh\necho ran > "{marker}"\nexit 1\n')
+    python.chmod(0o755)
+    file = _write(project / "notes.ipynb", STORED)
+
+    got = await client.get("/notebooks/kernelspecs", params={"path": str(file)})
+    assert got.status_code == 200, got.text
+    choice = got.json()["choice"]
+    assert choice["source"] == "project" and choice["interpreter"] == str(python)
+    assert choice["displayName"] == "Python (.venv)"          # found, not asked anything
+    assert not marker.exists()
+
+    # Starting a kernel is the person asking for that interpreter to run, so there it is asked — and
+    # what it answers is that it has no ipykernel, in the words that say what to install.
+    started = await client.post("/notebooks/kernels", json={"path": str(file), "kernel": "project"})
+    assert started.status_code == 409 and "ipykernel" in started.json()["detail"]
+    assert marker.exists()
+
+
+async def test_a_save_over_a_file_too_big_to_open_is_refused_before_it_is_read(client: AsyncClient, root: Path):
+    """A notebook too big to open is too big to save over, and is refused on its size on disk — not
+    pulled into memory to have its SHA-1 taken first."""
+    file = root / "huge.ipynb"
+    with open(file, "wb") as out:
+        out.truncate(nb.MAX_BYTES + 1)
+    refused = await client.put("/notebooks/file", json={"path": str(file), "expectSha1": "0" * 40,
+                                                        "notebook": {"cells": []}})
+    assert refused.status_code == 413 and "40.0 MB" in refused.json()["detail"]
+    assert file.stat().st_size == nb.MAX_BYTES + 1            # nothing written
 
 
 # ── kernels and the socket, on a committing workspace ─────────────
@@ -329,17 +369,22 @@ async def _kernel(owner: AsyncClient, file: Path) -> dict[str, Any]:
     return started.json()
 
 
-async def _run(owner: AsyncClient, kernel: str, code: str, cell: str = "c1", seconds: float = 30) -> dict[str, Any]:
-    queued = await owner.post(f"/notebooks/kernels/{kernel}/execute", json={"cellId": cell, "code": code})
-    assert queued.status_code == 202, queued.text
-    request_id = queued.json()["requestId"]
+async def _finished(owner: AsyncClient, kernel: str, request_id: str, seconds: float = 30) -> dict[str, Any]:
     deadline = asyncio.get_running_loop().time() + seconds
     while True:
-        run = (await owner.get(f"/notebooks/kernels/{kernel}/runs/{request_id}")).json()
+        got = await owner.get(f"/notebooks/kernels/{kernel}/runs/{request_id}")
+        assert got.status_code == 200, got.text
+        run = got.json()
         if run["status"] in ("ok", "error", "aborted"):
             return run
         assert asyncio.get_running_loop().time() < deadline, run
         await asyncio.sleep(0.05)
+
+
+async def _run(owner: AsyncClient, kernel: str, code: str, cell: str = "c1", seconds: float = 30) -> dict[str, Any]:
+    queued = await owner.post(f"/notebooks/kernels/{kernel}/execute", json={"cellId": cell, "code": code})
+    assert queued.status_code == 202, queued.text
+    return await _finished(owner, kernel, queued.json()["requestId"], seconds)
 
 
 async def test_a_real_kernel_runs_cells(live: FastAPI, owner: AsyncClient):
@@ -347,6 +392,8 @@ async def test_a_real_kernel_runs_cells(live: FastAPI, owner: AsyncClient):
     kernel = await _kernel(owner, file)
     assert kernel["new"] is True and kernel["status"] == "idle" and kernel["source"] == "project"
     assert kernel["interpreter"].endswith("proj/.venv/bin/python")
+    # Starting it asked the interpreter what it is, which is where its version comes from.
+    assert kernel["displayName"] == f"Python {'.'.join(map(str, sys.version_info[:3]))} (.venv)"
     # One kernel per notebook: asking again answers the same one.
     again = await _kernel(owner, file)
     assert again["id"] == kernel["id"] and again["new"] is False
@@ -415,6 +462,58 @@ async def test_interrupt_restart_and_shut_down(live: FastAPI, owner: AsyncClient
     assert (await owner.get(f"/notebooks/kernels/{kernel}")).status_code == 404
     late = await owner.post(f"/notebooks/kernels/{kernel}/execute", json={"cellId": "c", "code": "1"})
     assert late.status_code == 404
+
+
+async def test_a_kernel_that_died_is_closed_when_the_notebook_starts_another(live: FastAPI, owner: AsyncClient):
+    """Starting a kernel for a notebook whose last one died drops the dead one — and closes it, rather
+    than leaving its folder, its log file and its channels held for the life of the process."""
+    file = _notebook(live, "crash.ipynb")
+    first = await _kernel(owner, file)
+    held = kernels_of(live)
+    died = held._all[first["id"]]
+    folder = died._folder
+    suicide = "import os, signal\nos.kill(os.getpid(), signal.SIGKILL)"
+    killed = await owner.post(f"/notebooks/kernels/{first['id']}/execute",
+                              json={"cellId": "boom", "code": suicide})
+    assert killed.status_code == 202
+    for _ in range(200):
+        await held.reap_once()
+        if died.status == "dead":
+            break
+        await asyncio.sleep(0.05)
+    assert died.status == "dead" and os.path.isdir(folder)
+
+    again = await _kernel(owner, file)
+    assert again["id"] != first["id"] and again["new"] is True
+    assert died.status == "closed" and died._log_file.closed
+    assert not os.path.isdir(folder)      # with it, the connection file's session key
+
+
+async def test_a_cell_still_running_is_not_forgotten_when_older_runs_are_trimmed(
+        live: FastAPI, owner: AsyncClient, monkeypatch: pytest.MonkeyPatch):
+    """A kernel remembers its last KEPT_RUNS executions, but what it is still working on is how its
+    messages are found again: trimming that would drop the cell's output and leave it waiting forever."""
+    monkeypatch.setattr(nb, "KEPT_RUNS", 2)
+    kernel = (await _kernel(owner, _notebook(live, "many.ipynb")))["id"]
+    slow = (await owner.post(f"/notebooks/kernels/{kernel}/execute",
+                             json={"cellId": "slow", "code": "import time\nprint('a')\ntime.sleep(2)"})).json()
+    for _ in range(200):
+        if (await owner.get(f"/notebooks/kernels/{kernel}/runs/{slow['requestId']}")).json()["status"] == "running":
+            break
+        await asyncio.sleep(0.05)
+
+    behind = []
+    for i in range(3):
+        queued = await owner.post(f"/notebooks/kernels/{kernel}/execute",
+                                  json={"cellId": f"c{i}", "code": f"print({i})"})
+        assert queued.status_code == 202, queued.text
+        behind.append(queued.json()["requestId"])
+    still = await owner.get(f"/notebooks/kernels/{kernel}/runs/{slow['requestId']}")
+    assert still.status_code == 200, "the cell the kernel is working on was forgotten"
+
+    ran = await _finished(owner, kernel, slow["requestId"])
+    assert ran["status"] == "ok" and ran["outputs"][0]["text"] == "a\n"
+    assert (await _finished(owner, kernel, behind[-1]))["outputs"][0]["text"] == "2\n"
 
 
 async def test_the_limits_and_the_idle_shut_down(live: FastAPI, owner: AsyncClient):

@@ -13,6 +13,8 @@ beside the notebook or in a folder above it) when it has ipykernel; the kernelsp
 metadata names, when it is installed; any installed kernelspec for the notebook's language; the
 machine's python3 when it has ipykernel. Never the API's own environment: the notebook's packages are
 not installed there, and the API's secrets are. When nothing fits, the refusal says what to install.
+Opening a notebook only looks at the machine; an interpreter is run — which is how it is asked its
+version and whether it has ipykernel — when the person starts a kernel, and that start is audited.
 
 A kernel lives in this process and belongs to the person who started it, one per open notebook. It is
 shut down when the notebook is closed, when nobody has had it open for a while (settings), and when the
@@ -307,7 +309,13 @@ def write(file: Path, document: dict[str, Any], expect_sha1: str) -> tuple[Saved
     """Save the page's notebook over the file — only if the file is still the one the page opened.
 
     Written in place, as the editor's save is (see `machine.write` for why not a rename)."""
-    _regular(file)
+    st = _regular(file)
+    # The whole file is read below, to see whether it is still the one the page opened. A file too big to
+    # open here is refused before that read rather than pulled into memory: nothing this page opened, and
+    # so nothing it is saving over, can be that large.
+    if st.st_size > MAX_BYTES:
+        raise Refused(f"{file.name} is {_size(st.st_size)}; the Workbench opens notebooks up to "
+                      f"{_size(MAX_BYTES)}, so this is not a notebook it can save over.", status=413)
     data = serialise(document)
     if len(data) > MAX_BYTES:
         raise Refused(f"The notebook is {_size(len(data))}; notebooks are saved up to {_size(MAX_BYTES)}. Clear "
@@ -436,16 +444,25 @@ def missing(language: str, folder: Path) -> str:
     return f"No Jupyter kernel for {language} on this machine. Install {what}, then start the kernel again."
 
 
-def options(file: Path, language: str, named: str | None) -> dict[str, Any]:
-    """What could run this notebook, and what would be chosen. Blocking: it asks interpreters."""
+def options(file: Path, language: str, named: str | None, *, probe: bool = True) -> dict[str, Any]:
+    """What could run this notebook, and what would be chosen. Blocking: with `probe`, it asks interpreters.
+
+    Asking an interpreter its version runs it, and a `.venv/bin/python` beside a notebook is a file the
+    repository controls — anything that can write one file in a project folder would be writing a command
+    this server runs. So it is asked only where a person asked for it to run: starting a kernel, which is
+    audited. Merely opening a notebook passes `probe=False` and gets each interpreter as it was found on
+    disk, with no version, and no claim yet that it has ipykernel; that is settled when the kernel starts,
+    and `missing` then says what to install.
+    """
     folder = file.parent
     offered: list[Choice] = []
     own = project_python(folder)
     if language == "python" and own is not None:
-        version = python_version(str(own))
-        if version is not None:
+        version = python_version(str(own)) if probe else None
+        if version is not None or not probe:
             venv = own.parent.parent
-            offered.append(Choice(name="project", display=f"Python {version} ({venv.name})", language="python",
+            display = f"Python {version} ({venv.name})" if version else f"Python ({venv.name})"
+            offered.append(Choice(name="project", display=display, language="python",
                                   source="project", argv=_python_argv(str(own)), interpreter=str(own),
                                   venv=str(venv)))
     specs = installed_specs()
@@ -454,9 +471,10 @@ def options(file: Path, language: str, named: str | None) -> dict[str, Any]:
     if language == "python":
         system = shutil.which("python3", path=base_env().get("PATH"))
         if system and (own is None or os.path.realpath(system) != os.path.realpath(own)):
-            version = python_version(system)
-            if version is not None:
-                offered.append(Choice(name="machine", display=f"Python {version} (this machine)", language="python",
+            version = python_version(system) if probe else None
+            if version is not None or not probe:
+                display = f"Python {version} (this machine)" if version else "Python (this machine)"
+                offered.append(Choice(name="machine", display=display, language="python",
                                       source="machine", argv=_python_argv(system), interpreter=system))
     chosen = next((c for c in offered if c.source == "project"), None)
     chosen = chosen or next((c for c in offered if named and c.source == "kernelspec" and c.name == named), None)
@@ -680,8 +698,15 @@ class Kernel:
         # Registered before anything awaits, so the kernel's first message for it cannot arrive unclaimed.
         run = Run(request_id, cell_id)
         self.runs[request_id] = run
+        # The oldest go first, but only those that are over: a run the kernel is still working on is how
+        # its messages are found again, so forgetting it would throw its output away and leave its cell
+        # waiting forever. "Run all" queues every cell at once, so this may hold more than KEPT_RUNS
+        # until they finish.
         while len(self.runs) > KEPT_RUNS:
-            self.runs.popitem(last=False)
+            oldest = next((r for r in self.runs.values() if r.finished), None)
+            if oldest is None:
+                break
+            del self.runs[oldest.id]
         self.touch()
         self._broadcast({"type": "queued", "requestId": request_id, "cellId": cell_id})
         return run
@@ -913,6 +938,10 @@ class Kernels:
             return running, False
         for gone in [k for k in self.mine(owner) if k.path == path]:
             self._all.pop(gone.id, None)
+            # Dropped here, nothing can reach it again — not the reaper, not the shutdown — so it is
+            # closed now: a kernel that died still holds its channels, its open log file and its folder
+            # with the connection file's session key until `close` lets them go.
+            await gone.close()
         if config.kernels_max == 0:
             raise Refused("Notebook kernels are switched off on this server (NEUROCODE_KERNELS_MAX is 0).", status=409)
         if len(self.live()) >= config.kernels_max:
@@ -986,6 +1015,11 @@ async def start_kernel(session: AsyncSession, kernels: Kernels, config: Settings
     if kernel_name:
         choice = next((c for c in found["available"] if c.name == kernel_name), None)
         if choice is None:
+            # The page picked from what opening the notebook found, which is interpreters as they are on
+            # disk; asked here, one can turn out to have no ipykernel. Then say what to install, rather
+            # than that a kernel the person was just offered does not exist.
+            if kernel_name in ("project", "machine"):
+                raise Refused(missing(opened["language"], file.parent), status=409)
             raise Refused(f"There is no kernel called {kernel_name} on this machine.", status=404)
     if choice is None:
         raise Refused(found["missing"], status=409)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -132,6 +133,23 @@ async def test_a_sqlite_file_lists_its_tables_and_opens_the_one_asked(client: As
     assert missing.status_code == 404 and missing.json()["detail"] == "This database has no table named nope."
 
 
+async def test_a_table_past_the_ones_listed_still_opens_with_its_own_row_count(
+        client: AsyncClient, tree: Path, monkeypatch: pytest.MonkeyPatch):
+    db = sqlite3.connect(tree / "wide.sqlite")
+    for i in range(5):
+        db.execute(f"CREATE TABLE t{i} (a INTEGER)")
+        db.executemany(f"INSERT INTO t{i} VALUES (?)", [(n,) for n in range(i + 1)])
+    db.commit()
+    db.close()
+    monkeypatch.setattr(dataview, "MAX_TABLES", 2)
+    path = str(tree / "wide.sqlite")
+    body = (await client.get("/data/open", params={"path": path, "table": "t4"})).json()
+    assert [t["name"] for t in body["tables"]] == ["t0", "t1"]     # the list stops where it says it does
+    assert body["table"] == "t4" and body["rows"] == 5             # the table asked for is still counted
+    page = (await client.get("/data/rows", params={"path": path, "table": "t4"})).json()
+    assert page["total"] == 5 and len(page["rows"]) == 5
+
+
 async def test_what_is_not_a_data_file_is_refused_in_words(client: AsyncClient, tree: Path):
     fake = await client.get("/data/open", params={"path": str(tree / "fake.db")})
     assert fake.status_code == 415 and fake.json()["detail"] == "fake.db is not a SQLite database."
@@ -164,6 +182,27 @@ async def test_rows_sort_by_a_column_with_nulls_last_both_ways(client: AsyncClie
         assert [r[0] for r in down["rows"]] == ["Mumbai", "Delhi"] and down["desc"] is True
     bad = await client.get("/data/rows", params={"path": str(tree / "cities.csv"), "sort": "x\" ; DROP"})
     assert bad.status_code == 400 and bad.json()["detail"] == 'There is no column named x" ; DROP.'
+
+
+def test_a_page_takes_its_headers_from_the_read_that_gave_its_cells(tree: Path,
+                                                                   monkeypatch: pytest.MonkeyPatch):
+    """The view holds the read, not a snapshot, so every statement reads the file again: a file rewritten
+    under one call must not show an earlier read's headers over this page's cells. Here the rewrite
+    happens between the two, which is what a job regenerating a log or an export does on its own."""
+    race = tree / "race.csv"
+    race.write_text("a,b\n1,2\n")
+    read = dataview._duck_run
+
+    def rewrite_between(con, sql, params=None, **rest):
+        answer = read(con, sql, params, **rest)
+        if sql == "DESCRIBE data":
+            race.write_text("x,y,z\n7,8,9\n10,11,12\n")
+        return answer
+
+    monkeypatch.setattr(dataview, "_duck_run", rewrite_between)
+    page = dataview.rows(str(race))
+    assert [c["name"] for c in page["columns"]] == ["x", "y", "z"]
+    assert page["rows"] == [[7, 8, 9], [10, 11, 12]]
 
 
 async def test_sqlite_rows_page_and_sort_within_a_table(client: AsyncClient, tree: Path):
@@ -207,6 +246,35 @@ async def test_a_number_column_plots_as_a_histogram(client: AsyncClient, tree: P
     csv = (await client.get("/data/plot", params={"path": str(tree / "cities.csv"), "column": "population",
                                                   "bins": 2})).json()
     assert [b["count"] for b in csv["bins"]] == [3, 2] and csv["nulls"] == 1
+
+
+async def test_a_number_column_counts_the_rows_it_cannot_draw_as_empty(client: AsyncClient, tree: Path):
+    db = sqlite3.connect(tree / "mixed.sqlite")
+    db.execute("CREATE TABLE t (score INTEGER)")
+    db.executemany("INSERT INTO t VALUES (?)", [(1,), (2,), ("n/a",), ("n/a",), (None,), (3,)])
+    db.commit()
+    db.close()
+    path = str(tree / "mixed.sqlite")
+    assert (await client.get("/data/open", params={"path": path})).json()["rows"] == 6
+    body = (await client.get("/data/plot", params={"path": path, "column": "score", "bins": 3})).json()
+    # The two rows holding text are neither drawn nor thrown away: they are counted with the empty one,
+    # against the same six rows the header shows.
+    assert body["total"] == 6 and body["nulls"] == 3
+    assert sum(b["count"] for b in body["bins"]) == 3
+
+    (tree / "odd.csv").write_text("n,name\n1,a\nNaN,b\nInfinity,c\n3,d\n")
+    csv = (await client.get("/data/plot", params={"path": str(tree / "odd.csv"), "column": "n",
+                                                  "bins": 2})).json()
+    assert csv["total"] == 4 and csv["nulls"] == 2
+    assert sum(b["count"] for b in csv["bins"]) == 2
+
+
+async def test_a_column_named_like_the_tables_own_placeholder_charts_its_own_values(client: AsyncClient,
+                                                                                    tree: Path):
+    (tree / "brace.csv").write_text("{t},data\nalpha,9\nbeta,9\nalpha,7\n")
+    body = (await client.get("/data/plot", params={"path": str(tree / "brace.csv"), "column": "{t}"})).json()
+    assert body["column"] == "{t}" and body["kind"] == "top" and body["total"] == 3
+    assert body["values"] == [{"value": "alpha", "count": 2}, {"value": "beta", "count": 1}]
 
 
 async def test_a_text_column_plots_its_top_values(client: AsyncClient, tree: Path):
@@ -312,6 +380,31 @@ async def test_a_query_past_its_time_limit_is_stopped(client: AsyncClient, tree:
     lite = ("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n")
     answer = await client.post("/data/query", json={"path": str(tree / "shop.sqlite"), "sql": lite})
     assert answer.status_code == 408
+
+
+async def test_one_time_limit_covers_a_whole_call_not_each_statement(client: AsyncClient, tree: Path,
+                                                                     monkeypatch: pytest.MonkeyPatch):
+    """Opening a SQLite file counts one table at a time; the limit is the call's, so a file of slow
+    tables cannot hold one of the three turns for tables × the limit after the browser has given up."""
+    path = tree / "slow.sqlite"
+    db = sqlite3.connect(path)
+    for i in range(8):
+        db.execute(f"CREATE VIEW v{i} AS WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n "
+                   "WHERE i < 1500000) SELECT i FROM n")
+    db.commit()
+    db.close()
+    counting = sqlite3.connect(path)
+    started = time.monotonic()
+    counting.execute("SELECT count(*) FROM v0").fetchone()
+    each = time.monotonic() - started                 # what one of the eight counts costs on this machine
+    counting.close()
+    monkeypatch.setattr(dataview, "READ_SECONDS", each * 3)
+
+    started = time.monotonic()
+    answer = await client.get("/data/open", params={"path": str(path)})
+    spent = time.monotonic() - started
+    assert answer.status_code == 408 and "was stopped" in answer.json()["detail"]
+    assert spent < each * 6, "the counts were each given a fresh limit"
 
 
 async def test_a_syntax_error_answers_with_the_database_words(client: AsyncClient, tree: Path):

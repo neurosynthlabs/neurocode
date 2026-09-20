@@ -183,7 +183,13 @@ try {
       const el = document.querySelector('[title*="approvals waiting on you"]');
       return el && Number(el.getAttribute('title').match(/\d+/)[0]) === n;
     }, before - 1, { timeout: 5000 });
-    const after = (await api('/approvals')).filter((a) => a.status === 'pending');
+    // The badge moves the moment the click is made; the server answers a moment later. Wait for the server to
+    // agree rather than reading it in that gap — what matters is where it ends, not how fast it got there.
+    let after = pending;
+    for (const t0 = Date.now(); Date.now() - t0 < 10000; await page.waitForTimeout(250)) {
+      after = (await api('/approvals')).filter((a) => a.status === 'pending');
+      if (after.length === pending.length - 1) break;
+    }
     expect(after.length === pending.length - 1, `the server still holds ${after.length} pending`);
     const decided = pending.find((a) => !after.some((b) => b.ref === a.ref));
     await page.getByRole('button', { name: 'Activity', exact: true }).click();

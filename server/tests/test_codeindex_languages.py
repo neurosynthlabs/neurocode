@@ -107,7 +107,9 @@ SYMBOLS = {
     "zig/src/cart.zig": [("Cart", "struct", 3, True, 9), ("Cart.add", "method", 6, True, 8),
                          ("hidden", "function", 11, False, 11)],
     "bash/scripts/lib.sh": [("log", "function", 1, True, 3)],
-    "sql/schema.sql": [("Orders", "table", 1, True, 1), ("sp_AddOrder", "procedure", 3, True, 3)],
+    # T-SQL is read by patterns, which see the CREATE and not the END: sp_AddOrder really runs to
+    # line 6, and no reader here knows that, so the end line is 0 — NULL once written, not a guess.
+    "sql/schema.sql": [("Orders", "table", 1, True, 0), ("sp_AddOrder", "procedure", 3, True, 0)],
     # The file is the component; its <script> is read with its lines counted from the file's top.
     "vue/src/Cart.vue": [("Cart", "component", 1, True, 12), ("checkout", "function", 8, False, 10)],
     "svelte/src/Cart.svelte": [("Cart", "component", 1, True, 12), ("items", "constant", 4, True, 4),

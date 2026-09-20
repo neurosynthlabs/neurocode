@@ -40,6 +40,12 @@ def _moment(value: str | datetime | None) -> datetime | None:
 
 #: Rows per INSERT statement batch: bounded memory per round trip on a very large index.
 WRITE_BATCH = 20_000
+#: How wide a symbol name may be, asked of the column itself so the two cannot drift apart. Every
+#: reader ends here — Python's `ast`, the T-SQL patterns, the component reader, tree-sitter — and
+#: only tree-sitter cut its names to fit, so one long name from any of the others (a Python class
+#: and method whose names together pass 200 characters, a procedure named at length) made Postgres
+#: refuse the whole statement, rolled the index write back and put a raw database error in the feed.
+NAME_WIDTH: int = CodeSymbol.name.type.length or 200
 
 
 async def save_index(session: AsyncSession, project_id: str, root: str, idx: codeindex.Index,
@@ -63,8 +69,8 @@ async def save_index(session: AsyncSession, project_id: str, root: str, idx: cod
     # Symbols and edges are written as plain rows, many to a statement, not as tracked objects: every
     # language is read now, and a large repository holds hundreds of thousands of them — the ORM's
     # bookkeeping per row was most of the time a re-index took. Nothing reads them back here.
-    symbols = [{"project_id": project_id, "file_id": ids[path], "name": name, "kind": kind, "line": line,
-                "end_line": end or None, "exported": bool(exported)}
+    symbols = [{"project_id": project_id, "file_id": ids[path], "name": name[:NAME_WIDTH], "kind": kind,
+                "line": line, "end_line": end or None, "exported": bool(exported)}
                for path, name, kind, line, exported, end in idx.symbols if path in ids]
     edges = [{"project_id": project_id, "from_file": ids[a], "to_file": ids[b] if b and b in ids else None,
               "target": target, "kind": kind}
@@ -141,9 +147,16 @@ def merge(parts: Sequence[tuple[str, codeindex.Index]]) -> codeindex.Index:
     and so are its modules — `api/billing` — so search, impact and the graph span the whole project
     without two sources' `src/main.py` ever becoming one file. `parts` are (prefix, index); the first
     source's prefix is empty. Edges stay inside the checkout they were read in: nothing here guesses
-    that the web app's `fetch('/api/x')` is the API's handler."""
+    that the web app's `fetch('/api/x')` is the API's handler.
+
+    Two sources can still arrive at the same path, and that is refused here in words. A label may not
+    name a top-level entry of the first checkout, but that is only checked the day the label is
+    chosen: the first checkout can grow an `api/` folder afterwards, and then its `api/x.py` and the
+    `api` source's `x.py` are one path. Left alone it fails at the unique constraint on code_files,
+    which rolls the whole write back and posts a database error to the feed on every re-index."""
     if len(parts) == 1 and not parts[0][0]:
         return parts[0][1]
+    seen: dict[str, str] = {}                 # path → the label of the source it came from
     files: list[dict[str, Any]] = []
     symbols: list[tuple[str, str, str, int, bool, int]] = []
     edges: list[tuple[str, str | None, str, str]] = []
@@ -155,7 +168,15 @@ def merge(parts: Sequence[tuple[str, codeindex.Index]]) -> codeindex.Index:
             module = f["module"]
             if prefix:
                 module = label if module == "(root)" else f"{label}/{module}"
-            files.append({**f, "path": _under(prefix, f["path"]), "module": module})
+            path = _under(prefix, f["path"])
+            if path in seen:
+                clash = label or seen[path]
+                raise RuntimeError(
+                    f"two of this project's sources hold {path}: the first checkout now has a "
+                    f"top-level {clash}/ folder, and {clash} is also a source's label. Rename the "
+                    f"source's label or that folder, then read the project again.")
+            seen[path] = label
+            files.append({**f, "path": path, "module": module})
         symbols += [(_under(prefix, path), name, kind, line, exported, end)
                     for path, name, kind, line, exported, end in idx.symbols]
         edges += [(_under(prefix, a), _under(prefix, b) if b else b, target, kind)

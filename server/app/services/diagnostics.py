@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import json
 import os
 import re
@@ -64,6 +65,10 @@ MAX_REFERENCES = 6
 SEVERITIES = ("error", "warning", "info")
 #: Lines kept of what a tool said besides its problems, to show when it failed without any.
 NOTE_LINES = 12
+#: How many line-starting `[` or `{` are tried when the whole output is not one JSON document. A tool
+#: prints a banner line or two before its report, never thousands — and each try reads the rest of the
+#: output again, which over megabytes of junk would take minutes.
+JSON_STARTS = 5
 
 
 # ── what a checker found ──────────────────────────────────────────
@@ -131,7 +136,8 @@ def _int(value: Any, default: int | None = None) -> int | None:
 # ── the JSON reports ──────────────────────────────────────────────
 def _json(text: str) -> Any:
     """The JSON document in a tool's output. Some print a line before it (npm, a banner), so the first
-    `[` or `{` that starts a line is where it is looked for when the whole text is not JSON."""
+    `[` or `{` that starts a line is where it is looked for when the whole text is not JSON — the first
+    few such lines only (`JSON_STARTS`), because each one is read to the end of the output."""
     text = text.strip()
     if not text:
         return None
@@ -139,7 +145,7 @@ def _json(text: str) -> Any:
         return json.loads(text)
     except ValueError:
         pass
-    for match in re.finditer(r"^[\[{]", text, re.M):
+    for match in itertools.islice(re.finditer(r"^[\[{]", text, re.M), JSON_STARTS):
         with contextlib.suppress(ValueError):
             return json.loads(text[match.start():])
     return None
@@ -523,11 +529,26 @@ def _tsconfig_references(text: str) -> list[str] | None:
     return refs[:MAX_REFERENCES] or None
 
 
-def _ref_config(folder: Path, ref: str) -> str | None:
+def _ref_config(folder: Path, ref: str, bound: Path | None = None) -> str | None:
+    """The config one reference names, as `-p` wants it — or None when there is none there, or when it
+    lies outside the machine root.
+
+    A reference is the repository's own words, and a repository is not trusted with where this server
+    reads: an absolute one would replace the folder entirely (`Path("/repo") / "/tmp/x"` is `/tmp/x`),
+    and one made of `..` would climb above it — either way tsc would be pointed at, and would print,
+    files `machine.inside` refuses to open. So it must resolve to somewhere inside the root the folder
+    is in, symlinks and all, before it becomes a command."""
+    if os.path.isabs(ref):
+        return None
     target = folder / ref
     if target.is_dir():
         target = target / "tsconfig.json"
-    return os.path.relpath(target, folder) if target.is_file() else None
+    if not target.is_file():
+        return None
+    home = Path(os.path.realpath(bound if bound is not None else folder))
+    if not Path(os.path.realpath(target)).is_relative_to(home):
+        return None
+    return os.path.relpath(target, folder)
 
 
 ESLINT_CONFIGS = ("eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", "eslint.config.ts",
@@ -556,7 +577,7 @@ def detect(folder: Path, bound: Path | None = None) -> tuple[list[Checker], list
                                           "install (or add typescript to the devDependencies)."))
         else:
             refs = _tsconfig_references(_text(tsconfig))
-            configs = [c for c in (_ref_config(folder, r) for r in refs or []) if c] if refs else []
+            configs = [c for c in (_ref_config(folder, r, bound) for r in refs or []) if c] if refs else []
             for config in configs or ["tsconfig.json"]:
                 found.append(Checker("tsc", f"tsc · {config}" if configs else "tsc",
                                      (tsc, "--noEmit", "--pretty", "false", "-p", config), "text",
@@ -755,6 +776,11 @@ class Check:
             tool.ms = int((time.monotonic() - started) * 1000)
             return
         self._proc = proc
+        if self._cancelled:
+            # cancel() may have run while this was being started: it killed the tool before this one,
+            # not this one, which did not exist yet. cancel() is not a coroutine, so it either ran
+            # before this line — and is seen here — or after it, and sees the process just assigned.
+            _kill(proc)
         out = bytearray()
         err: deque[str] = deque(maxlen=400)
         over = False
@@ -771,19 +797,38 @@ class Check:
                 out.extend(chunk)
 
         async def read_err() -> None:
+            # Read in chunks and cut the lines here, as stdout is read: `readline` raises on a line
+            # longer than the stream's own limit, and a tool that logs a minified source line or a
+            # one-line JSON trace must not end the check. Past the ceiling it keeps reading and keeps
+            # nothing, so a chatty tool never blocks on a full pipe.
             assert proc.stderr is not None
-            size = 0
-            while line := await proc.stderr.readline():
-                size += len(line)
-                if size <= OUTPUT_BYTES:
-                    err.append(line.decode("utf-8", "replace").rstrip())
+            size, rest = 0, b""
+            while chunk := await proc.stderr.read(65536):
+                size += len(chunk)
+                if size > OUTPUT_BYTES:
+                    rest = b""
+                    continue
+                *lines, rest = (rest + chunk).split(b"\n")
+                err.extend(line.decode("utf-8", "replace").rstrip() for line in lines)
+            if rest:
+                err.append(rest.decode("utf-8", "replace").rstrip())
 
         timed_out = False
+        unreadable: str | None = None
+        readers = [asyncio.ensure_future(job) for job in (read_out(), read_err(), proc.wait())]
         try:
-            await asyncio.wait_for(asyncio.gather(read_out(), read_err(), proc.wait()), timeout=TOOL_SECONDS)
+            await asyncio.wait_for(asyncio.gather(*readers), timeout=TOOL_SECONDS)
         except TimeoutError:
             timed_out = True
+        except Exception as broke:       # noqa: BLE001 — reading can fail; the tool must still be stopped
+            unreadable = str(broke)[:200] or broke.__class__.__name__
+        if timed_out or unreadable is not None:
+            # However the reading ended, the tool does not outlive it: nothing else would stop it — the
+            # check is over, and cancel() only reaches the tool a check thinks is running.
             _kill(proc)
+            for reader in readers:
+                reader.cancel()
+            await asyncio.gather(*readers, return_exceptions=True)
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(proc.wait(), timeout=5)
         tool.ms = int((time.monotonic() - started) * 1000)
@@ -794,12 +839,19 @@ class Check:
             tool.status, tool.note = "cancelled", "Stopped by you before it finished."
             return
         parser = PARSERS[tool.checker.parser]
-        # A text tool may write its problems to either stream (go vet uses stderr); a JSON tool to stdout.
-        found = parse_text(stdout + "\n" + errors, tool.checker.default) if parser is parse_text \
-            else parser(stdout)
-        placed, total = place(found, cwd=folder, base=folder, prefix=self.target.prefix,
-                              source=self.target.source or self.target.name, tool=tool.checker.tool,
-                              limit=max(0, MAX_PROBLEMS - len(self.problems)))
+
+        def read_problems() -> tuple[list[Problem], int]:
+            # A text tool may write its problems to either stream (go vet uses stderr); a JSON tool to stdout.
+            found = parse_text(stdout + "\n" + errors, tool.checker.default) if parser is parse_text \
+                else parser(stdout)
+            return place(found, cwd=folder, base=folder, prefix=self.target.prefix,
+                         source=self.target.source or self.target.name, tool=tool.checker.tool,
+                         limit=max(0, MAX_PROBLEMS - len(self.problems)))
+
+        # In a thread: reading as much as OUTPUT_BYTES of text, and asking the filesystem where every
+        # problem really is, are plain blocking work — on the event loop they would stop every other
+        # request, stream and heartbeat this API serves for as long as they take.
+        placed, total = await asyncio.to_thread(read_problems)
         self.problems.extend(placed)
         self.total += total
         tool.problems = total
@@ -808,6 +860,10 @@ class Check:
         if timed_out:
             tool.status = "timeout"
             tool.note = f"Stopped after {int(TOOL_SECONDS)} seconds; what it printed before then is read."
+        elif unreadable is not None:
+            tool.status = "error"
+            tool.note = (f"What {tool.checker.tool} printed could not be read to the end ({unreadable}); it was "
+                         "stopped, and the problems read before then are kept.")
         elif total:
             tool.status = "problems"
             if over:

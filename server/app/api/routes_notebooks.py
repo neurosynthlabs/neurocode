@@ -123,11 +123,15 @@ async def kernel_options(path: str = Query(min_length=1, max_length=MAX_PATH), p
                          open_session: AsyncSession = Depends(session)) -> Any:
     """What could run this notebook, found on this machine: `{language, choice, available, missing}`.
     `choice` is what starting a kernel would use (null when nothing can, and `missing` then says what to
-    install); `available` is every kernel that could be picked instead."""
+    install); `available` is every kernel that could be picked instead.
+
+    Looking only: this runs nothing, because opening a notebook is not asking for anything on this
+    machine to run. An interpreter found beside the notebook is therefore listed without its version,
+    and whether it has ipykernel is settled when the person starts a kernel with it."""
     async def work() -> dict[str, Any]:
         file = await nb.resolve(open_session, path, projectId)
         opened = await asyncio.to_thread(nb.read, file)
-        found = await asyncio.to_thread(nb.options, file, opened["language"], opened["kernelName"])
+        found = await asyncio.to_thread(nb.options, file, opened["language"], opened["kernelName"], probe=False)
         return nb.options_json(found)
     return await _answer(work())
 

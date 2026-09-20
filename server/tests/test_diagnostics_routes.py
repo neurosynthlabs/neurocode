@@ -15,6 +15,8 @@ import asyncio
 import json
 import os
 import sys
+import threading
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -40,6 +42,52 @@ FAKE_LSP = Path(__file__).parent / "fixtures" / "fake_lsp.py"
 TSC_SAYS = ("src/a.ts(1,7): error TS2322: Type 'string' is not assignable to type 'number'.\n"
             "src/a.ts(2,41): error TS2339: Property 'foo' does not exist on type 'string'.\n"
             "  The rest of a long message, indented under it.\n")
+
+#: A language server that answers until it is asked something, then prints a header no client can read
+#: while it goes on running — a garbled banner line, or one past the reader's limit, does the same. It
+#: notes the pids it was started with, and leaves by itself so a run that leaks one does not keep it.
+BREAKS_FRAMING = '''\
+import json, os, sys, time
+
+open(PIDS, "a").write(str(os.getpid()) + "\\n")
+
+
+def read():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        text = line.decode().strip()
+        if not text:
+            break
+        key, _, value = text.partition(":")
+        headers[key.lower()] = value.strip()
+    return json.loads(sys.stdin.buffer.read(int(headers.get("content-length", "0"))))
+
+
+def send(message):
+    body = json.dumps({"jsonrpc": "2.0", **message}).encode()
+    sys.stdout.buffer.write(b"Content-Length: %d\\r\\n\\r\\n" % len(body) + body)
+    sys.stdout.buffer.flush()
+
+
+while True:
+    message = read()
+    if message is None:
+        break
+    method = message.get("method")
+    if method == "initialize":
+        send({"id": message["id"], "result": {"capabilities": {"hoverProvider": True}}})
+    elif method == "textDocument/didOpen":
+        send({"method": "textDocument/publishDiagnostics",
+              "params": {"uri": message["params"]["textDocument"]["uri"], "diagnostics": []}})
+    elif method == "textDocument/hover":
+        sys.stdout.buffer.write(b"Content-Length: not-a-number\\r\\n\\r\\n")
+        sys.stdout.buffer.flush()
+        time.sleep(20)
+        break
+'''
 
 
 def tool(path: Path, body: str) -> Path:
@@ -204,6 +252,16 @@ def test_json_reports_read_into_problems():
     assert diagnostics.parse_ruff_json("not json at all") == []
 
 
+def test_megabytes_that_only_look_like_json_are_given_up_on_quickly():
+    """Every line that starts with `{` is a place the report might begin, and reading from each one
+    reads the rest of the output again. Trying them all is quadratic: at the 16 MB ceiling that is
+    minutes of a blocked reader for output that holds no report at all."""
+    junk = "{ not json\n" * 300_000                       # 3.3 MB, every line of it a candidate
+    started = time.monotonic()
+    assert diagnostics.parse_eslint_json(junk) == []
+    assert time.monotonic() - started < 2.0
+
+
 def test_detection_reads_the_project_and_names_what_is_missing(root: Path):
     shop = root / "shop"
     found, missing = diagnostics.detect(shop, root)
@@ -234,6 +292,27 @@ def test_detection_reads_the_project_and_names_what_is_missing(root: Path):
     assert {m.tool for m in diagnostics.detect(root / "rs", root)[1]} == {"cargo check", "eslint"}
     (root / "empty").mkdir()
     assert diagnostics.detect(root / "empty", root) == ([], [])
+
+
+def test_a_tsconfig_reference_out_of_the_roots_is_not_a_config_to_check(root: Path):
+    """A `references` path is the repository's own words, and a repository does not say where this
+    server reads: an absolute one replaces the folder, and `..` climbs above it, either way pointing
+    the compiler at files `machine.inside` refuses to open — and printing them back to the Workbench."""
+    shop = root / "shop"
+    away = root.parent / "outside"
+    (away / "tsconfig.json").write_text("{}")
+    (root / "sibling").mkdir()
+    (root / "sibling" / "tsconfig.json").write_text("{}")
+    (shop / "tsconfig.app.json").write_text("{}")
+    (shop / "tsconfig.json").write_text(json.dumps({"files": [], "references": [
+        {"path": str(away)}, {"path": "../../outside/tsconfig.json"}, {"path": "../sibling"},
+        {"path": "./tsconfig.app.json"}]}))
+
+    # What is left is what lies inside the machine root — a sibling package of a monorepo still counts.
+    configs = [c.argv[-1] for c in diagnostics.detect(shop, root)[0] if c.tool == "tsc"]
+    assert configs == ["../sibling/tsconfig.json", "tsconfig.app.json"]
+    # With the folder itself as the root, nothing above it is a config any more.
+    assert [c.argv[-1] for c in diagnostics.detect(shop, shop)[0] if c.tool == "tsc"] == ["tsconfig.app.json"]
 
 
 # ── checks over HTTP ──────────────────────────────────────────────
@@ -344,6 +423,90 @@ async def test_a_tool_that_fails_without_problems_times_out_or_is_cancelled_says
     stopped = await client.post(f"/diagnostics/checks/{started.json()['id']}/cancel")
     assert stopped.status_code == 200
     assert stopped.json()["status"] == "cancelled" and stopped.json()["tools"][0]["status"] == "cancelled"
+
+
+async def test_a_very_long_line_on_stderr_is_read_and_never_leaves_the_tool_running(
+        client: AsyncClient, root: Path, monkeypatch: pytest.MonkeyPatch):
+    """A line longer than a stream reads at once used to raise where nothing caught it: the check read
+    "failed", the person was shown asyncio's words instead of a reason, and the tool itself was left
+    running with no time limit and no way to stop it. A tool may print whatever it likes."""
+    odd = root / "odd"
+    (odd / "src").mkdir(parents=True)
+    (odd / "tsconfig.json").write_text("{}")
+    tool(odd / "node_modules" / ".bin" / "tsc",
+         f"#!{sys.executable}\nimport sys\n"
+         "sys.stderr.write('x' * 100000 + '\\n')\n"
+         "sys.stdout.write('src/a.ts(1,7): error TS2322: broken\\n')\n"
+         "sys.exit(2)\n")
+    done = await finished(client, (await client.post("/diagnostics/checks",
+                                                     json={"folder": str(odd)})).json()["id"])
+    assert done["status"] == "done"
+    assert [(t["status"], t["problems"]) for t in done["tools"]] == [("problems", 1)]
+    assert done["problems"][0]["file"] == "src/a.ts"
+
+    # And one that goes on printing after such a line is stopped at the time limit, like any other.
+    tool(odd / "node_modules" / ".bin" / "tsc",
+         f"#!{sys.executable}\nimport os, sys, time\n"
+         "open('.pid', 'w').write(str(os.getpid()))\n"
+         "sys.stderr.write('x' * 100000 + '\\n')\n"
+         "time.sleep(20)\n")
+    monkeypatch.setattr(diagnostics, "TOOL_SECONDS", 0.6)
+    done = await finished(client, (await client.post("/diagnostics/checks",
+                                                     json={"folder": str(odd)})).json()["id"])
+    assert done["tools"][0]["status"] == "timeout"
+    with pytest.raises(ProcessLookupError):
+        os.kill(int((odd / ".pid").read_text()), 0)
+
+
+async def test_reading_what_a_tool_printed_does_not_stop_the_rest_of_the_api(
+        client: AsyncClient, root: Path, monkeypatch: pytest.MonkeyPatch):
+    """Parsing as much as 16 MB of output, and asking the filesystem where each problem really is, are
+    plain blocking work: on the event loop they hold up every other request for as long as they take."""
+    places: list[str] = []
+    placing = diagnostics.place
+
+    def watched(*args: Any, **words: Any) -> Any:
+        places.append(threading.current_thread().name)
+        return placing(*args, **words)
+
+    monkeypatch.setattr(diagnostics, "place", watched)
+    done = await finished(client, (await client.post("/diagnostics/checks",
+                                                     json={"folder": str(root / "shop")})).json()["id"])
+    assert done["status"] == "done" and done["total"] == 4
+    assert places and threading.main_thread().name not in places
+
+
+async def test_a_check_cancelled_while_a_tool_is_starting_still_stops_it(
+        root: Path, monkeypatch: pytest.MonkeyPatch):
+    """cancel() kills the process the check holds, and it holds the new one only once the spawn has
+    come back. A cancel landing in that window used to kill the tool before it — long gone — and leave
+    the one just started running to its own time limit, while the check read "cancelled"."""
+    odd = root / "odd"
+    odd.mkdir()
+    sleeper = tool(odd / "sleeper", "#!/bin/sh\nexec sleep 20\n")
+    spawned: list[Any] = []
+    running: list[diagnostics.Check] = []
+    spawn = asyncio.create_subprocess_exec
+
+    async def cancel_while_starting(*argv: Any, **words: Any) -> Any:
+        proc = await spawn(*argv, **words)
+        spawned.append(proc)
+        running[0].cancel()                    # the child is here; the check does not hold it yet
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", cancel_while_starting)
+    held = diagnostics.Checks()
+    check = held.start(owner="someone", target=diagnostics.Target(kind="folder", folder=odd, name="odd"),
+                       checkers=[diagnostics.Checker("sleeper", "sleeper", (str(sleeper),), "text", "a test")],
+                       missing=[])
+    running.append(check)
+    try:
+        ended, _ = await asyncio.wait({check.task}, timeout=5)
+        assert ended, "the check never ended: the tool it had just started was left running"
+        assert check.status == "cancelled" and check.tools[0].status == "cancelled"
+        assert spawned[0].returncode is not None              # killed, not left to run on its own
+    finally:
+        await held.close_all()
 
 
 async def test_checks_are_refused_outside_the_roots_without_checkers_and_without_the_permission(
@@ -486,3 +649,48 @@ async def test_language_servers_that_are_missing_or_do_not_apply_say_so(
     assert failed.status_code == 502 and "broken-lsp did not start" in failed.json()["detail"]
     status = await client.get("/lsp/status", params={"path": str(pyproject / "pkg" / "main.py")})
     assert status.json()["state"] == "failed" and "no licence found" in status.json()["message"]
+
+
+async def test_a_server_that_stops_making_sense_is_stopped_not_only_forgotten(
+        client: AsyncClient, root: Path, pyproject: Path, monkeypatch: pytest.MonkeyPatch):
+    """The reader gives up on a server whose output it cannot frame — a bad Content-Length, a body
+    that is not JSON, a line past its limit — while that server is still running. Dropping it from
+    the registry without stopping it puts it out of reach of the reaper and of closing the API, and
+    the next hover starts another: one leaked workspace index per question asked."""
+    pids = root / ".lsp-pids"
+    breaks = tool(root / "framing-lsp", f"#!{sys.executable}\nPIDS = {str(pids)!r}\n{BREAKS_FRAMING}")
+    specs = [lsp.Spec(s.id, s.language, s.extensions, ((str(breaks),),), s.markers, s.install)
+             if s.id == "python" else s for s in lsp.SPECS]
+    monkeypatch.setattr(lsp, "SPECS", specs)
+    main = pyproject / "pkg" / "main.py"
+
+    first = await client.post("/lsp/hover", json={"path": str(main), "line": 6, "col": 17})
+    assert first.status_code == 409 and "framing-lsp" in first.json()["detail"]
+    second = await client.post("/lsp/hover", json={"path": str(main), "line": 6, "col": 17})
+    assert second.status_code == 409
+
+    started = [int(line) for line in pids.read_text().split()]
+    assert len(started) == 2 and started[0] != started[1]     # the question was asked of a fresh server
+    with pytest.raises(ProcessLookupError):
+        os.kill(started[0], 0)                                # and the first one is gone, not left behind
+
+
+async def test_a_very_long_line_on_stderr_does_not_cost_a_server_its_drain(
+        client: AsyncClient, root: Path, pyproject: Path, monkeypatch: pytest.MonkeyPatch):
+    """Nothing reads a server's stderr once the drain has died of one long line — a panic dump, a
+    one-line trace — so the server fills the pipe, blocks in write() and answers nothing at all,
+    while it still counts as ready. One line it logged must not cost every answer after it."""
+    noisy = tool(root / "noisy-lsp",
+                 f"#!{sys.executable}\nimport sys\n"
+                 "sys.stderr.write('z' * 100000 + '\\n')\n"                     # past the reader's limit
+                 "for _ in range(8000):\n    sys.stderr.write('z' * 99 + '\\n')\n"   # past any pipe's room
+                 f"sys.path.insert(0, {str(FAKE_LSP.parent)!r})\n"
+                 "import fake_lsp\nfake_lsp.main()\n")
+    specs = [lsp.Spec(s.id, s.language, s.extensions, ((str(noisy),),), s.markers, s.install)
+             if s.id == "python" else s for s in lsp.SPECS]
+    monkeypatch.setattr(lsp, "SPECS", specs)
+    monkeypatch.setattr(lsp, "START_SECONDS", 5.0)
+
+    got = await client.post("/lsp/hover", json={"path": str(pyproject / "pkg" / "main.py"), "line": 6, "col": 17})
+    assert got.status_code == 200, got.text
+    assert got.json()["markdown"].startswith("**helper**")
