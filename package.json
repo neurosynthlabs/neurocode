@@ -12,8 +12,9 @@
     "dev:stop": "./scripts/dev.sh stop",
     "dev:restart": "./scripts/dev.sh restart",
     "dev:status": "./scripts/dev.sh status",
-    "deploy": "./scripts/deploy.sh",
-    "deploy:preview": "./scripts/deploy.sh -p",
+    "deploy": "deploy/push.sh",
+    "vercel:deploy": "./scripts/deploy.sh",
+    "vercel:preview": "./scripts/deploy.sh -p",
     "smoke": "npm run build && node scripts/smoke.mjs",
     "audit:themes": "node scripts/theme-audit.mjs",
     "lint:layout": "npm run build && node scripts/layout-lint.mjs",
@@ -24,7 +25,10 @@
     "desktop:start": "node desktop/scripts/prepare.mjs && electron desktop/app",
     "desktop:build": "npm run build && node desktop/scripts/build.mjs",
     "desktop:test": "node desktop/scripts/prepare.mjs && node --test desktop/test/",
-    "desktop:smoke": "node desktop/scripts/smoke.mjs"
+    "desktop:smoke": "node desktop/scripts/smoke.mjs",
+    "deploy:status": "deploy/status.sh",
+    "deploy:logs": "deploy/logs.sh",
+    "deploy:backup": "deploy/backup.sh"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

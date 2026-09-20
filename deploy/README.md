@@ -40,16 +40,37 @@ If you use a subdomain, put it in `DOMAIN` in the server's `.env` after the firs
 ## 3. From your Mac
 
 ```bash
-# once: Docker, the host firewall, /opt/neurocode
+# once: Docker, the firewall, log rotation, security updates, a nightly backup, /opt/neurocode
 ssh -i ~/.ssh/neurocode_oci ubuntu@<ip> 'bash -s' < deploy/setup-vm.sh
 
-# every release: build, copy, (re)start. The first run writes the server's .env with random secrets and prints
-# the setup token.
-deploy/push.sh ubuntu@<ip>
+# the first release — the name it is served under, and the server it goes to, are given once
+NEUROCODE_DOMAIN=eurex.dev deploy/push.sh ubuntu@<ip>
+
+# every release after that
+npm run deploy
 ```
 
-Then open `https://eurex.dev`. The setup wizard asks for the **setup token** once, before it makes the first
-Owner — so nobody who finds the address first can claim the workspace. Add a model key in Admin → AI providers.
+`push.sh` builds the web app here, copies the tree, builds the API image on the server, starts it, waits for
+the API's own health check, and then asks `https://<domain>/api/health` from your machine. A release that
+never becomes healthy is put back: the image that was running is retagged and started again, and the deploy
+fails with the log that explains why. It takes a lock on the server, so two releases cannot interleave.
+
+With no domain of your own yet, use the machine's own name — `NEUROCODE_DOMAIN=<ip>.sslip.io` — and move it
+later with `deploy/domain.sh eurex.dev`. That is real HTTPS either way; Caddy gets the certificate itself.
+
+The rest of the day-to-day:
+
+| Command | What it does |
+|---|---|
+| `npm run deploy` | a release (the server is remembered in `deploy/.host`) |
+| `npm run deploy:status` | containers and health, what the API says, the certificate, disk and memory, last backups |
+| `npm run deploy:logs` (`-- web`) | follow a service's log |
+| `npm run deploy:backup` | take a dump now and bring it to `deploy/backups/` on this Mac |
+| `deploy/domain.sh <name>` | serve it under another name, once that name points here |
+
+**On every push to main:** `.github/workflows/deploy.yml` releases the commit that `verify` just passed, using
+the same `push.sh`. It needs two repository secrets — `DEPLOY_HOST` (`ubuntu@<ip>`) and `DEPLOY_SSH_KEY` (the
+private half of the deploy key) — and does nothing until they are set.
 
 ## What runs where
 
@@ -65,8 +86,10 @@ Owner — so nobody who finds the address first can claim the workspace. Add a m
   The web app is told, on the session, that this server opens nothing — so the Workbench, the folder pickers
   and Blueprint scaffolding say why instead of offering a folder that cannot be opened. Everything else —
   plans, runs on cloned repositories, sessions, memory, reviews, routines — works the same as locally.
-- **Backups:** Admin → Database → Back up now writes a `pg_dump` into the `data` volume. Copy one off the server
-  now and then: `ssh -i ~/.ssh/neurocode_oci ubuntu@<ip> 'docker compose -f /opt/neurocode/deploy/docker-compose.yml exec -T api ls /data/backups'`.
+- **Backups:** the server takes one every night at 03:00 UTC (a systemd timer from `setup-vm.sh`) and keeps two
+  weeks of them in the `data` volume; Admin → Database → Back up now writes one on demand. `npm run deploy:backup`
+  takes a fresh dump and copies it to this Mac, because a backup that only exists on the server it came from is
+  not a backup. The restore command is printed with it.
 - **Logs:** `docker compose logs -f api` (or `web`, `db`) in `/opt/neurocode/deploy`.
 
 ## Closing the old Oracle account

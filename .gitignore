@@ -42,6 +42,8 @@ server/.worktrees/
 
 # A server's secrets, written by deploy/push.sh on the server itself
 deploy/.env
+deploy/.host
+deploy/backups/
 
 # Working plans for the feature waves (not shipped)
 .plan/
