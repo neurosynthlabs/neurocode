@@ -72,6 +72,18 @@ The rest of the day-to-day:
 the same `push.sh`. It needs two repository secrets — `DEPLOY_HOST` (`ubuntu@<ip>`) and `DEPLOY_SSH_KEY` (the
 private half of the deploy key) — and does nothing until they are set.
 
+## When the region has no Ampere capacity
+
+Free Ampere machines are handed out as others give them back, so "Out of host capacity" is a queue, not a
+refusal — and Always Free machines exist only in your home region, which cannot be changed. `oci-create.sh`
+is built for that: it asks for the whole free allowance, then smaller sizes, once a minute, and takes the
+first one it gets (`NEUROCODE_CAPACITY_TRIES=600` waits ten hours). Leave it running; a smaller machine can
+be given the rest later from Compute → the instance → Edit → shape, without rebuilding it.
+
+What not to do: the always-free AMD shape (`VM.Standard.E2.1.Micro`, 1 GB of memory) cannot hold Postgres,
+the API and a build at once, and a trial credit machine stops when the trial ends. Waiting for Ampere is the
+honest answer.
+
 ## What runs where
 
 | Piece | Where | Kept in |
