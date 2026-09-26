@@ -1,0 +1,65 @@
+name: deploy
+
+# A release goes out when main is green, and only then: this waits for `verify` to finish on that commit and
+# refuses to run if it failed. The deploy itself is `deploy/push.sh` — the same script a person runs by hand,
+# so there is one way to release and it is the one that is tested every time.
+#
+# Two secrets make it work (Settings → Secrets and variables → Actions):
+#   DEPLOY_HOST     ubuntu@<the server's IP or name>
+#   DEPLOY_SSH_KEY  the private half of the key the server knows (~/.ssh/neurocode_oci here)
+# Without them the job says so and stops, rather than failing halfway through a release.
+on:
+  workflow_run:
+    workflows: [verify]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+# One release at a time, and never cancelled halfway: a half-copied tree on the server is worse than a wait.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The commit that passed, not whatever main is by the time this starts.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+
+      - name: The key to the server
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          [ -n "$KEY" ] && [ -n "$HOST" ] || {
+            echo "::error::DEPLOY_HOST and DEPLOY_SSH_KEY are not set, so there is nowhere to deploy."
+            exit 1
+          }
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/neurocode_oci
+          chmod 600 ~/.ssh/neurocode_oci
+
+      - name: Release
+        env:
+          NEUROCODE_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: deploy/push.sh
+
+      - name: What is running now
+        if: always()
+        env:
+          NEUROCODE_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: deploy/status.sh

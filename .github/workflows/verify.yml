@@ -1,0 +1,83 @@
+name: verify
+
+# Every check the repo has, on every push to main and on every pull request. The same commands run
+# locally (docs/DESIGN_SYSTEM.md → "Verify before you finish"); CI makes them impossible to skip.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Everything the app holds lives in Postgres, and so does everything the checks look at: the API tests,
+    # and the smoke, layout and end-to-end runs, which each make and migrate a database of their own.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # pg_dump must match the server's major version for the backup the end-to-end run takes.
+      NEUROCODE_PG_BIN_DIR: /usr/lib/postgresql/16/bin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: server/uv.lock
+
+      - name: Install
+        run: |
+          npm ci
+          npx playwright-core install --with-deps --only-shell chromium
+          uv sync --project server --locked
+
+      - name: Databases
+        run: |
+          psql -h 127.0.0.1 -U postgres -c "CREATE ROLE neurocode LOGIN PASSWORD 'neurocode'"
+          uv run --project server python scripts/bootstrap-db.py
+
+      - name: Typecheck and build
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      # A deploy script's mistakes are found the night you need it most, not in CI — unless CI reads it.
+      # shellcheck is on every GitHub runner, and it knows the shell far better than `bash -n` does.
+      - name: Shell scripts
+        run: shellcheck -x deploy/*.sh scripts/*.sh
+
+      - name: Theme contrast audit
+        run: npm run audit:themes
+
+      - name: Smoke (every route in two themes, plus key interactions)
+        run: node scripts/smoke.mjs
+
+      - name: Layout (nothing spills on a phone or a tablet)
+        run: node scripts/layout-lint.mjs
+
+      - name: API tests
+        working-directory: server
+        run: uv run pytest -q
+
+      - name: End to end (API + web app + browser)
+        run: node scripts/e2e.mjs
