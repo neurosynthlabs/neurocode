@@ -8,6 +8,11 @@
   },
   "redirects": [
     {
+      "source": "/",
+      "destination": "https://141.148.215.167.sslip.io/",
+      "permanent": false
+    },
+    {
       "source": "/:path*",
       "destination": "https://141.148.215.167.sslip.io/:path*",
       "permanent": false
