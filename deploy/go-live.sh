@@ -17,7 +17,7 @@ IP=$(SUPPRESS_LABEL_WARNING=True command oci compute instance list \
        --display-name "${NEUROCODE_VM_NAME:-neurocode}" --lifecycle-state RUNNING --query 'data[0].id' --raw-output \
      | xargs -I{} env SUPPRESS_LABEL_WARNING=True oci compute instance list-vnics --instance-id {} \
        --query 'data[0]."public-ip"' --raw-output)
-[ -n "$IP" ] && [ "$IP" != null ] || die "The machine was made but has no public address yet — run this again."
+if [ -z "$IP" ] || [ "$IP" = null ]; then die "The machine was made but has no public address yet — run this again."; fi
 resolve_host "ubuntu@$IP" >/dev/null
 
 bold "2/4 · Waiting for it to answer"

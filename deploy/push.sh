@@ -41,14 +41,30 @@ if [ ! -f .env ]; then
       -e "s|^NEUROCODE_DB_PASSWORD=.*|NEUROCODE_DB_PASSWORD=$(rand)|" \
       -e "s|^NEUROCODE_SETUP_TOKEN=.*|NEUROCODE_SETUP_TOKEN=$(rand)|" \
       ${DOMAIN_WANTED:+-e "s|^DOMAIN=.*|DOMAIN=$DOMAIN_WANTED|"} .env.template > .env
-  # A small server has to share its memory with the API and the build; Postgres is told so once, here.
-  if [ "$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)" -lt 2500 ]; then
-    printf 'PG_SHARED_BUFFERS=96MB\nPG_EFFECTIVE_CACHE_SIZE=384MB\nPG_MAX_CONNECTIONS=25\n' >> .env
-    echo "A small machine: Postgres given 96 MB of shared buffers."
-  fi
   chmod 600 .env
   echo "First run: wrote .env for $(grep '^DOMAIN=' .env | cut -d= -f2)."
   echo "SETUP TOKEN (asked once, when you create the first Owner): $(grep '^NEUROCODE_SETUP_TOKEN=' .env | cut -d= -f2)"
+fi
+
+# Postgres is sized to this machine on every release, so resizing the VM is picked up by the next one. It gets about a
+# sixth of the memory as shared buffers (the API, its builds and the kernel's page cache need the rest) and is told
+# half of it is cache. The block between the markers is rewritten each time; PG_TUNE=manual in .env keeps your own.
+if ! grep -q '^PG_TUNE=manual' .env; then
+  mem=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)
+  clamp() { local v=$1; [ "$v" -lt "$2" ] && v=$2; [ "$v" -gt "$3" ] && v=$3; echo "$v"; }
+  share=6 conns=60; [ "$mem" -lt 2500 ] && share=10 conns=25
+  sed -i -e '/^# >>> postgres sizing/,/^# <<< postgres sizing/d' \
+         -e '/^PG_\(SHARED_BUFFERS\|EFFECTIVE_CACHE_SIZE\|MAX_CONNECTIONS\|WORK_MEM\|MAINTENANCE_WORK_MEM\)=/d' .env
+  {
+    echo "# >>> postgres sizing (push.sh, for ${mem} MB)"
+    echo "PG_SHARED_BUFFERS=$(clamp $((mem / share)) 96 8192)MB"
+    echo "PG_EFFECTIVE_CACHE_SIZE=$(clamp $((mem / 2)) 384 65536)MB"
+    echo "PG_MAX_CONNECTIONS=$conns"
+    echo "PG_WORK_MEM=$(clamp $((mem / 1500)) 4 32)MB"
+    echo "PG_MAINTENANCE_WORK_MEM=$(clamp $((mem / 32)) 64 1024)MB"
+    echo "# <<< postgres sizing"
+  } >> .env
+  echo "Postgres sized for ${mem} MB: $(grep '^PG_SHARED_BUFFERS=' .env | cut -d= -f2) shared buffers."
 fi
 
 docker image inspect neurocode-api:latest >/dev/null 2>&1 && docker tag neurocode-api:latest neurocode-api:previous

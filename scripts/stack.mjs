@@ -11,6 +11,7 @@
 //   await stack.stop();
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,7 +51,20 @@ function claudeHome(dir) {
   return dir;
 }
 
+/** A port someone else holds would make a check test *their* app: the API or vite fails to bind, and
+ * the wait below finds the other process answering. So a taken port stops the check before it starts. */
+async function mustBeFree(port, what) {
+  await new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once('error', (e) => reject(e.code === 'EADDRINUSE'
+      ? new Error(`port ${port} (${what}) is already in use — stop whatever holds it, or pick another port`) : e));
+    probe.listen(port, '127.0.0.1', () => probe.close(resolve));
+  });
+}
+
 export async function startStack({ name, apiPort, webPort, web = 'dev', fixture = false, owner = false }) {
+  await mustBeFree(apiPort, 'API');
+  await mustBeFree(webPort, 'web');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `nc-${name}-`));
   const db = `neurocode_${name}`;
   const url = `postgresql+asyncpg://neurocode:neurocode@127.0.0.1:5432/${db}`;

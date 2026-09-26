@@ -9,20 +9,24 @@ services:
   db:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
+    # Parallel queries share work through /dev/shm, which Docker caps at 64 MB unless told otherwise.
+    shm_size: 1gb
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       NEUROCODE_DB_PASSWORD: ${NEUROCODE_DB_PASSWORD:?set NEUROCODE_DB_PASSWORD in .env}
-    # Postgres assumes a machine of its own. These are the knobs that decide whether it fits beside the API on a
-    # small server; `push.sh` writes smaller ones into .env on a machine with little memory, and the defaults
-    # here suit an ordinary one.
+    # Postgres assumes a machine of its own. These are the knobs that decide whether it fits beside the API;
+    # `push.sh` sizes them from the machine's memory on every release, and the defaults here suit a small one.
+    # The data sits on network SSD block storage, so a random read costs about what a sequential one does.
     command: >
       postgres
       -c shared_buffers=${PG_SHARED_BUFFERS:-256MB}
       -c effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-1GB}
       -c max_connections=${PG_MAX_CONNECTIONS:-40}
-      -c work_mem=4MB
-      -c maintenance_work_mem=64MB
+      -c work_mem=${PG_WORK_MEM:-4MB}
+      -c maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-64MB}
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d:ro

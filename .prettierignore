@@ -1,0 +1,3 @@
+# This repository is not formatted by prettier (house style: single quotes, ~120 columns, hand-packed;
+# oxlint checks it). A global editor hook that runs `prettier --write` must leave it alone.
+**/*

@@ -61,6 +61,14 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Unit tests
+        run: npm run test:unit
+
+      # The UI says what it is in a few words; an explanation lives one click deeper. A sentence over
+      # twenty words on screen is a paragraph that belongs behind an (i) or a "More".
+      - name: UI copy
+        run: node scripts/copy-measure.mjs --max 20
+
       # A deploy script's mistakes are found the night you need it most, not in CI — unless CI reads it.
       # shellcheck is on every GitHub runner, and it knows the shell far better than `bash -n` does.
       - name: Shell scripts
