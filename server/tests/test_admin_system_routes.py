@@ -169,6 +169,8 @@ async def test_a_backup_with_no_pg_dump_is_refused_in_words(client: AsyncClient,
 
     monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(maintenance, "PG_BIN_GLOBS", ())
+    found = maintenance.find_pg_dump                          # and no folder named in settings: CI names one
+    monkeypatch.setattr(maintenance, "find_pg_dump", lambda major, _configured=None: found(major, None))
     refused = await client.post("/admin/database/backup")
     assert refused.status_code == 409 and "pg_dump" in refused.json()["detail"]
 

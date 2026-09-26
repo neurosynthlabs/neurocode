@@ -23,16 +23,24 @@ to "no fence" would be the one thing this product never does.
 `unshare` on a Linux without bubblewrap confines only the network, and says only that. `confines`
 carries the two answers separately so no screen has to guess.
 
+**It proves a fence before trusting it.** `bwrap` or `unshare` on PATH is not the kernel allowing them:
+inside a Docker container, and on Ubuntu 24.04 for any ordinary account, the namespaces both need are
+refused. Trusted on sight, every test, check, hook and custom tool on the live server failed with
+"unshare: unshare failed: Operation not permitted". So each is run once, on `true`, before it is used.
+
 **It wraps, it does not spawn.** `wrap()` returns an argv, and whoever was already starting the
 process starts this one instead — so the sandbox cannot change how output is read, how a process is
 killed, or how long it is given.
 """
 from __future__ import annotations
 
+import functools
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -174,13 +182,30 @@ def _sbpl(path: str) -> str:
     return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def detect(*, platform: str | None = None, which=shutil.which,
-           exists=os.path.exists) -> tuple[str, str]:
+@functools.cache
+def allowed(kind: str) -> bool:
+    """Whether this kernel lets the fence up: the exact argv a command would get, run once on `true`.
+    Remembered for the life of the process — what a kernel allows does not change under a running API."""
+    probe = Sandbox(kind, (), False).wrap(["true"])
+    try:
+        return subprocess.run(probe, capture_output=True, timeout=10, check=False).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+#: Why a Linux fence that is installed is still not up, said once for both.
+REFUSED = ("this machine refuses the Linux namespaces a sandbox needs — they are off inside a container, and "
+           "Ubuntu 24.04 keeps them from ordinary accounts. Commands run with the same rights as the account "
+           "running NeuroCode.")
+
+
+def detect(*, platform: str | None = None, which=shutil.which, exists=os.path.exists,
+           works: Callable[[str], bool] = allowed) -> tuple[str, str]:
     """What this machine has, and — when it has nothing — why, in words a person can act on.
 
     Injectable rather than reading the world directly, so the Linux answers can be tested on a Mac
-    and the Mac answer on a Linux box. Nothing here runs a command to find out: `sandbox-exec` is
-    part of macOS and `bwrap`/`unshare` are on PATH or they are not.
+    and the Mac answer on a Linux box. `sandbox-exec` is part of macOS and is taken as it is; a Linux
+    fence is tried once before it is trusted (`allowed`).
     """
     system = platform or sys.platform
     if system == "darwin":
@@ -189,11 +214,16 @@ def detect(*, platform: str | None = None, which=shutil.which,
         return NONE, (f"This Mac has no {SANDBOX_EXEC}, which every macOS ships with. Commands run "
                       "with the same rights as the account running NeuroCode.")
     if system.startswith("linux"):
-        if which("bwrap"):
+        installed = [x for x, program in ((BUBBLEWRAP, "bwrap"), (UNSHARE, "unshare")) if which(program)]
+        if BUBBLEWRAP in installed and works(BUBBLEWRAP):
             return BUBBLEWRAP, ""
-        if which("unshare"):
+        if UNSHARE in installed and works(UNSHARE):
             return UNSHARE, ("bubblewrap is not installed, so only the network is confined. "
-                             "Install bubblewrap (`apt install bubblewrap`) to confine writes too.")
+                             "Install bubblewrap (`apt install bubblewrap`) to confine writes too."
+                             if BUBBLEWRAP not in installed else
+                             "bubblewrap is refused here, so only the network is confined.")
+        if installed:
+            return NONE, f"{NAMES[installed[0]].capitalize()} is installed, but {REFUSED}"
         return NONE, ("Neither bubblewrap nor unshare is on this machine. Install bubblewrap "
                       "(`apt install bubblewrap`) to confine what a command may write and reach.")
     return NONE, (f"NeuroCode has no sandbox for {system}. Commands run with the same rights as the "

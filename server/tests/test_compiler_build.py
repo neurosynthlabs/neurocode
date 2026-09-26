@@ -25,7 +25,7 @@ def test_a_new_project_is_one_build_by_one_owner_without_the_runtimes_own_steps(
                 ("Perform manual UI/UX review", roster.REVIEWER, "Check every page by hand.")])
     built_as_one(out, Context(project={"name": "site", "files": 0, "stack": []}, facts=[]))   # README only
     assert [s.label for s in out.steps] == ["Initialize project scaffold", "Create content pages", "Write UI tests"]
-    assert {s.agent for s in out.steps} == {"Architect"}
+    assert {s.agent for s in out.steps} == {"Frontend Engineer"}      # the engineer builds it, not the Architect
     assert "placeholder" not in out.steps[1].detail and "real content" in out.steps[1].detail
 
 
@@ -44,3 +44,28 @@ def test_a_plan_that_is_only_the_runtimes_job_is_left_as_it_was_and_an_unmeasure
     unmeasured = plan([("Map it", "Architect", "a"), ("Review", roster.REVIEWER, "b")])
     built_as_one(unmeasured, Context(project={"name": "erp", "files": 0, "stack": ["React 18"]}, facts=[]))
     assert [(s.label, s.agent) for s in unmeasured.steps] == [("Map it", "Architect"), ("Review", roster.REVIEWER)]
+
+
+def test_a_persons_own_work_is_not_given_to_a_code_agent():
+    out = plan([("Gather core use case details", "Researcher", "a"),
+                ("Set up project skeleton", "Backend Engineer", "b"), ("Build minimal UI", "Frontend Engineer", "c"),
+                ("Deploy prototype to test environment", "DevOps Engineer", "d"),
+                ("Recruit pilot users", "Researcher", "e"), ("Collect user feedback", roster.TESTER, "f"),
+                ("Iterate on feedback", "Frontend Engineer", "g")])
+    built_as_one(out, Context(project={"name": "rr", "files": 5}, facts=[]))
+    assert [s.label for s in out.steps] == ["Set up project skeleton", "Build minimal UI", "Iterate on feedback"]
+    assert {s.agent for s in out.steps} == {"Backend Engineer"}
+
+
+def test_a_plan_that_named_only_thinkers_is_still_built_by_an_engineer():
+    out = plan([("Document core use case", "Architect", "a"), ("Initialize project scaffold", "Architect", "b"),
+                ("Write prototype tests", roster.TESTER, "c")])
+    built_as_one(out, Context(project={"name": "rr", "files": 0, "stack": []}, facts=[]))
+    assert {s.agent for s in out.steps} == {"Frontend Engineer"}
+
+
+def test_a_projects_own_agent_builds_before_the_built_in_engineers():
+    out = plan([("Initialize project scaffold", "Frontend Engineer", "a"), ("Add the booking API", "Laravel Dev", "b")])
+    own = [{"name": "Laravel Dev"}]
+    built_as_one(out, Context(project={"name": "rr", "files": 0, "stack": []}, facts=[], agents=own))
+    assert {s.agent for s in out.steps} == {"Laravel Dev"}

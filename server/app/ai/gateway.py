@@ -82,7 +82,12 @@ class Result(Generic[T]):
 
 
 class NoModel(RuntimeError):
-    """Nothing can answer: no lane has a key, and no local model is pulled."""
+    """Nothing can answer: no lane has a key, and no local model is pulled — or, `busy`, every lane that has one
+    has spent its allowance or is resting for now, which is said as that and not as a missing key."""
+
+    def __init__(self, message: str, *, busy: bool = False) -> None:
+        super().__init__(message)
+        self.busy = busy
 
 
 #: Who is calling, on every request to a provider. Python's own "Python-urllib/3.x" is refused outright by
@@ -776,6 +781,17 @@ class Gateway:
         soonest = min(waits, default=None)
         return soonest + 0.5 if soonest is not None and soonest <= WAIT_FOR_REST else None
 
+    def none_open(self) -> NoModel:
+        """Why no lane can take a call. "No model is configured" only when that is true: a key that is set
+        and has spent its minute is busy, and saying otherwise sent a person to add a key they already had."""
+        busy = [f"{x.label} — {why}" for x in self.lanes()
+                if self._allowed(x) and x.api != "ollama" and (not x.needs_key or lanes.key_of(x, self.secrets))
+                and (why := self.why_not(x)) and why not in ("switched off", "no API key")]
+        if busy:
+            return NoModel("Every model is busy: " + "; ".join(busy) + ". Try again in a minute, or add a second "
+                           "free key.", busy=True)
+        return NoModel("No model is configured. Add a free key in Models → Keys, or pull an Ollama model.")
+
     def ollama_look(self) -> str | None:
         """None when the local model is ready to answer, else why it is not. Remembered for 30 seconds.
 
@@ -1026,7 +1042,7 @@ class Gateway:
             waited += wake
             chain = self.chain(role=role, lane=lane, avoid=avoid)
         if not chain:
-            raise NoModel("No model is configured. Add a free key in Models → Keys, or pull an Ollama model.")
+            raise self.none_open()
         # Nothing is cut that need not be: a lane that can take the whole request goes before one that could
         # only take it cut down to its minute. The small lane still answers when it is the only one open.
         need, level = _size(messages) + FIT_MARGIN, self.thinking(feature)

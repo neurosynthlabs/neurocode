@@ -49,7 +49,7 @@ from ..repositories import ActivityRepository, NotFound, ProjectRepository
 from ..repositories.base import bounded
 from ..repositories.knowledge import MemoryRepository
 from . import machine
-from .errors import NO_MODEL, Refused, needs_a_model
+from .errors import Refused, needs_a_model, no_model
 from .identity import Person
 from .knowledge import MemoryService, NewFact
 from .onboarding import SourceService, SourceSpec
@@ -1545,7 +1545,7 @@ class BlueprintService:
         # The plan needs a model. Asked before the folder is touched, so "no model" leaves it as it was
         # rather than made and taken back; a provider that fails later is undone below.
         if not await asyncio.to_thread(lambda: gw.chain()):
-            raise Refused(NO_MODEL, status=409)
+            raise Refused(no_model(await asyncio.to_thread(gw.none_open)), status=409)
 
         single = len(repos) == 1
         roots = [real] if single else [real / r["label"] for r in repos]

@@ -688,3 +688,15 @@ def test_a_lane_whose_minute_is_used_up_is_waited_for_rather_than_skipped(
     provider.replies.append((200, completion('{"ok": true}')))
     assert gw.ask(ASK, extract_json, feature="compile").data == {"ok": True}
     assert slept and 25 < slept[0] < 35
+
+
+def test_a_key_that_is_set_but_busy_is_not_called_missing(
+        provider: Provider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Seven agents on one free Groq key spent its minute at once, and every one heard "No model is configured"
+    — which sent the owner to add a key they already had. Busy is said as busy, with the lane's own reason."""
+    gw = _groq(provider, tmp_path, monkeypatch)
+    gw._rest("groq", "its provider answered HTTP 503")                 # down, so not waited for
+    with pytest.raises(gateway_module.NoModel) as busy:
+        gw.ask(ASK, extract_json, feature="compile")
+    assert str(busy.value).startswith("Every model is busy: ") and "HTTP 503" in str(busy.value)
+    assert "configured" not in str(busy.value)

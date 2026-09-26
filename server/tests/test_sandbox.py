@@ -40,10 +40,12 @@ darwin_only = pytest.mark.skipif(sys.platform != "darwin" or not os.path.exists(
 def test_the_sandbox_is_whatever_this_machine_has_and_says_so_when_it_has_none():
     assert sandbox.detect(platform="darwin", exists=lambda p: p == sandbox.SANDBOX_EXEC) == (
         sandbox.SEATBELT, "")
-    assert sandbox.detect(platform="linux", which=lambda t: "/usr/bin/bwrap" if t == "bwrap" else None) == (
-        sandbox.BUBBLEWRAP, "")
+    fine = lambda _kind: True                                                      # noqa: E731
+    assert sandbox.detect(platform="linux", which=lambda t: "/usr/bin/bwrap" if t == "bwrap" else None,
+                          works=fine) == (sandbox.BUBBLEWRAP, "")
 
-    kind, why = sandbox.detect(platform="linux", which=lambda t: "/usr/bin/unshare" if t == "unshare" else None)
+    kind, why = sandbox.detect(platform="linux", which=lambda t: "/usr/bin/unshare" if t == "unshare" else None,
+                               works=fine)
     assert kind == sandbox.UNSHARE and "bubblewrap" in why
 
     kind, why = sandbox.detect(platform="linux", which=lambda t: None)
@@ -52,6 +54,28 @@ def test_the_sandbox_is_whatever_this_machine_has_and_says_so_when_it_has_none()
     # No pretending: a machine with nothing gets nothing, and the sentence says what that means.
     kind, why = sandbox.detect(platform="win32", which=lambda t: None, exists=lambda p: False)
     assert kind == sandbox.NONE and "same rights as the account running NeuroCode" in why
+
+
+def test_a_fence_the_kernel_refuses_is_not_trusted_because_it_is_installed():
+    """The live server's container has unshare and no namespaces: every test, check and hook there failed with
+    "unshare failed: Operation not permitted". A refused fence is no fence, and says why."""
+    both = lambda t: f"/usr/bin/{t}"                                              # noqa: E731
+    kind, why = sandbox.detect(platform="linux", which=both, works=lambda _kind: False)
+    assert kind == sandbox.NONE and "refuses the Linux namespaces" in why and "container" in why
+    kind, why = sandbox.detect(platform="linux", which=both, works=lambda k: k == sandbox.UNSHARE)
+    assert kind == sandbox.UNSHARE and "bubblewrap is refused here" in why
+
+
+def test_a_probe_that_cannot_even_start_is_a_refusal(monkeypatch: pytest.MonkeyPatch):
+    def missing(*_a: object, **_k: object) -> None:
+        raise FileNotFoundError("bwrap")
+
+    sandbox.allowed.cache_clear()
+    monkeypatch.setattr(sandbox.subprocess, "run", missing)
+    try:
+        assert sandbox.allowed(sandbox.BUBBLEWRAP) is False
+    finally:
+        sandbox.allowed.cache_clear()                   # the next test asks the real kernel again
 
 
 def test_a_machine_with_no_sandbox_says_so_in_the_words_the_run_screen_prints(monkeypatch):

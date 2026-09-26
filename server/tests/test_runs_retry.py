@@ -216,11 +216,11 @@ async def test_no_lane_at_all_is_not_asked_twice(live: Database):
 
     run = await state(live, ref)
     step = step_one(run)
-    # `_edit` handles NoModel itself and skips the step, which is the older and better answer: the loop
-    # never sees it, so nothing is tried again and nothing pretends a model wrote anything.
-    assert step.status == "skipped" and step.attempts == 1
-    assert "will not pretend to write code it cannot write" in step.detail
-    assert gateway.writes() == 1
+    # `_edit` handles NoModel itself: the loop never sees it, so nothing is tried again. The step fails and
+    # so does the run — a run that wrote nothing because no model answered once ended "done" with 0 files.
+    assert step.status == "failed" and step.attempts == 1
+    assert step.detail.startswith("No model wrote this step. No model is configured.")
+    assert gateway.writes() == 1 and run.status == "failed"
 
 
 async def test_a_tool_rule_s_deny_ends_the_step_on_the_first_try(live: Database):

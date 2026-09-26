@@ -18,6 +18,12 @@ NO_MODEL = ("No model is configured. Add a free key in Models → Keys — Groq,
             "take a minute.")
 
 
+
+def no_model(none: NoModel) -> str:
+    """The words for a call no lane could take: the lanes' own reasons when a key is set and only busy."""
+    return str(none) if none.busy else NO_MODEL
+
+
 class Refused(RuntimeError):
     """A rule said no. `status` is what HTTP should make of it; the message is for the person."""
 
@@ -44,6 +50,6 @@ def needs_a_model(call: Callable[[], T]) -> T:
     try:
         return call()
     except NoModel as none:
-        raise Refused(NO_MODEL, status=409) from none
+        raise Refused(no_model(none), status=409) from none
     except ProviderError as failed:
         raise Refused(f"The model could not answer: {failed.body}", status=502) from failed

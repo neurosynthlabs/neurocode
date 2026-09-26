@@ -262,7 +262,7 @@ def test_megabytes_that_only_look_like_json_are_given_up_on_quickly():
     assert time.monotonic() - started < 2.0
 
 
-def test_detection_reads_the_project_and_names_what_is_missing(root: Path):
+def test_detection_reads_the_project_and_names_what_is_missing(root: Path, monkeypatch: pytest.MonkeyPatch):
     shop = root / "shop"
     found, missing = diagnostics.detect(shop, root)
     assert [(c.tool, c.parser) for c in found] == [("tsc", "text"), ("ruff", "ruff-json")]
@@ -285,7 +285,10 @@ def test_detection_reads_the_project_and_names_what_is_missing(root: Path):
     assert [c.tool for c in diagnostics.detect(root / "mono" / "web", root)[0]] == ["tsc"]
     assert diagnostics.detect(root / "mono" / "web", root / "mono" / "web")[0] == []
 
-    # Declared but not installed, each named with what installs it; nothing declared, nothing run.
+    # Declared but not installed, each named with what installs it; nothing declared, nothing run. Not installed
+    # on *this* machine: a CI runner ships Rust, so it is taken away here.
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda *_a, **_k: None)
+    monkeypatch.setenv("HOME", str(root))
     (root / "rs").mkdir()
     (root / "rs" / "Cargo.toml").write_text("[package]\nname='x'\n")
     (root / "rs" / ".eslintrc.json").write_text("{}")

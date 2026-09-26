@@ -347,13 +347,21 @@ def compile_plan(gw: Gateway, requirement: str, ctx: Context, *, actor: str | No
 
 #: A project this small is being built, not changed: its steps are one build, in one worktree.
 NEW_PROJECT_FILES = 12
+#: Who builds it, best first: an engineer who writes the product. Never the one who maps, researches or documents
+#: it — the Architect's brief is "map the blast radius", with no git and no terminal, and it built RR's first try.
+MAKERS = tuple(roster.BY_ID[x].name for x in ("frontend", "backend", "database"))
+THINKERS = frozenset(roster.BY_ID[x].name for x in ("architect", "researcher", "docs", "vision", "qa", "reviewer"))
 #: Steps that are the runtime's own job — running the build or the tests, reviewing, gathering what to do —
 #: and that an agent can only answer with a document about it. The runtime tests and reviews every run.
 RUNTIME_STEP = re.compile(r"^\s*(?:(?:run|execute|launch|start)\b.*\b(?:build|tests?|lint|dev|server|locally|app)\b"
                           r"|(?:perform|do|conduct|carry out)?\s*(?:an?\s+)?"
                           r"(?:(?:manual|final|code|ui/?ux|visual|design|qa)\s+)*review\b"
                           r"|(?:gather|collect|clarify)\b.*\b(?:requirements?|details|needs)\b"
-                          r"|(?:manually\s+)?(?:verify|check)\b.*\b(?:pages?|works?|runs?|loads?)\b)", re.I)
+                          r"|(?:manually\s+)?(?:verify|check)\b.*\b(?:pages?|works?|runs?|loads?)\b"
+                          # a person's work, not a code agent's: finding users, talking to them, shipping it
+                          r"|(?:recruit|interview|survey|onboard)\b.*\b(?:users?|customers?|testers?)\b"
+                          r"|(?:collect|gather|analy[sz]e)\b.*\bfeedback\b|validate\b.*\bwith\b.*\busers?\b"
+                          r"|deploy\b.*\b(?:to|on)\b.*\b(?:test|staging|production|prod|environment|server))", re.I)
 
 
 def built_as_one(out: PlanOut, ctx: Context) -> None:
@@ -371,8 +379,11 @@ def built_as_one(out: PlanOut, ctx: Context) -> None:
     for s in out.steps:
         s.detail = re.sub(r"\bplaceholders?\b", "real", s.detail, flags=re.I)
     approving = set(roster.NOT_WRITERS)
-    builders = [s.agent for s in out.steps if s.agent not in approving | {roster.TESTER, roster.REVIEWER}]
-    builder = builders[0] if builders else (out.steps[0].agent if out.steps else "")
+    named = [s.agent for s in out.steps if s.agent not in approving]
+    # A project's own agent first — somebody made it for this work — then an engineer, then anyone who is not
+    # a thinker, and a frontend engineer when the plan named only thinkers.
+    builder = next((a for a in named if a not in roster.NAMES and a != roster.UNNAMED), None) \
+        or next((a for a in named if a in MAKERS), None) or next((a for a in named if a not in THINKERS), MAKERS[0])
     for s in out.steps:
         if s.agent not in approving:
             s.agent = builder

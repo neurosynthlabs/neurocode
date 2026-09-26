@@ -2405,9 +2405,13 @@ async def _edit(db: Database, gateway: Gateway, ref: str, step_n: int) -> bool:
             async with db.session() as s:
                 run = await RunRepository(s).by_ref(ref)
                 step = next(x for x in run.steps if x.n == step_n)
-                step.status = "skipped"
-                step.detail = "Needs a model. NeuroCode will not pretend to write code it cannot write."
-                await RunLogRepository(s).write(run_id, level="warn", step=step_n, line=str(e))
+                # Failed, not skipped: a run whose steps no model wrote has built nothing, and one that ended
+                # "done" with 0 files read as success. NeuroCode will not pretend to write code it cannot write.
+                step.status = "failed"
+                step.detail = f"No model wrote this step. {e}"[:500]
+                if not run.note:
+                    run.note = str(e)[:200]
+                await RunLogRepository(s).write(run_id, level="err", step=step_n, line=str(e))
             return False
 
         question = result.data.question.strip()
