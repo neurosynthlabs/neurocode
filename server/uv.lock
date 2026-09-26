@@ -632,6 +632,7 @@ dependencies = [
     { name = "debugpy" },
     { name = "duckdb" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "jupyter-client" },
     { name = "pgvector" },
     { name = "psycopg", extra = ["binary"] },
@@ -646,7 +647,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "ipykernel" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -659,6 +659,7 @@ requires-dist = [
     { name = "debugpy", specifier = ">=1.8.22" },
     { name = "duckdb", specifier = ">=1.2" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "jupyter-client", specifier = ">=8.6" },
     { name = "pgvector", specifier = ">=0.5.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
@@ -673,7 +674,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.27" },
     { name = "ipykernel", specifier = ">=6.29" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },

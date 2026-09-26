@@ -25,6 +25,10 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+# The whole app imported with only the runtime dependencies, as it will run. The tests install the dev group,
+# so a module that needs a package only the tests have passes every one of them and fails here, at build,
+# rather than as a release that never comes up.
+RUN .venv/bin/python -c "import app.api.app"
 
 # The API never runs as root: a plain user that owns only /data, where everything it writes lives.
 RUN useradd --create-home --uid 10001 neurocode && mkdir -p /data && chown neurocode:neurocode /data \
