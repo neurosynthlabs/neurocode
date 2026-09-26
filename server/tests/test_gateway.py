@@ -137,7 +137,7 @@ def test_the_thinking_a_feature_asks_for_is_what_the_lane_is_sent(gateway: Gatew
     gateway.ask(ASK, extract_json, feature="compile")               # compile: high by default
     off, high = provider.sent
     assert off["thinking"] == {"type": "disabled"} and "reasoning_effort" not in off
-    assert off["max_tokens"] == lanes.ANSWER_TOKENS and off["model"] == "deepseek-flash"
+    assert off["max_tokens"] == lanes.WRITE_TOKENS and off["model"] == "deepseek-flash"   # writing code: room to
     assert high["thinking"] == {"type": "enabled"} and high["reasoning_effort"] == "high"
     assert high["max_tokens"] == lanes.ANSWER_TOKENS + lanes.THINKING_TOKENS["high"]
 
@@ -651,3 +651,40 @@ def test_a_request_goes_whole_to_a_lane_that_can_hold_it_before_one_that_must_cu
     with pytest.raises(gateway_module.ProviderError):
         gw.ask(ASK, json.loads, feature="chat")
     assert tried[0] == gw.chain()[0].id
+
+
+def test_a_lane_resting_only_for_its_full_minute_is_waited_for_when_nothing_else_can_answer(
+        gateway: Gateway, provider: Provider, monkeypatch: pytest.MonkeyPatch):
+    """With one free key, a full minute used to skip a run's step with "no model"; a lane that is down still
+    is not asked again while it rests."""
+    provider.replies += [(429, {"error": "rate limited"}), (200, completion('{"ok": true}'))]
+    with pytest.raises(ProviderError):
+        gateway.ask(ASK, extract_json, feature="compile")
+    slept: list[float] = []
+
+    def nap(seconds: float) -> None:
+        slept.append(seconds)
+        gateway._resting.clear()                       # the minute passes
+
+    monkeypatch.setattr(gateway_module.time, "sleep", nap)
+    assert gateway.ask(ASK, extract_json, feature="compile").data == {"ok": True}
+    assert slept and 0 < slept[0] <= gateway_module.WAIT_FOR_REST + 1
+
+
+def test_a_lane_whose_minute_is_used_up_is_waited_for_rather_than_skipped(
+        provider: Provider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Groq's free minute is 8,000 tokens; one step can use it. The next step used to find "no model" and be
+    skipped — now it waits for the minute to turn."""
+    gw = _groq(provider, tmp_path, monkeypatch)
+    gw._burned["groq"] = [(gateway_module.time.monotonic() - 30, 8_000)]
+    assert gw.chain() == []
+    slept: list[float] = []
+
+    def nap(seconds: float) -> None:
+        slept.append(seconds)
+        gw._burned["groq"] = []
+
+    monkeypatch.setattr(gateway_module.time, "sleep", nap)
+    provider.replies.append((200, completion('{"ok": true}')))
+    assert gw.ask(ASK, extract_json, feature="compile").data == {"ok": True}
+    assert slept and 25 < slept[0] < 35

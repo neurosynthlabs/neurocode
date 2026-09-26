@@ -135,7 +135,10 @@ export default function CommandCenter() {
     setReq('');
     if (autoStart && can('plans:decide')) {
       try {
-        const started = await plansApi.dispatch(plan.ref, { skipQuestions: true });
+        // Run until done, twice at most: a second model judges the result against the plan's own criteria and
+        // sends it round again when they are missed, so a thin first attempt is not what waits for a signature.
+        const judged = ((plan as { acceptanceCriteria?: string[] }).acceptanceCriteria ?? []).some((c) => c.trim());
+        const started = await plansApi.dispatch(plan.ref, { skipQuestions: true, goalBudget: judged ? 2 : undefined });
         setBusy(false);
         const skipped = plan.openQuestions.length;
         if (started.noRun) toast.warning(`${plan.ref} dispatched, no run started`, { description: started.noRun });

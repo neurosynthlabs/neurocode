@@ -9,6 +9,7 @@ answer, compiling now says so and writes nothing.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -85,9 +86,21 @@ Rules:
 - Follow the project's instructions where they bear on the plan: its conventions, its commands, what it
   says must not be touched.
 - When a business decision is missing, put it in openQuestions instead of guessing.
-- Steps are small and ordered. Each step has exactly one owner from: {agents}.
-- End with a test step owned by {tester} and a review step owned by {reviewer}. When risk is HIGH
-  or CRITICAL, add a final step "Your approval" owned by {commander}.
+- Plan the product, not a process. Every step writes or changes working code (or content the requirement
+  asks for) that moves the requirement toward done. Never a step that only gathers requirements, writes a
+  checklist, a template, a review document or notes about what someone else should do — unless the
+  requirement itself asks for documentation.
+- Building something new (an empty folder, a new app, a new page): the first step writes a complete,
+  runnable scaffold — the package manifest with real dev, build and test scripts, its config and entry
+  files. Each later step builds one part end to end (a page, a feature, a component set) with real content,
+  real styling and working behaviour, at the quality the requirement asks for. No placeholders.
+- One coherent build goes to one owner, so its steps run in order in one worktree and each step sees the
+  files the step before it wrote. Give steps to different owners only when the parts are truly independent
+  (a backend service and a separate frontend, say). Each step writes at most about four files, completely.
+- Owners come from: {agents}. Testing and review are done by the runtime after the steps — the project's
+  own test command, then a second model's review — so add a test step (owned by {tester}) only to write
+  real test files, and never a review step. When risk is HIGH or CRITICAL, add a final step "Your approval"
+  owned by {commander}.
 - risk is CRITICAL for production data or money movement, HIGH for schema changes or financial logic.
 - Write businessRequirement and technicalRequirement in plain English whatever language the input is in.
 - acceptanceCriteria are what "done" means: 2 to 6 sentences, each one a person or a test can check
@@ -243,8 +256,9 @@ What each comment kind asks:
   the reply why it is not.
 
 Rules:
-- Steps are small and ordered. Each step has exactly one owner from: {agents}.
-- Keep a test step owned by {tester} and a review step owned by {reviewer} at the end.
+- Steps are small and ordered. Each step has exactly one owner from: {agents}. Every step writes or changes
+  working code; the runtime tests and reviews after them, so there is no review step, and a test step
+  (owned by {tester}) only writes real test files.
 - Follow the project's instructions and the team's taste rules where they bear on the plan.
 - affectedFiles: the full list after the revision; leave it empty to keep the plan's files as they are.
 - acceptanceCriteria: the full list after the revision; leave it empty to keep them as they are.
@@ -327,4 +341,38 @@ def compile_plan(gw: Gateway, requirement: str, ctx: Context, *, actor: str | No
     custom = [a["name"] for a in ctx.agents]
     result = gw.ask(messages(requirement, ctx), lambda raw: parse(raw, custom), feature="compile", actor=actor,
                     project=project)
+    built_as_one(result.data, ctx)
     return result, [f["ref"] for f in ctx.facts]
+
+
+#: A project this small is being built, not changed: its steps are one build, in one worktree.
+NEW_PROJECT_FILES = 12
+#: Steps that are the runtime's own job — running the build or the tests, reviewing, gathering what to do —
+#: and that an agent can only answer with a document about it. The runtime tests and reviews every run.
+RUNTIME_STEP = re.compile(r"^\s*(?:(?:run|execute|launch|start)\b.*\b(?:build|tests?|lint|dev|server|locally|app)\b"
+                          r"|(?:perform|do|conduct|carry out)?\s*(?:an?\s+)?"
+                          r"(?:(?:manual|final|code|ui/?ux|visual|design|qa)\s+)*review\b"
+                          r"|(?:gather|collect|clarify)\b.*\b(?:requirements?|details|needs)\b"
+                          r"|(?:manually\s+)?(?:verify|check)\b.*\b(?:pages?|works?|runs?|loads?)\b)", re.I)
+
+
+def built_as_one(out: PlanOut, ctx: Context) -> None:
+    """Hold a plan to what the runtime can make of it, whatever the model wrote. A plan for a new project is
+    one build: every step goes to one owner, so the steps run in order in one worktree and each sees the
+    files the one before it wrote — split across agents, each wrote a fragment in its own copy. Steps that
+    are the runtime's own job are dropped, and "placeholder" work is asked for as real work."""
+    # Small, and either measured with files or with no stack found at all — a folder holding a README, a first
+    # scaffold. A project that names a stack and has no files counted was never measured, and is not new.
+    files, stack = int(ctx.project.get("files") or 0), ctx.project.get("stack") or []
+    if files > NEW_PROJECT_FILES or (files == 0 and stack):
+        return
+    kept = [s for s in out.steps if not RUNTIME_STEP.search(s.label)] or out.steps
+    out.steps = kept
+    for s in out.steps:
+        s.detail = re.sub(r"\bplaceholders?\b", "real", s.detail, flags=re.I)
+    approving = set(roster.NOT_WRITERS)
+    builders = [s.agent for s in out.steps if s.agent not in approving | {roster.TESTER, roster.REVIEWER}]
+    builder = builders[0] if builders else (out.steps[0].agent if out.steps else "")
+    for s in out.steps:
+        if s.agent not in approving:
+            s.agent = builder

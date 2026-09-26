@@ -490,12 +490,19 @@ def thinking_params(thinks: str, level: str) -> dict[str, Any]:
     return {}
 
 
-def max_tokens(thinks: str, level: str) -> int:
+#: What writing code may take: a step that builds a page writes files whole, and 3,000 tokens is a stub.
+WRITE_TOKENS = 16_000
+#: The least of a lane's minute kept for the prompt when the answer's budget is set — below this a step's
+#: own files would not fit beside the instructions.
+PROMPT_FLOOR = 3_400
+
+
+def max_tokens(thinks: str, level: str, answer: int = ANSWER_TOKENS) -> int:
     """The answer's budget, and the reasoning's on top of it when the lane is asked to think."""
-    return ANSWER_TOKENS + (THINKING_TOKENS.get(level, 0) if thinks else 0)
+    return answer + (THINKING_TOKENS.get(level, 0) if thinks else 0)
 
 
-def budget(lane: Lane | None, level: str) -> tuple[str, int]:
+def budget(lane: Lane | None, level: str, answer: int = ANSWER_TOKENS) -> tuple[str, int]:
     """How hard this lane may really think, and what to ask for — the level asked for, unless the
     lane's own minute is too small to hold it.
 
@@ -511,12 +518,14 @@ def budget(lane: Lane | None, level: str) -> tuple[str, int]:
     """
     thinks = lane.thinks if lane else ""
     cap = lane.max_request_tokens if lane else 0
+    if lane is not None and lane.tpm:            # a small minute must still hold the prompt beside the answer
+        answer = min(answer, max(ANSWER_TOKENS, lane.tpm - PROMPT_FLOOR))
     if not cap:
-        return level, max_tokens(thinks, level)
+        return level, max_tokens(thinks, level, answer)
     for candidate in (level, "high", "low", "off"):
-        if LEVELS.index(candidate) <= LEVELS.index(level) and max_tokens(thinks, candidate) <= cap:
-            return candidate, max_tokens(thinks, candidate)
-    return "off", min(ANSWER_TOKENS, cap)
+        if LEVELS.index(candidate) <= LEVELS.index(level) and max_tokens(thinks, candidate, answer) <= cap:
+            return candidate, max_tokens(thinks, candidate, answer)
+    return "off", min(answer, cap)
 
 
 def retired(lane: Lane) -> str | None:

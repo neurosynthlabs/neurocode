@@ -157,3 +157,26 @@ def test_a_request_too_big_for_the_lane_is_cut_where_it_matters_least():
 def test_a_request_that_fits_is_sent_as_it_is():
     msgs = [{"role": "system", "content": "short"}, {"role": "user", "content": "hi"}]
     assert gateway.fit(msgs, 4000) is msgs and gateway.fit(msgs, 0) is msgs
+
+
+def test_a_provider_whose_json_mode_gives_up_is_asked_again_without_it(monkeypatch: pytest.MonkeyPatch):
+    sent: list[dict[str, Any]] = []
+    refusal = gateway.ProviderError(400, '{"error":{"message":"Failed to generate JSON. Please adjust your prompt.",'
+                                         '"code":"json_validate_failed"}}')
+    answers = iter([refusal, {"choices": [{"message": {"content": '{"ok": 1}'}}]}])
+
+    def post(_url: str, body: dict[str, Any], *_: Any) -> Any:
+        sent.append(body)
+        got = next(answers)
+        if isinstance(got, Exception):
+            raise got
+        return got
+
+    monkeypatch.setattr(gateway, "_post", post)
+    assert gateway.call_openai([{"role": "user", "content": "hi"}], CFG).text == '{"ok": 1}'
+    assert "response_format" in sent[0] and "response_format" not in sent[1]
+
+
+def test_the_first_complete_object_is_the_answer_whatever_follows_it():
+    assert gateway.extract_json('{"files": [{"path": "a.css", "content": "a{}"}]} and then {"more": 1}',
+                                trim=False) == {"files": [{"path": "a.css", "content": "a{}"}]}

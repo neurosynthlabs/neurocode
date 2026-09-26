@@ -124,7 +124,7 @@ def _like(text: str) -> str:
 def _project_doc(project: Project) -> dict[str, Any]:
     """What the compiler is told about the project, from the row rather than a stored document."""
     return {"id": project.id, "name": project.name, "stack": project.stack or [],
-            "description": project.description}
+            "description": project.description, "files": project.files_count}
 
 
 def _grounded(grounding: list[dict[str, str]]) -> str:

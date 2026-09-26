@@ -183,6 +183,10 @@ LEAST_SECONDS = 1.0
 #: timeout, a refused connection, a 429, a 5xx. Short, because a provider that went soft usually
 #: comes back; long enough that a chain of three lanes does not pick the sick one first every turn.
 COOLDOWN_SECONDS = 60.0
+#: How long a call waits for a resting lane when no other can answer, before it says there is no model.
+WAIT_FOR_REST = 65.0
+#: Why a lane rests when the provider said "not now" — the one rest worth waiting out; a lane that is down is not.
+RATE_LIMITED = "it is rate-limiting this key"
 
 
 class _Budget:
@@ -245,10 +249,17 @@ class Reply:
 OPTIONAL = ("response_format", "stream_options", "reasoning_effort", "thinking", "tools", "tool_choice", "models")
 
 
+#: A provider's own JSON mode failing to produce JSON (Groq: "json_validate_failed" — it holds GPT-OSS to strict
+#: JSON and gives up on a long file inside a string). Asked again without the mode, the answer is read leniently.
+JSON_MODE_FAILED = ("json_validate_failed", "Failed to generate JSON")
+
+
 def _refusal(e: ProviderError, body: dict[str, Any]) -> str | None:
     """The optional field a 400 named, if it named one this request carries."""
     if e.status != 400:
         return None
+    if "response_format" in body and any(x in e.body for x in JSON_MODE_FAILED):
+        return "response_format"
     return next((name for name in OPTIONAL if name in body and name in e.body), None)
 
 
@@ -586,7 +597,12 @@ def extract_json(raw: str, trim: bool = True) -> dict[str, Any]:
     start, end = raw.find("{"), raw.rfind("}")
     if start < 0 or end <= start:
         raise ValueError("the answer holds no JSON object")
-    parsed = json.loads(raw[start:end + 1])
+    try:
+        parsed = json.loads(raw[start:end + 1])
+    except json.JSONDecodeError:
+        # A model that wrote the object and then kept going — a second object, a sentence, a stray brace:
+        # the first complete object is the answer.
+        parsed, _ = json.JSONDecoder().raw_decode(raw[start:])
     return clip(parsed) if trim else parsed
 
 
@@ -638,7 +654,7 @@ def _sick(e: Exception) -> str | None:
     slow. A 4xx that is not a 429 is about what we sent, so the lane keeps its place."""
     if isinstance(e, ProviderError):
         if e.status == 429:
-            return "it is rate-limiting this key"
+            return RATE_LIMITED
         return f"its provider answered HTTP {e.status}" if e.status >= 500 else None
     if isinstance(e, LaneTooSlow):
         return f"it did not answer within {e.seconds:g} seconds"
@@ -689,7 +705,9 @@ class Gateway:
         tokens that may take on *this* lane, and how long it may take — what is left of the chain's
         budget, so three lanes cannot each spend it."""
         lane = self.lane(lane_id)
-        level, room = lanes.budget(lane, self.thinking(feature))
+        # Writing code gets room to write whole files; everything else answers in a few thousand tokens.
+        answer = lanes.WRITE_TOKENS if feature == "agent" else lanes.ANSWER_TOKENS
+        level, room = lanes.budget(lane, self.thinking(feature), answer)
         return {**self.config(lane_id), "thinking": level, "maxTokens": room,
                 "thinks": lane.thinks if lane else "", "seconds": seconds}
 
@@ -737,6 +755,26 @@ class Gateway:
 
     def _rest(self, lane_id: str, why: str) -> None:
         self._resting[lane_id] = (time.monotonic() + COOLDOWN_SECONDS, why)
+
+    def _soonest_wake(self) -> float | None:
+        """Seconds until a lane held back only by time may answer again — resting because its provider said
+        "not now", or with this minute's free calls or tokens used up — when that is within `WAIT_FOR_REST`;
+        None otherwise. A lane resting because it is down is not waited on."""
+        now, waits = time.monotonic(), []
+        for x in self.lanes():
+            if not self._allowed(x) or (x.needs_key and not lanes.key_of(x, self.secrets)):
+                continue
+            rest = self._resting.get(x.id)
+            if rest and rest[0] > now:
+                if rest[1] == RATE_LIMITED:
+                    waits.append(rest[0] - now)
+                continue
+            if (why := self.why_not(x)) and why.endswith("this minute — its free allowance"):
+                stamps = [*self._recent.get(x.id, []), *(at for at, _ in self._burned.get(x.id, []))]
+                if stamps:
+                    waits.append(min(stamps) + 60 - now)
+        soonest = min(waits, default=None)
+        return soonest + 0.5 if soonest is not None and soonest <= WAIT_FOR_REST else None
 
     def ollama_look(self) -> str | None:
         """None when the local model is ready to answer, else why it is not. Remembered for 30 seconds.
@@ -979,6 +1017,14 @@ class Gateway:
         halfway leaves what it wrote behind — the next lane starts afresh, and `on_delta("restart", …)`
         says so, so a screen never shows two lanes' words stitched into one answer."""
         chain = self.chain(role=role, lane=lane, avoid=avoid)
+        waited = 0.0
+        while not chain and waited < 2 * WAIT_FOR_REST and (wake := self._soonest_wake()) is not None:
+            # Every lane that could answer is held back only by its minute, and one frees up soon: waiting
+            # beats skipping a step — with one free key, that minute is most of what goes wrong. A minute
+            # holding several calls frees one at a time, so the wait may take more than one turn.
+            time.sleep(wake)
+            waited += wake
+            chain = self.chain(role=role, lane=lane, avoid=avoid)
         if not chain:
             raise NoModel("No model is configured. Add a free key in Models → Keys, or pull an Ollama model.")
         # Nothing is cut that need not be: a lane that can take the whole request goes before one that could
