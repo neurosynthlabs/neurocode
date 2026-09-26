@@ -428,7 +428,7 @@ def test_a_refusal_about_the_request_leaves_the_lane_where_it_is(gateway: Gatewa
 
 
 def test_a_lane_that_answers_the_test_call_stops_resting(gateway: Gateway, provider: Provider):
-    """Admin → AI providers presses Test. A lane that answers it is well, whatever it did a minute ago."""
+    """Models → Keys presses Test. A lane that answers it is well, whatever it did a minute ago."""
     provider.replies += [(500, {"error": "boom"}), (200, completion('{"ok": true}'))]
     with pytest.raises(ProviderError):
         gateway.ask(ASK, extract_json, feature="compile")
@@ -594,7 +594,7 @@ class Counting(MemoryLedger):
 def test_choosing_a_lane_reads_each_setting_once_and_not_once_per_question(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Settling eight lanes, asking each whether it is switched off and what it has spent was dozens
-    of round trips for one question, and 350 for the Models & Router screen — all through the
+    of round trips for one question, and 350 for the Models screen — all through the
     gateway's own two-connection pool, which is what made that screen and four working agents wait on
     each other."""
     monkeypatch.delenv("NEUROCODE_COMPILER", raising=False)
@@ -616,7 +616,7 @@ def test_choosing_a_lane_reads_each_setting_once_and_not_once_per_question(
 
 def test_a_lane_an_admin_saves_is_the_lane_the_next_call_uses(tmp_path: Path,
                                                               monkeypatch: pytest.MonkeyPatch):
-    """Remembering is only safe if a write is seen at once: Admin → AI providers saves through the
+    """Remembering is only safe if a write is seen at once: Models → Keys saves through the
     same object, so the row it replaced is dropped rather than believed for another two seconds."""
     monkeypatch.delenv("NEUROCODE_COMPILER", raising=False)
     gw = Gateway(MemoryLedger(), Secrets(tmp_path / "s.json"))

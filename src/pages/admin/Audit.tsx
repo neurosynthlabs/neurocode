@@ -22,7 +22,7 @@ const LABEL: Record<string, string> = {
   'user.create': 'Person added', 'user.update': 'Person changed', 'user.password_reset': 'Password set by an admin',
   'role.create': 'Role created', 'role.update': 'Role changed', 'role.delete': 'Role deleted',
   'team.create': 'Team created', 'team.update': 'Team changed', 'team.delete': 'Team deleted',
-  'ai.update': 'AI providers changed', 'database.backup': 'Database backed up', 'database.optimize': 'Database optimized',
+  'ai.update': 'Model keys changed', 'database.backup': 'Database backed up', 'database.optimize': 'Database optimized',
   'run.merge': 'Run merged', 'test.expect': 'Test failure expected', 'test.expect.remove': 'Test expectation removed',
 };
 const kind = (action: string): Filter =>
@@ -56,7 +56,11 @@ export default function Audit() {
     <Page>
       <PageHeader
         title="Audit log"
-        subtitle="Who signed in, who changed access, keys or the workspace, and who merged a run or marked a failing test as expected, with when and from where. Nothing here can be edited or deleted."
+        subtitle="Who changed what, when and from where."
+        about={<>
+          <p>Sign-ins, access, keys and workspace changes, merged runs, and failing tests marked as expected.</p>
+          <p>Nothing here can be edited or deleted.</p>
+        </>}
       >
         <div className="pb-3"><Segmented options={FILTERS} value={filter} onChange={setFilter} /></div>
       </PageHeader>

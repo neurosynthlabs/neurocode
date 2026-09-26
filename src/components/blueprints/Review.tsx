@@ -86,10 +86,10 @@ export function ReviewPanel({ bp, canDesign, dirty, onChanged }: {
     return (
       <Panel>
         <Empty icon={<MessageSquareText className="size-6" />} title="No review yet"
-          hint={locked ? 'This blueprint was scaffolded; it is kept as it was built.'
-            : 'A model reads your answers and this architecture and proposes changes, each with its reason. Nothing is applied until you accept it. It needs a model in Admin → AI providers.'}
+          hint={locked ? 'Scaffolded, so kept as built.'
+            : 'A model proposes changes; you accept each. Needs a model: Models → Keys.'}
           action={!locked && askButton} />
-        {dirty && <p className="pb-2 text-center text-[12.5px] text-warn">Save your changes first — the review reads the saved blueprint.</p>}
+        {dirty && <p className="pb-2 text-center text-[12.5px] text-warn">Save first: the review reads the saved blueprint.</p>}
       </Panel>
     );
   }
@@ -106,7 +106,7 @@ export function ReviewPanel({ bp, canDesign, dirty, onChanged }: {
         </p>
         {stale && (
           <p className="mt-3 rounded-lg bg-warn/10 px-3 py-2 text-[12.5px] text-warn">
-            The blueprint changed since (it is at revision {bp.revision}). A change whose starting value moved will be refused; ask again for a fresh review.
+            The blueprint is now at revision {bp.revision}. Changes to moved values are refused; review again.
           </p>
         )}
       </Panel>
@@ -164,7 +164,7 @@ export function ReviewPanel({ bp, canDesign, dirty, onChanged }: {
         )}
         {review.dropped.length > 0 && (
           <details className="border-t border-line/60 px-5 py-3 text-[12.5px] text-dim">
-            <summary className="cursor-pointer">{review.dropped.length} proposal{review.dropped.length === 1 ? ' was' : 's were'} left out because {review.dropped.length === 1 ? 'it' : 'they'} did not fit</summary>
+            <summary className="cursor-pointer">{review.dropped.length} proposal{review.dropped.length === 1 ? '' : 's'} left out: did not fit</summary>
             <ul className="mt-2 space-y-1">{review.dropped.map((d) => <li key={d} className="font-mono text-[12px] break-all">{d}</li>)}</ul>
           </details>
         )}

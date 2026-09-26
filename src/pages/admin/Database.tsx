@@ -11,9 +11,9 @@ import { LoadError, Loading } from './kit';
 
 /** What Postgres' `wal_level` means, for a screen read by someone deciding whether to act. */
 const WAL: Record<string, string> = {
-  minimal: 'minimal: crash recovery only, no replicas and no point-in-time restore',
-  replica: 'replica: enough to recover to a moment in time, and to feed a standby',
-  logical: 'logical: replica, plus row-level streaming to another system',
+  minimal: 'minimal: crash recovery only, no replicas or point-in-time restore',
+  replica: 'replica: point-in-time recovery and standbys',
+  logical: 'logical: replica, plus row-level streaming out',
 };
 
 /** One table that only ever grows, how long it is kept, and how many rows are older than that —
@@ -95,7 +95,8 @@ export default function DatabasePage() {
     <Page>
       <PageHeader
         title="Database"
-        subtitle={`${db ? `${db.engine} ${db.version} at ${db.path}` : 'The PostgreSQL database behind this workspace'}: people, access, the audit log, the work and the code index all live in it. Back it up, check it and keep it compact from here.`}
+        subtitle="Back up, check and compact the workspace’s database."
+        about="People, access, the audit log, the work and the code index all live in this PostgreSQL database."
         actions={
           <Button size="sm" onClick={() => void backup()} disabled={!manage || busy !== null}>
             {busy === 'backup' ? <Loader2 className="size-3.5 animate-spin" /> : <DatabaseBackup className="size-3.5" />}Back up now
@@ -114,11 +115,12 @@ export default function DatabasePage() {
             </StatGrid>
 
             <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-              <Panel title="Health" eyebrow="What keeps the data sound">
+              <Panel title="Health">
                 <KV k="Engine" v={`${db.engine} ${db.version}`} />
+                <KV k="Location" v={db.path} mono wrap />
                 <KV k="Write-ahead log" v={WAL[db.walLevel] ?? db.walLevel} />
                 <KV k="Foreign keys" v={check ? (check.foreignKeyProblems ? `${check.foreignKeyProblems.toLocaleString()} rows point at nothing` : 'every one walked, none violated') : 'declared in the schema · Check integrity walks them'} />
-                <KV k="Audit log" v="append-only by design: a trigger refuses edits and deletes" />
+                <KV k="Audit log" v="append-only: a trigger refuses edits and deletes" />
                 <KV k="Indexes" v={`${db.indexHealth.count} · ${db.indexHealth.unusedCount} never used`
                   + (db.indexHealth.invalidCount ? ` · ${db.indexHealth.invalidCount} invalid` : '')} />
                 <KV k="Free pages" v={`${db.freePages.toLocaleString()} (${bytes(db.freePages * db.pageSize)})`} />
@@ -144,7 +146,9 @@ export default function DatabasePage() {
                 </div>
               </Panel>
 
-              <Panel flush title="Backups" eyebrow={db.backupDir ? `the newest are kept in ${db.backupDir.split('/').slice(-2).join('/')}` : 'the newest are kept'}>
+              <Panel flush title="Backups" eyebrow={db.backupDir ? `the newest are kept in ${db.backupDir.split('/').slice(-2).join('/')}` : 'the newest are kept'}
+                about={<><p>Backups are <Mono>pg_dump</Mono>, taken while the database stays in use.</p>
+                  <p>To restore, stop the API and run <Mono>pg_restore --clean --if-exists</Mono> against the dump.</p></>}>
                 {db.backups.length === 0 ? (
                   <p className="px-5 py-3 text-[13px] text-soft">No backup yet. One is made on its own before every reset.</p>
                 ) : (
@@ -158,20 +162,13 @@ export default function DatabasePage() {
                     ))}
                   </DataTable>
                 )}
-                <p className="border-t border-line/60 px-5 py-3 text-[12.5px] leading-relaxed text-dim">
-                  Backups are <Mono>pg_dump</Mono>, taken while the database stays in use, so nothing stops while one is
-                  made. To restore, stop the API and run <Mono>pg_restore --clean --if-exists</Mono> against the dump.
-                </p>
               </Panel>
             </div>
 
-            <Panel flush title="History" eyebrow="What grows on its own, and how long it is kept">
-              <p className="px-5 pb-1 pt-0.5 text-[13px] leading-relaxed text-ink-2">
-                Run output, the feed, the ledger and the rest are only ever added to. Each is kept for as long as its
-                own setting says and pruned a day at a time; the ledger and the audit log are kept for good — the audit
-                log cannot be pruned at all, by anyone. Removing rows does not shrink the files on disk: Optimize &amp;
-                compact does that.
-              </p>
+            <Panel flush title="History" eyebrow="Kept, then pruned"
+              about={<><p>Run output, the feed and the rest only grow. Each is kept as long as its setting says, pruned a day at a time.</p>
+                <p>The ledger and the audit log are kept for good; nobody can prune the audit log.</p>
+                <p>Pruning does not shrink the files on disk. Optimize &amp; compact does.</p></>}>
               {!history ? (
                 <p className="px-5 py-3 text-[13px] text-soft">Counting what is past its keeping…</p>
               ) : (
@@ -208,8 +205,8 @@ export default function DatabasePage() {
                 </Button>
                 <span className="text-[12.5px] text-dim">
                   {!history ? 'Counted before anything is removed.'
-                    : history.rows > 0 ? `Counted just now, across ${history.tables.filter((t) => t.rows > 0).length} tables. A few thousand rows go per statement, so nothing else waits on it.`
-                    : 'Nothing in any of them is past its keeping.'}
+                    : history.rows > 0 ? `Counted just now, across ${history.tables.filter((t) => t.rows > 0).length} tables. Removed in small batches.`
+                    : 'Nothing is past its keeping.'}
                 </span>
               </div>
             </Panel>
@@ -226,7 +223,7 @@ export default function DatabasePage() {
                   ))}
                 </DataTable>
               </Panel>
-              <Panel flush title="Migrations" eyebrow="applied in order, each in its own transaction">
+              <Panel flush title="Migrations" eyebrow="applied in order">
                 <DataTable head={['Version', 'Migration', 'Applied']}>
                   {db.migrations.map((m) => (
                     <Row key={m.version}>

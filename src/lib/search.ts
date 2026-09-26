@@ -46,13 +46,13 @@ export function buildIndex(
     ...runs.map<SearchHit>((r) => ({
       id: `run-${r.id}`, group: 'Runs', title: `${r.ref} · ${sentence(r.requirement)}`,
       subtitle: `${r.projectName} · ${r.branch} · ${r.status}`, to: `/runs?ref=${r.ref}`,
-      icon: navIcon('/runs', 'Activity'), meta: r.status.toUpperCase(),
+      icon: navIcon('/runs', 'Activity'), meta: r.status,
     })),
     // An archived fact is out of recall and off the Memory screen, so a hit for it would open to nothing.
     ...memory.filter((f) => !f.archived).map<SearchHit>((f) => ({
       id: `mem-${f.id}`, group: 'Memory', title: `${f.ref} · ${f.title}`,
       subtitle: `${f.category.replace('_', ' ')} · ${f.confidence.toLowerCase()} confidence`, to: `/memory?ref=${f.ref}`,
-      icon: 'Brain', meta: f.pinned ? 'PINNED' : f.category.toUpperCase(),
+      icon: 'Brain', meta: f.pinned ? 'pinned' : f.category,
     })),
     ...brainstorms.map<SearchHit>((b) => ({
       id: `brief-${b.id}`, group: 'Brainstorms', title: `${b.ref} · ${b.brief.title}`,
@@ -60,7 +60,7 @@ export function buildIndex(
     })),
     ...mcp.map<SearchHit>((m) => ({
       id: `mcp-${m.id}`, group: 'Tools', title: m.name,
-      subtitle: `${m.transport} · ${m.tools.length} tools · ${m.status.replace('_', ' ')}`, to: '/mcp', icon: navIcon('/mcp', 'Server'), meta: m.scope.toUpperCase(),
+      subtitle: `${m.transport} · ${m.tools.length} tools · ${m.status.replace('_', ' ')}`, to: '/mcp', icon: navIcon('/mcp', 'Server'), meta: m.scope,
     })),
     ...agents.map<SearchHit>((a) => ({
       id: `agent-${a.id}`, group: 'Agents', title: a.name, subtitle: a.role, to: '/agents',
@@ -74,7 +74,7 @@ export function codeHits(projectName: string, hits: CodeHit[]): SearchHit[] {
   return hits.map((h) => ({
     id: `code-${h.path}:${h.line}:${h.name}`, group: 'Code', title: h.name,
     subtitle: `${h.path}:${h.line} · ${projectName}`, to: `/code?path=${encodeURIComponent(h.path)}`,
-    icon: 'FileCode', meta: h.kind.toUpperCase(),
+    icon: 'FileCode', meta: h.kind,
   }));
 }
 

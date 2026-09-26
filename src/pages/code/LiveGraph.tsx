@@ -72,13 +72,13 @@ function Decisions({ project }: { project: Project }) {
     return (
       <Panel>
         <Empty icon={<Scale className="size-6" />} title={`No decisions recorded for ${project.name} yet`}
-          hint="Facts filed under Decisions in Memory appear here — from Add from text, or from a plan's answered question."
+          hint="Facts filed under Decisions in Memory appear here."
           action={<Button size="sm" variant="outline" onClick={() => nav('/memory')}>Open Memory</Button>} />
       </Panel>
     );
   }
   return (
-    <Panel flush eyebrow={`${decisions.length} in memory · this project and the workspace`} title="Decisions">
+    <Panel flush eyebrow={`${decisions.length} in memory`} title="Decisions">
       {decisions.map((f) => (
         <ListRow key={f.id} onClick={() => nav(`/memory?ref=${encodeURIComponent(f.ref)}`)}>
           <div className="flex items-center gap-2">
@@ -120,7 +120,8 @@ export function LiveGraph({ project }: { project: Project }) {
     <Page>
       <PageHeader
         title="Architecture"
-        subtitle={`The modules of ${project.name} as their imports and SQL say they are, and the measured blast radius of changing any of them.`}
+        subtitle="How the modules depend on each other, and what a change moves."
+        about={<p>Read from the code index: imports, type uses and SQL. The blast radius of a change is measured on this graph.</p>}
         actions={<Segmented options={[{ id: 'graph', label: 'Graph & impact' }, { id: 'decisions', label: 'Decisions' }]} value={tab} onChange={setTab} />}
       >
         {tab === 'graph' && g.data && (
@@ -146,11 +147,11 @@ export function LiveGraph({ project }: { project: Project }) {
         ) : !g.data || !L ? (
           <Empty icon={<Loader2 className="size-5 animate-spin" />} title="Loading the graph…" />
         ) : g.data.nodes.length === 0 ? (
-          <Empty title={`${project.name} has no index yet`} hint="Onboard or re-index the project in Code Intelligence, and its modules appear here." />
+          <Empty title={`${project.name} has no index yet`} hint="Index it in Code Intelligence to see its modules." />
         ) : (
           <div className="grid grid-cols-12 gap-4">
             <div className="col-span-12 2xl:col-span-7">
-              <Panel eyebrow="Read from the code index: imports, type uses and SQL" title="Module graph" flush>
+              <Panel title="Module graph" flush>
                 <div className="overflow-auto p-3">
                   <svg width={L.width} height={L.height} className="block" role="img" aria-label={`Module graph of ${project.name}`}>
                     <defs>
@@ -212,7 +213,7 @@ export function LiveGraph({ project }: { project: Project }) {
                   </svg>
                 </div>
                 <p className="border-t border-line px-5 py-2.5 text-[12px] text-dim">
-                  Arrows point from a module to what it depends on. Click a module or a table to see what moves with it.
+                  Arrows point to what a module depends on. Click one to see its impact.
                 </p>
               </Panel>
             </div>
@@ -221,7 +222,7 @@ export function LiveGraph({ project }: { project: Project }) {
               {!focus ? (
                 <Panel>
                   <Empty icon={<Target className="size-5" />} title="Pick a module or a table"
-                    hint="The impact of changing it is measured on the dependency graph: who uses it directly, who is reached through them, and which tests notice." />
+                    hint="See who uses it, what it reaches and which tests notice." />
                 </Panel>
               ) : impact.error ? (
                 <Panel><Empty title={`No impact report for ${nameOf(focus)}`} hint={impact.error} /></Panel>
@@ -237,14 +238,14 @@ export function LiveGraph({ project }: { project: Project }) {
                     </Button>
                     {'path' in focus && (
                       <Button size="sm" variant="outline" onClick={() => nav(`/code?path=${encodeURIComponent(focus.path)}`)}>
-                        <FileCode className="size-3.5" />Open the file
+                        <FileCode className="size-3.5" />Open file
                       </Button>
                     )}
                   </>}
                 />
               )}
               {impact.data && impact.data.modules.length > 0 && (
-                <Panel flush title="Modules it reaches" eyebrow="dependents, by module">
+                <Panel flush title="Modules it reaches">
                   <div className="flex flex-wrap gap-1.5 px-5 py-3">
                     {impact.data.modules.map((m) => (
                       <button key={m.name} onClick={() => setPicked({ link, focus: { module: m.name } })}

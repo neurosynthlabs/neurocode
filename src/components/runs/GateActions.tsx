@@ -18,12 +18,12 @@ const failed = (e: unknown) => (e instanceof ApiError ? e.message : 'The local A
 
 /** What an answer did, in the words the toast uses. */
 const SAID: Record<string, { ok: string; no: string }> = {
-  tests: { ok: 'The command runs now, and this project will not ask again.', no: 'It will not run in this project; the run carries on without it.' },
+  tests: { ok: 'The command runs now, and this project will not ask again.', no: 'It will not run here; the run carries on without it.' },
   signature: { ok: 'The branch is yours to merge.', no: 'The branch and its worktree are removed.' },
-  step: { ok: 'The step runs now.', no: 'The run stops here; its branch stays for you to look at.' },
+  step: { ok: 'The step runs now.', no: 'The run stops here; its branch is kept.' },
   command: { ok: 'The command runs now.', no: 'The command does not run; the step is skipped.' },
   edit: { ok: 'The files are written in the run’s worktree.', no: 'None of the step’s files are written.' },
-  question: { ok: 'The step goes again with your answer, and the answer is kept in memory.', no: 'The step is skipped.' },
+  question: { ok: 'The step goes again with your answer, kept in memory.', no: 'The step is skipped.' },
   other: { ok: 'Your signature is recorded against this action.', no: 'Your answer is recorded.' },
 };
 const SCOPE_SAID: Record<GateScope, string> = {
@@ -81,9 +81,9 @@ export function GateActions({ approval }: { approval: ApprovalRequest }) {
     <div className="mt-3 border-t border-line pt-3">
       {kind === 'question' && (
         <label className="mb-2.5 block">
-          <span className="mb-1.5 block text-[12.5px] text-dim">Your answer — kept on the step and remembered as a decision in this project’s memory</span>
+          <span className="mb-1.5 block text-[12.5px] text-dim">Your answer, kept in this project’s memory</span>
           <Textarea value={words} onChange={(e) => setWords(e.target.value)} maxLength={4000} rows={3} disabled={off}
-            placeholder="Say what to do, in a sentence or two" className="text-[13.5px]" />
+            placeholder="Say what to do" className="text-[13.5px]" />
         </label>
       )}
       <div className="flex flex-wrap items-center gap-2">
@@ -91,12 +91,12 @@ export function GateActions({ approval }: { approval: ApprovalRequest }) {
           <>
             <Button size="sm" onClick={() => void answer('approve', { scope: 'once' })} disabled={off}>{spin ?? <Check className="size-3.5" />}Allow once</Button>
             <Button size="sm" variant="outline" onClick={() => void answer('approve', { scope: 'run' })} disabled={off}
-              title="Anything this run asks about the same thing again is allowed without asking">
+              title="Later asks for the same thing in this run are allowed">
               <CheckCheck className="size-3.5" />Allow for this run
             </Button>
             {can('rules:manage') && (
               <Button size="sm" variant="outline" onClick={() => void answer('approve', { scope: 'project' })} disabled={off}
-                title="Writes a project tool rule that allows exactly this, audited. Edit or remove it under Permissions → Tool rules.">
+                title="Writes an audited project tool rule. Edit it in Permissions → Tool rules.">
                 <ShieldCheck className="size-3.5" />Always allow in this project
               </Button>
             )}
@@ -108,13 +108,13 @@ export function GateActions({ approval }: { approval: ApprovalRequest }) {
             <Button size="sm" onClick={() => void answer('approve', { answer: words.trim() })} disabled={off || !words.trim()}>
               {spin ?? <MessageSquareReply className="size-3.5" />}Answer
             </Button>
-            <Button size="sm" variant="outline" onClick={() => void answer('deny')} disabled={off}><X className="size-3.5" />Decline — skip the step</Button>
+            <Button size="sm" variant="outline" onClick={() => void answer('deny')} disabled={off}><X className="size-3.5" />Decline and skip</Button>
           </>
         )}
         {kind === 'step' && (
           <>
             <Button size="sm" onClick={() => void plain('approve')} disabled={off}>{spin ?? <Play className="size-3.5" />}Continue</Button>
-            <Button size="sm" variant="destructive" onClick={() => void plain('deny')} disabled={off}><Square className="size-3.5" />Stop the run here</Button>
+            <Button size="sm" variant="destructive" onClick={() => void plain('deny')} disabled={off}><Square className="size-3.5" />Stop the run</Button>
           </>
         )}
         {kind === 'tests' && (
@@ -129,7 +129,7 @@ export function GateActions({ approval }: { approval: ApprovalRequest }) {
             <Button size="sm" variant="destructive" onClick={() => void plain('deny')} disabled={off}><X className="size-3.5" />Deny</Button>
           </>
         )}
-        <span className="text-[12px] text-dim sm:ml-auto">{sent ? 'Decided. The run picks it up from here.' : 'Your decision is recorded under your name, and it is final.'}</span>
+        <span className="text-[12px] text-dim sm:ml-auto">{sent ? 'Decided. The run picks it up from here.' : 'Recorded under your name, and final.'}</span>
       </div>
     </div>
   );

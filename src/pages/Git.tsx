@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Dot, Mono, Ascii, ListRow, Segmented, Field,
-  DataTable, Row, Cell, Stat, StatGrid, KV, Empty, Toolbar, SectionTitle,
+  DataTable, Row, Cell, Stat, StatGrid, KV, Empty, Toolbar, SectionTitle, More,
 } from '@/components/os';
 import type { RunDoc, RunStep } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -34,7 +34,7 @@ export default function Git() {
         <Empty
           icon={<FolderGit2 className="size-6" />}
           title={all.length === 0 ? 'No repository onboarded yet' : `${project?.name ?? 'This project'} has no code on this machine`}
-          hint="Onboard a repository in Projects, and its branches, worktrees, commits and the runs waiting on your signature show here."
+          hint="Onboard a repository to see its branches, worktrees and commits."
           action={<Button size="sm" variant="outline" onClick={() => nav('/projects')}>Open Projects</Button>}
         />
       </PageBody>
@@ -103,7 +103,7 @@ function LiveGit({ project }: { project: Project }) {
             <span className="flex items-center gap-1.5"><FolderGit2 className="size-3.5" /><Mono>{data.repo}</Mono></span>
             <span>checked out <Mono tone="brand">{data.head.branch}</Mono> at <Mono>{sha7(data.head.sha)}</Mono></span>
             <Tag tone={data.head.dirty ? 'warn' : 'ok'}>{data.head.dirty ? 'uncommitted changes' : 'clean'}</Tag>
-            {data.shallow && <span className="text-warn">shallow clone: history before it is not on this machine</span>}
+            {data.shallow && <span className="text-warn">shallow clone: older history is not on this machine</span>}
           </div>
         )}
       </PageHeader>
@@ -120,7 +120,7 @@ function LiveGit({ project }: { project: Project }) {
             <Stat label="Worktrees" value={data.stats.worktrees} sub={`${data.stats.dirty} dirty`} />
             <Stat label="Clean merges" value={data.stats.clean} tone={data.stats.clean ? 'ok' : 'neutral'} sub="merge-tree says clean" />
             <Stat label="Collisions" value={data.stats.collisions} tone={data.stats.collisions ? 'danger' : 'neutral'} sub="with the checkout" />
-            <Stat label="Commits today" value={data.stats.commitsToday} sub={`${data.stats.agentCommitsToday} by NeuroCode`} />
+            <Stat label="Commits today" value={data.stats.commitsToday} sub={`${data.stats.agentCommitsToday} by agents`} />
             <Stat label="Awaiting you" value={data.stats.awaitingYou} tone={data.stats.awaitingYou ? 'warn' : 'neutral'} sub="merge gates pending"
               onClick={() => setTab('reviews')} />
           </StatGrid>
@@ -142,7 +142,7 @@ function PushedLine({ pushed }: { pushed: NonNullable<RunDoc['pushed']> }) {
       <Upload className="size-3 text-brand" />Pushed to {pushed.remote} at <Mono>{sha7(pushed.sha)}</Mono> by {pushed.by}, {ago(pushed.at)} ·
       {pushed.compareUrl
         ? <a href={pushed.compareUrl} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">Open pull request ↗</a>
-        : <span>this remote has no pull request page NeuroCode knows how to open</span>}
+        : <span>no known pull request page for this remote</span>}
     </p>
   );
 }
@@ -176,7 +176,7 @@ function LiveWorktrees({ project, data, stamp }: { project: Project; data: GitOv
   if (!wt) {
     return (
       <Empty icon={<FolderGit2 className="size-6" />} title="No worktree beside the checkout"
-        hint="A dispatched plan gives each agent a worktree on a branch of its own. They show here as soon as one starts." />
+        hint="A dispatched plan gives each agent its own worktree here." />
     );
   }
 
@@ -237,17 +237,17 @@ function LiveWorktrees({ project, data, stamp }: { project: Project; data: GitOv
               {wt.merged && <p className="text-ok">Merged into {wt.merged.into} as <Mono>{wt.merged.commit}</Mono> · undo with <Mono>{wt.merged.undo}</Mono></p>}
               {wt.mergeBlocked && !wt.merged && <p>Merge: {wt.mergeBlocked}</p>}
               {pushed ? <PushedLine pushed={pushed} />
-                : wt.runRef ? <p>Once you accept <Link to={`/runs?ref=${encodeURIComponent(wt.runRef)}`} className="text-brand hover:underline">the run</Link>, push its branch from there: your own git credentials, never forced.</p>
+                : wt.runRef ? <p>Accept <Link to={`/runs?ref=${encodeURIComponent(wt.runRef)}`} className="text-brand hover:underline">the run</Link>, then push from there: your credentials, never forced.</p>
                   : <p>To share it for review, push it yourself: <Mono>git push origin {wt.branch}</Mono></p>}
             </div>
           </Panel>
 
           <Panel flush title="Diff"
             eyebrow={diff.data ? `${diff.data.files.length} files · ${against === 'head' ? `what merging into ${diff.data.against} would bring` : `since ${diff.data.against || 'its base'}`}` : against === 'head' ? `against ${data.head.branch}` : 'since its base'}>
-            {!branchKnown ? <Empty title="No branch to read" hint="The branch this worktree was on no longer exists." />
+            {!branchKnown ? <Empty title="No branch to read" hint="Its branch no longer exists." />
               : diff.error ? <Empty title="The diff did not load" hint={diff.error} />
                 : !diff.data ? <Empty icon={<Loader2 className="size-5 animate-spin" />} title="Reading the diff…" />
-                  : diff.data.files.length === 0 ? <Empty title="No changes" hint={against === 'head' ? `Merging it would bring nothing into ${data.head.branch}.` : 'The branch has no commits beyond its base.'} />
+                  : diff.data.files.length === 0 ? <Empty title="No changes" hint={against === 'head' ? `Merging it would bring nothing into ${data.head.branch}.` : 'No commits beyond its base.'} />
                     : <DiffFiles files={diff.data.files} truncated={diff.data.truncated} />}
           </Panel>
 
@@ -255,9 +255,7 @@ function LiveWorktrees({ project, data, stamp }: { project: Project; data: GitOv
         </div>
       </div>
 
-      <Panel eyebrow="The checkout and every worktree beside it" title="Worktree layout">
-        <Ascii className="overflow-auto">{tree}</Ascii>
-      </Panel>
+      <More label="Worktree layout"><Ascii className="overflow-auto">{tree}</Ascii></More>
     </>
   );
 }
@@ -281,7 +279,7 @@ function DiffFiles({ files, truncated }: { files: GitChangedFile[]; truncated: b
           )}
         </div>
       ))}
-      {truncated && <p className="px-5 py-2.5 text-[12.5px] text-warn">The diff is larger than this screen shows. Read the rest with git in the worktree.</p>}
+      {truncated && <p className="px-5 py-2.5 text-[12.5px] text-warn">Truncated. Read the rest with git in the worktree.</p>}
     </div>
   );
 }
@@ -289,7 +287,7 @@ function DiffFiles({ files, truncated }: { files: GitChangedFile[]; truncated: b
 function MergePreviewPanel({ data }: { data: GitOverview }) {
   const rows: GitMergePreview[] = data.mergePreview;
   return (
-    <Panel eyebrow={`What merging into ${data.head.branch} would do today`} title="Merge preview" flush>
+    <Panel eyebrow={`If merged into ${data.head.branch}`} title="Merge preview" flush>
       {rows.length === 0 ? <Empty title="Nothing waiting to merge" hint={`No open branch has commits that ${data.head.branch} does not.`} /> : (
         <DataTable head={['Branch', 'Into', 'Result', 'Files', 'Note']}>
           {rows.map((m) => (
@@ -314,13 +312,13 @@ function LiveConflicts({ pid, stamp }: { pid: string; stamp: string }) {
   const c = useRemote(`${pid}:conflicts:${stamp}`, () => gitApi.conflicts(pid));
   if (c.error) return <Empty title="The collisions did not load" hint={c.error} />;
   if (!c.data) return <Empty icon={<Loader2 className="size-5 animate-spin" />} title="Asking git where the branches collide…" />;
-  if (c.data.length === 0) return <Empty icon={<Check className="size-6" />} title="No collisions" hint="Every open branch merges cleanly into the checkout and with the others." />;
+  if (c.data.length === 0) return <Empty icon={<Check className="size-6" />} title="No collisions" hint="Every open branch merges cleanly." />;
   return (
     <div className="space-y-3">
       {c.data.map((x) => (
         <Panel key={x.id} className="border-danger/35" eyebrow={x.region ? `${x.taskRef} · ${x.region}` : x.taskRef}
           title={<span className="flex items-center gap-2"><TriangleAlert className="size-3.5 text-danger" /><Mono>{x.file}</Mono></span>}>
-          {x.hunks.length === 0 ? <p className="text-[13px] text-dim">Only the file list was recorded; the lines are not available to show.</p> : (
+          {x.hunks.length === 0 ? <p className="text-[13px] text-dim">Only the file list was recorded, not the lines.</p> : (
             <div className="grid grid-cols-1 gap-2.5 lg:grid-cols-2">
               {x.hunks.map((h) => (
                 <div key={h.side} className="rounded-lg bg-base p-3 ring-1 ring-line/60 ring-inset">
@@ -364,7 +362,7 @@ function LiveCommits({ pid, stamp }: { pid: string; stamp: string }) {
         <Field className="w-72" value={q} onChange={setQ} icon={<Search className="size-3.5" />} placeholder="Search commits, authors, branches…" onClear={() => setQ('')} />
         <span className="ml-auto text-[12.5px] text-dim">{shown.length} of {all.length}</span>
       </Toolbar>
-      {c.data?.shallow && <p className="pb-3 text-[12.5px] text-warn">This is a shallow clone: commits from before it was cloned are not on this machine.</p>}
+      {c.data?.shallow && <p className="pb-3 text-[12.5px] text-warn">Shallow clone: older commits are not on this machine.</p>}
       <Panel flush>
         {c.error ? <Empty title="The history did not load" hint={c.error} />
           : !c.data ? <Empty icon={<Loader2 className="size-5 animate-spin" />} title="Reading the history…" />
@@ -424,7 +422,7 @@ function LiveReviews({ runs, data }: { runs: RunDoc[]; data: GitOverview }) {
   const [busy, setBusy] = useState<string | null>(null);
 
   if (runs.length === 0) {
-    return <Empty icon={<GitPullRequest className="size-6" />} title="Nothing to review" hint="A run that finishes its work stops at your signature and shows here, with its steps as checks." />;
+    return <Empty icon={<GitPullRequest className="size-6" />} title="Nothing to review" hint="A finished run waits here for your signature." />;
   }
 
   const approve = async (run: RunDoc) => {
@@ -432,7 +430,7 @@ function LiveReviews({ runs, data }: { runs: RunDoc[]; data: GitOverview }) {
     setBusy(run.ref);
     const ok = await decide(run.waitingOn, 'approve');
     setBusy(null);
-    if (ok) toast('Approved', { description: `${run.ref} finishes in the background. Merge appears here once it is done.` });
+    if (ok) toast('Approved', { description: `${run.ref} finishes in the background; merge it here after.` });
   };
   const refuse = async (run: RunDoc) => {
     if (!run.waitingOn) return;
@@ -509,7 +507,7 @@ function LiveReviews({ runs, data }: { runs: RunDoc[]; data: GitOverview }) {
                       </Button>
                     )}
                     {p.state === 'open' && !canMerge && wt?.mergeBlocked && <span className="text-[12px] text-dim">{wt.mergeBlocked}</span>}
-                    <Link to={`/runs?ref=${encodeURIComponent(run.ref)}`} className="ml-auto text-[12.5px] text-brand hover:underline">Open the run →</Link>
+                    <Link to={`/runs?ref=${encodeURIComponent(run.ref)}`} className="ml-auto text-[12.5px] text-brand hover:underline">Open run →</Link>
                   </div>
                 </div>
               </div>

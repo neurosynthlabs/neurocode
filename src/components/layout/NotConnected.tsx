@@ -58,8 +58,7 @@ export function NotConnected({ reason, onRetry, variant = 'screen' }: {
         </div>
 
         <p className="mt-4 text-[13.5px] leading-relaxed text-soft">
-          NeuroCode could not reach its API, and the workspace lives behind it — so there is nothing to show
-          until it answers.
+          The API did not answer, and the workspace lives behind it.
         </p>
         {reason && <p className="mt-2 font-mono text-[12px] leading-relaxed break-words text-dim">{reason}</p>}
 
@@ -69,8 +68,8 @@ export function NotConnected({ reason, onRetry, variant = 'screen' }: {
           <Button size="xs" variant="ghost" onClick={() => void copy()} aria-label="Copy the command"><Copy className="size-3" />Copy</Button>
         </div>
         <p className="mt-1.5 text-[12px] leading-relaxed text-dim">
-          It starts the API and this web app together; Postgres has to be running first. If the API is
-          already up, <code className="font-mono">./scripts/dev.sh logs api</code> says why it is not answering.
+          Starts the API and this app; Postgres must be running first. If the API is up,{' '}
+          <code className="font-mono">./scripts/dev.sh logs api</code> says why it is silent.
         </p>
 
         <Button className="mt-5" onClick={() => void retry()} disabled={busy}>

@@ -8,7 +8,7 @@ import { extensionsAdmin, HOOKS_PERMISSION, type GovernedHook, type HookFiring }
 import { Button } from '@/components/ui/button';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Mono, Toolbar, SelectField, DataTable, Row, Cell,
-  Stat, StatGrid, KV, Empty, SectionTitle,
+  Stat, StatGrid, KV, Empty, SectionTitle, More,
 } from '@/components/os';
 import { cn } from '@/lib/utils';
 
@@ -82,7 +82,12 @@ function LiveHooks() {
     <Page>
       <PageHeader
         title="Hooks"
-        subtitle={`What Claude Code runs around its tool calls, read from its settings files${project ? ` for ${project.name}` : ' in the workspace'} and from enabled plugins. None of them runs here until a tool rule allows that one by name.`}
+        subtitle="What Claude Code runs around tool calls, and which may run here."
+        about={<>
+          <p>Read from Claude Code's settings files{project ? ` for ${project.name}` : ' in the workspace'} and enabled plugins.</p>
+          <p>A hook is someone's shell script, so each is refused by default. A <Mono>hook</Mono> tool rule in Permissions allows one, matched on <Mono>event/command</Mono>.</p>
+          <p>An allowed hook fires in the project's checkout, with a timeout. Every firing is in the activity feed.</p>
+        </>}
         actions={r.data && (
           <div className="flex items-center gap-1.5">
             <Tag tone={allowed ? 'ok' : 'neutral'}><ShieldCheck className="size-3" />{allowed} allowed to run</Tag>
@@ -109,33 +114,23 @@ function LiveHooks() {
         <PageBody><Empty icon={<Loader2 className="size-5 animate-spin" />} title="Reading settings files…" /></PageBody>
       ) : (
         <PageBody className="space-y-4">
-          <StatGrid cols={4}>
+          {all.length > 0 && <StatGrid cols={4}>
             <Stat label="Hooks" value={all.length} sub={`in ${files.filter((f) => f.exists).length} settings files and ${new Set(all.filter((x) => x.scope === 'plugin').map((x) => x.source)).size} plugins`} icon={<Webhook className="size-3" />} />
-            <Stat label="A rule allows" value={allowed} tone={allowed ? 'ok' : undefined} sub={allowed ? 'these run at their event' : 'none runs until you write a rule'} />
+            <Stat label="A rule allows" value={allowed} tone={allowed ? 'ok' : undefined} sub={allowed ? 'these run at their event' : 'none runs without a rule'} />
             <Stat label="Shown only" value={all.length - allowed} sub="found, never run" />
             <Stat label="Can block" value={blocking} tone="warn" sub="exit 2 refuses the action, where a rule allows it" />
-          </StatGrid>
+          </StatGrid>}
 
-          <Panel className="accent-left" eyebrow="A hook runs only where you said so"
-            title={allowed ? `${allowed} of these ${all.length} may run here` : 'None of these runs here yet'}>
-            <p className="max-w-4xl text-[13.5px] leading-relaxed text-ink-2">
-              A hook in a settings file is somebody's shell script, so NeuroCode refuses every one of them
-              by default. Write a tool rule of kind <Mono>hook</Mono> in Governance → Permissions —
-              its pattern is matched against <Mono>event/command</Mono>, the command exactly as the file
-              writes it — and that hook then fires at its event, in this project's checkout, with a timeout
-              and its output cut. Every firing is in the activity feed.
+          {all.length > 0 && !canRun && (
+            <p className="text-[12.5px] text-warn">
+              Nothing can run here now: {project ? 'no checkout on this machine' : 'no project is open'}, or machine access is off. Allowed hooks are still listed.
             </p>
-            {!canRun && (
-              <p className="mt-2 max-w-4xl text-[12.5px] text-warn">
-                Nothing can run here right now: {project ? 'this project has no checkout on this machine' : 'no project is open'}, or machine access is off on this server. Allowed hooks are still listed.
-              </p>
-            )}
-          </Panel>
+          )}
 
           {all.length === 0 ? (
             <Panel>
               <Empty icon={<Webhook className="size-6" />} title="No hooks configured"
-                hint={`None in ${files.map((f) => `${f.path}${f.exists ? '' : ' (missing)'}`).join(', ')}, or in an enabled plugin.`} />
+                hint="None in the settings files below, or in an enabled plugin." />
             </Panel>
           ) : (
             <>
@@ -175,23 +170,23 @@ function LiveHooks() {
                     <KV k="Timeout" v={h.timeoutS ? `${h.timeoutS} s, capped at 60 s` : 'up to 60 s'} />
                     <KV k="Exit 0" v="the event carries on" />
                     <KV k="Exit 2" v={h.blocking
-                      ? <span className="text-warn">what was about to happen is refused, and the hook's words are the refusal</span>
+                      ? <span className="text-warn">refuses the action; its output is the reason</span>
                       : <span className="text-dim">its output is kept; the action still happens</span>} />
                   </div>
                   <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
                     <Button size="sm" variant="outline" onClick={() => void copyPattern(h)}>
-                      <Copy className="size-3.5" />Copy its rule pattern
+                      <Copy className="size-3.5" />Copy pattern
                     </Button>
                     <Button size="sm" disabled={!h.allowed || !canRun || !can(HOOKS_PERMISSION) || firing === h.id}
                       onClick={() => void runNow(h)}>
                       {firing === h.id ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
-                      Run it once
+                      Run once
                     </Button>
                     <span className="text-[12px] text-dim">
-                      {!h.allowed ? 'Write a `hook` rule allowing this one, and this button runs it.'
-                        : !canRun ? 'There is nowhere to run it on this machine right now.'
+                      {!h.allowed ? 'Needs a hook rule that allows it.'
+                        : !canRun ? 'Nowhere to run it on this machine now.'
                           : !can(HOOKS_PERMISSION) ? `Running one needs ${HOOKS_PERMISSION}.`
-                            : 'The same rule decides, the same limits hold, and the firing is logged.'}
+                            : 'Same rule, same limits; the firing is logged.'}
                     </span>
                   </div>
                   {fired && fired.hookId === h.id && (
@@ -200,7 +195,7 @@ function LiveHooks() {
                       <pre className="mt-1.5 max-h-72 overflow-auto rounded-xs border border-line bg-surface-2 p-3 text-[12px] leading-relaxed whitespace-pre-wrap text-ink-2">
                         {fired.ran ? (fired.output || '(it printed nothing)') : fired.why}
                       </pre>
-                      {fired.blocked && <p className="mt-1.5 text-[12.5px] text-warn">On its own event this would have refused what was about to happen.</p>}
+                      {fired.blocked && <p className="mt-1.5 text-[12.5px] text-warn">On its own event, this would have refused the action.</p>}
                     </div>
                   )}
                 </Panel>
@@ -208,7 +203,7 @@ function LiveHooks() {
             </>
           )}
 
-          <SectionTitle>Files read</SectionTitle>
+          <More label="Files read">
           <Panel flush>
             <div className="divide-y divide-line/60">
               {files.map((f) => (
@@ -221,9 +216,10 @@ function LiveHooks() {
               ))}
             </div>
             <p className="border-t border-line/60 px-5 py-2.5 text-[12.5px] text-dim">
-              Only the hooks in each file are read. Everything else in them — environment, permissions, helpers — never leaves the server.
+              Only hooks are read. Everything else in these files stays on the server.
             </p>
           </Panel>
+          </More>
         </PageBody>
       )}
     </Page>

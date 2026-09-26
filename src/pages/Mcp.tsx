@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
   Page, PageHeader, PageBody, Panel, Tag, RiskPill, Dot, Mono, ListRow, Toolbar, Field,
-  SelectField, DataTable, Row, Cell, Stat, StatGrid, KV, Empty, Ascii, StatusText, Wizard,
+  SelectField, DataTable, Row, Cell, Stat, StatGrid, KV, Empty, Ascii, StatusText, Wizard, More,
 } from '@/components/os';
 import { useAuth } from '@/lib/auth';
 import { useData } from '@/lib/data';
@@ -54,9 +54,9 @@ function connectionProblem(transport: string, raw: string): string | null {
 }
 
 const TRANSPORTS = [
-  { id: 'stdio', label: 'stdio', note: 'A local process the OS launches and talks to over pipes. Fastest, and the most common.' },
+  { id: 'stdio', label: 'stdio', note: 'A local process, talked to over pipes. The most common.' },
   { id: 'http', label: 'Streamable HTTP', note: 'A remote server over HTTPS. Needs a URL and usually a token.' },
-  { id: 'sse', label: 'SSE (legacy)', note: 'The older remote transport. A check speaks streamable HTTP to it, so a server that only speaks the old transport reports why it refused.' },
+  { id: 'sse', label: 'SSE (legacy)', note: 'The older remote transport. A check speaks streamable HTTP, so an SSE-only server says why it refused.' },
 ];
 
 const STATUSES: McpServer['status'][] = ['connected', 'disconnected', 'error', 'auth_required'];
@@ -138,7 +138,12 @@ export default function Mcp() {
     <Page>
       <PageHeader
         title="MCP & Tools"
-        subtitle="Model Context Protocol servers this workspace knows about. A check connects once and records what each one offers."
+        subtitle="Model Context Protocol servers the workspace knows, and their tools."
+        about={<>
+          <p>A check connects once and records what a server offers.</p>
+          <p>Tool output is untrusted input. An untrusted server is never launched, and none of its tools is called.</p>
+          <p>A checked server's tool runs only under the tool rules. What it answers is shown to you, never stored.</p>
+        </>}
         actions={<Button size="sm" onClick={() => setAdd(true)}><Plus className="size-3.5" />Add server</Button>}
       >
         {servers.length > 0 && (
@@ -155,7 +160,7 @@ export default function Mcp() {
       <PageBody className="space-y-4">
         {servers.length === 0 ? (
           <Empty icon={<Server className="size-6" />} title="No MCP servers registered"
-            hint="Add one to record how it is launched or reached. Check it afterwards to see the tools it offers."
+            hint="Record how it is launched or reached, then check its tools."
             action={<Button size="sm" variant="outline" onClick={() => setAdd(true)}>Register a server</Button>} />
         ) : (
           <>
@@ -166,21 +171,16 @@ export default function Mcp() {
               <Stat label="Untrusted" value={untrusted.length} tone={untrusted.length ? 'warn' : 'neutral'} sub="never launched" icon={<ShieldAlert className="size-3" />} />
             </StatGrid>
 
-            <Panel className="border-warn/30 accent-left" eyebrow="Enforced on every call" title="Tool output is untrusted input">
-              <p className="text-[13.5px] leading-relaxed text-ink-2">
-                An untrusted server is never launched and none of its tools is called. A checked server's tool runs only
-                under the tool rules (Permissions → Tool rules), and what it answers is shown to you, never stored.
-              </p>
-              {untrusted.length > 0 && (
-                <div className="mt-2.5 flex flex-wrap gap-1">
-                  {untrusted.map((m) => <Tag key={m.id} tone="warn">{m.name}</Tag>)}
-                </div>
-              )}
-            </Panel>
+            {untrusted.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 text-[12.5px] text-dim">
+                <ShieldAlert className="size-3.5 text-warn" />Untrusted, never launched:
+                {untrusted.map((m) => <Tag key={m.id} tone="warn">{m.name}</Tag>)}
+              </div>
+            )}
 
             <div className="flex min-h-[520px] flex-col gap-3 md:flex-row">
               <div className="no-scrollbar w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[290px] overflow-y-auto rounded-md border border-line bg-surface">
-                {list.length === 0 ? <Empty title="No server matches" hint="Clear the search or the status filter." /> : list.map((m) => (
+                {list.length === 0 ? <Empty title="No server matches" hint="Clear the filters." /> : list.map((m) => (
                   <ListRow key={m.id} active={m.id === srv?.id} onClick={() => setSel(m.id)}>
                     <div className="flex items-center gap-2">
                       <Dot state={m.checkedAt ? m.status : 'idle'} pulse={m.status === 'connected' && !!m.checkedAt} />
@@ -227,15 +227,16 @@ export default function Mcp() {
                     )}
                     {srv.transport === 'stdio' && srv.untrusted && (
                       <p className="mt-2.5 text-[12.5px] text-dim">
-                        Checking launches this command on the machine running NeuroCode, so it needs trusting first — by someone with {LAUNCH_PERMISSION}.
+                        Checking launches this command here, so someone with {LAUNCH_PERMISSION} must trust it first.
                       </p>
                     )}
                   </Panel>
 
-                  <Panel eyebrow={srv.checkedAt ? `${srv.tools.length} listed at the last check · risk from the tool's own hints` : 'not checked yet'} title="Tools" flush>
+                  <Panel eyebrow={srv.checkedAt ? `${srv.tools.length} at the last check` : 'not checked yet'} title="Tools" flush
+                    about="Risk comes from the tool's own hints.">
                     {srv.tools.length === 0 ? (
-                      <Empty title={srv.checkedAt ? 'The server listed no tools' : 'Tools are listed when the server is checked'}
-                        hint={srv.checkedAt ? (srv.status === 'connected' ? 'It connected and offers none.' : 'The last check did not connect.') : 'A check connects once and asks the server what it offers.'} />
+                      <Empty title={srv.checkedAt ? 'The server listed no tools' : 'Not checked yet'}
+                        hint={srv.checkedAt ? (srv.status === 'connected' ? 'It connected and offers none.' : 'The last check did not connect.') : 'Check it to list its tools.'} />
                     ) : (
                       <DataTable head={['Tool', 'What it does', 'Risk', '']}>
                         {srv.tools.map((t) => (
@@ -259,9 +260,9 @@ export default function Mcp() {
                     <TryTool key={`${srv.id}/${trying.tool}`} server={srv} tool={trying.tool} onClose={() => setTrying(null)} />
                   )}
 
-                  <Panel eyebrow="As reviewed in the wizard" title="Server config">
+                  <More label="Server config">
                     <Ascii className="max-h-[240px] overflow-auto">{srv.config ?? '// no config recorded for this server'}</Ascii>
-                  </Panel>
+                  </More>
                 </div>
               )}
             </div>
@@ -273,7 +274,7 @@ export default function Mcp() {
         open={add}
         onOpenChange={setAdd}
         title="Add an MCP server"
-        description="A new server is recorded untrusted and not checked. Check it afterwards to see what it offers."
+        description="It starts untrusted and unchecked."
         finishLabel="Register server"
         busy={busy}
         onFinish={async () => {
@@ -337,9 +338,8 @@ export default function Mcp() {
                 <div className="flex items-start gap-2.5 rounded-sm border border-warn/30 bg-warn/8 px-3 py-2.5">
                   <ShieldAlert className="mt-px size-3.5 shrink-0 text-warn" />
                   <span className="text-[13px] leading-relaxed text-warn">
-                    <span className="font-semibold">A new server starts untrusted.</span> Until someone trusts it, a stdio
-                    server's command is never launched, not even to check it. The default effect below is recorded for
-                    when agents can call its tools.
+                    <span className="font-semibold">A new server starts untrusted.</span> Its command is never launched
+                    until someone trusts it. The effect below is recorded for when agents call its tools.
                   </span>
                 </div>
                 <SelectField label="Default effect for its tools" value={effect} onChange={setEffect}
@@ -428,7 +428,7 @@ function TryTool({ server, tool, onClose }: { server: McpServer; tool: string; o
               {!answer.ok ? 'call failed' : answer.isError ? 'the tool reported an error' : 'answered'}
             </Tag>
             {answer.ms !== null && <span className="tnum text-[12px] text-dim">{answer.ms} ms</span>}
-            {answer.truncated && <span className="text-[12px] text-dim">cut to the first 20,000 characters</span>}
+            {answer.truncated && <span className="text-[12px] text-dim">truncated to 20,000 characters</span>}
             <span className="text-[12px] text-dim">{answer.decision.why}</span>
           </div>
           {answer.ok ? (

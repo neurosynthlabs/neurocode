@@ -61,7 +61,6 @@ const Settings = lazy(() => import('@/pages/Settings'));
 const People = lazy(() => import('@/pages/admin/People'));
 const Roles = lazy(() => import('@/pages/admin/Roles'));
 const Teams = lazy(() => import('@/pages/admin/Teams'));
-const AiProviders = lazy(() => import('@/pages/admin/AiProviders'));
 const Audit = lazy(() => import('@/pages/admin/Audit'));
 const WorkspacePage = lazy(() => import('@/pages/admin/Workspace'));
 const DatabasePage = lazy(() => import('@/pages/admin/Database'));
@@ -91,7 +90,7 @@ function Guard({ to, children }: { to: string; children: ReactNode }) {
         <Empty
           icon={<ShieldAlert className="size-6" />}
           title={item ? `${item.label} is part of ${where}` : 'This screen needs a permission'}
-          hint={`${roleNames || 'Your role'} does not include “${permissionLabel(catalogue, perm[0])}”. An Owner or Admin can grant it in Admin → Roles & permissions, or give you a role that has it in Admin → People.`}
+          hint={`${roleNames || 'Your role'} does not include “${permissionLabel(catalogue, perm[0])}”. An Owner or Admin can grant it in Admin → Roles.`}
         />
       </PageBody>
     </Page>
@@ -190,7 +189,8 @@ function Shell() {
                   <Route path="/admin/users" element={<Guard to="/admin/users"><People /></Guard>} />
                   <Route path="/admin/roles" element={<Guard to="/admin/roles"><Roles /></Guard>} />
                   <Route path="/admin/teams" element={<Guard to="/admin/teams"><Teams /></Guard>} />
-                  <Route path="/admin/ai" element={<Guard to="/admin/ai"><AiProviders /></Guard>} />
+                  {/* Keys moved into Models; old links still land there. */}
+                  <Route path="/admin/ai" element={<Navigate to="/models?tab=keys" replace />} />
                   <Route path="/admin/audit" element={<Guard to="/admin/audit"><Audit /></Guard>} />
                   <Route path="/admin/workspace" element={<Guard to="/admin/workspace"><WorkspacePage /></Guard>} />
                   <Route path="/admin/database" element={<Guard to="/admin/database"><DatabasePage /></Guard>} />

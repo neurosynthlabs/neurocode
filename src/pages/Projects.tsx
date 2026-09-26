@@ -7,7 +7,7 @@ import {
 import { Button } from '@/components/ui/button';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Dot, BlockBar, Segmented, Mono,
-  SectionTitle, Empty, KV, Field, Wizard,
+  Empty, KV, Field, Wizard, More, About,
 } from '@/components/os';
 import { RolePick } from '@/components/projects/SourcesPanel';
 import { FolderPicker } from '@/components/workbench/FolderPicker';
@@ -93,7 +93,7 @@ function repoProblem(source: 'git' | 'local', repo: string, branch: string): str
     that is a folder name no other source of the new project has taken. */
 function sourceProblem(draft: SourceInput, taken: string[]): string | null {
   const label = draft.label.trim();
-  if (!label) return 'Give it a label — the folder its files appear under in the project';
+  if (!label) return 'Give it a label: the folder its files appear under';
   if (!LABEL.test(label)) return 'A label is lower-case letters, digits, dots, dashes or underscores';
   if (taken.includes(label)) return `Another source is already called ${label}`;
   return repoProblem(draft.kind, draft.repo, draft.branch);
@@ -290,7 +290,7 @@ export default function Projects() {
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search projects, stacks, codenames…"
+              placeholder="Search projects…"
               className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-dim focus-visible:outline-none"
             />
           </div>
@@ -315,7 +315,7 @@ export default function Projects() {
             hint="Open a folder, import an archive, clone a repository, or start empty."
             action={<Button size="sm" variant="outline" onClick={() => setNewOpen(true)}>New project</Button>} />
         ) : list.length === 0 ? (
-          <Empty title="No project matches those filters" hint="Clear the search or widen the kind/status filter." />
+          <Empty title="No project matches those filters" hint="Clear the search or filters." />
         ) : (
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
             {list.map((p) => (
@@ -329,14 +329,14 @@ export default function Projects() {
                     </div>
                     <div className="mt-1 flex items-center gap-2">
                       <Mono>{p.codename}</Mono>
-                      <span className="eyebrow">{p.kind}</span>
+                      <span className="text-[11.5px] text-dim">{p.kind}</span>
                     </div>
                   </div>
                   <span className="shrink-0 text-right">
                     {p.understoodPct === null
                       ? <span className="block text-[12.5px] text-dim">{p.status === 'onboarding' ? 'reading…' : 'not indexed'}</span>
                       : <span className="tnum block text-[17px] leading-none font-semibold text-brand">{p.understoodPct}%</span>}
-                    <span className="eyebrow">understood</span>
+                    <span className="block text-[11px] text-dim">understood</span>
                   </span>
                 </div>
 
@@ -366,7 +366,7 @@ export default function Projects() {
                       { icon: GitBranch, v: p.storedProcs, l: 'sprocs' },
                     ].map(({ icon: Icon, v, l }) => (
                       <div key={l}>
-                        <div className="flex items-center gap-1 text-dim"><Icon className="size-3" /><span className="eyebrow">{l}</span></div>
+                        <div className="flex items-center gap-1 text-dim"><Icon className="size-3" /><span className="text-[11px]">{l}</span></div>
                         <div className="tnum mt-0.5 text-[14px] font-medium text-ink">{v}</div>
                       </div>
                     ))}
@@ -405,10 +405,10 @@ export default function Projects() {
         )}
 
         {/* Global brain vs isolated memory */}
-        <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+        {projects.length > 0 && <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
           <Panel eyebrow="Shared across every project" title={<span className="flex items-center gap-1.5"><Brain className="size-3.5 text-brand" />Global AI Brain</span>} className="xl:col-span-2" flush>
             {brain.length === 0 ? (
-              <Empty title="Nothing in the global brain yet" hint="Facts saved as Global in Memory are shared by every project."
+              <Empty title="Nothing in the global brain yet"
                 action={<Button size="sm" variant="outline" onClick={() => nav('/memory')}>Open Memory</Button>} />
             ) : (
               <div className="divide-y divide-line">
@@ -436,7 +436,7 @@ export default function Projects() {
 
           <Panel eyebrow="Never leaves its project" title={<span className="flex items-center gap-1.5"><Lock className="size-3.5 text-warn" />Isolated memory</span>} flush>
             {isolated.length === 0 ? (
-              <Empty title="No project memory yet" hint="Facts remembered for one project are listed here, by project." />
+              <Empty title="No project memory yet" />
             ) : (
               <div className="divide-y divide-line">
                 {isolated.map(([pid, facts]) => (
@@ -455,7 +455,7 @@ export default function Projects() {
               </div>
             )}
           </Panel>
-        </div>
+        </div>}
       </PageBody>
 
       {/* Onboarding wizard */}
@@ -463,7 +463,7 @@ export default function Projects() {
         open={wizardOpen}
         onOpenChange={setWizard}
         title="New project"
-        description="NeuroCode reads the codebase before it is allowed to change anything: it measures it, indexes its code and builds retrieval over its code and documents."
+        description="Nothing changes until the code is read, measured and indexed."
         finishLabel={door === 'archive' ? 'Import and onboard' : door === 'empty' ? 'Create and onboard' : 'Start onboarding'}
         busy={busy}
         onFinish={async () => {
@@ -559,7 +559,7 @@ export default function Projects() {
                         <Upload className="size-4 shrink-0 text-brand" />
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-[13px] text-ink">{upload ? upload.name : 'Choose a .zip, .tar.gz or .tgz file'}</span>
-                          <span className="block text-[12px] text-dim">{upload ? bytes(upload.size) : 'It is sent to the API, checked like any archive, unpacked, and the copy deleted.'}</span>
+                          <span className="block text-[12px] text-dim">{upload ? bytes(upload.size) : 'Checked and unpacked; the upload is then deleted.'}</span>
                         </span>
                         <input type="file" accept={ARCHIVES.join(',')} className="sr-only"
                           onChange={(e) => setUpload(e.target.files?.[0] ?? null)} />
@@ -569,13 +569,13 @@ export default function Projects() {
                       survey.error ? (
                         <p className="rounded-lg border border-danger/40 bg-danger/5 px-3 py-2 text-[12.5px] text-danger [overflow-wrap:anywhere]">{survey.error}</p>
                       ) : !survey.data ? (
-                        <p className="flex items-center gap-2 text-[12.5px] text-dim"><Loader2 className="size-3.5 animate-spin" />Reading every entry of the archive…</p>
+                        <p className="flex items-center gap-2 text-[12.5px] text-dim"><Loader2 className="size-3.5 animate-spin" />Reading the archive…</p>
                       ) : (
                         <div className="rounded-lg border border-line bg-base px-3 py-2 text-[12.5px]">
                           <p className="text-ink-2">
                             {survey.data.name} · {bytes(survey.data.bytes)} → {survey.data.files.toLocaleString()} {survey.data.files === 1 ? 'file' : 'files'}, {bytes(survey.data.total)} unpacked
                           </p>
-                          {survey.data.top && <p className="text-dim">Its single top folder <span className="font-mono">{survey.data.top}/</span> is dropped, so the files sit at the project's root.</p>}
+                          {survey.data.top && <p className="text-dim">Its top folder <span className="font-mono">{survey.data.top}/</span> is dropped; files sit at the project root.</p>}
                           {survey.data.sample.length > 0 && (
                             <p className="mt-1 truncate font-mono text-[11.5px] text-dim" title={survey.data.sample.join('\n')}>{survey.data.sample.slice(0, 6).join('  ')}</p>
                           )}
@@ -597,7 +597,7 @@ export default function Projects() {
                       )}
                     </div>
                     <Field label="Folder name" value={folderName} onChange={setFolderName} mono placeholder="shop"
-                      hint={target ? `A new folder, ${target} — refused if it already exists, never merged.` : 'A new folder; one that already exists is refused, never merged.'} />
+                      hint={target ? `${target} — refused if it exists, never merged` : 'Refused if it exists, never merged.'} />
                   </div>
                 )}
 
@@ -615,11 +615,10 @@ export default function Projects() {
             id: 'scope', title: 'Scope', hint: 'what gets read',
             content: (
               <div className="space-y-3">
-                <Field label="Excluded paths — never parsed, embedded or shown to a model" value={excluded} onChange={setExcluded} mono />
+                <Field label="Excluded paths" value={excluded} onChange={setExcluded} mono
+                  hint="Never parsed, embedded or shown to a model." />
                 <div className="rounded-sm border border-line bg-base px-3 py-2 text-[12.5px] leading-relaxed text-soft">
-                  Everything else in the repository is read: its source files, the tables and procedures its SQL files
-                  declare, its git history when it has one, and its README, docs and notes. Languages are measured once
-                  the files are read.
+                  Everything else is read: code, SQL, git history and docs.
                 </div>
               </div>
             ),
@@ -629,8 +628,7 @@ export default function Projects() {
             content: (
               <div className="space-y-3">
                 <p className="text-[13px] leading-relaxed text-soft">
-                  Tick the ones this project should follow, and they are recorded as its rules. They are recorded, not
-                  yet enforced: nothing checks a change against them today.
+                  Recorded, not yet enforced: nothing checks a change against them.
                 </p>
                 <div className="divide-y divide-line rounded-sm border border-line">
                   {SUGGESTED_RULES.map((r) => {
@@ -652,10 +650,7 @@ export default function Projects() {
                 </div>
                 <div className="flex items-start gap-2 rounded-sm border border-line bg-base px-3 py-2">
                   <Lock className="mt-px size-3.5 shrink-0 text-warn" />
-                  <p className="text-[12.5px] text-soft">
-                    Facts remembered for this project stay with it. A fact saved as Global in Memory is shared by every
-                    project.
-                  </p>
+                  <p className="text-[12.5px] text-soft">This project's facts stay with it. Global facts are shared by all.</p>
                 </div>
               </div>
             ),
@@ -664,10 +659,9 @@ export default function Projects() {
             id: 'sources', title: 'More sources', hint: extras.length || readsFrom.size ? `${extras.length + readsFrom.size} added` : 'optional',
             content: (
               <div className="space-y-3">
-                <p className="text-[13px] leading-relaxed text-soft">
-                  Add another folder or repository that belongs to this project — the API beside the web app, a shared
-                  library, a data repository. Each is onboarded the same way, and its files appear in the project under
-                  its label, so search, impact and runs span all of them.
+                <p className="flex items-center gap-1 text-[13px] leading-relaxed text-soft">
+                  Another folder or repository, such as an API or shared library.
+                  <About>Each is onboarded the same way. Its files appear under its label, so search, impact and runs span all of them.</About>
                 </p>
                 {extras.length > 0 && (
                   <div className="divide-y divide-line/60 rounded-lg border border-line">
@@ -695,7 +689,7 @@ export default function Projects() {
                     <RolePick value={draft.role ?? 'code'} onChange={(role) => setDraft((d) => ({ ...d, role }))} label="What this source is" />
                   </div>
                   {draft.role === 'reference' && (
-                    <p className="text-[12px] text-dim">A reference: documents, a design system, another repository — indexed and read for grounding, never written by an agent.</p>
+                    <p className="text-[12px] text-dim">Read for grounding, never written by an agent.</p>
                   )}
                   <div className="flex items-end gap-2">
                     <Field className="min-w-0 flex-1" mono value={draft.repo}
@@ -710,20 +704,20 @@ export default function Projects() {
                   </div>
                   <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                     <Field label="Label" mono value={draft.label} placeholder="api" onChange={(v) => setDraft((d) => ({ ...d, label: v }))}
-                      hint="The folder its files appear under in the project" />
+                      hint="The folder its files appear under" />
                     {draft.kind === 'git' && <Field label="Branch" mono value={draft.branch} onChange={(v) => setDraft((d) => ({ ...d, branch: v }))} />}
                   </div>
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-[12px] text-dim">{draft.repo.trim() || draft.label.trim() ? draftProblem ?? 'Ready to add' : 'Optional — skip this step to onboard one source'}</span>
+                    <span className="text-[12px] text-dim">{draft.repo.trim() || draft.label.trim() ? draftProblem ?? 'Ready to add' : 'Optional: skip to onboard one source'}</span>
                     <Button type="button" size="sm" variant="outline" disabled={!!draftProblem} onClick={addDraft}>
-                      <Plus className="size-3.5" />{draft.role === 'reference' ? 'Add a reference' : 'Add another folder or repository'}
+                      <Plus className="size-3.5" />{draft.role === 'reference' ? 'Add a reference' : 'Add source'}
                     </Button>
                   </div>
                 </div>
                 {projects.length > 0 && (
                   <div className="space-y-2">
                     <p className="flex items-center gap-1.5 text-[12.5px] font-medium text-soft"><BookOpen className="size-3.5" />Reads from other projects</p>
-                    <p className="text-[12px] text-dim">Their code, documents and memory are searched beside this project's own, labelled as a reference, and never written from here.</p>
+                    <p className="text-[12px] text-dim">Searched as references, never written.</p>
                     <div className="flex flex-wrap gap-1.5">
                       {projects.map((x) => {
                         const on = readsFrom.has(x.id);
@@ -766,7 +760,7 @@ export default function Projects() {
                 {progress !== null && (
                   <p className="flex items-center gap-2 text-[12.5px] text-soft"><Loader2 className="size-3.5 animate-spin" />Uploading the archive · {Math.round(progress * 100)}%</p>
                 )}
-                <SectionTitle>What onboarding does</SectionTitle>
+                <More label="What onboarding does">
                 <div className="rounded-sm border border-line bg-base">
                   {stages.map((st, n) => (
                     <div key={st.id} className="flex items-center gap-2.5 border-b border-line/60 px-3 py-1.5 last:border-0">
@@ -778,6 +772,7 @@ export default function Projects() {
                     </div>
                   ))}
                 </div>
+                </More>
               </div>
             ),
           },

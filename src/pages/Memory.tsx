@@ -13,7 +13,7 @@ import { useAuth } from '@/lib/auth';
 import { SIGNAL_LABEL, tasteApi, tasteMarkdown, type TasteKind, type TasteRule, type TasteSignal } from '@/lib/live/taste';
 import type { Extracted } from '@/lib/api';
 import {
-  Page, PageHeader, PageBody, Panel, Tag, Mono, Segmented, ListRow, Empty,
+  Page, PageHeader, PageBody, Panel, Tag, Mono, Segmented, ListRow, Empty, About,
   Stat, StatGrid, KV, DataTable, Row, Cell, Field, SelectField,
 } from '@/components/os';
 import { MEMORY_CATEGORIES, RECALLED_BY, categoryLabel, memoryApi, type ConflictInput } from '@/lib/live/knowledge';
@@ -106,7 +106,11 @@ export default function Memory() {
     <Page>
       <PageHeader
         title="Memory"
-        subtitle="Facts the workspace keeps, with their reason, source and evidence."
+        subtitle="Facts the workspace keeps, with reason and evidence."
+        about={<>
+          <p>Facts arrive from answers to a plan's open questions, or from pasted text.</p>
+          <p>Ask memory, sessions, research and the compiler read them. Each use is counted as a recall.</p>
+        </>}
         actions={
           <>
             <Button size="sm" variant="outline" onClick={() => setAdding(true)}><FilePlus2 className="size-3.5" />Add from text</Button>
@@ -135,7 +139,7 @@ export default function Memory() {
             <div className="flex h-9 w-80 items-center gap-2 rounded-lg border border-line bg-surface-2 px-2.5 focus-within:border-brand">
               <Search className="size-3.5 shrink-0 text-dim" />
               <input value={q} onChange={(e) => { setQ(e.target.value); setSel(null); }}
-                placeholder="Search memory — words, or a ref like MEM-12"
+                placeholder="Search memory or MEM-12"
                 className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-dim focus-visible:outline-none" />
             </div>
           )}
@@ -146,8 +150,8 @@ export default function Memory() {
       <PageBody className={cn(tab === 'facts' && 'flex h-full flex-col p-0')}>
         {tab === 'facts' && (scoped.length === 0 ? (
           <Empty icon={<Layers className="size-6" />} title="Nothing remembered yet"
-            hint="Facts arrive when you answer a plan's open question, or from Add from text."
-            action={<Button size="sm" variant="outline" onClick={() => setAdding(true)}>Add facts from text</Button>} />
+            hint="Answer a plan's open question, or paste notes."
+            action={<Button size="sm" variant="outline" onClick={() => setAdding(true)}>Add from text</Button>} />
         ) : (
           <div className="flex min-h-0 flex-1 flex-col gap-0 lg:flex-row">
             {/* Category rail */}
@@ -197,12 +201,12 @@ export default function Memory() {
 
             {/* Fact list */}
             <div className="no-scrollbar w-full shrink-0 max-h-[42vh] lg:max-h-none lg:w-[340px] overflow-y-auto border-b border-line lg:border-b-0 lg:border-r">
-              {list.length === 0 ? <Empty title="Nothing recalled" hint="No fact in this scope matches that search." /> : <>{list.map((f) => (
+              {list.length === 0 ? <Empty title="No fact matches" /> : <>{list.map((f) => (
                 <ListRow key={f.id} active={fact?.id === f.id} onClick={() => setSel(f.id)}>
                   <div className="flex items-center gap-2">
                     <Mono tone={f.pinned ? 'brand' : 'neutral'}>{f.ref}</Mono>
                     {f.pinned && <Pin className="size-3 text-brand" />}
-                    <span className="eyebrow ml-auto">{categoryLabel(f.category)}</span>
+                    <span className="ml-auto text-[11.5px] text-dim">{categoryLabel(f.category)}</span>
                   </div>
                   <p className="mt-1 line-clamp-2 text-[13px] text-ink">{f.title}</p>
                   <div className="mt-1.5 flex items-center gap-2">
@@ -219,12 +223,12 @@ export default function Memory() {
               {fts
                 ? fts.length >= MEMORY_PAGE && (
                   <p className="border-t border-line px-3.5 py-2.5 text-[12px] text-dim">
-                    The {MEMORY_PAGE} best matches are shown. Narrow the words to reach the rest.
+                    Top {MEMORY_PAGE} matches. Narrow the search for more.
                   </p>
                 )
                 : capped.memory && (
                   <p className="border-t border-line px-3.5 py-2.5 text-[12px] text-dim">
-                    Drawn from the newest {MEMORY_PAGE} facts. Search reaches the ones before them.
+                    Newest {MEMORY_PAGE} facts. Search reaches older ones.
                   </p>
                 )}</>}
             </div>
@@ -247,7 +251,7 @@ export default function Memory() {
                     <p className="mt-1.5 text-[14px] leading-relaxed text-ink-2">{fact.body}</p>
                   </div>
 
-                  <Panel eyebrow="Why this is true" title="Reason">
+                  <Panel title="Reason">
                     <p className="text-[13.5px] leading-relaxed text-ink-2">{fact.reason}</p>
                     <div className="mt-2.5 border-t border-line pt-2.5">
                       <KV k="Source" v={fact.source} />
@@ -258,13 +262,13 @@ export default function Memory() {
                   </Panel>
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <Panel eyebrow="Use" title={fact.hits24h ? `${fact.hits24h} ${fact.hits24h === 1 ? 'recall' : 'recalls'} in 24 h` : 'Not recalled today'}>
+                    <Panel title={fact.hits24h ? `${fact.hits24h} ${fact.hits24h === 1 ? 'recall' : 'recalls'} in 24 h` : 'Not recalled today'}
+                      about="A recall is counted when Ask memory cites a fact, or a session, research or the compiler reads it.">
                       <p className="text-[12.5px] leading-relaxed text-dim">
-                        {fact.lastUsedAt ? `Last used ${ago(fact.lastUsedAt)}. ` : 'Nothing has used it yet. '}
-                        A use is recorded when Ask memory cites it, or a session, a research or the compiler is handed it.
+                        {fact.lastUsedAt ? `Last used ${ago(fact.lastUsedAt)}.` : 'Nothing has used it yet.'}
                       </p>
                     </Panel>
-                    <Panel eyebrow="Tags" title="Indexed under">
+                    <Panel title="Tags">
                       {fact.tags.length === 0 ? <p className="text-[12.5px] text-dim">No tags.</p> : (
                         <div className="flex flex-wrap gap-1">
                           {fact.tags.map((t) => <span key={t} className="rounded-xs border border-line bg-surface-2 px-1.5 py-px font-mono text-[11.5px] text-ink-2">{t}</span>)}
@@ -273,7 +277,7 @@ export default function Memory() {
                     </Panel>
                   </div>
 
-                  <Panel eyebrow="Evidence" title={fact.evidence.length ? `${fact.evidence.length} ${fact.evidence.length === 1 ? 'artefact backs' : 'artefacts back'} this claim` : 'No evidence recorded'} flush>
+                  <Panel title={fact.evidence.length ? `Evidence (${fact.evidence.length})` : 'No evidence recorded'} flush>
                     {fact.evidence.length > 0 && (
                       <div className="divide-y divide-line">
                         {fact.evidence.map((e) => (
@@ -313,7 +317,7 @@ export default function Memory() {
             </div>
             {conflicts.length === 0 && (
               <Empty icon={<TriangleAlert className="size-6" />} title="No contradictions recorded"
-                hint="NeuroCode does not check facts against each other. Mark two facts that disagree, from either fact or from here." />
+                hint="Nothing checks facts against each other. Mark two that disagree." />
             )}
             {conflicts.map((c) => (
               <Panel key={c.id} eyebrow={`recorded ${ago(c.detected)}`} title={c.topic} className={c.severity === 'HIGH' ? 'border-danger/35' : undefined}
@@ -323,7 +327,7 @@ export default function Memory() {
                     const f = memory.find((x) => x.id === id);
                     return (
                       <div key={id} className="rounded-sm border border-line bg-base p-3">
-                        <div className="eyebrow mb-1">claim {i === 0 ? 'A' : 'B'}{f && <> · <span className="font-mono normal-case">{f.ref}</span></>}</div>
+                        <div className="mb-1 text-[11.5px] text-dim">Claim {i === 0 ? 'A' : 'B'}{f && <> · <span className="font-mono">{f.ref}</span></>}</div>
                         <p className="text-[13px] text-ink-2">{f ? f.title : id}</p>
                       </div>
                     );
@@ -372,18 +376,18 @@ function Health({ live, conflicts }: { live: MemoryFact[]; conflicts: number }) 
 
   return (
     <div className="space-y-4">
-      <StatGrid cols={5}>
+      {(live.length > 0 || !!s?.retired) && <StatGrid cols={5}>
         <Stat label="Facts held" value={shown(s?.held)} sub={sub(s ? `${s.global.toLocaleString()} in the global brain` : 'counting…')} icon={<Layers className="size-3" />} />
         <Stat label="Pinned" value={shown(s?.pinned)} tone="brand" sub={sub('first in every list')} icon={<Pin className="size-3" />} />
-        <Stat label="Recalled 24h" value={shown(s?.recalled24h)} sub={sub('uses by every feature')} icon={<Activity className="size-3" />} />
+        <Stat label="Recalled 24h" value={shown(s?.recalled24h)} sub={stats.error ? 'could not be counted' : undefined} icon={<Activity className="size-3" />} />
         <Stat label="Conflicts" value={conflicts} tone={conflicts ? 'danger' : 'neutral'} sub="waiting for a ruling" icon={<TriangleAlert className="size-3" />} />
-        <Stat label={`Retired ${s?.retiredDays ?? 30}d`} value={shown(s?.retired)} sub={sub(`archived in the last ${s?.retiredDays ?? 30} days`)} icon={<Archive className="size-3" />} />
-      </StatGrid>
+        <Stat label={`Retired ${s?.retiredDays ?? 30}d`} value={shown(s?.retired)} sub={sub('archived')} icon={<Archive className="size-3" />} />
+      </StatGrid>}
 
-      <Panel eyebrow="What memory holds, and what gets used" title="By category" flush>
+      <Panel title="By category" flush>
         {stats.error ? <Empty title="The counts did not load" hint={stats.error} action={<Button size="sm" variant="outline" onClick={stats.reload}>Try again</Button>} />
           : !s ? <Empty icon={<Loader2 className="size-5 animate-spin" />} title="Counting…" />
-          : rows.length === 0 ? <Empty title="Nothing remembered yet" hint="Add facts from text, or answer a plan's open question." /> : (
+          : rows.length === 0 ? <Empty title="Nothing remembered yet" /> : (
           <DataTable head={['Category', 'Held', 'Pinned', 'Recalled 24h', 'Last used']}>
             {rows.map((r) => (
               <Row key={r.id}>
@@ -398,12 +402,11 @@ function Health({ live, conflicts }: { live: MemoryFact[]; conflicts: number }) 
         )}
       </Panel>
 
-      <Panel eyebrow="Newest first" title="Recent recalls" flush>
+      <Panel title="Recent recalls" flush>
         {hits.error ? <Empty title="Recalls did not load" hint={hits.error} action={<Button size="sm" variant="outline" onClick={hits.reload}>Try again</Button>} />
           : !hits.data ? <Empty icon={<Loader2 className="size-5 animate-spin" />} title="Loading recalls…" />
             : hits.data.length === 0 ? (
-              <Empty title="No fact has been recalled yet"
-                hint="When Ask memory cites a fact, or a session, a research or the compiler is handed one, it is listed here." />
+              <Empty title="No fact has been recalled yet" />
             ) : (
               <DataTable head={['Fact', 'Used by', 'For', 'When']}>
                 {hits.data.map((h, i) => (
@@ -450,7 +453,7 @@ function MarkContradiction({ facts, first, onClose, onFiled }: {
       <DialogContent className="sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle>Mark a contradiction</DialogTitle>
-          <DialogDescription>Two facts that cannot both be true. Both stay in memory until you keep one; the other is then archived.</DialogDescription>
+          <DialogDescription>Both stay until you keep one; the other is then archived.</DialogDescription>
         </DialogHeader>
         <div className="grid gap-3">
           <SelectField label="Claim A" value={a} onChange={setA} options={options} />
@@ -459,7 +462,7 @@ function MarkContradiction({ facts, first, onClose, onFiled }: {
           <label className="grid gap-1.5">
             <span className="text-[12.5px] font-medium text-ink-2">Detail</span>
             <textarea value={detail} onChange={(e) => setDetail(e.target.value)} rows={3} maxLength={2000}
-              placeholder="What each one says, and what depends on the answer."
+              placeholder="What each one says"
               className="focus-brand w-full resize-none rounded-lg border border-line bg-surface-2/60 p-3 text-[13.5px] leading-relaxed text-ink placeholder:text-dim focus-visible:outline-none" />
           </label>
           <div className="flex items-center justify-between gap-3">
@@ -515,22 +518,20 @@ function AddFromText({ open, onOpenChange, projectId, onAdded }: {
       <DialogContent className="sm:max-w-[640px]">
         <DialogHeader>
           <DialogTitle>Add from text</DialogTitle>
-          <DialogDescription>
-            Paste meeting notes, a requirement or a chat, in any language. The facts worth keeping come back, and you choose which to store.
-          </DialogDescription>
+          <DialogDescription>Paste notes in any language, then choose which facts to keep.</DialogDescription>
         </DialogHeader>
         {!found ? (
           <textarea
             value={text} onChange={(e) => setText(e.target.value)} rows={9} autoFocus aria-label="Text to read"
-            placeholder={'Paste meeting notes, a decision log or a review.\nLines like "We decided …" or "X must never …" become candidate facts.'}
+            placeholder="Meeting notes, a decision log or a review…"
             className="focus-brand w-full resize-none rounded-lg border border-line bg-surface-2/60 p-3 text-[13.5px] leading-relaxed text-ink placeholder:text-dim focus-visible:outline-none"
           />
         ) : found.facts.length === 0 ? (
           <Empty
-            icon={<FileSearch className="size-6" />} title="No fact worth keeping was found"
+            icon={<FileSearch className="size-6" />} title="No facts found"
             hint={found.provider === 'rules'
-              ? 'The offline rules keep sentences that state a rule or a decision: must, never, always, decided… A model reads more; set one in Admin → AI providers.'
-              : 'Nothing in this text looks durable enough to remember.'}
+              ? 'Offline rules catch only must, never, decided. Add a model in Models → Keys.'
+              : 'Nothing here looks worth remembering.'}
           />
         ) : (
           <div className="grid gap-3">
@@ -609,7 +610,7 @@ function Taste({ projectId, scopeName }: { projectId: string | null; scopeName: 
       const n = done.proposed.length;
       toast.success(n ? `${n} rule${n === 1 ? '' : 's'} proposed` : 'Nothing new came of them', {
         description: `Read ${done.read} signal${done.read === 1 ? '' : 's'}${done.harvested ? `, ${done.harvested} gathered from recent decisions` : ''} · ${done.model}.`
-          + (n ? ' Adopt the ones that are true; nothing reaches a model until you do.' : ''),
+          + (n ? ' Adopt the true ones; none reach a model until then.' : ''),
       });
       reload();
     } catch (e) {
@@ -669,7 +670,7 @@ function Taste({ projectId, scopeName }: { projectId: string | null; scopeName: 
   );
 
   if (rules.loading && !rules.data) {
-    return <p className="flex items-center gap-2 p-2 text-[13px] text-dim"><Loader2 className="size-3.5 animate-spin" />Reading what the team has decided…</p>;
+    return <p className="flex items-center gap-2 p-2 text-[13px] text-dim"><Loader2 className="size-3.5 animate-spin" />Loading taste…</p>;
   }
   if (rules.error && !rules.data) {
     return (
@@ -681,39 +682,40 @@ function Taste({ projectId, scopeName }: { projectId: string | null; scopeName: 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <p className="max-w-3xl text-[13px] text-soft">
-          How {scopeName === 'the workspace' ? 'this workspace' : scopeName} likes the work done, learnt from what people did: runs accepted or refused
-          beside what the review found, runs sent back with notes, plans reshaped before dispatch, and their own commits on an agent’s branch.
-          A model proposes rules from those signals; a rule reaches the compiler, the agents and the reviewer only once someone adopts it.
-        </p>
+        <div className="flex items-center gap-1 text-[13px] text-soft">
+          How {scopeName === 'the workspace' ? 'this workspace' : scopeName} likes the work done.
+          <About>
+            <p>Rules are learnt from what people did: runs accepted, refused or sent back, plans reshaped, commits on an agent’s branch.</p>
+            <p>A model proposes them. A rule reaches the compiler, the agents and the reviewer only once someone adopts it.</p>
+          </About>
+        </div>
         <div className="flex shrink-0 flex-wrap gap-2">
           <Button size="sm" variant="outline" disabled={active.length === 0} onClick={exportMd}
-            title={active.length ? 'The active rules as a Markdown file' : 'Adopt a rule first'}>
+            title={active.length ? undefined : 'Adopt a rule first'}>
             <Download className="size-3.5" />Export taste.md
           </Button>
           <Button size="sm" disabled={!mayWrite || learning} onClick={learn}
-            title={mayWrite ? 'Gathers recent decisions, then asks a model to propose rules from the unread signals' : 'Needs the memory:write permission'}>
+            title={mayWrite ? undefined : 'Needs the memory:write permission'}>
             {learning ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
-            {learning ? 'Learning…' : 'Learn from my decisions'}
+            {learning ? 'Learning…' : 'Learn from decisions'}
           </Button>
         </div>
       </div>
 
-      <StatGrid cols={4}>
-        <Stat label="Signals not read yet" value={counts ? counts.unread.toLocaleString() : '…'}
+      {(!!counts?.total || items.length > 0) && <StatGrid cols={4}>
+        <Stat label="Unread signals" value={counts ? counts.unread.toLocaleString() : '…'}
           sub={counts ? `${counts.total.toLocaleString()} kept in all` : undefined} tone={counts?.unread ? 'brand' : undefined} />
-        <Stat label="Proposed" value={rules.data?.counts.proposed ?? 0} sub="waiting for your word" tone={proposed.length ? 'warn' : undefined} />
-        <Stat label="Active" value={rules.data?.counts.active ?? 0} sub="handed to every model" tone={active.length ? 'ok' : undefined} />
-        <Stat label="Retired" value={rules.data?.counts.retired ?? 0} sub="rejected or switched off" />
-      </StatGrid>
+        <Stat label="Proposed" value={rules.data?.counts.proposed ?? 0} sub="awaiting review" tone={proposed.length ? 'warn' : undefined} />
+        <Stat label="Active" value={rules.data?.counts.active ?? 0} sub="handed to models" tone={active.length ? 'ok' : undefined} />
+        <Stat label="Retired" value={rules.data?.counts.retired ?? 0} sub="rejected or off" />
+      </StatGrid>}
 
-      <Panel eyebrow={proposed.length ? 'Adopt what is true, reject what is not' : 'From the last time it learnt'}
-        title={`Proposed (${proposed.length})`} flush>
+      <Panel title={`Proposed (${proposed.length})`} flush>
         {proposed.length === 0 ? (
           <p className="px-5 py-3 text-[13px] text-dim">
             {counts?.total
-              ? 'Nothing is waiting. Learn from your decisions to read the signals that came in since.'
-              : 'Nothing yet. Signals arrive as you accept, refuse or send back runs, shape plans, and commit on a run’s branch; then Learn from my decisions.'}
+              ? 'Nothing waiting.'
+              : 'Nothing yet. Review a few runs first.'}
           </p>
         ) : (
           <div className="divide-y divide-line">
@@ -733,10 +735,10 @@ function Taste({ projectId, scopeName }: { projectId: string | null; scopeName: 
         )}
       </Panel>
 
-      <Panel eyebrow="Handed to the compiler, the agents and the reviewer after the project's instruction files"
-        title={`Active (${active.length})`} flush>
+      <Panel title={`Active (${active.length})`} flush
+        about="Handed to the compiler, the agents and the reviewer, after the project's instruction files. Plans list them under “Taste applied”.">
         {active.length === 0 ? (
-          <p className="px-5 py-3 text-[13px] text-dim">No rule is active. Adopt a proposed one, and plans record it under “Taste applied”.</p>
+          <p className="px-5 py-3 text-[13px] text-dim">No rule is active.</p>
         ) : (
           <div className="divide-y divide-line">
             {active.map((r) => (
@@ -780,7 +782,8 @@ function Taste({ projectId, scopeName }: { projectId: string | null; scopeName: 
         )}
       </Panel>
 
-      <Panel eyebrow="The moments it learns from, newest first" title="Signals" flush>
+      <Panel title="Signals" flush
+        about={<><p>A signal is kept when a run is accepted, refused or sent back with notes.</p><p>Editing a plan’s steps, or committing on a run’s branch before it merges, counts too. Past decisions are gathered on Learn.</p></>}>
         {signals.error ? (
           <div className="flex items-center gap-2 px-5 py-3 text-[13px] text-danger">
             <span className="min-w-0 flex-1">The signals did not load: {signals.error}</span>
@@ -789,10 +792,7 @@ function Taste({ projectId, scopeName }: { projectId: string | null; scopeName: 
         ) : !signals.data ? (
           <p className="flex items-center gap-2 px-5 py-3 text-[13px] text-dim"><Loader2 className="size-3.5 animate-spin" />Reading the signals…</p>
         ) : signals.data.length === 0 ? (
-          <p className="px-5 py-3 text-[13px] text-dim">
-            None kept yet. Accepting or refusing a run, sending one back with notes, editing a plan’s steps and your own commits on a
-            run’s branch before it merges are each kept as a signal. Decisions already made are gathered when you press Learn.
-          </p>
+          <p className="px-5 py-3 text-[13px] text-dim">None kept yet.</p>
         ) : (
           <div className="divide-y divide-line">
             {signals.data.map((sig) => <SignalRow key={sig.id} signal={sig} />)}
@@ -831,7 +831,7 @@ function Evidence({ rule, onClose }: { rule: TasteRule | null; onClose: () => vo
               <Mono tone="brand">{rule.ref}</Mono>
               <SheetTitle className="mt-2 text-[15px] text-ink">{rule.text}</SheetTitle>
               <SheetDescription className="text-[12.5px] text-soft">
-                {rule.support} signal{rule.support === 1 ? '' : 's'} for it, {rule.contradict} against — counted from the signals it cites, not taken from the model.
+                {rule.support} for, {rule.contradict} against, counted from the signals it cites.
               </SheetDescription>
             </SheetHeader>
             <div className="divide-y divide-line">

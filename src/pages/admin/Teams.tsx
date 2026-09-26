@@ -46,14 +46,15 @@ export default function Teams() {
     <Page>
       <PageHeader
         title="Teams"
-        subtitle="Teams group people by what they work on. They never change what anyone can do; roles do that."
+        subtitle="Group people by what they work on."
+        about="A team never changes what anyone can do; roles do that."
         actions={<Button size="sm" onClick={() => setEditing('new')} disabled={!manage}><Plus className="size-3.5" />New team</Button>}
       />
       <PageBody>
         {error ? <LoadError error={error} onRetry={reload} /> : !data ? <Loading /> : data.teams.length === 0 ? (
           <Empty
             icon={<UsersRound className="size-6" />} title="No teams yet"
-            hint="Group people by what they work on, for example Core or ERP renewal."
+            hint="For example, Core or ERP renewal."
             action={manage && <Button size="sm" onClick={() => setEditing('new')}><Plus className="size-3.5" />New team</Button>}
           />
         ) : (

@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ICONS } from '@/lib/icons';
 import {
-  Page, PageHeader, PageBody, Panel, Tag, Dot, Mono, ListRow, Stat, StatGrid,
+  Page, PageHeader, PageBody, Panel, Tag, Dot, Mono, ListRow, Stat, StatGrid, About,
   KV, MeterRow, SectionTitle, Empty, Segmented, Field, SelectField,
 } from '@/components/os';
 import { ApiError, type LaneId } from '@/lib/api';
@@ -39,13 +39,13 @@ export default function Agents() {
 
 /** What a plan becomes, in the order services/runs.py does it. Static, and true. */
 const CHAIN = [
-  { what: 'A plan is split by the agent that owns each step', note: 'One agent: one run. Several: a run each, in a worktree and branch of its own, on lanes spread so they answer at the same time.' },
-  { what: 'Each agent writes its steps', note: 'Through a lane good at writing. With no lane the step is skipped: no code is invented.' },
-  { what: 'An integration run merges the branches', note: 'Only when several agents worked. Files that collide are reported, never half-applied.' },
-  { what: 'The project\'s own tests run', note: 'The first time in a project, only after you approve the command (medium risk). Nothing else is ever executed.' },
-  { what: 'The diff is reviewed', note: 'On a different lane from the one that wrote it when another is open; by rules when no lane answers, and the review says so.' },
-  { what: 'You sign', note: 'High risk when the review found something high, the tests failed or branches collided; medium otherwise. Refuse and the branch and worktree are removed.' },
-  { what: 'You merge', note: 'Into the branch your checkout is on, with the runs:merge permission, and an undo command recorded.' },
+  { what: 'A plan is split by the agent that owns each step', note: 'A run per agent, each in its own worktree and branch.' },
+  { what: 'Each agent writes its steps', note: 'On a writing lane. With no lane open the step is skipped.' },
+  { what: 'An integration run merges the branches', note: 'Only when several agents worked. Collisions are reported, never half-applied.' },
+  { what: 'The project\'s own tests run', note: 'The first time, only once you approve the command. Nothing else runs.' },
+  { what: 'The diff is reviewed', note: 'On another lane when one is open; by rules when none answers.' },
+  { what: 'You sign', note: 'High risk after a high finding, failed tests or a collision. Refusing removes the worktree.' },
+  { what: 'You merge', note: 'Into your checkout\'s branch, with runs:merge. An undo command is kept.' },
 ];
 
 const CALLS_AS = { write: 'writes code', review: 'reviews diffs' } as const;
@@ -76,8 +76,9 @@ function LiveAgents() {
     <Page>
       <PageHeader
         title="Agents"
-        subtitle="Who works on a run, which lane the router would give them now, and what their steps have really done. You are the only one who can approve."
-        actions={<Segmented options={[{ id: 'roster', label: 'Roster' }, { id: 'custom', label: 'Custom' }, { id: 'org', label: 'How a run flows' }]} value={view} onChange={setView} />}
+        subtitle="Who works on a run, on which lane, and what they did."
+        about={<><p>The router gives each agent a lane; lanes rotate so agents working together start apart.</p><p>Each run gets its own worktree, never shared. Only you can approve.</p></>}
+        actions={<Segmented options={[{ id: 'roster', label: 'Roster' }, { id: 'custom', label: 'Custom' }, { id: 'org', label: 'Run flow' }]} value={view} onChange={setView} />}
       >
         {roster.data && view !== 'custom' && (
           <div className="flex flex-wrap items-center gap-2 pb-3">
@@ -85,7 +86,7 @@ function LiveAgents() {
             <Tag tone="neutral">{count('idle')} idle</Tag>
             <Tag tone="warn">{count('waiting')} waiting</Tag>
             <span className="ml-2 text-[12.5px] text-dim">
-              {roster.data.lanesOpen} {roster.data.lanesOpen === 1 ? 'lane' : 'lanes'} open now · {roster.data.worktreesOnDisk} {roster.data.worktreesOnDisk === 1 ? 'worktree' : 'worktrees'} on disk · one worktree per run, never shared
+              {roster.data.lanesOpen} {roster.data.lanesOpen === 1 ? 'lane' : 'lanes'} open now · {roster.data.worktreesOnDisk} {roster.data.worktreesOnDisk === 1 ? 'worktree' : 'worktrees'} on disk
             </span>
           </div>
         )}
@@ -100,7 +101,7 @@ function LiveAgents() {
       ) : view === 'org' ? (
         <PageBody>
           <div className="space-y-4">
-            <Panel eyebrow="What the runtime does with a plan" title="Every change ends at your signature" flush>
+            <Panel title="Every change ends at your signature" flush>
               <ol className="divide-y divide-line/60">
                 {CHAIN.map((c, i) => (
                   <li key={c.what} className="flex items-start gap-3 px-5 py-3">
@@ -117,7 +118,7 @@ function LiveAgents() {
           </div>
         </PageBody>
       ) : !a ? (
-        <PageBody><Empty title="The agent roster is missing" hint="The roster ships in NeuroCode's catalogue and is installed each time the API starts. Restart the API, and it is written back." /></PageBody>
+        <PageBody><Empty title="The agent roster is missing" hint="Restart the API to install it again." /></PageBody>
       ) : (
         <PageBody className="flex h-full flex-col p-0">
           <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -176,7 +177,7 @@ function AgentDetail({ a, enforced }: { a: LiveAgent; enforced: string[] }) {
         <div className="flex flex-wrap items-center justify-end gap-2">
           {ask.can && a.declared.systemPrompt && (
             <Button size="xs" variant="outline" disabled={ask.busy} onClick={() => void ask.start(a.id, a.name)}
-              title={`A session on ${ask.projectName} answered with ${a.name}'s declared prompt`}>
+              title={`A session on ${ask.projectName}, with this prompt`}>
               {ask.busy ? <Loader2 className="size-3 animate-spin" /> : <MessageSquarePlus className="size-3" />}Ask {a.name}
             </Button>
           )}
@@ -186,7 +187,7 @@ function AgentDetail({ a, enforced }: { a: LiveAgent; enforced: string[] }) {
       </div>
 
       <StatGrid cols={a.outcomes.length + 3} className="mb-4">
-        <Stat label="Tasks done" value={a.tasksDone} sub="finished tasks that name it" />
+        <Stat label="Tasks done" value={a.tasksDone} />
         {a.outcomes.map((o) => (
           <Stat
             key={o.kind} label={o.label[0].toUpperCase() + o.label.slice(1)}
@@ -195,8 +196,8 @@ function AgentDetail({ a, enforced }: { a: LiveAgent; enforced: string[] }) {
             sub={o.decided ? `${o.good} of ${o.decided}${o.avgMinutes === null ? '' : ` · ${o.avgMinutes}m each`}` : 'no step finished yet'}
           />
         ))}
-        <Stat label="Tokens 24h" value={a.tokens24h.toLocaleString()} sub="from the usage ledger" />
-        <Stat label="Cost 24h" value={a.cost24h === null ? 'unpriced' : a.cost24h === 0 ? 'free' : `$${a.cost24h.toFixed(2)}`} tone={a.cost24h === 0 ? 'ok' : a.cost24h === null ? undefined : 'brand'} sub={a.cost24h === null ? 'part of it ran on a lane with no declared price' : "at each lane's declared price"} />
+        <Stat label="Tokens 24h" value={a.tokens24h.toLocaleString()} />
+        <Stat label="Cost 24h" value={a.cost24h === null ? 'unpriced' : a.cost24h === 0 ? 'free' : `$${a.cost24h.toFixed(2)}`} tone={a.cost24h === 0 ? 'ok' : a.cost24h === null ? undefined : 'brand'} sub={a.cost24h === null ? 'some lanes have no price' : undefined} />
       </StatGrid>
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -216,10 +217,10 @@ function AgentDetail({ a, enforced }: { a: LiveAgent; enforced: string[] }) {
             </div>
           </Panel>
         ) : (
-          <Panel className="lg:col-span-2"><Empty title={`${a.name} is ${a.status}`} hint="It works when a dispatched plan gives it a step. Nothing here is started or stopped: runs live on Live Runs." /></Panel>
+          <Panel className="lg:col-span-2"><Empty title={`${a.name} is ${a.status}`} hint="It works when a plan gives it a step." /></Panel>
         )}
 
-        <Panel eyebrow="Routing" title="Lanes">
+        <Panel title="Lanes" about={a.callsAs ? 'A snapshot: lanes rotate so agents working together start apart. Last answered comes from the ledger.' : undefined}>
           {a.callsAs ? (
             <>
               <KV k="Would try now" v={lanes.primary ? <Mono tone="brand">{lanes.primary.lane} · {lanes.primary.model}</Mono> : <span className="text-warn">no lane open</span>} />
@@ -229,12 +230,11 @@ function AgentDetail({ a, enforced }: { a: LiveAgent; enforced: string[] }) {
             <p className="py-2 text-[13px] text-soft">{a.noCall ?? 'The runtime makes no model call as this agent.'}</p>
           )}
           <KV k="Last answered" v={lanes.lastAnswered ? <span className="flex items-center gap-2"><Mono>{lanes.lastAnswered.lane} · {lanes.lastAnswered.model}</Mono><span className="text-[12px] text-dim">{ago(lanes.lastAnswered.at)}</span></span> : 'never'} />
-          {a.callsAs && <p className="mt-2 text-[12.5px] text-dim">A snapshot: lanes rotate so agents working together start on different ones. Last answered is what really happened, from the ledger.</p>}
         </Panel>
 
         <Enforced rules={enforced} />
 
-        <Panel eyebrow="Sent by the runtime" title={a.prompt ? `What every ${a.callsAs === 'review' ? 'review' : 'edit'} step is told` : 'No prompt'} className="lg:col-span-2">
+        <Panel title={a.prompt ? `What every ${a.callsAs === 'review' ? 'review' : 'edit'} step is told` : 'No prompt'} className="lg:col-span-2">
           {a.prompt ? (
             <div className="space-y-3">
               <div>
@@ -242,17 +242,17 @@ function AgentDetail({ a, enforced }: { a: LiveAgent; enforced: string[] }) {
                 <pre className="ascii rounded-sm border border-line bg-base p-3 whitespace-pre-wrap">{a.prompt.system}</pre>
               </div>
               <div>
-                <SectionTitle className="mb-1.5">Then, filled in for each step</SectionTitle>
+                <SectionTitle className="mb-1.5">Per step</SectionTitle>
                 <pre className="ascii rounded-sm border border-line bg-base p-3 whitespace-pre-wrap">{a.prompt.user}</pre>
               </div>
             </div>
           ) : (
-            <p className="text-[13px] text-soft">{a.noCall ?? 'No model call is made as this agent, so nothing is sent.'}</p>
+            <p className="text-[13px] text-soft">{a.noCall ?? 'Nothing is sent.'}</p>
           )}
         </Panel>
 
-        <Panel eyebrow="Declared on the agent · runs do not read these; a session asked through it is given its prompt" title="As written" className="lg:col-span-2">
-          <KV k="Autonomy" wrap v={<span className="text-soft">{a.declared.autonomy} <span className="text-dim">· every agent is gated the same way</span></span>} />
+        <Panel title="As declared" about="Runs do not read these. A session asked through this agent is given its prompt." className="lg:col-span-2">
+          <KV k="Autonomy" wrap v={<span className="text-soft">{a.declared.autonomy} <span className="text-dim">· gated like every agent</span></span>} />
           {a.declared.tools.length > 0 && (
             <>
               <SectionTitle className="mt-3 mb-1.5">Tools</SectionTitle>
@@ -285,7 +285,7 @@ function AgentDetail({ a, enforced }: { a: LiveAgent; enforced: string[] }) {
 
 function Enforced({ rules }: { rules: string[] }) {
   return (
-    <Panel eyebrow="Enforced for every agent" title="What the runtime makes sure of" flush>
+    <Panel title="Enforced for every agent" flush>
       <div className="divide-y divide-line/60">
         {rules.map((g) => (
           <div key={g} className="flex items-start gap-2 px-5 py-2.5">
@@ -311,7 +311,7 @@ function useAsk() {
     setBusy(true);
     try {
       const made = await agentsApi.ask(project.id, key);
-      toast.success(`${made.ref} started`, { description: `${name} answers every question in it.` });
+      toast.success(`${made.ref} started`, { description: `${name} answers in it.` });
       nav(`/sessions?ref=${encodeURIComponent(made.ref)}`);
     } catch (e) {
       toast.error('Session not started', { description: reason(e) });
@@ -350,14 +350,14 @@ function CustomAgents() {
       onSaved={(saved) => { setEditing(null); setSel(saved.key); cat.reload(); }} />
   );
   const unread = data.checkout === false
-    ? `${project?.name ?? 'This project'}'s code is not on this machine, so its .neurocode/agents and .claude/agents were not read.`
+    ? `Agent files not read: ${project?.name ?? 'this project'}'s code is not on this machine.`
     : null;
 
   if (list.length === 0) {
     return (
       <PageBody>
         <Empty icon={<Bot className="size-6" />} title="No custom agents yet"
-          hint={`Write one here — its instructions, the lane it prefers, the tools it may use — or add a markdown file to .neurocode/agents or .claude/agents in ${project?.name ?? 'a project'}'s repository. Plans can then give it steps, and a session can be asked through it.${unread ? ` ${unread}` : ''}`}
+          hint={`Write one, or add a file to .neurocode/agents or .claude/agents.${unread ? ` ${unread}` : ''}`}
           action={mayManage ? <Button size="sm" onClick={() => setEditing('new')}><Plus className="size-3.5" />New agent</Button> : undefined} />
         {editor}
       </PageBody>
@@ -377,7 +377,7 @@ function CustomAgents() {
             if (mine.length === 0) return null;
             return (
               <div key={g.title}>
-                <p className="px-4 pt-3 pb-1 text-[11.5px] font-medium tracking-wide text-dim uppercase">{g.title}</p>
+                <p className="px-4 pt-3 pb-1 text-[12px] font-medium text-dim">{g.title}</p>
                 {mine.map((x) => (
                   <ListRow key={x.key} active={a?.key === x.key} onClick={() => setSel(x.key)}>
                     <div className="flex items-center gap-2">
@@ -395,7 +395,7 @@ function CustomAgents() {
           {(unread || data.unreadable.length > 0) && (
             <div className="space-y-1 border-t border-line/60 px-4 py-3 text-[12px] text-dim">
               {unread && <p>{unread}</p>}
-              {data.unreadable.length > 0 && <p>Front matter could not be read in {data.unreadable.join(', ')}; those files are left out.</p>}
+              {data.unreadable.length > 0 && <p>Left out, front matter unreadable: {data.unreadable.join(', ')}</p>}
             </div>
           )}
         </div>
@@ -424,7 +424,7 @@ function CustomDetail({ a, cat, mayManage, projectId, onEdit, onRemoved }: {
     setRemoving(true);
     try {
       await agentsApi.remove(a.id);
-      toast(`${a.name} removed`, { description: 'Runs and sessions it already did keep its name.' });
+      toast(`${a.name} removed`, { description: 'Past runs and sessions keep its name.' });
       onRemoved();
     } catch (e) {
       toast.error('Not removed', { description: reason(e) });
@@ -451,7 +451,7 @@ function CustomDetail({ a, cat, mayManage, projectId, onEdit, onRemoved }: {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {ask.can && !a.shadowedBy && (
-            <Button size="xs" variant="outline" disabled={ask.busy} onClick={() => void ask.start(a.key, a.name)} title={`A session on ${ask.projectName} answered by ${a.name}`}>
+            <Button size="xs" variant="outline" disabled={ask.busy} onClick={() => void ask.start(a.key, a.name)} title={`A session on ${ask.projectName}`}>
               {ask.busy ? <Loader2 className="size-3 animate-spin" /> : <MessageSquarePlus className="size-3" />}Ask {a.name}
             </Button>
           )}
@@ -461,7 +461,7 @@ function CustomDetail({ a, cat, mayManage, projectId, onEdit, onRemoved }: {
               {confirm ? (
                 <>
                   <Button size="xs" variant="destructive" disabled={removing} onClick={() => void remove()}>
-                    {removing ? <Loader2 className="size-3 animate-spin" /> : <Trash2 className="size-3" />}Remove {a.name}
+                    {removing ? <Loader2 className="size-3 animate-spin" /> : <Trash2 className="size-3" />}Remove
                   </Button>
                   <Button size="xs" variant="ghost" onClick={() => setConfirm(false)}>Keep</Button>
                 </>
@@ -476,27 +476,27 @@ function CustomDetail({ a, cat, mayManage, projectId, onEdit, onRemoved }: {
       {a.shadowedBy && (
         <p className="mb-4 rounded-md border border-warn/30 bg-warn/8 px-3 py-2 text-[13px] text-ink-2">
           {a.shadowedBy === 'built-in'
-            ? `${a.name} is a built-in agent's name, so a plan step that names it means the roster's. Rename the file to use it.`
-            : `Another agent called ${a.name} is nearer — ${a.shadowedBy.replace(/^(custom|file):/, '')} — so plans and sessions get that one. Project beats repository files beats workspace.`}
+            ? `A built-in agent has this name and wins. Rename the file to use it.`
+            : `A nearer ${a.name} (${a.shadowedBy.replace(/^(custom|file):/, '')}) wins. Project beats repository beats workspace.`}
         </p>
       )}
 
       <StatGrid cols={4} className="mb-4">
         <Stat label="Sessions asked" value={a.usage.sessions} sub={a.usage.lastSession ? `last ${ago(a.usage.lastSession)}` : 'none yet'} />
-        <Stat label="Plan steps written" value={a.usage.steps ? `${a.usage.stepsDone} of ${a.usage.steps}` : '0'} sub="steps it owned in runs, done" />
+        <Stat label="Plan steps done" value={a.usage.steps ? `${a.usage.stepsDone} of ${a.usage.steps}` : '0'} />
         <Stat label="Lane it prefers" value={lane ? lane.label : 'router'} sub={lane ? lane.model : 'the router chooses'} />
-        <Stat label="Tool calls per answer" value={a.maxSteps} sub="in a session, then it must answer" />
+        <Stat label="Tool calls per answer" value={a.maxSteps} />
       </StatGrid>
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-        <Panel eyebrow={`~${a.tokens.toLocaleString()} tokens${a.truncated ? ' · cut to fit' : ''}`} title="Instructions" className="lg:col-span-2">
+        <Panel eyebrow={`~${a.tokens.toLocaleString()} tokens${a.truncated ? ' · cut to fit' : ''}`} title="Instructions" className="lg:col-span-2"
+          about="Given first, before the runtime's own rules, which hold whatever it says.">
           <pre className="ascii max-h-[320px] overflow-y-auto rounded-sm border border-line bg-base p-3 whitespace-pre-wrap">{a.prompt || 'No instructions: the file has no body.'}</pre>
-          <p className="mt-2 text-[12.5px] text-dim">Given first, before the runtime's own rules — which hold whatever it says.</p>
         </Panel>
 
-        <Panel eyebrow="Capped by the tool rules" title="Tools">
+        <Panel eyebrow="Capped by tool rules" title="Tools">
           {a.tools.length === 0 ? (
-            <p className="text-[13px] text-soft">Every tool NeuroCode has. Each call is still weighed by the tool rules; the web and MCP tools ask first unless a rule allows them.</p>
+            <p className="text-[13px] text-soft">Every tool. Web and MCP tools ask first unless a rule allows them.</p>
           ) : (
             <ul className="space-y-1.5">
               {tools.map((t) => (
@@ -508,20 +508,20 @@ function CustomDetail({ a, cat, mayManage, projectId, onEdit, onRemoved }: {
           )}
           {a.ignored.length > 0 && (
             <p className="mt-2.5 text-[12.5px] text-dim">
-              Not tools here, so never offered: {a.ignored.map((t) => <Mono key={t} className="mr-1 line-through">{t}</Mono>)}
+              Unknown, never offered: {a.ignored.map((t) => <Mono key={t} className="mr-1 line-through">{t}</Mono>)}
             </p>
           )}
           <p className={cn('mt-2.5 text-[12.5px]', writes ? 'text-dim' : 'text-warn')}>
-            {writes ? 'Writes files when a plan step is given to it — in its run’s worktree, under the edit rules.' : 'Cannot write files: a plan step given to it fails and says why.'}
+            {writes ? 'Writes files in its run’s worktree, under the edit rules.' : 'Cannot write files: a plan step given to it fails.'}
           </p>
         </Panel>
 
-        <Panel eyebrow="Where it comes from" title={a.path ?? (a.source === 'project' ? 'Written for this project' : 'Written for the workspace')}>
+        <Panel title={a.path ?? (a.source === 'project' ? 'Written for this project' : 'Written for the workspace')}>
           <KV k="Source" v={SOURCE_LABEL[a.source]} />
           {a.model && <KV k="Model, as written" v={<Mono>{a.model}</Mono>} />}
           {a.createdBy && <KV k="Written by" v={a.createdBy} />}
           {a.updatedAt && <KV k="Last changed" v={ago(a.updatedAt)} />}
-          {!a.editable && <p className="mt-2 text-[12.5px] text-dim">Read from the repository every time, like a skill. Change the file to change it.</p>}
+          {!a.editable && <p className="mt-2 text-[12.5px] text-dim">Read from the repository. Edit the file to change it.</p>}
           {a.notes.map((n) => <p key={n} className="mt-1.5 text-[12.5px] text-warn">{n}</p>)}
         </Panel>
 
@@ -548,16 +548,16 @@ function TryPanel({ a, projectId }: { a: CustomAgent; projectId: string | null }
     }
   };
   return (
-    <Panel eyebrow="Dry run · no tools, nothing written" title={`Try ${a.name}`} className="lg:col-span-2">
+    <Panel eyebrow="No tools, nothing written" title={`Try ${a.name}`} className="lg:col-span-2">
       <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); if (question.trim() && may) void tryIt(); }}>
         <textarea rows={2} maxLength={4000} value={question} onChange={(e) => setQuestion(e.target.value)} disabled={!may || busy}
-          aria-label={`A question for ${a.name}`} placeholder={may ? 'Ask it something, to see how its instructions answer.' : 'Trying an agent needs the sessions:chat permission.'}
+          aria-label={`A question for ${a.name}`} placeholder={may ? 'Ask it something' : 'Needs the sessions:chat permission'}
           className="w-full resize-none rounded-lg border border-line bg-surface-2/60 px-3 py-2 text-[13.5px] text-ink placeholder:text-dim focus-visible:border-brand focus-visible:outline-none" />
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" type="submit" disabled={!may || busy || !question.trim()}>
             {busy ? <Loader2 className="size-3.5 animate-spin" /> : <FlaskConical className="size-3.5" />}Try it
           </Button>
-          <span className="text-[12px] text-dim">One model call on {a.lane ? `the ${a.lane} lane when it is open` : 'whichever lane the router picks'}; counted in the usage ledger.</span>
+          <span className="text-[12px] text-dim">One model call on {a.lane ? `the ${a.lane} lane if open` : 'the router’s lane'}, counted in usage.</span>
         </div>
       </form>
       {answer && (
@@ -565,7 +565,7 @@ function TryPanel({ a, projectId }: { a: CustomAgent; projectId: string | null }
           <p className="text-[13.5px] leading-relaxed whitespace-pre-wrap text-ink">{answer.answer}</p>
           <p className="text-[12px] text-dim">
             {answer.lane} · {answer.model} · {(answer.ms / 1000).toFixed(1)} s · {answer.tokens.in.toLocaleString()} in, {answer.tokens.out.toLocaleString()} out
-            {!answer.onPreferred && answer.preferred ? ` · ${answer.preferred} could not answer, so another lane did` : ''}
+            {!answer.onPreferred && answer.preferred ? ` · ${answer.preferred} did not answer; another lane did` : ''}
           </p>
         </div>
       )}
@@ -596,7 +596,7 @@ function AgentEditor({ initial, cat, projectId, projectName, onClose, onSaved }:
     const body = { ...form, name: form.name.trim(), role: form.role.trim(), prompt: form.prompt.trim() };
     try {
       const saved = initial?.id ? await agentsApi.update(initial.id, body) : await agentsApi.create(body);
-      toast.success(initial ? `${saved.name} saved` : `${saved.name} created`, { description: 'It is used from the next plan step or session answer on.' });
+      toast.success(initial ? `${saved.name} saved` : `${saved.name} created`, { description: 'Used from the next step or answer.' });
       onSaved(saved);
     } catch (e) {
       toast.error('Not saved', { description: reason(e) });
@@ -609,8 +609,9 @@ function AgentEditor({ initial, cat, projectId, projectName, onClose, onSaved }:
       <DialogContent className="sm:max-w-[680px]">
         <DialogHeader>
           <DialogTitle>{initial ? `Edit ${initial.name}` : 'New agent'}</DialogTitle>
-          <DialogDescription>
-            An agent is instructions, a lane it prefers and the tools it may ask for. It never gets more than the tool rules allow, and every run it works on still stops at your signature.
+          <DialogDescription className="flex items-center gap-1">
+            Its instructions, lane and tools.
+            <About>Never more than the tool rules allow. Every run it works on still stops at your signature.</About>
           </DialogDescription>
         </DialogHeader>
         <div className="grid max-h-[62vh] gap-3 overflow-y-auto pr-1">
@@ -624,11 +625,11 @@ function AgentEditor({ initial, cat, projectId, projectName, onClose, onSaved }:
             )}
           </div>
           <Field label="Role" value={form.role} onChange={(v) => put({ role: v })} placeholder="Reads money code for rounding and tax mistakes"
-            hint="One line. The compiler reads it to decide which steps to give this agent." />
+            hint="One line; the compiler uses it to assign steps." />
           <label className="block">
             <span className="mb-1.5 block text-[12.5px] font-medium text-soft">Instructions</span>
             <textarea rows={7} value={form.prompt} onChange={(e) => put({ prompt: e.target.value })} maxLength={cat.limits.prompt}
-              placeholder="What it is for, how it works, what it must never do."
+              placeholder="What it does, and must never do"
               className="w-full rounded-lg border border-line bg-surface-2/60 px-3 py-2 font-mono text-[12.5px] leading-relaxed text-ink placeholder:text-dim focus-visible:border-brand focus-visible:outline-none" />
             <span className="mt-1 block text-[12px] text-dim">{form.prompt.length.toLocaleString()} of {cat.limits.prompt.toLocaleString()} characters</span>
           </label>
@@ -642,7 +643,7 @@ function AgentEditor({ initial, cat, projectId, projectName, onClose, onSaved }:
           </div>
           <div>
             <SectionTitle right={!every && <Button size="xs" variant="ghost" onClick={() => put({ tools: [] })}>Allow every tool</Button>}>Tools</SectionTitle>
-            <p className="mb-2 text-[12px] text-dim">{every ? 'Every tool, each under the tool rules. Untick one to narrow the list.' : `${form.tools.length} of ${cat.tools.length}. An agent can narrow what it is offered, never widen it.`}</p>
+            <p className="mb-2 text-[12px] text-dim">{every ? 'Every tool. Untick one to narrow.' : `${form.tools.length} of ${cat.tools.length}`}</p>
             <div className="grid gap-1 sm:grid-cols-2">
               {cat.tools.map((t) => (
                 <label key={t.name} className="flex items-start gap-2 rounded-md px-1.5 py-1 hover:bg-surface-2/60">

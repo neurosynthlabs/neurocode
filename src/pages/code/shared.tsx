@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FolderGit2, Target, TriangleAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Empty, Mono, Page, PageBody, PageHeader, Panel, RiskPill, Ring } from '@/components/os';
+import { About, Empty, Mono, Page, PageBody, PageHeader, Panel, RiskPill, Ring } from '@/components/os';
 import type { Impact } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { baseName } from './format';
@@ -28,7 +28,6 @@ export function ImpactPanel({ impact, onOpen, actions }: { impact: Impact; onOpe
     <div className="space-y-3">
       <Panel
         className={cn('accent-top', hot ? 'border-danger/40' : impact.risk === 'MEDIUM' ? 'border-warn/35' : '')}
-        eyebrow="Impact · measured on the dependency graph"
         title={<span className="flex items-center gap-2"><Target className="size-3.5 shrink-0 text-brand" />If {baseName(impact.target)} changes…</span>}
         actions={<RiskPill risk={impact.risk} />}
       >
@@ -48,13 +47,14 @@ export function ImpactPanel({ impact, onOpen, actions }: { impact: Impact; onOpe
             ))}
           </div>
         </div>
-        <p className="mt-3 border-t border-line pt-2.5 text-[12px] text-dim">
-          Confidence {impact.confidence}%: how much of this graph an exact parser read, less the imports that could not be resolved.
-        </p>
+        <div className="mt-3 flex items-center gap-1 border-t border-line pt-2.5 text-[12px] text-dim">
+          Confidence {impact.confidence}%
+          <About>How much of this graph an exact parser read, less the imports it could not resolve.</About>
+        </div>
       </Panel>
 
       {impact.warnings.length > 0 && (
-        <Panel eyebrow="Read these before changing it" title="Warnings" className="border-warn/30" flush>
+        <Panel title="Warnings" className="border-warn/30" flush>
           <div className="divide-y divide-line">
             {impact.warnings.map((w) => (
               <div key={w} className="flex items-start gap-2 px-5 py-2.5">
@@ -67,9 +67,9 @@ export function ImpactPanel({ impact, onOpen, actions }: { impact: Impact; onOpe
       )}
 
       {impact.blastRadius.length === 0 ? (
-        <Panel><Empty title="Nothing else depends on it" hint="No other file in the index imports it, uses it or touches its data." /></Panel>
+        <Panel><Empty title="Nothing else depends on it" hint="No other indexed file imports it, uses it or touches its data." /></Panel>
       ) : (
-        <Panel eyebrow="Everything that moves with it" title="Blast radius" flush>
+        <Panel title="Blast radius" flush>
           <div className="divide-y divide-line">
             {impact.blastRadius.map((g) => (
               <div key={g.label} className="px-5 py-3">
@@ -87,7 +87,7 @@ export function ImpactPanel({ impact, onOpen, actions }: { impact: Impact; onOpe
         </Panel>
       )}
 
-      <Panel eyebrow="What the OS would do" title="Recommendation" className="accent-left">
+      <Panel title="Recommendation" className="accent-left">
         <p className="text-[13.5px] leading-relaxed text-ink-2">{impact.recommendation}</p>
         {actions && <div className="mt-3 flex flex-wrap gap-2">{actions}</div>}
       </Panel>

@@ -107,8 +107,8 @@ def phases(steps: list[StepDraft] | None, tests: dict[str, Any]) -> list[dict[st
                                         "here for you; nothing is guessed.", "single", 0))
         out.append(_phase(2, "Write", "One agent per owner the plan names, each in a worktree of its own.",
                           "parallel", None))
-        out.append(_phase(3, "Merge", "Only when the plan names more than one agent: their branches come "
-                                      "together one by one, and a collision is named, never half-applied.",
+        out.append(_phase(3, "Merge", "With several agents only: branches merge one by one, and a collision "
+                                      "is named, never half-applied.",
                           "single", 0))
     else:
         owners = list(dict.fromkeys(s.agent for s in steps))
@@ -204,9 +204,8 @@ class WorkflowService:
                  tests: dict[str, Any]) -> dict[str, Any]:
         return workflow_json(
             id=BUILTIN, name=BUILTIN, builtin=True, scope="global", project_id=None, project_name=None,
-            description="A requirement in your own words, compiled into a plan, written by the agents it "
-                        "names, tested, reviewed, and stopped at your signature. The compiler decides the "
-                        "steps, so a question it cannot settle waits for you in Plans.",
+            description="Your requirement, compiled into a plan, written by its agents, tested, reviewed and "
+                        "stopped at your signature. A question the compiler cannot settle waits in Plans.",
             trigger="on dispatch · Plans, or the Run button", phases=phases(None, tests),
             stats=stats.get(None), last_result=results.get(None), tests=tests)
 

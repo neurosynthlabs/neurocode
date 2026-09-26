@@ -400,11 +400,11 @@ export function DebugPanel({ projectId, breakpoints, onPausedAt, openFile, curre
 
   if (!allowed) {
     return <Empty icon={<Bug className="size-6" />} title="Debugging needs the machine:access permission"
-      hint="The debugger runs programs on the machine the API runs on, so only an Owner holds it unless an Owner grants it." />;
+      hint="The debugger uses the API's machine; Owners hold it unless they grant it." />;
   }
   if (!projectId) {
     return <Empty icon={<Bug className="size-6" />} title="Debugging belongs to a project"
-      hint="Choose a project in the top bar, or onboard this folder as a project, to debug its programs." />;
+      hint="Choose a project in the top bar, or onboard this folder." />;
   }
   if (loadError && !configs) {
     return <Empty title="The debug configurations did not load" hint={loadError}
@@ -471,14 +471,14 @@ export function DebugPanel({ projectId, breakpoints, onPausedAt, openFile, curre
         <Empty icon={<Bug className="size-6" />}
           title={choices.length ? 'Nothing is being debugged' : 'Nothing to debug yet'}
           hint={choices.length
-            ? 'Set breakpoints in the editor’s gutter, then start debugging. Python runs with the project’s own .venv when it has one.'
-            : 'Add a debug configuration — a .py or .js file of the checkout and its arguments — or open a Python or JavaScript file in the editor.'}
+            ? 'Set breakpoints in the gutter, then start. Python uses the project’s .venv.'
+            : 'Add a debug configuration, or open a .py or .js file.'}
           action={choices.length ? undefined : <Button size="sm" variant="outline" onClick={() => { setEditing(null); setDialog(true); }}><Plus className="size-3.5" />New debug configuration</Button>} />
       ) : (
         <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.15fr)_minmax(0,1.35fr)] md:divide-x md:divide-line/60 md:overflow-hidden">
           <div className="flex min-h-0 flex-col">
             <Section title="Call stack" className="md:flex-[3]">
-              {!isPaused ? <Quiet>{live ? 'Frames appear when the program stops — at a breakpoint, or when you pause it.' : 'The program is not running.'}</Quiet>
+              {!isPaused ? <Quiet>{live ? 'Frames appear when the program stops.' : 'The program is not running.'}</Quiet>
                 : session.frames.length === 0 ? <Quiet>The debugger reported no frames.</Quiet>
                   : session.frames.map((f, i) => (
                     <button key={`${f.id}:${i}`} type="button"
@@ -491,7 +491,7 @@ export function DebugPanel({ projectId, breakpoints, onPausedAt, openFile, curre
                   ))}
             </Section>
             <Section title="Breakpoints" className="border-t border-line/60 md:flex-[2]">
-              {bpList.length === 0 ? <Quiet>Click beside a line number in the editor to add one.</Quiet>
+              {bpList.length === 0 ? <Quiet>Click beside a line number to add one.</Quiet>
                 : bpList.map((b) => {
                   const ok = verified(b.path, b.line);
                   return (

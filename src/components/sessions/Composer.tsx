@@ -163,7 +163,7 @@ export function Composer({ session, canAsk, thinking, waiting, onSend, onStop }:
 
   const hint = !canAsk ? 'Your role cannot use sessions.'
     : waiting ? 'Answer the permission request above first.'
-    : `Ask about ${session.projectName}… (@ attaches, / runs a command, Enter sends)`;
+    : `Ask about ${session.projectName}… (@ to attach, / for commands)`;
 
   return (
     <div className={cn('relative rounded-xl border bg-surface p-2.5 transition-colors', dragging ? 'border-brand/60' : 'border-line')}
@@ -172,15 +172,15 @@ export function Composer({ session, canAsk, thinking, waiting, onSend, onStop }:
         <div role="listbox" aria-label={shown.kind === 'mention' ? 'Attach from the project' : 'Commands'}
           className="absolute right-2.5 bottom-full left-2.5 z-20 mb-1.5 max-h-[280px] overflow-y-auto rounded-xl border border-line bg-surface p-1 shadow-lg">
           <p className="px-2.5 pt-1.5 pb-1 text-[11.5px] text-dim">
-            {shown.kind === 'mention' ? 'Attach a file, symbol, fact or plan — its content goes to the model with your question' : "This project's commands — the server expands one when you ask"}
+            {shown.kind === 'mention' ? 'Attach a file, symbol, fact or plan' : "This project's commands"}
           </p>
           {loading ? (
             <p className="flex items-center gap-2 px-2.5 py-2 text-[12.5px] text-dim"><Loader2 className="size-3.5 animate-spin" />Looking…</p>
           ) : options.length === 0 ? (
             <p className="px-2.5 py-2 text-[12.5px] text-dim">
               {shown.kind === 'mention'
-                ? `Nothing matches “${shown.query}”. Files and symbols come from the code index, so index the project to find them here.`
-                : 'No command matches. Commands are Markdown files in .claude/commands (project or home); text that names none is asked as typed.'}
+                ? `Nothing matches “${shown.query}”. Files and symbols need the code index.`
+                : 'No command matches; it is asked as typed. Commands live in .claude/commands.'}
             </p>
           ) : options.map((o, i) => (
             <button key={o.id} role="option" aria-selected={i === active} type="button"
@@ -222,7 +222,7 @@ export function Composer({ session, canAsk, thinking, waiting, onSend, onStop }:
       <input ref={files} type="file" multiple hidden accept="text/*,.md,.json,.yaml,.yml,.toml,.csv,.sql,.py,.ts,.tsx,.js,.go,.rs,.java,.cs,.rb,.php,.sh,image/png,image/jpeg,image/gif,image/webp"
         onChange={(e) => { if (e.target.files) void upload(e.target.files); e.target.value = ''; }} />
       <div className="flex items-center gap-1.5 border-t border-line/60 px-1 pt-2">
-        <Button size="icon-sm" variant="ghost" aria-label="Attach a file or picture" title="Attach a text file (up to 1 MB) or a picture (up to 5 MB)"
+        <Button size="icon-sm" variant="ghost" aria-label="Attach a file or picture" title="A text file up to 1 MB, or a picture up to 5 MB"
           disabled={!canAsk || waiting} onClick={() => files.current?.click()}><Paperclip className="size-3.5" /></Button>
         <Button size="icon-sm" variant="ghost" aria-label="Mention a file, symbol, fact or plan" title="Attach from the project (@)"
           disabled={!canAsk || waiting} onClick={() => {
@@ -230,7 +230,7 @@ export function Composer({ session, canAsk, thinking, waiting, onSend, onStop }:
             setDraft(text); setCaret(text.length); setClosedAt(null); box.current?.focus();
           }}><AtSign className="size-3.5" /></Button>
         <span className="min-w-0 flex-1 truncate text-[11.5px] text-dim">
-          <Mono>{session.ref}</Mono> · reads the code; the web and MCP tools ask before they act
+          <Mono>{session.ref}</Mono> · web and MCP tools ask first
         </span>
         {thinking && (
           <Button size="sm" variant="outline" onClick={onStop}><Square className="size-3.5" />Stop</Button>

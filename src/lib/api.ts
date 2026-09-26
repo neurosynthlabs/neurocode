@@ -677,6 +677,7 @@ export const api = {
   cancelRun: (ref: string) => request<RunDoc>(`/runs/${seg(ref)}/cancel`, POST()),
   mergeRun: (ref: string) => request<MergeResult>(`/runs/${seg(ref)}/merge`, { ...POST(), signal: AbortSignal.timeout(120_000) }),
   discardRun: (ref: string) => request<RunDoc>(`/runs/${seg(ref)}/discard`, POST()),
+  unmergeRun: (ref: string) => request<RunDoc>(`/runs/${seg(ref)}/unmerge`, { ...POST(), signal: AbortSignal.timeout(60_000) }),
 
   sessions: (project?: string) => request<SessionDoc[]>(`/sessions${project ? `?project=${encodeURIComponent(project)}` : ''}`),
   session: (ref: string, after = 0) => request<SessionDetail>(`/sessions/${seg(ref)}?after=${after}`),

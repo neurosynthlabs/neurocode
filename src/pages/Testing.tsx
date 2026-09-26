@@ -60,7 +60,7 @@ function LiveTesting() {
     try {
       const run = await testing.run(projectId);
       toast(`Testing ${name}`, {
-        description: `${run.ref} · a throwaway worktree at ${run.shortBase}. The first run in a project waits for your approval.`,
+        description: `${run.ref} · worktree at ${run.shortBase}. A first run waits for your approval.`,
         action: { label: 'Open run', onClick: () => nav(`/runs?ref=${encodeURIComponent(run.ref)}`) },
       });
       reload();
@@ -74,18 +74,22 @@ function LiveTesting() {
   const mine = project ? data?.suites.find((s) => s.projectId === project.id) : undefined;
   const runBlocked = !project?.source ? 'Onboard a repository first'
     : !can('runs:run') ? 'Needs the runs:run permission'
-      : mine && !mine.command ? 'No test command was found in this project'
+      : mine && !mine.command ? 'No test command found'
         : mine?.checking ? `${mine.checking} is testing it now` : null;
 
   return (
     <Page>
       <PageHeader
         title="Testing"
-        subtitle="Each onboarded project's own test command, run in a throwaway worktree. The numbers are what the runner printed; a documented legacy failure is information, not a defect."
+        subtitle="Run each project's own test command in a throwaway worktree."
+        about={<>
+          <p>The numbers are what the runner printed. Nothing is instrumented here.</p>
+          <p>A documented legacy failure is information, not a defect.</p>
+        </>}
         actions={project && (
           <Button size="sm" disabled={!!runBlocked || starting === project.id} title={runBlocked ?? undefined}
             onClick={() => void start(project.id, project.name)}>
-            {starting === project.id ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}Run {project.name}'s tests
+            {starting === project.id ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}Run tests
           </Button>
         )}
       >
@@ -110,7 +114,7 @@ function LiveTesting() {
       ) : data.suites.length === 0 ? (
         <PageBody>
           <Empty icon={<FlaskConical className="size-6" />} title={all.length === 0 ? 'No repository onboarded yet' : 'No project has code on this machine'}
-            hint="Tests are the project's own command — a Makefile test target, pytest, npm test, go test or dotnet test — so there is nothing to run until a repository is onboarded."
+            hint="Onboard a repository to run its tests."
             action={<Button size="sm" variant="outline" onClick={() => nav('/projects')}>Open Projects</Button>} />
         </PageBody>
       ) : (
@@ -154,10 +158,10 @@ function Stats({ report }: { report: TestingReport }) {
       <Stat label="Pass rate" value={pct === null ? '—' : `${pct.toFixed(1)}%`} tone={pct === null ? 'neutral' : rateTone(pct)}
         sub={pct === null ? (latest.length ? 'exit code only' : 'nothing measured yet') : `latest run of ${counted.length === 1 ? 'one suite' : `${counted.length} suites`}`} />
       <Stat label="Real failures" value={real + unnamed} tone={real + unnamed ? 'warn' : 'ok'}
-        sub={unnamed ? `${unnamed} failed run${unnamed === 1 ? '' : 's'} with failures not named` : real ? 'need a decision' : 'none unexplained'} />
+        sub={unnamed ? `${unnamed} failed run${unnamed === 1 ? '' : 's'} named no test` : real ? 'need a decision' : 'none unexplained'} />
       <Stat label="Expected" value={expected.length} tone="neutral" icon={<ShieldQuestion className="size-3" />}
         sub={`${legacy} legacy · ${expected.length - legacy} quarantined`} />
-      <Stat label="Wall clock" value={latest.length ? seconds(wall) : '—'} sub="latest run of each suite" />
+      <Stat label="Wall clock" value={latest.length ? seconds(wall) : '—'} sub="latest runs" />
     </StatGrid>
   );
 }
@@ -175,8 +179,8 @@ function Suites({ report, canRun, starting, onRun, onOpenFailure }: {
             const l = s.latest;
             const calm = l?.allExpected === true;
             const pct = l ? rate(l.passed, l.total) : null;
-            const blocked = !canRun ? 'Needs the runs:run permission' : !s.command ? 'No test command was found'
-              : s.allowed === 'refused' ? 'You chose not to run tests here' : s.checking ? `${s.checking} is testing it now` : null;
+            const blocked = !canRun ? 'Needs the runs:run permission' : !s.command ? 'No test command found'
+              : s.allowed === 'refused' ? 'You refused tests here' : s.checking ? `${s.checking} is testing it now` : null;
             return (
               <Row key={s.projectId}>
                 <Cell className="font-medium text-ink">{s.projectName}</Cell>
@@ -214,7 +218,7 @@ function Suites({ report, canRun, starting, onRun, onOpenFailure }: {
       </Panel>
 
       {legacy?.expectation && (
-        <Panel className="border-warn/35 accent-left" eyebrow="Red on purpose — this is not a regression"
+        <Panel className="border-warn/35 accent-left" eyebrow="Red on purpose"
           title={<span className="flex items-center gap-2"><ShieldQuestion className="size-4 text-warn" />{legacy.name}</span>}
           actions={<Button size="xs" variant="ghost" onClick={() => onOpenFailure(legacy.id)}>Open</Button>}>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -252,8 +256,8 @@ function Failures({ report, picked, onPick, onChanged, canRun, canDecide, indexe
     return (
       <div className="space-y-4">
         <Panel>
-          <Empty icon={<FlaskConical className="size-6" />} title={ran ? 'Nothing failed in the latest run of any suite' : 'No tests have run yet'}
-            hint={ran ? 'Or the runner printed its failures in a shape NeuroCode does not read — the run itself still says pass or fail.' : 'Run a project\'s tests from the Suites tab. Failures appear here with the lines the runner printed.'} />
+          <Empty icon={<FlaskConical className="size-6" />} title={ran ? 'Nothing failed in the latest runs' : 'No tests have run yet'}
+            hint={ran ? 'Or their format was not one read here.' : 'Run tests from Suites; failures show here.'} />
         </Panel>
         {idle.length > 0 && <Standing items={idle} names={names} canDecide={canDecide} onChanged={onChanged} />}
       </div>
@@ -333,7 +337,7 @@ function FailureDetail({ f, canRun, canDecide, indexed, onChanged, onOpenFile, o
       <SectionTitle>What the runner said</SectionTitle>
       <p className="text-[13.5px] leading-relaxed text-ink-2">{f.message || 'The runner printed no message for it.'}</p>
       <p className="mt-2 text-[12.5px] text-dim">
-        Failed in <span className="tnum text-ink-2">{f.failedIn}</span> of the last <span className="tnum">{f.ofLast}</span> tested runs of this project, since{' '}
+        Failed in <span className="tnum text-ink-2">{f.failedIn}</span> of the last <span className="tnum">{f.ofLast}</span> tested runs, since{' '}
         <button className="font-mono text-brand hover:underline" onClick={() => onOpenRun(f.firstFailedRef)}>{f.firstFailedRef}</button>
         {' '}· this one in <button className="font-mono text-brand hover:underline" onClick={() => onOpenRun(f.runRef)}>{f.runRef}</button>
       </p>
@@ -342,7 +346,7 @@ function FailureDetail({ f, canRun, canDecide, indexed, onChanged, onOpenFile, o
         <>
           <SectionTitle className="mt-3">Why it is expected</SectionTitle>
           <p className="rounded-sm border border-warn/30 bg-warn/8 p-2.5 text-[13.5px] leading-relaxed text-warn">{f.expectation.reason}</p>
-          <p className="mt-1.5 text-[12.5px] text-dim">{f.expectation.by ?? 'Someone'} · {ago(f.expectation.at)} · still run and reported; it does not raise a run's gate on its own</p>
+          <p className="mt-1.5 text-[12.5px] text-dim">{f.expectation.by ?? 'Someone'} · {ago(f.expectation.at)} · still run; never gates a run alone</p>
         </>
       )}
 
@@ -353,7 +357,7 @@ function FailureDetail({ f, canRun, canDecide, indexed, onChanged, onOpenFile, o
       ) : f.excerpt && <pre className="ascii mt-3 overflow-x-auto rounded-sm border border-line bg-base p-3">{f.excerpt}</pre>}
 
       <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line pt-3">
-        <Button size="xs" variant="outline" disabled={!canRun || busy} title={canRun ? 'Runs the whole command again' : 'Needs the runs:run permission'} onClick={() => void rerun()}>
+        <Button size="xs" variant="outline" disabled={!canRun || busy} title={canRun ? 'Reruns the whole command' : 'Needs the runs:run permission'} onClick={() => void rerun()}>
           <RotateCcw className="size-3" />Re-run suite
         </Button>
         {f.expectation ? (
@@ -370,7 +374,7 @@ function FailureDetail({ f, canRun, canDecide, indexed, onChanged, onOpenFile, o
             </Button>
           </>
         )}
-        <Button size="xs" variant="ghost" disabled={!f.file || !indexed} title={!f.file ? 'The runner named no file' : !indexed ? 'Index the project to open its files' : undefined}
+        <Button size="xs" variant="ghost" disabled={!f.file || !indexed} title={!f.file ? 'The runner named no file' : !indexed ? 'Index the project first' : undefined}
           onClick={() => onOpenFile(f)}>
           <FileCode className="size-3" />Open file
         </Button>
@@ -394,7 +398,7 @@ function ExpectDialog({ f, kind, onClose, onSaved }: {
     setSaving(true);
     try {
       await testing.expect(f.projectId, { testName: f.name, kind, reason: why.trim() });
-      toast(kind === 'legacy' ? 'Marked legacy-expected' : 'Quarantined', { description: 'Still run and reported. It no longer raises a run\'s gate on its own.' });
+      toast(kind === 'legacy' ? 'Marked legacy-expected' : 'Quarantined', { description: 'Still run and reported; no longer gates a run alone.' });
       onSaved();
     } catch (e) {
       toast.error('Not saved', { description: reason(e) });
@@ -409,14 +413,12 @@ function ExpectDialog({ f, kind, onClose, onSaved }: {
           <DialogDescription className="break-all font-mono text-[12px]">{f.name}</DialogDescription>
         </DialogHeader>
         <p className="text-[13px] leading-relaxed text-ink-2">
-          {kind === 'legacy'
-            ? 'The behaviour it checks is known to differ and is kept that way on purpose.'
-            : 'It fails for reasons that are not the code under test.'} It keeps running and keeps being reported;
-          a run whose every failure is expected does not raise its gate. The next person to see it red reads your reason.
+          {kind === 'legacy' ? 'Known to differ, on purpose.' : 'Fails for reasons outside the code under test.'}
+          {' '}It still runs, but no longer gates a run.
         </p>
         <Textarea value={why} onChange={(e) => setWhy(e.target.value)} rows={4} aria-label="Why"
           placeholder={kind === 'legacy' ? 'Why is it red on purpose, and until when?' : 'What makes it flaky?'} />
-        <p className="text-[12px] text-dim">{ready ? 'Recorded in the audit log with your name.' : 'A sentence, at least ten characters.'}</p>
+        <p className="text-[12px] text-dim">{ready ? 'Logged with your name.' : 'At least ten characters.'}</p>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button disabled={!ready || saving} onClick={() => void save()}>{saving && <Loader2 className="size-3.5 animate-spin" />}Save</Button>
@@ -443,7 +445,7 @@ function Standing({ items, names, canDecide, onChanged }: {
     }
   };
   return (
-    <Panel flush eyebrow="Not failing in the latest run" title="Standing expectations">
+    <Panel flush eyebrow="Not failing now" title="Standing expectations">
       <div className="divide-y divide-line/60">
         {items.map((e) => (
           <div key={`${e.projectId}:${e.testName}`} className="flex items-center gap-3 px-5 py-2.5">
@@ -468,7 +470,7 @@ function Coverage({ report }: { report: TestingReport }) {
     return (
       <Panel>
         <Empty icon={<FlaskConical className="size-6" />} title="No coverage report was written"
-          hint="Your test command wrote no coverage report (coverage.xml, lcov.info, coverage/coverage-summary.json, coverage.out). Turn one on in the project and the next run fills this." />
+          hint="Have it write coverage.xml, lcov.info, coverage/coverage-summary.json or coverage.out." />
       </Panel>
     );
   }
@@ -480,6 +482,7 @@ function Coverage({ report }: { report: TestingReport }) {
         const sources = [...new Set(rows.map((r) => r.source))].join(', ');
         return (
           <Panel key={suite.projectId} title={suite.projectName}
+            about="Lines this project's runner reported executing in its latest tested run. A directory missing here was not measured, not untested."
             eyebrow={`${rows[0].runRef} · ${sources} · ${total ? ((100 * covered) / total).toFixed(1) : '0'}% of ${total.toLocaleString()} ${rows.some((r) => r.source === 'go') ? 'statements' : 'lines'}`}>
             {rows.map((r) => {
               const pct = r.total ? (100 * r.covered) / r.total : 0;
@@ -488,19 +491,13 @@ function Coverage({ report }: { report: TestingReport }) {
           </Panel>
         );
       })}
-      <Panel eyebrow="Honesty" title="What this measures">
-        <p className="text-[13.5px] leading-relaxed text-ink-2">
-          These are the lines each project's own runner reported executing, read from the report it wrote during its latest
-          tested run. NeuroCode instruments nothing, so a directory missing here was not measured — not untested.
-        </p>
-      </Panel>
     </div>
   );
 }
 
 function History({ lines, onOpen }: { lines: TestHistoryLine[]; onOpen: (ref: string) => void }) {
   if (lines.length === 0) {
-    return <Panel><Empty title="No test run on record" hint="A run appears here once a project's test command has really run — from this screen, or as a step of an agent's run." /></Panel>;
+    return <Panel><Empty title="No test run on record" hint="Runs from here or from agents land here." /></Panel>;
   }
   return (
     <Panel flush>

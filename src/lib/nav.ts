@@ -50,7 +50,7 @@ export const NAV: NavItem[] = [
   { section: 'Platform', sub: 'Extensions',  to: '/hooks',    label: 'Hooks',           icon: 'Webhook',     perm: ['settings:write'], keywords: 'pretooluse posttooluse events automation guard' },
   { section: 'Platform', sub: 'Extensions',  to: '/plugins',  label: 'Plugins',         icon: 'Blocks',      keywords: 'marketplace install packs extensions' },
   { section: 'Platform', sub: 'Connections', to: '/mcp',      label: 'MCP & Tools',     icon: 'Plug',        keywords: 'model context protocol servers filesystem sql playwright' },
-  { section: 'Platform', sub: 'Connections', to: '/models',   label: 'Models & Router', icon: 'Cpu',         keywords: 'lanes groq cerebras gemini deepseek routing keys local ollama' },
+  { section: 'Platform', sub: 'Connections', to: '/models',   label: 'Models',          icon: 'Cpu',         keywords: 'lanes groq cerebras gemini deepseek routing router keys api key providers local ollama test connection' },
 
   { section: 'Governance', to: '/permissions', label: 'Permissions',  icon: 'ShieldCheck', keywords: 'approval gates allow deny risk sandbox' },
   { section: 'Governance', to: '/cost',        label: 'Cost & Usage', icon: 'Coins',       keywords: 'tokens spend ledger price agent project lane' },
@@ -58,9 +58,8 @@ export const NAV: NavItem[] = [
   { section: 'Governance', to: '/settings',    label: 'Settings',     icon: 'Settings',    keywords: 'general appearance notifications preferences' },
 
   { section: 'Admin', to: '/admin/users',     label: 'People',              icon: 'Users',        perm: ['people:read', 'users:manage', 'teams:manage'], keywords: 'users accounts invite members disable reset password' },
-  { section: 'Admin', to: '/admin/roles',     label: 'Roles & permissions', icon: 'KeyRound',     perm: ['roles:manage', 'users:manage'], keywords: 'rbac access control custom role grant' },
+  { section: 'Admin', to: '/admin/roles',     label: 'Roles',               icon: 'KeyRound',     perm: ['roles:manage', 'users:manage'], keywords: 'rbac access control custom role grant permissions rights' },
   { section: 'Admin', to: '/admin/teams',     label: 'Teams',               icon: 'UsersRound',   perm: ['people:read', 'teams:manage', 'users:manage'], keywords: 'groups squads members' },
-  { section: 'Admin', to: '/admin/ai',        label: 'AI providers',        icon: 'BrainCircuit', perm: ['workspace:admin'],              keywords: 'deepseek ollama api key model routing offline test connection' },
   { section: 'Admin', to: '/admin/audit',     label: 'Audit log',           icon: 'FileClock',    perm: ['audit:read'],                   keywords: 'security sign in history who changed access' },
   { section: 'Admin', to: '/admin/workspace', label: 'Workspace',           icon: 'Building2',    perm: ['workspace:admin'],              keywords: 'name organisation reset data' },
   { section: 'Admin', to: '/admin/database',  label: 'Database',            icon: 'Database',     perm: ['workspace:admin'],              keywords: 'postgres backup integrity check migrations optimize tables' },

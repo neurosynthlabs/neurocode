@@ -68,7 +68,11 @@ export default function Cost() {
     <Page>
       <PageHeader
         title="Cost & Usage"
-        subtitle="What the AI work really cost, call by call, from the gateway’s ledger and each lane’s declared price."
+        subtitle="What each AI call cost, from the gateway’s ledger."
+        about={<>
+          <p>One line per model call and per offline answer, each priced at its lane’s declared price.</p>
+          <p>Nothing is projected or estimated. Days are UTC days, whatever your time zone.</p>
+        </>}
       />
       {u.error ? (
         <PageBody><Empty title="The usage ledger did not load" hint={u.error} action={<Button size="sm" variant="outline" onClick={u.reload}>Try again</Button>} /></PageBody>
@@ -79,8 +83,8 @@ export default function Cost() {
           <Empty
             icon={<Coins className="size-5" />}
             title="No AI call yet"
-            hint="Compile a requirement, ask memory or start a session, and every call is counted here with what it cost."
-            action={<Button size="sm" variant="outline" onClick={() => nav('/')}>Go to Command Center</Button>}
+            hint="Every model call is counted here, with its cost."
+            action={<Button size="sm" variant="outline" onClick={() => nav('/')}>Open Command Center</Button>}
           />
         </PageBody>
       ) : (
@@ -95,17 +99,17 @@ function Report({ r }: { r: SpendReport }) {
   const month = thisMonth(r);
   return (
     <PageBody className="space-y-4">
-      <SectionTitle right={<span className="text-[12.5px] text-dim">last {r.days} days · from the AI gateway’s ledger</span>}>Spend</SectionTitle>
+      <SectionTitle right={<span className="text-[12.5px] text-dim">last {r.days} days</span>}>Spend</SectionTitle>
       <StatGrid cols={5}>
         <Stat label="This month" value={usd(month)} tone="brand" sub={`${month.calls.toLocaleString()} call${month.calls === 1 ? '' : 's'} since the 1st (UTC)`} icon={<Coins className="size-3" />} />
         <Stat label={`Last ${r.days} days`} value={usd(t)} sub={`${t.calls.toLocaleString()} calls · ${t.modelCalls.toLocaleString()} to a model`} />
         <Stat label="Tokens" value={tokens(t.tokensIn + t.tokensOut)} sub={`${tokens(t.tokensIn)} in · ${tokens(t.tokensOut)} out`} />
-        <Stat label="Failed model calls" value={t.failures} tone={t.failures ? 'warn' : 'ok'} sub="a lane that fails hands the call to the next" />
-        <Stat label="Offline share" value={`${t.calls ? Math.round((100 * t.offline) / t.calls) : 0}%`} tone="ok" sub={`${t.offline.toLocaleString()} answered by the rules, no model`} icon={<HardDrive className="size-3" />} />
+        <Stat label="Failed model calls" value={t.failures} tone={t.failures ? 'warn' : 'ok'} sub="each handed to the next lane" />
+        <Stat label="Offline share" value={`${t.calls ? Math.round((100 * t.offline) / t.calls) : 0}%`} tone="ok" sub={`${t.offline.toLocaleString()} by the rules, no model`} icon={<HardDrive className="size-3" />} />
       </StatGrid>
       {!t.costComplete && (
         <p className="text-[12.5px] text-warn">
-          Some calls ran on lanes with no price, so the dollar figures marked ≥ are a floor, and a line with only those calls reads unpriced.
+          Some lanes have no price, so ≥ marks a floor.
         </p>
       )}
 
@@ -132,7 +136,7 @@ function DailySpend({ r }: { r: SpendReport }) {
 
   return (
     <Panel
-      eyebrow={dollars ? `${r.days} UTC days · dollars per day` : `${r.days} UTC days · every call was free, so this counts calls`}
+      eyebrow={dollars ? `${r.days} UTC days · dollars per day` : `${r.days} UTC days · all free, so calls`}
       title="Daily spend"
       actions={day
         ? <span className="text-[12.5px] text-soft"><Mono>{day.day} UTC</Mono> {usd(day)} · {day.calls} call{day.calls === 1 ? '' : 's'} · {day.offline} offline</span>
@@ -169,7 +173,7 @@ function DailySpend({ r }: { r: SpendReport }) {
       <div className="mt-2 flex flex-wrap items-center gap-4 border-t border-line pt-2 text-[11.5px] text-dim">
         <span className="flex items-center gap-1.5"><span className="size-2 rounded-xs bg-brand" />{dollars ? 'spend' : 'calls to a model'}</span>
         {!dollars && <span className="flex items-center gap-1.5"><span className="size-2 rounded-xs bg-ok" />offline answers</span>}
-        {dollars && !r.totals.costComplete && <span className="flex items-center gap-1.5"><span className="size-2 rounded-xs bg-warn" />a day with unpriced calls, drawn at its floor</span>}
+        {dollars && !r.totals.costComplete && <span className="flex items-center gap-1.5"><span className="size-2 rounded-xs bg-warn" />unpriced calls, drawn at the floor</span>}
       </div>
     </Panel>
   );
@@ -211,14 +215,14 @@ function Breakdown({ r }: { r: SpendReport }) {
           value={split} onChange={setSplit}
         />
         <span className="ml-auto text-[12.5px] text-dim">
-          {split === 'agent' ? 'calls an agent asked for; a person’s own calls are not counted here' : `${tokens(all)} tokens in the window`}
+          {split === 'agent' ? 'agent calls only, not a person’s own' : `${tokens(all)} tokens in the window`}
         </span>
       </div>
       <Panel flush>
         {rows.length === 0 ? (
           <Empty
             title="No agent made a model call in this window"
-            hint="Dispatch a plan, and every step an agent works is counted here with what it cost."
+            hint="Dispatch a plan to see what agents spend."
             action={<Button size="sm" variant="outline" onClick={() => nav('/plans')}>Open Plans</Button>}
           />
         ) : (
@@ -264,14 +268,14 @@ function CacheAndReasoning({ r }: { r: SpendReport }) {
   const hit = share(all);
   return (
     <section className="space-y-3">
-      <SectionTitle right={<span className="text-[12.5px] text-dim">model calls only · as each provider reported them</span>}>Prompt cache and reasoning</SectionTitle>
+      <SectionTitle right={<span className="text-[12.5px] text-dim">model calls · as providers reported</span>}>Prompt cache and reasoning</SectionTitle>
       <StatGrid cols={3}>
         <Stat label="Served from cache" value={hit === null ? '—' : `${hit}%`} tone={hit ? 'ok' : undefined}
           sub={`${tokens(all.tokensCached)} of ${tokens(all.tokensIn)} input tokens`} />
         <Stat label="Saved by the cache" value={saved(all)} tone={all.savedUsd ? 'ok' : undefined}
-          sub="cached tokens at the fresh price, less what they cost cached" />
+          sub="vs the same tokens uncached" />
         <Stat label="Reasoning" value={tokens(all.tokensReasoning)}
-          sub={all.tokensOut ? `${Math.round((100 * all.tokensReasoning) / all.tokensOut)}% of ${tokens(all.tokensOut)} output tokens — paid for, not shown as the answer` : 'no output tokens'} />
+          sub={all.tokensOut ? `${Math.round((100 * all.tokensReasoning) / all.tokensOut)}% of ${tokens(all.tokensOut)} output tokens · paid, not shown` : 'no output tokens'} />
       </StatGrid>
       <div className="flex flex-wrap items-center gap-2">
         <Segmented options={[{ id: 'lane', label: 'By lane' }, { id: 'feature', label: 'By feature' }]} value={by} onChange={setBy} />
@@ -308,7 +312,7 @@ function Costliest({ r }: { r: SpendReport }) {
     <Panel
       flush
       title="Costliest calls"
-      eyebrow={anyCost ? `the ${r.costliest.length} most expensive in the window` : 'no call in the window cost anything known, so these are the largest'}
+      eyebrow={anyCost ? `the ${r.costliest.length} most expensive` : 'no known cost · largest by tokens'}
     >
       <DataTable head={['When', 'Call', 'Run', 'Answered by', 'Tokens', 'Cost']}>
         {r.costliest.map((c, i) => (
@@ -337,7 +341,7 @@ function Latest({ r }: { r: SpendReport }) {
   const { recent, byPerson } = r;
   if (!recent.length) return null;
   return (
-    <Panel flush title="Latest calls" eyebrow={`newest calls, any date${byPerson ? ` · ${byPerson.length} ${byPerson.length === 1 ? 'person' : 'people'} used AI in the window` : ''}`}>
+    <Panel flush title="Latest calls" eyebrow={`newest first${byPerson ? ` · ${byPerson.length} ${byPerson.length === 1 ? 'person' : 'people'} used AI` : ''}`}>
       <DataTable head={['When', 'Feature', 'Answered by', 'Tokens', 'Time', ...(byPerson ? ['By'] : [])]}>
         {recent.map((c, i) => (
           <Row key={`${c.at}:${i}`}>

@@ -31,7 +31,7 @@ interface Suggestion { icon: LucideIcon; label: string; text: string }
 const MODES: Mode[] = [
   { id: 'plan', label: 'Plan', icon: GitBranchPlus, placeholder: 'Describe the change you want, in your own words…', action: 'Compile Plan', verb: 'compile', perm: 'plans:compile' },
   { id: 'ask', label: 'Ask', icon: MessagesSquare, placeholder: 'Ask what memory knows about this project…', action: 'Ask memory', verb: 'ask', perm: 'ai:use' },
-  { id: 'idea', label: 'Brainstorm', icon: Lightbulb, placeholder: 'Pitch an idea. It comes back as a brief that argues against itself.', action: 'Brainstorm', verb: 'brainstorm', perm: 'ai:use' },
+  { id: 'idea', label: 'Brainstorm', icon: Lightbulb, placeholder: 'Pitch an idea. The brief argues against itself.', action: 'Brainstorm', verb: 'brainstorm', perm: 'ai:use' },
 ];
 
 /* Shapes of a request, to start from. They name nothing in any codebase: a suggestion that mentioned a
@@ -192,7 +192,7 @@ export default function CommandCenter() {
                 ))}
               </div>
               <span className="ml-1 hidden h-8 items-center gap-1.5 rounded-full px-2.5 text-[12.5px] text-soft sm:flex"
-                title={note ?? 'The model that answers. Choose it in Admin → AI providers.'}>
+                title={note ?? 'The model that answers. Choose it in Models.'}>
                 <Cpu className="size-3.5" />{engine}
                 {note && <TriangleAlert className="size-3.5 text-warn" aria-label={note} />}
               </span>
@@ -231,7 +231,7 @@ export default function CommandCenter() {
                   )}
                   <p className="mt-3 text-[12px] text-dim">
                     {answer.provider === 'rules'
-                      ? 'Memory search, no model: the matching facts, quoted. Add a model in Admin → AI providers for a written answer.'
+                      ? 'Memory search, no model: matching facts, quoted. Add a model for a written answer.'
                       : `${answer.model} · ${(answer.ms / 1000).toFixed(1)} s`}
                   </p>
                 </div>
@@ -271,8 +271,8 @@ export default function CommandCenter() {
         {all.length === 0 && (
           <section className="mx-auto mt-10 grid w-full max-w-[760px] grid-cols-1 gap-4 sm:grid-cols-2" aria-label="Get started">
             {[
-              { icon: FolderGit2, title: 'Onboard an existing repository', text: 'Clone a repository or open a folder on this machine. It is measured and indexed, ready to plan against.', to: '/projects?new=1', perm: 'projects:onboard' },
-              { icon: Compass, title: 'Design a new system', text: 'Answer a few questions, start from the architecture that fits, shape it, and scaffold it into a new repository.', to: '/blueprints?new=1', perm: 'plans:compile' },
+              { icon: FolderGit2, title: 'Onboard an existing repository', text: 'Clone one, or open a folder on this machine.', to: '/projects?new=1', perm: 'projects:onboard' },
+              { icon: Compass, title: 'Design a new system', text: 'Pick an architecture, shape it, scaffold it.', to: '/blueprints?new=1', perm: 'plans:compile' },
             ].map(({ icon: I, title, text, to, perm }) => (
               <button key={to} onClick={() => nav(to)} disabled={!can(perm)} title={can(perm) ? undefined : `Needs the ${perm} permission`}
                 className="flex flex-col items-start gap-2 rounded-2xl border border-line bg-surface px-5 py-4 text-left transition-colors hover:bg-surface-2/60 disabled:opacity-50">
@@ -320,7 +320,7 @@ export default function CommandCenter() {
             flush
           >
             {active.length === 0 ? (
-              <Empty title="Nothing in flight" hint="Describe a change above and it becomes a plan." />
+              <Empty title="Nothing in flight" hint="Describe a change above to plan it." />
             ) : (
               <div className="divide-y divide-line/60">
                 {active.slice(0, 5).map((t) => {
@@ -470,8 +470,8 @@ function InboxStrip() {
       return;
     }
     const now = await enableNotify();
-    if (now === 'on') toast.success('Notifications on', { description: 'While NeuroCode is in the background, you hear when something needs you or finishes.' });
-    else toast.warning('Notifications are blocked', { description: 'This browser refused them. Allow notifications for this site in its settings, then try again.' });
+    if (now === 'on') toast.success('Notifications on', { description: 'You hear when something needs you or finishes.' });
+    else toast.warning('Notifications are blocked', { description: 'Allow them for this site in browser settings, then try again.' });
   };
 
   const data: Inbox | null = box.data;
@@ -482,7 +482,7 @@ function InboxStrip() {
         <div className="flex items-center gap-1.5">
           {notifyState !== 'unsupported' && (
             <Button size="sm" variant="ghost" onClick={() => void toggleNotify()} aria-pressed={notifyState === 'on'}
-              title={notifyState === 'blocked' ? 'This browser blocks notifications for this site' : 'A notification when something needs you or finishes, while NeuroCode is in the background'}>
+              title={notifyState === 'blocked' ? 'This browser blocks notifications for this site' : 'Notify when something needs you or finishes, in the background'}>
               {notifyState === 'on' ? <Bell className="size-3.5" /> : <BellOff className="size-3.5" />}
               {notifyState === 'on' ? 'Notifying you' : 'Notify me'}
             </Button>

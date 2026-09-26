@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { TriangleAlert, Container as Box, KeyRound, Activity, Terminal, Loader2, RefreshCw, DatabaseBackup, GitMerge, Trash2, Check, X } from 'lucide-react';
+import { TriangleAlert, Container as Box, KeyRound, Terminal, Loader2, RefreshCw, DatabaseBackup, GitMerge, Trash2, Check, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useData } from '@/lib/data';
 import { ApiError, api } from '@/lib/api';
@@ -44,7 +44,8 @@ function LiveDevOps() {
     <Page>
       <PageHeader
         title="DevOps"
-        subtitle="This machine, as it is right now: the services it runs, checks probed when you look, the work the agents delivered, and your signature on anything that reaches your checkout."
+        subtitle="This machine right now: services, health checks and delivered work."
+        about={<p>Checks are probed when you look. Work the agents delivered waits here for your signature before it reaches your checkout.</p>}
         actions={<Segmented
           options={[
             { id: 'services', label: 'Services' }, { id: 'deliveries', label: 'Deliveries' },
@@ -131,9 +132,9 @@ function LiveServices() {
         {services.map((s) => <ServiceCard key={s.id} s={s} />)}
       </div>
 
-      <Panel className={cn(gate.length > 0 && 'accent-top border-warn/35')} eyebrow="Before anything reaches your checkout" title="Awaiting your signature">
+      <Panel className={cn(gate.length > 0 && 'accent-top border-warn/35')} eyebrow="Before your checkout" title="Awaiting your signature">
         {gate.length === 0 ? (
-          <Empty title="Nothing is waiting on you" hint="A run that stops at its hand-off, or an accepted run not merged yet, appears here with what it ships and how to undo it." />
+          <Empty title="Nothing is waiting on you" hint="A run at its hand-off, or accepted but not merged, waits here." />
         ) : (
           <div className="divide-y divide-line/60">
             {gate.map((g) => (
@@ -224,14 +225,14 @@ function LiveDeliveries() {
   const noted = items.filter((x) => x.note);
   return (
     <>
-      <StatGrid cols={4}>
+      {(items.length > 0 || stats.merged + stats.failed + stats.discarded + stats.blockedOnYou > 0) && <StatGrid cols={4}>
         <Stat label="Merged today" value={stats.mergedToday} sub={`${stats.merged} merged in all`} tone="ok" />
         <Stat label="Failed" value={stats.failed} tone={stats.failed ? 'danger' : undefined} />
         <Stat label="Discarded" value={stats.discarded} sub="branch and worktree removed" />
         <Stat label="Blocked on you" value={stats.blockedOnYou} tone={stats.blockedOnYou ? 'warn' : undefined} sub="run approvals pending" />
-      </StatGrid>
+      </StatGrid>}
       <Panel flush>
-        {items.length === 0 ? <Empty title="Nothing delivered yet" hint="Dispatch a plan: each run's branch, and what became of it, is listed here." /> : (
+        {items.length === 0 ? <Empty title="Nothing delivered yet" hint="Dispatch a plan; each run's branch and outcome land here." /> : (
           <DataTable head={['Project', 'Branch', 'Status', 'By', 'Duration', 'Commit', 'When']}>
             {items.map((x) => (
               <Row key={x.id}>
@@ -273,7 +274,7 @@ function LiveContainers() {
   const { available, reason, containers: rows } = c.data;
   if (!available) return <Panel><Empty icon={<Box className="size-6" />} title="No containers to show" hint={reason} /></Panel>;
   return (
-    <Panel eyebrow={`${rows.filter((x) => x.status === 'up').length} of ${rows.length} up · every container on this machine`} title={<span className="flex items-center gap-1.5"><Box className="size-3.5 text-brand" />Docker on this machine</span>} flush>
+    <Panel eyebrow={`${rows.filter((x) => x.status === 'up').length} of ${rows.length} up`} title={<span className="flex items-center gap-1.5"><Box className="size-3.5 text-brand" />Docker on this machine</span>} flush>
       {rows.length === 0 ? <Empty title="Docker is running, with no containers" /> : (
         <DataTable head={['Name', 'Image', 'Status', 'CPU', 'Memory', 'Ports']}>
           {rows.map((x) => (
@@ -300,7 +301,7 @@ function LivePipeline() {
   return (
     <>
       {run === null ? (
-        <Panel><Empty title="No run yet" hint="The newest agent run's steps show here as its pipeline, one stage per step." /></Panel>
+        <Panel><Empty title="No run yet" hint="The newest agent run's steps show here, one stage each." /></Panel>
       ) : (
         <Panel eyebrow={`${run.ref} · ${run.trigger}`} title="Newest run"
           actions={<span className="text-[12.5px] text-dim">{run.runner} · {span(run.elapsedS)}</span>}>
@@ -368,17 +369,18 @@ function LiveLogs() {
         <Button size="xs" variant="outline" disabled={!l.data?.next} onClick={() => { const next = l.data?.next; if (next) setBefore((b) => [...b, next]); }}>Older</Button>
         <Button size="xs" variant="outline" onClick={l.reload}><RefreshCw className="size-3" />Refresh</Button>
       </div>
-      <Panel eyebrow="Run output, activity and failed model calls" title={<span className="flex items-center gap-1.5"><Terminal className="size-3.5 text-brand" />Workspace log</span>} flush>
+      <Panel title={<span className="flex items-center gap-1.5"><Terminal className="size-3.5 text-brand" />Workspace log</span>} flush
+        about="Run output, the activity feed and failed model calls, written as they happen.">
         {l.error ? <Failed what="The log" error={l.error} retry={l.reload} />
           : !l.data ? <Loading what="the log" />
             : lines.length === 0 ? (level === 'all'
-              ? <Empty title="No log lines yet" hint="Run output, the activity feed and failed model calls are written here as they happen." />
+              ? <Empty title="No log lines yet" hint="Run output, activity and failed model calls land here." />
               : <Empty title={`No ${level} lines`} hint="Pick All levels to see everything." />) : (
               <div className="max-h-[520px] overflow-y-auto bg-base px-3.5 py-2.5 font-mono text-[12.5px] leading-relaxed">
                 {lines.map((x) => (
                   <div key={x.id} className="flex gap-2.5">
                     <span className="shrink-0 text-dim">{new Date(x.t).toLocaleTimeString()}</span>
-                    <span className={cn('w-11 shrink-0 uppercase',
+                    <span className={cn('w-11 shrink-0',
                       x.level === 'err' ? 'text-danger' : x.level === 'warn' ? 'text-warn' : x.level === 'ok' ? 'text-ok' : x.level === 'debug' ? 'text-dim' : 'text-info')}>{x.level}</span>
                     <span className="w-28 shrink-0 truncate text-violet">{x.source}</span>
                     <span className="min-w-0 break-words text-ink-2">{x.text}</span>
@@ -397,15 +399,14 @@ function LiveSecrets() {
   const s = useRemote(allowed ? 'ops:secrets' : null, fetchSecrets);
   return (
     <>
-      <Panel className="border-warn/30 accent-left" eyebrow="Rule" title={<span className="flex items-center gap-1.5"><KeyRound className="size-3.5 text-warn" />Named, never shown</span>}>
+      <Panel className="border-warn/30 accent-left" title={<span className="flex items-center gap-1.5"><KeyRound className="size-3.5 text-warn" />Named, never shown</span>}
+        about="Model keys live in the API’s keys file, readable only by its account, or in the environment. The database password is in its URL.">
         <p className="text-[13.5px] leading-relaxed text-ink-2">
-          Model keys live in the API’s keys file, readable only by the account that runs it, or in the environment; the
-          database password is in its URL. This list says where each one is kept and whether it is set. No value and no
-          mask of one ever leaves the API.
+          No value or mask ever leaves the API. Replace a key in Models → Keys.
         </p>
       </Panel>
       {!allowed ? (
-        <Panel><Empty icon={<KeyRound className="size-6" />} title="Only a workspace admin can see this list" hint="It needs workspace:admin, like Admin → AI providers." /></Panel>
+        <Panel><Empty icon={<KeyRound className="size-6" />} title="Only a workspace admin can see this list" hint="It needs workspace:admin, like Models → Keys." /></Panel>
       ) : s.error ? <Failed what="Secrets" error={s.error} retry={s.reload} />
         : !s.data ? <Loading what="where the keys are kept" /> : (
           <Panel flush>
@@ -425,9 +426,6 @@ function LiveSecrets() {
             </DataTable>
           </Panel>
         )}
-      <Panel eyebrow="Value column" title={<span className="flex items-center gap-1.5"><Activity className="size-3.5 text-dim" />Deliberately absent</span>}>
-        <p className="text-[13px] text-dim">There is no value column, no mask and no reveal button. Replace a key in Admin → AI providers.</p>
-      </Panel>
     </>
   );
 }

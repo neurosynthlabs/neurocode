@@ -1,7 +1,7 @@
 import { useEffect, useState, type SyntheticEvent } from 'react';
 import { ArrowLeft, ArrowRight, Check, KeyRound, Loader2, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Field, SelectField } from '@/components/os';
+import { About, Field, SelectField } from '@/components/os';
 import { LogoSymbol } from '@/components/os/Logo';
 import { SignalGlow } from '@/components/os/Glow';
 import { ApiError, api, type LaneId } from '@/lib/api';
@@ -14,15 +14,15 @@ import { cn } from '@/lib/utils';
 
 const STEPS = ['Workspace', 'Your account', 'AI'];
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-/** The free lanes a first key is most likely to be for. The rest are in Admin → AI providers. */
+/** The free lanes a first key is most likely to be for. The rest are in Models → Keys. */
 const FREE_LANES: { value: LaneId; label: string }[] = [
   { value: 'groq', label: 'Groq' }, { value: 'cerebras', label: 'Cerebras' }, { value: 'gemini', label: 'Gemini' },
 ];
 const FEATURES = [
-  ['Requirement compiler', 'turns a requirement into a plan with steps, risks and questions'],
-  ['Ask memory', 'answers from what the workspace has learned, with its sources'],
-  ['Brainstorm', 'expands an idea into a brief that argues against itself'],
-  ['Add from text', 'picks durable facts out of meeting notes and chats'],
+  ['Requirement compiler', 'turns a requirement into a plan'],
+  ['Ask memory', 'answers from memory, with sources'],
+  ['Brainstorm', 'turns an idea into a brief that argues back'],
+  ['Add from text', 'picks facts out of notes and chats'],
 ] as const;
 
 function strength(p: string) {
@@ -103,7 +103,7 @@ export default function Setup() {
           </div>
           <h1 className="mt-6 text-[27px] leading-[1.15] font-semibold tracking-[-0.028em] text-ink">Welcome to NeuroCode</h1>
           <p className="mt-2 max-w-sm text-[14.5px] leading-relaxed text-soft">
-            Three short steps and your workspace is ready. It lives in your own database; a model sees only what a step sends it.
+            Three short steps. It all lives in your own database.
           </p>
         </div>
 
@@ -124,11 +124,11 @@ export default function Setup() {
           {step === 0 && (
             <>
               <h2 className="text-[16px] font-semibold text-ink">Name your workspace</h2>
-              <p className="mt-1 text-[13.5px] text-soft">Usually your company or team. You can rename it later in Admin → Workspace.</p>
+              <p className="mt-1 text-[13.5px] text-soft">Usually your company or team. Rename it any time.</p>
               <Field className="mt-4" label="Workspace name" value={workspace} onChange={setWorkspace} placeholder="Acme Engineering" autoFocus />
               {needsToken && (
                 <Field className="mt-3.5" label="Setup token" value={token} onChange={setToken} mono autoComplete="off"
-                  hint="This server asks for it once, before its first Owner is made. It is NEUROCODE_SETUP_TOKEN in the server's .env." />
+                  hint="NEUROCODE_SETUP_TOKEN in the server’s .env, asked once before the first Owner." />
               )}
               <div className="mt-6 flex justify-end">
                 <Button type="submit" disabled={!workspaceReady}>Continue<ArrowRight className="size-3.5" /></Button>
@@ -138,15 +138,14 @@ export default function Setup() {
 
           {step === 1 && (
             <>
-              <h2 className="text-[16px] font-semibold text-ink">Create the Owner account</h2>
-              <p className="mt-1 text-[13.5px] text-soft">
-                The Owner can do everything, including adding people and setting keys. You can add more Owners later.
-              </p>
-              <p className="mt-2 text-[12.5px] leading-relaxed text-dim">
-                This account is made here and nowhere else. If your team signs in through Google, Okta or Entra, the
-                Owner turns that on afterwards in Admin → Workspace — an identity provider can never make the
-                first Owner of a workspace.
-              </p>
+              <div className="flex items-center gap-1.5">
+                <h2 className="text-[16px] font-semibold text-ink">Create the Owner account</h2>
+                <About label="About the Owner account">
+                  <p>This account is made here and nowhere else.</p>
+                  <p>Google, Okta or Entra sign-in is turned on later, in Admin → Workspace. It can never make the first Owner.</p>
+                </About>
+              </div>
+              <p className="mt-1 text-[13.5px] text-soft">The Owner can do everything. More Owners can be added later.</p>
               <div className="mt-4 space-y-3">
                 <Field label="Your name" value={name} onChange={setName} autoComplete="name" autoFocus />
                 <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="username" placeholder="you@company.com" />
@@ -167,8 +166,7 @@ export default function Setup() {
             <>
               <h2 className="text-[16px] font-semibold text-ink">AI, now or later</h2>
               <p className="mt-1 text-[13.5px] leading-relaxed text-soft">
-                Planning and brainstorming need a model; asking memory works without one, by quoting the facts that match.
-                A free key from Groq, Cerebras or Gemini takes a minute — add it now, or any time in Admin → AI providers.
+                Planning and brainstorming need a model; Ask memory works without one. A free key takes a minute.
               </p>
               <ul className="mt-4 space-y-2">
                 {FEATURES.map(([title, text]) => (
@@ -182,13 +180,13 @@ export default function Setup() {
               <Field
                 className="mt-3" label="API key (optional)" type="password" mono value={key} onChange={setKey}
                 icon={<KeyRound className="size-3.5" />} autoComplete="off"
-                hint="Kept on this machine, readable only by the account that runs NeuroCode. Never shown again in full."
+                hint="Kept on this machine, never shown again in full."
               />
               <div className="mt-6 flex items-center justify-between gap-2">
                 <Button type="button" variant="ghost" onClick={() => void finish(false)} disabled={busy}>Skip for now</Button>
                 <Button type="submit" disabled={busy}>
                   {busy ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                  {key.trim() ? 'Save key and open' : 'Open workspace'}<ArrowRight className="size-3.5" />
+                  {key.trim() ? 'Save and open' : 'Open workspace'}<ArrowRight className="size-3.5" />
                 </Button>
               </div>
             </>

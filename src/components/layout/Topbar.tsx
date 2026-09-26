@@ -127,7 +127,7 @@ export function Topbar({
               />
             </div>
             <div className="px-2.5 pt-2.5 pb-1.5 text-[12px] font-medium text-dim">
-              {q.trim() ? `${found.length} of ${projects.length} projects` : 'Projects · context never leaks between them'}
+              {q.trim() ? `${found.length} of ${projects.length} projects` : 'Projects · context kept apart'}
             </div>
             <div className="max-h-[min(60vh,440px)] space-y-0.5 overflow-y-auto">
               {found.length === 0 && (
@@ -199,7 +199,7 @@ export function Topbar({
               )}
               {workbench && (
                 <button onClick={() => pick(active.id, `/workbench?project=${encodeURIComponent(active.id)}`)} className={ITEM} style={{ borderRadius: 'var(--radius)' }}>
-                  <Code2 className="size-3.5" />Open {active.name} in Workbench
+                  <Code2 className="size-3.5" />Open in Workbench
                 </button>
               )}
               <button onClick={() => { nav('/projects'); setProjOpen(false); }} className={ITEM} style={{ borderRadius: 'var(--radius)' }}>

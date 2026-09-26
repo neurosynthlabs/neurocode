@@ -7,8 +7,8 @@ import { tokens } from '@/pages/code/format';
 import { KeyRound, Loader2, PlugZap } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Cell, DataTable, Dot, Field, KV, Mono, Page, PageBody, PageHeader, Panel, Row, Segmented, Tag } from '@/components/os';
-import { api, type AiConfig, type AiLane, type AiPatch, type AiPreference, type AiTestResult, type CompilerInfo, type LaneId } from '@/lib/api';
+import { Cell, DataTable, Dot, Field, KV, More, Mono, Panel, Row, Tag } from '@/components/os';
+import { api, type AiConfig, type AiLane, type AiPatch, type AiTestResult, type CompilerInfo, type LaneId } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { attempt, useAdmin } from './load';
@@ -17,17 +17,15 @@ import { LoadError, Loading } from './kit';
 type ProviderId = CompilerInfo['provider'];
 type Test = AiTestResult | 'running';
 
-const ROUTES: { id: AiPreference; label: string }[] = [
-  { id: 'auto', label: 'Automatic' }, { id: 'free', label: 'Free only' }, { id: 'local', label: 'This Mac only' }, { id: 'rules', label: 'No model' },
-];
-const answering = (a: CompilerInfo) => (a.provider === 'rules' ? 'No model' : a.model);
 /** Three things get called free, and the tag has to tell them apart: free with nothing asked, free
     once something is handed over, and not free at all. The whole sentence is the lane's `freedom`. */
 const GATE_WORD: Record<string, string> = { card: 'a card', phone: 'a phone', identity: 'ID' };
 const freeness = (l: AiLane) =>
   l.free ? (l.gate ? `Free after ${GATE_WORD[l.gate] ?? l.gate}` : 'Free') : l.gate ? `Not free · ${GATE_WORD[l.gate] ?? l.gate} first` : 'Paid';
 
-export default function AiProviders() {
+/** The Keys tab of Models: each lane's key and limits, DeepSeek and Ollama, and what each feature does
+    with no lane. Routing itself is chosen on the Policy panel beside the router, not here. */
+export function ProviderKeys() {
   const { can } = useAuth();
   const { data: cfg, setData, error, reload } = useAdmin<AiConfig>(api.admin.ai);
   // What each routing choice allows, and what each feature does without a lane, in the gateway's own words.
@@ -48,7 +46,7 @@ export default function AiProviders() {
   };
   const saveKey = async (e: SyntheticEvent) => {
     e.preventDefault();
-    if (key.trim() && (await update({ deepseekKey: key.trim() }, 'Key saved. From now on it is only shown masked.'))) setKey('');
+    if (key.trim() && (await update({ deepseekKey: key.trim() }, 'Key saved; shown masked from now on.'))) setKey('');
   };
   const test = async (provider: ProviderId) => {
     setTests((t) => ({ ...t, [provider]: 'running' }));
@@ -57,46 +55,10 @@ export default function AiProviders() {
     if (r) reload();  // a refused key is remembered by the gateway: show it
   };
 
+  if (error) return <LoadError error={error} onRetry={reload} />;
+  if (!cfg) return <Loading />;
   return (
-    <Page>
-      <PageHeader
-        title="AI providers"
-        subtitle="Every AI feature goes through one gateway. Add a free key (Groq, Gemini or Cloudflare take a minute, and none of the three asks for a card) or a local Ollama model; with none, the features that need a model say so."
-      />
-      <PageBody>
-        {error ? <LoadError error={error} onRetry={reload} /> : !cfg ? <Loading /> : (
           <div className="space-y-5">
-            <Panel
-              className="accent-top" eyebrow="Answering now"
-              title={
-                <span className="flex items-center gap-2.5">
-                  <Dot state={cfg.active.provider === 'rules' ? 'idle' : 'ok'} pulse={cfg.active.provider !== 'rules'} />
-                  {answering(cfg.active)}
-                </span>
-              }
-            >
-              {cfg.active.note && <p className="mb-3 text-[13px] text-warn">{cfg.active.note}</p>}
-              <div className={cn(!manage || cfg.preferenceLocked ? 'pointer-events-none opacity-60' : '')}>
-                <Segmented
-                  options={ROUTES} value={cfg.preference}
-                  onChange={(p) => void update({ preference: p }, `Routing: ${ROUTES.find((r) => r.id === p)?.label}`)}
-                />
-              </div>
-              {models.data && (
-                <p className="mt-2.5 text-[13px] text-soft">
-                  {cfg.preference in models.data.preferences
-                    ? models.data.preferences[cfg.preference as keyof typeof models.data.preferences]
-                    : `Pinned to ${cfg.preference}.`}
-                </p>
-              )}
-              <p className="mt-1.5 text-[12.5px] text-dim">
-                {cfg.active.lanes ? `${cfg.active.lanes} ${cfg.active.lanes === 1 ? 'lane can' : 'lanes can'} answer right now.` : 'No lane can answer right now.'}
-              </p>
-              {cfg.preferenceLocked && (
-                <p className="mt-1.5 text-[12.5px] text-dim">NEUROCODE_COMPILER is set where the API runs, and it wins over this choice.</p>
-              )}
-            </Panel>
-
             <Lanes lanes={cfg.lanes} manage={manage} busy={busy} tests={tests} onTest={(id) => void test(id)}
               onPatch={(patch, done) => update(patch, done)} />
 
@@ -125,10 +87,7 @@ export default function AiProviders() {
                   />
                   <Button type="submit" disabled={!manage || busy || !key.trim()}>Save key</Button>
                 </form>
-                <p className="mt-2 text-[12px] leading-relaxed text-dim">
-                  Kept in the API’s keys file, readable only by the account that runs the API. Never sent back in full, never
-                  logged.
-                </p>
+                <p className="mt-2 text-[12px] leading-relaxed text-dim">Kept in the API’s keys file. Never sent back in full, never logged.</p>
                 <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <Field label="Model" mono value={ds.model ?? cfg.deepseek.model} onChange={(v) => setDs({ ...ds, model: v })} disabled={!manage} />
                   <Field label="Base URL" mono value={ds.baseUrl ?? cfg.deepseek.baseUrl} onChange={(v) => setDs({ ...ds, baseUrl: v })} disabled={!manage} />
@@ -168,7 +127,7 @@ export default function AiProviders() {
             </div>
 
             {models.data && (
-              <Panel flush eyebrow="What each feature asks the gateway for" title="When no lane answers">
+              <More label="When no lane answers"><Panel flush>
                 <DataTable head={['Feature', 'Without a model', 'How it routes']}>
                   {models.data.routes.map((r) => (
                     <Row key={r.feature}>
@@ -178,12 +137,9 @@ export default function AiProviders() {
                     </Row>
                   ))}
                 </DataTable>
-              </Panel>
+              </Panel></More>
             )}
           </div>
-        )}
-      </PageBody>
-    </Page>
   );
 }
 
@@ -203,7 +159,8 @@ function Lanes({ lanes, manage, busy, tests, onTest, onPatch }: {
 
   return (
     <Panel
-      flush title="Lanes" eyebrow={`${ready} of ${lanes.length} can answer · free first, paid only when the free ones are spent`}
+      flush title="Lanes" eyebrow={`${ready} of ${lanes.length} can answer · free first`}
+      about="Free lanes answer first. A paid lane answers only once the free ones are spent."
     >
       <div className="divide-y divide-line/60">
         {lanes.map((lane) => (
@@ -231,7 +188,7 @@ function Lanes({ lanes, manage, busy, tests, onTest, onPatch }: {
               {lane.ready ? lane.note : <span className="text-warn">{lane.blocked}</span>}
               {' · '}good at {lane.goodAt.join(', ')}
               {lane.window ? ` · ${tokens(lane.window)} context` : ''}
-              {lane.thinks ? ' · thinking set per feature on Models & Router' : ''}
+              {lane.thinks ? ' · thinking set per feature under Routing' : ''}
             </p>
             <p className="mt-1 text-[12px] leading-relaxed text-soft">
               {lane.freedom}{lane.expires ? ` · ${lane.expires}` : ''}{lane.allowance ? ` · ${lane.allowance}` : ''}

@@ -85,7 +85,8 @@ export default function Routines() {
     <Page>
       <PageHeader
         title="Routines"
-        subtitle="Requirements and workflows on a cadence, a webhook, or Run now. Times are UTC."
+        subtitle="Requirements and workflows, fired on a schedule or a webhook."
+        about={<><p>A fire writes a plan and dispatches it, as a person on Workflows would.</p><p>Its runs stop at the same gates and your signature. Times are UTC.</p></>}
         actions={mayWrite && (
           <Button size="sm" onClick={() => setEditing('new')} disabled={!withCode.length}
             title={withCode.length ? undefined : 'No project has code on this machine yet'}>
@@ -102,8 +103,8 @@ export default function Routines() {
           <Panel>
             <Empty icon={<CalendarClock className="size-6" />} title="No routines yet"
               hint={withCode.length
-                ? 'A routine compiles a requirement, or runs a workflow, on a cadence you choose — hourly, daily, on weekdays, weekly or any cron — and from a webhook when you add one.'
-                : 'A routine’s runs branch from a real repository. Onboard a project with its code first.'}
+                ? 'Fire a requirement or workflow hourly, daily, weekly or on any cron.'
+                : 'Runs branch from a real repository. Onboard a project with its code.'}
               action={withCode.length
                 ? mayWrite && <Button size="sm" variant="outline" onClick={() => setEditing('new')}><Plus className="size-3.5" />New routine</Button>
                 : <Button size="sm" variant="outline" onClick={() => nav('/projects')}><FolderGit2 className="size-3.5" />Open Projects</Button>} />
@@ -147,7 +148,7 @@ export default function Routines() {
           <DialogContent className="sm:max-w-[440px]">
             <DialogHeader>
               <DialogTitle>Delete {removing.name}?</DialogTitle>
-              <DialogDescription>It stops firing, and its history and webhook go with it. The plans and runs it started stay where they are.</DialogDescription>
+              <DialogDescription>Its history and webhook go. Plans and runs it started stay.</DialogDescription>
             </DialogHeader>
             <DialogFooter>
               <Button variant="outline" onClick={() => setRemoving(null)}>Cancel</Button>
@@ -268,10 +269,11 @@ function Detail({ routine: r, mayWrite, mayFire, onChanged, onEdit, onRemove, on
         <KV k="Cadence" v={<span className="flex items-center justify-end gap-2">{r.cadenceLabel}{r.cadence && <Mono>{r.cadence}</Mono>}</span>} />
         <KV k="Next fire" v={!r.enabled ? 'Paused' : r.nextAt ? `${utc(r.nextAt)} · ${until(r.nextAt)}` : 'Only on Run now or its webhook'} />
         <KV k="Last fired" v={r.lastFiredAt ? `${utc(r.lastFiredAt)} · ${ago(r.lastFiredAt)}` : 'Never'} />
-        <KV k="Acts as" v={r.createdBy ? `${r.createdBy} on schedule and webhook · you on Run now` : 'Its maker is gone — edit and save it to take it over'} wrap />
+        <KV k="Acts as" v={r.createdBy ? `${r.createdBy} on schedule and webhook · you on Run now` : 'Its maker is gone; save it to take it over'} wrap />
       </Panel>
 
       <Panel title={<span className="flex items-center gap-2"><Webhook className="size-4 text-dim" />Webhook</span>}
+        about="The body goes to the compiler as quoted data, never as instructions. The token is shown once; only its hash is kept."
         actions={mayWrite && (r.webhook ? (
           <div className="flex items-center gap-1.5">
             <Button size="sm" variant="outline" onClick={() => void issue()} disabled={busy !== null}><RefreshCw className="size-3.5" />Replace token</Button>
@@ -284,8 +286,8 @@ function Detail({ routine: r, mayWrite, mayFire, onChanged, onEdit, onRemove, on
         ))}>
         <p className="text-[13px] leading-relaxed text-soft">
           {r.webhook
-            ? 'A POST with this routine’s token fires it. Whatever the request carries is kept as a quoted excerpt and handed to the compiler as data — never as instructions. The token was shown once; replace it if it is lost.'
-            : 'No webhook. Add one to fire this routine from CI, an alert or any service that can send a POST. The token is shown once and only its hash is kept.'}
+            ? 'A POST with its token fires it. Replace the token if lost.'
+            : 'No webhook. Add one to fire it from CI, an alert or any POST.'}
         </p>
       </Panel>
 
@@ -346,7 +348,7 @@ function TokenDialog({ token, onClose }: { token: WebhookToken; onClose: () => v
       <DialogContent className="sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle>Webhook token</DialogTitle>
-          <DialogDescription>Copy it now: it is shown this once, and only its hash is kept. Any earlier token for this routine has stopped working.</DialogDescription>
+          <DialogDescription>Copy it now; it is shown once. Any earlier token has stopped working.</DialogDescription>
         </DialogHeader>
         <div className="grid min-w-0 gap-3">
           <div>
@@ -356,7 +358,7 @@ function TokenDialog({ token, onClose }: { token: WebhookToken; onClose: () => v
           <div>
             <SectionTitle right={<Button size="xs" variant="ghost" onClick={() => copy('curl', curl)}>{copied === 'curl' ? <Check className="size-3" /> : <Copy className="size-3" />}Copy</Button>}>Fire it</SectionTitle>
             <pre className="overflow-x-auto rounded-lg bg-base p-3 font-mono text-[12px] text-ink-2 ring-1 ring-line/60 ring-inset whitespace-pre-wrap [overflow-wrap:anywhere]">{curl}</pre>
-            <p className="mt-1.5 text-[12px] text-dim">The token also works as <Mono>X-NeuroCode-Token</Mono> or <Mono>?token=</Mono> for senders that cannot set a header.</p>
+            <p className="mt-1.5 text-[12px] text-dim">Also accepted as <Mono>X-NeuroCode-Token</Mono> or <Mono>?token=</Mono>, for senders without headers.</p>
           </div>
         </div>
         <DialogFooter><Button onClick={onClose}>Done</Button></DialogFooter>
@@ -439,7 +441,7 @@ function Editor({ initial, projects, onClose, onSaved }: {
         <DialogHeader>
           <DialogTitle>{initial ? `Edit ${initial.name}` : 'New routine'}</DialogTitle>
           <DialogDescription>
-            On schedule and from its webhook it acts as {initial?.createdBy && initial ? initial.createdBy : 'you'}, with the permissions held at that moment. Saving it does not fire it.
+            On schedule and webhook it acts as {initial?.createdBy && initial ? initial.createdBy : 'you'}, with the permissions held then. Saving does not fire it.
           </DialogDescription>
         </DialogHeader>
         <div className="grid max-h-[64vh] min-w-0 gap-3 overflow-y-auto pr-1">
@@ -456,15 +458,15 @@ function Editor({ initial, projects, onClose, onSaved }: {
               <SelectField label="Workflow" value={chosen} onChange={setWorkflowId} options={choices.map((w) => ({ value: w.id, label: w.name }))} />
             ) : (
               <p className="rounded-lg bg-surface-2/60 px-3 py-2 text-[13px] text-soft">
-                {flows.loading ? 'Loading workflows…' : 'No workflow runs in this project yet. Write one on the Workflows screen, or compile a requirement instead.'}
+                {flows.loading ? 'Loading workflows…' : 'No workflow for this project yet. Write one, or compile a requirement.'}
               </p>
             )
           )}
           <label className="block">
-            <span className="mb-1.5 block text-[12.5px] font-medium text-soft">{what === 'workflow' ? 'Input — what {input} becomes on each run' : 'Requirement'}</span>
+            <span className="mb-1.5 block text-[12.5px] font-medium text-soft">{what === 'workflow' ? 'Input, fills {input}' : 'Requirement'}</span>
             <textarea
               value={requirement} onChange={(e) => setRequirement(e.target.value)} rows={4}
-              placeholder={what === 'workflow' ? 'the weekly tax report' : 'Update the dependencies with known vulnerabilities and keep the tests green'}
+              placeholder={what === 'workflow' ? 'the weekly tax report' : 'Update vulnerable dependencies, keep tests green'}
               className="focus-brand w-full resize-none rounded-lg border border-line bg-surface-2/60 p-3 text-[13.5px] leading-relaxed text-ink placeholder:text-dim focus-visible:outline-none"
             />
           </label>

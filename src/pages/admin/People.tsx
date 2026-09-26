@@ -43,9 +43,11 @@ export default function People() {
     <Page>
       <PageHeader
         title="People"
-        subtitle={manage
-          ? 'Everyone signs in with their own account, and their roles decide what they can change. Every change here lands in the audit log.'
-          : 'Everyone signs in with their own account, and their roles decide what they can change. Changing any of it needs “Manage people” (users:manage).'}
+        subtitle="Who can sign in, and the roles they hold."
+        about={<>
+          <p>Everyone signs in with their own account, and their roles decide what they can change.</p>
+          <p>{manage ? 'Every change here lands in the audit log.' : 'Changing any of it needs “Manage people” (users:manage).'}</p>
+        </>}
         actions={(
           <Button
             size="sm" onClick={() => setAdding(true)} disabled={!manage}
@@ -98,7 +100,7 @@ export default function People() {
               </DataTable>
             </Panel>
 
-            <Panel flush title="What each role can do" eyebrow="Roles & permissions has the details">
+            <Panel flush title="What each role can do">
               <div className="divide-y divide-line/60">
                 {data.roles.map((r) => (
                   <div key={r.id} className="flex flex-col gap-0.5 px-5 py-3 sm:flex-row sm:items-baseline sm:gap-4">
@@ -247,13 +249,13 @@ function EditPerson({ person, roles, minPassword, isOwner, isMe, onClose, onSave
           {password ? <Credentials email={person.email} password={password} /> : (
             <div className="flex flex-wrap gap-2 border-t border-line/60 pt-3.5">
               <Button type="button" size="sm" variant="outline" onClick={newPassword} disabled={busy}>
-                <KeyRound className="size-3.5" />Set a temporary password
+                <KeyRound className="size-3.5" />New temporary password
               </Button>
               {!isMe && (
                 <Button type="button" size="sm" variant={person.status === 'active' ? 'destructive' : 'outline'} onClick={flip} disabled={busy}>
                   {person.status === 'active'
                     ? <><UserRoundX className="size-3.5" />Disable account</>
-                    : <><UserRoundCheck className="size-3.5" />Turn account back on</>}
+                    : <><UserRoundCheck className="size-3.5" />Enable account</>}
                 </Button>
               )}
             </div>

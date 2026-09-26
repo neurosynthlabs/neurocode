@@ -64,9 +64,9 @@ export function OsPermissionCard({ blocked, onRetry }: { blocked: OsPermission; 
       <div className="max-w-md space-y-1.5">
         <p className="text-[14px] font-semibold text-ink">macOS keeps {blocked.place} private from {who}</p>
         <p className="text-[13px] leading-relaxed text-soft">
-          macOS has not given {who} access to {blocked.place}. Open {blocked.settings}, turn it on for {who}, then try again.
+          Open {blocked.settings}, turn it on for {who}, then try again.
         </p>
-        <p className="text-[12px] text-dim">Some apps only see the change after they are quit and opened again.</p>
+        <p className="text-[12px] text-dim">Some apps must be quit and reopened to see it.</p>
         <p className="font-mono text-[11.5px] break-all text-dim">{blocked.folder}</p>
       </div>
       <Button size="sm" variant="outline" onClick={onRetry}><RefreshCw className="size-3.5" />Try again</Button>
@@ -159,7 +159,7 @@ export function FolderPicker({
         ?? (listed.capped ? { name, path: joinPath(listed.path, name) } : null);
       if (!entry || !matches(entry.name, accept)) {
         go(listed.path);
-        setNative({ phase: 'browse', note: `${name} is not a ${accept.join(', ')} file NeuroCode can open here.` });
+        setNative({ phase: 'browse', note: `${name} is not a ${accept.join(', ')} file that can be opened here.` });
         return;
       }
       pick(entry.path);
@@ -219,8 +219,8 @@ export function FolderPicker({
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             {description ?? (fileMode
-              ? `Files on the machine the NeuroCode API runs on${accept.length ? ` — ${accept.join(', ')}` : ''}.`
-              : 'Folders on the machine the NeuroCode API runs on.')}
+              ? `Files on the machine the API runs on${accept.length ? ` — ${accept.join(', ')}` : ''}.`
+              : 'Folders on the machine the API runs on.')}
           </DialogDescription>
         </DialogHeader>
 
@@ -233,7 +233,7 @@ export function FolderPicker({
             action={<Button size="sm" variant="outline" onClick={roots.reload}><RefreshCw className="size-3.5" />Try again</Button>} />
         ) : roots.data && roots.data.length === 0 ? (
           <Empty icon={<HardDrive className="size-6" />} title="No folder is open to the browser"
-            hint="NEUROCODE_MACHINE_ROOTS in the server's .env names the folders it may open, separated by ':'. None of them exists on this machine." />
+            hint="None of the folders in NEUROCODE_MACHINE_ROOTS exists on this machine." />
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-1.5">

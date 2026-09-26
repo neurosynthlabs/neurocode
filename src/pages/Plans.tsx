@@ -34,9 +34,9 @@ const FINISHED = ['done', 'skipped', 'failed'];
 const finished = (r: RunDoc) => r.steps.filter((s) => FINISHED.includes(s.status)).length;
 
 const STAGES = [
-  { k: 'rawRequirement',       label: 'Raw requirement',      hint: 'what you actually typed' },
-  { k: 'businessRequirement',  label: 'Business requirement', hint: 'what it means for the business' },
-  { k: 'technicalRequirement', label: 'Technical requirement',hint: 'what has to change in the code' },
+  { k: 'rawRequirement',       label: 'Raw requirement',      hint: 'as typed' },
+  { k: 'businessRequirement',  label: 'Business requirement', hint: 'what it means' },
+  { k: 'technicalRequirement', label: 'Technical requirement',hint: 'what changes in code' },
 ] as const;
 
 /** One affected file, and what checking it against the code index said. */
@@ -48,7 +48,7 @@ function FileLine({ path, p }: { path: string; p: ShapedPlan }) {
     <div className="flex items-center gap-2 px-3.5 py-1.5">
       <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-2" title={path}>{path}</span>
       {closed && <span title={`Agents never write here: ${closed}`}><Tag tone="violet"><Lock className="size-3" />{closed.startsWith('reference') ? 'reference, read only' : 'read only'}</Tag></span>}
-      {check?.newFiles.includes(path) && <span title="Not in the code index: a file this change creates"><Tag tone="brand">new</Tag></span>}
+      {check?.newFiles.includes(path) && <span title="New file, not in the code index"><Tag tone="brand">new</Tag></span>}
       {candidates && <span title={`Matches ${candidates.join(', ')} in the code index`}><Tag tone="warn">{candidates.length}+ matches</Tag></span>}
     </div>
   );
@@ -62,10 +62,10 @@ function GroundedIn({ p }: { p: ShapedPlan }) {
   const pieces = grounding.filter((g) => g.kind === 'code' || g.kind === 'doc');
   const facts = p.cited ?? [];
   if (!p.compiler) {
-    return <p className="px-3.5 py-3 text-[13px] text-dim">Written by a workflow, not compiled — nothing was handed to a model.</p>;
+    return <p className="px-3.5 py-3 text-[13px] text-dim">Written by a workflow, not compiled.</p>;
   }
   if (told.length + taste.length + pieces.length + facts.length === 0) {
-    return <p className="px-3.5 py-3 text-[13px] text-dim">Nothing: no instruction files, no indexed code and no memory matched. The plan rests on the requirement alone.</p>;
+    return <p className="px-3.5 py-3 text-[13px] text-dim">Nothing matched; it rests on the requirement alone.</p>;
   }
   const group = (label: string, items: { key: string; main: string; sub?: string }[]) => items.length > 0 && (
     <div className="px-3.5 py-2.5">
@@ -81,7 +81,7 @@ function GroundedIn({ p }: { p: ShapedPlan }) {
     <div className="divide-y divide-line">
       {group('Instruction files', told.map((g) => ({ key: g.path, main: g.path, sub: `sha ${g.ref.slice(0, 7)}` })))}
       {group('Taste applied', taste.map((g) => ({ key: g.ref, main: g.ref, sub: 'adopted in Memory → Taste' })))}
-      {group('Code and documents from retrieval', pieces.map((g) => ({ key: g.ref, main: g.ref, sub: g.kind === 'doc' ? 'document' : undefined })))}
+      {group('From retrieval', pieces.map((g) => ({ key: g.ref, main: g.ref, sub: g.kind === 'doc' ? 'document' : undefined })))}
       {group('Memory facts', facts.map((ref) => ({ key: ref, main: ref })))}
     </div>
   );
@@ -159,8 +159,9 @@ export default function Plans() {
   if (!p) {
     return (
       <Page>
-        <PageHeader title="Plans" subtitle="The requirement compiler." />
-        <PageBody><Empty title="No plans yet" hint="Compile a requirement from the Command Center. If no project is onboarded, onboard one in Projects first." /></PageBody>
+        <PageHeader title="Plans" subtitle="Requirements, compiled into plans you shape and dispatch." />
+        <PageBody><Empty title="No plans yet" hint="Compile a requirement from the Command Center."
+          action={<Button size="sm" onClick={() => nav('/')}>Write a requirement</Button>} /></PageBody>
       </Page>
     );
   }
@@ -188,7 +189,7 @@ export default function Plans() {
     if (!(await settleQuestion(p.ref, index, answer))) return;
     setDraft(null);
     if (answer === null) toast('Deferred', { description: 'The plan proceeds under its stated assumption.' });
-    else toast.success('Answer recorded', { description: 'Saved to memory as a business rule, so the next plan knows it.' });
+    else toast.success('Answer recorded', { description: 'Saved to memory as a business rule.' });
   };
 
   const untilDone = goal.on && criteria.length > 0;
@@ -209,11 +210,11 @@ export default function Plans() {
     }
     setWorking(null);
     if (!ok) return;
-    const paced = stepGate ? ' It waits for your approval before each step after the first — look in Approvals.' : '';
+    const paced = stepGate ? ' It waits for your approval before each step.' : '';
     toast.success(`${p.ref} dispatched`, {
       description: untilDone
         ? `${p.taskRef} runs until its acceptance criteria are met, ${goal.budget} attempt${goal.budget > 1 ? 's' : ''} at most. It still stops at your signature.${paced}`
-        : `${p.taskRef} is in progress. Its run, once one starts, is in Live runs.${paced}`,
+        : `${p.taskRef} is in progress; its run shows in Live runs.${paced}`,
     });
     nav('/tasks');
   };
@@ -311,7 +312,7 @@ export default function Plans() {
       <PageHeader
         title="Plans"
         subtitle="Requirements, compiled into plans you shape and dispatch."
-        actions={<Button size="sm" onClick={() => nav('/tasks')}><Play className="size-3.5" />Open the board</Button>}
+        actions={<Button size="sm" onClick={() => nav('/tasks')}><Play className="size-3.5" />Open board</Button>}
       />
 
       <PageBody className="flex h-full flex-col gap-0 p-0 md:flex-row">
@@ -351,7 +352,7 @@ export default function Plans() {
             <RiskPill risk={p.risk} />
             <CompiledBy p={p} workflow={workflow} />
             {(p.revision ?? 1) > 1 && <Tag tone="info"><History className="size-3" />revision {p.revision}</Tag>}
-            {p.stepGate && <span title="Dispatched to wait for your approval before each step"><Tag tone="warn"><PauseCircle className="size-3" />pauses before each step</Tag></span>}
+            {p.stepGate && <Tag tone="warn"><PauseCircle className="size-3" />pauses before each step</Tag>}
             <span className="ml-auto text-[12.5px] text-dim">{p.compiler ? 'compiled' : 'written'} {ago(p.createdAt)}</span>
           </div>
 
@@ -400,7 +401,7 @@ export default function Plans() {
 
             {p.architectureImpact && (
               <>
-                <Panel eyebrow="Architecture impact" title="What this changes structurally" className="border-warn/30">
+                <Panel title="Architecture impact" className="border-warn/30">
                   <p className="text-[13.5px] leading-relaxed text-ink-2">{p.architectureImpact}</p>
                 </Panel>
                 <div className="flex justify-center py-1.5"><ArrowDown className="size-3.5 text-line-strong" /></div>
@@ -410,7 +411,7 @@ export default function Plans() {
             {/* Steps */}
             <Panel
               eyebrow={run ? `${run.ref} · ${finished(run)} of ${run.steps.length} run steps finished`
-                : shapeable ? 'Implementation plan · yours to shape until it is dispatched' : 'Implementation plan'}
+                : shapeable ? 'Editable until dispatch' : 'Implementation plan'}
               title={`${p.steps.length} step${p.steps.length === 1 ? '' : 's'}, as agreed`}
               actions={run ? (
                 <span className="flex items-center gap-2">
@@ -516,14 +517,14 @@ export default function Plans() {
                     </>
                   ) : (
                     <p className="text-[12.5px] text-soft">
-                      Steps written by {workflow ? `the ${workflow} workflow` : 'a workflow'}, not compiled — nothing was read or weighed to write them.
+                      Written by {workflow ? `the ${workflow} workflow` : 'a workflow'}, not compiled.
                     </p>
                   )}
                 </div>
                 <SectionTitle className="mt-3 mb-1.5">Unknown</SectionTitle>
                 <p className={cn('text-[12.5px]', open > 0 ? 'text-warn' : 'text-dim')}>
                   {open > 0
-                    ? `${open} open question${open > 1 ? 's' : ''} the compiler would not guess at.`
+                    ? `${open} open question${open > 1 ? 's' : ''} left to you.`
                     : 'No question was left open.'}
                 </p>
               </Panel>
@@ -579,7 +580,7 @@ export default function Plans() {
             </div>
 
               <div className="mt-3">
-              <Panel eyebrow={g.criteriaEdited ? 'Edited by a person · a re-compile keeps them' : 'What done means · proposed by the compiler'}
+              <Panel eyebrow={g.criteriaEdited ? 'Edited · kept on re-compile' : 'Proposed by the compiler'}
                 title={<span className="flex items-center gap-1.5"><ListChecks className="size-3.5 text-brand" />Acceptance criteria</span>}
                 actions={!underway && !editingCriteria && can('plans:decide') ? (
                   <Button size="xs" variant="ghost" onClick={() => setCriteriaDraft({ plan: p.ref, text: criteria.join('\n') })}>
@@ -595,7 +596,7 @@ export default function Plans() {
                       aria-label="Acceptance criteria, one per line"
                       placeholder="One checkable sentence per line…"
                       className="w-full resize-y rounded-sm border border-line bg-base px-2.5 py-1.5 text-[13px] text-ink placeholder:text-dim focus-visible:border-brand focus-visible:outline-none" />
-                    <p className="text-[11.5px] text-dim">One per line, up to 12. Blank lines are dropped.</p>
+                    <p className="text-[11.5px] text-dim">One per line, up to 12.</p>
                     <div className="flex gap-1.5">
                       <Button size="xs" type="submit" disabled={working !== null}><Check className="size-3" />{working === 'criteria' ? 'Saving…' : 'Save criteria'}</Button>
                       <Button size="xs" type="button" variant="ghost" onClick={() => setCriteriaDraft(null)}>Cancel</Button>
@@ -603,7 +604,7 @@ export default function Plans() {
                   </form>
                 ) : criteria.length === 0 ? (
                   <p className="px-3.5 py-3 text-[13px] text-dim">
-                    {underway ? 'None were set before it was dispatched.' : 'None yet. A compile proposes them; you can write your own before dispatch.'}
+                    {underway ? 'None were set before dispatch.' : 'None yet. Write your own before dispatch.'}
                   </p>
                 ) : (
                   <div className="divide-y divide-line">
@@ -633,15 +634,16 @@ export default function Plans() {
           {detailTab === 'evidence' && (
             <>
               <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
-              <Panel eyebrow="What the compiler was handed" title={<span className="flex items-center gap-1.5"><BookOpen className="size-3.5 text-brand" />Grounded in</span>} flush>
+              <Panel title={<span className="flex items-center gap-1.5"><BookOpen className="size-3.5 text-brand" />Grounded in</span>} flush
+                about="What the compiler was handed: instruction files, taste, code, documents and memory facts.">
                 <GroundedIn p={g} />
               </Panel>
 
               <RevisionsPanel p={p} />
               </div>
 
-            <Panel className="mt-3" eyebrow="Verification" title={<span className="flex items-center gap-1.5"><FlaskConical className="size-3.5 text-brand" />Test plan</span>} flush>
-              {p.testPlan.length === 0 && <p className="px-3.5 py-3 text-[13px] text-dim">No test plan was written for this plan.</p>}
+            <Panel className="mt-3" title={<span className="flex items-center gap-1.5"><FlaskConical className="size-3.5 text-brand" />Test plan</span>} flush>
+              {p.testPlan.length === 0 && <p className="px-3.5 py-3 text-[13px] text-dim">No test plan was written.</p>}
               <div className="divide-y divide-line">
                 {p.testPlan.map((t, i) => (
                   <div key={i} className="flex items-start gap-2.5 px-3.5 py-1.5">
@@ -658,14 +660,14 @@ export default function Plans() {
             <Button size="sm" disabled={underway || open > 0 || working !== null} onClick={dispatch}>
               <Play className="size-3.5" />{underway ? 'Dispatched' : working === 'dispatch' ? 'Dispatching…' : 'Dispatch plan'}
             </Button>
-            <Button size="sm" variant="outline" onClick={() => nav('/architecture')}>See impact analysis</Button>
+            <Button size="sm" variant="outline" onClick={() => nav('/architecture')}>See impact</Button>
             <Button size="sm" variant="ghost" disabled={underway || working !== null} onClick={again}>
               <RefreshCw className={cn('size-3.5', working === 'recompile' && 'animate-spin')} />
               {working === 'recompile' ? 'Re-compiling…' : 'Re-compile'}
             </Button>
             {!underway && can('plans:decide') && (
               <span className="flex flex-wrap items-center gap-1.5 text-[12.5px] text-ink-2">
-                <label className="flex items-center gap-1.5" title="After tests, checks and review, a second model judges each acceptance criterion against the diff; a miss sends the run back on its own.">
+                <label className="flex items-center gap-1.5" title="A second model judges each criterion; a miss sends the run back.">
                   <input type="checkbox" checked={goal.on} disabled={criteria.length === 0}
                     onChange={(e) => setGoal({ ...goal, on: e.target.checked })} className="accent-brand" />
                   Run until done
@@ -678,7 +680,7 @@ export default function Plans() {
                   </select>
                 )}
                 {criteria.length === 0 && <span className="text-[12px] text-dim">needs acceptance criteria</span>}
-                <label className="ml-2 flex items-center gap-1.5" title="The run stops at an approval between one step and the next, so you read each step's work before the next one starts.">
+                <label className="ml-2 flex items-center gap-1.5" title="Waits for your approval between steps">
                   <input type="checkbox" checked={stepGate} onChange={(e) => setStepGate(e.target.checked)} className="accent-brand" />
                   Pause before each step
                 </label>
@@ -735,12 +737,12 @@ function StepEditor({ draft, names, busy, onChange, onSave, onCancel }: {
     <form className="space-y-1.5 bg-surface-2/40 px-3.5 py-2.5"
       onSubmit={(e) => { e.preventDefault(); if (draft.label.trim()) onSave(draft); }}>
       <p className="text-[12px] font-medium text-dim">
-        {draft.stepId ? 'Edit this step' : draft.at ? `New step, at position ${draft.at}` : 'New step, at the end'}
+        {draft.stepId ? 'Edit this step' : draft.at ? `New step at ${draft.at}` : 'New step at the end'}
       </p>
       <div className="flex flex-col gap-1.5 sm:flex-row">
         <input autoFocus value={draft.label} maxLength={200} aria-label="Step"
           onChange={(e) => onChange({ ...draft, label: e.target.value })}
-          placeholder="What this step does, in a few words" className={cn(FIELD, 'min-w-0 flex-1')} />
+          placeholder="What this step does" className={cn(FIELD, 'min-w-0 flex-1')} />
         <select value={draft.agent} aria-label="Owner" onChange={(e) => onChange({ ...draft, agent: e.target.value })}
           className={cn(FIELD, 'h-[34px] sm:w-52')}>
           {owners.map((n) => <option key={n} value={n}>{n}</option>)}
@@ -748,7 +750,7 @@ function StepEditor({ draft, names, busy, onChange, onSave, onCancel }: {
       </div>
       <textarea rows={2} value={draft.detail} maxLength={2000} aria-label="Detail"
         onChange={(e) => onChange({ ...draft, detail: e.target.value })}
-        placeholder="One sentence the agent is told with it (optional)" className={cn(FIELD, 'resize-y')} />
+        placeholder="Detail for the agent (optional)" className={cn(FIELD, 'resize-y')} />
       <div className="flex gap-1.5">
         <Button size="xs" type="submit" disabled={busy || !draft.label.trim() || !draft.agent}>
           {busy ? <Loader2 className="animate-spin" /> : <Check />}{draft.stepId ? 'Save step' : 'Add step'}
@@ -825,9 +827,10 @@ function CommentsPanel({
   );
   return (
     <Panel
-      eyebrow={open.length ? `${open.length} open · handed to the compiler when you revise` : 'Notes for the next revision'}
+      eyebrow={open.length ? `${open.length} open` : 'For the next revision'}
+      about="Revising hands open comments to the compiler. It writes the next revision and answers each."
       title={<span className="flex items-center gap-1.5"><MessageSquare className="size-3.5 text-brand" />Comments</span>}
-      actions={shapeable && !writing ? <Button size="xs" variant="ghost" disabled={working !== null} onClick={onWrite}><Plus className="size-3" />On the plan</Button> : undefined}
+      actions={shapeable && !writing ? <Button size="xs" variant="ghost" disabled={working !== null} onClick={onWrite}><Plus className="size-3" />Comment on plan</Button> : undefined}
       flush
     >
       {writing && <CommentComposer draft={writing} steps={p.steps} busy={working === 'comment'} onChange={onChange} onSave={onSave} onCancel={onCancel} />}
@@ -841,8 +844,8 @@ function CommentsPanel({
       ) : thread.length === 0 && !writing ? (
         <p className="px-3.5 py-3 text-[13px] text-dim">
           {shapeable
-            ? 'No comments yet. Leave one on a step — split it, ask why, flag a risk — or on the whole plan. Revising hands the open ones to the compiler, which writes the next revision and answers each.'
-            : 'No comments were left on this plan.'}
+            ? 'No comments yet. Leave one on a step or the whole plan.'
+            : 'No comments.'}
         </p>
       ) : (
         <div className="divide-y divide-line">
@@ -863,7 +866,7 @@ function CommentsPanel({
             {working === 'revise' ? <Loader2 className="animate-spin" /> : <Wand2 />}
             {working === 'revise' ? 'Revising…' : `Revise with comments${open.length ? ` (${open.length})` : ''}`}
           </Button>
-          <span className="text-[11.5px] text-dim">Needs a model. Answered questions and your own criteria are kept.</span>
+          <span className="text-[11.5px] text-dim">Needs a model. Keeps answers and your criteria.</span>
         </div>
       )}
     </Panel>
@@ -883,8 +886,8 @@ function RevisionsPanel({ p }: { p: ShapedPlan }) {
     ?? revisions[revisions.length - 1];
   if (!chosen) {
     return (
-      <Panel eyebrow="What changed between revisions" title={<span className="flex items-center gap-1.5"><History className="size-3.5 text-brand" />Revisions</span>}>
-        <p className="text-[13px] text-dim">This is the first revision. Revising with comments writes the next, and keeps this one’s steps here to compare.</p>
+      <Panel title={<span className="flex items-center gap-1.5"><History className="size-3.5 text-brand" />Revisions</span>}>
+        <p className="text-[13px] text-dim">This is the first revision.</p>
       </Panel>
     );
   }

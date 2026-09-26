@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { AlertTriangle, BookCheck, Download, FolderOpen, FolderPlus, GitBranchPlus, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Empty, KV, Mono, Panel, Tag } from '@/components/os';
+import { About, Empty, KV, Mono, Panel, Tag } from '@/components/os';
 import { FolderPicker } from '@/components/workbench/FolderPicker';
 import { ApiError } from '@/lib/api';
 import { blueprintsApi, download, type BlueprintDoc } from '@/lib/live/blueprints';
@@ -57,7 +57,7 @@ export function FinalizePanel({ bp, canDesign, dirty, onChanged }: {
       {!final ? (
         <Panel>
           <Empty icon={<BookCheck className="size-6" />} title="Not finalized yet"
-            hint="Finalizing writes the architecture document and the diagram, and records a decision for every key choice in Memory under Decisions. It needs no model: everything is written from the blueprint."
+            hint="Writes the document, the diagram and key decisions to Memory. No model needed."
             action={action} />
           {blockers.length > 0 && <Blockers items={blockers} />}
         </Panel>
@@ -132,10 +132,10 @@ export function ScaffoldPanel({ bp, canScaffold, why, dirty, onChanged }: {
         {done.repos.map((r) => <KV key={r.label} k={`Repository ${r.label}`} v={r.path} mono wrap />)}
         <KV k="When" v={`${ago(done.at)} by ${done.by}`} />
         <p className="mt-4 text-[13px] leading-relaxed text-soft">
-          The plan waits in Plans. Dispatch it and agents write the files in worktrees; the change lands only after the review and your signature.
+          The plan waits in Plans. Its files land only after review and your signature.
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button size="sm" onClick={() => nav(`/plans?ref=${done.planRef}`)}><GitBranchPlus className="size-3.5" />Open the plan</Button>
+          <Button size="sm" onClick={() => nav(`/plans?ref=${done.planRef}`)}><GitBranchPlus className="size-3.5" />Open plan</Button>
           <Button size="sm" variant="outline" onClick={() => nav(`/workbench?project=${done.projectId}`)}><FolderOpen className="size-3.5" />Open in Workbench</Button>
         </div>
       </Panel>
@@ -149,7 +149,7 @@ export function ScaffoldPanel({ bp, canScaffold, why, dirty, onChanged }: {
     try {
       const made = await blueprintsApi.scaffold(bp.id, folder, only ?? undefined);
       onChanged(made.blueprint);
-      toast.success(`${made.project.name} created`, { description: `${made.planRef} waits in Plans for you to dispatch it.` });
+      toast.success(`${made.project.name} created`, { description: `${made.planRef} waits in Plans.` });
     } catch (e) {
       toast.error('Not scaffolded', { description: failed(e) });
     } finally {
@@ -161,16 +161,19 @@ export function ScaffoldPanel({ bp, canScaffold, why, dirty, onChanged }: {
     <Panel title="Scaffold into a folder">
       {!ready ? (
         <Empty icon={<FolderPlus className="size-6" />} title="Finalize it first"
-          hint="The scaffold is built from the finalized architecture, so it can only follow a finalize of the current revision." />
+          hint="Scaffolding follows a finalize of the current revision." />
       ) : repos.length === 0 ? (
         <Empty icon={<FolderPlus className="size-6" />} title="The recipe names no repository"
           hint="Add one in Architecture → Scaffold, save, and finalize again." />
       ) : (
         <div className="space-y-5">
-          <p className="text-[13px] leading-relaxed text-soft">
-            Pick an empty folder. {repos.length > 1 ? 'Each repository becomes a folder inside it' : 'It becomes the repository'}, with one empty commit so a run can branch —
-            no file is written now. A project is onboarded from {repos.length > 1 ? 'them' : 'it'} and a plan is compiled from the recipe; it needs a model.
-          </p>
+          <div className="flex items-center gap-1 text-[13px] text-soft">
+            Pick an empty folder. Scaffolding needs a model.
+            <About>
+              <p>{repos.length > 1 ? 'Each repository becomes a folder inside it' : 'It becomes the repository'}, with one empty commit so a run can branch. No file is written now.</p>
+              <p>A project is onboarded from {repos.length > 1 ? 'them' : 'it'}, and a plan is compiled from the recipe.</p>
+            </About>
+          </div>
           {repos.length > 1 && (
             <div>
               <span className="mb-2 block text-[12.5px] font-medium text-soft">Repositories</span>
@@ -201,7 +204,7 @@ export function ScaffoldPanel({ bp, canScaffold, why, dirty, onChanged }: {
           </div>
         </div>
       )}
-      <FolderPicker open={picking} onClose={() => setPicking(false)} title="Where should it go?" confirmLabel="Use this empty folder"
+      <FolderPicker open={picking} onClose={() => setPicking(false)} title="Where should it go?" confirmLabel="Use this folder"
         onPick={(p) => { setFolder(p); setPicking(false); }} />
     </Panel>
   );

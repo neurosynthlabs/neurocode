@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Empty, Tag, cx } from '@/components/os';
+import { About, Empty, More, Tag, cx } from '@/components/os';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import {
@@ -96,7 +96,7 @@ export function RunConfigDialog({ open, onOpenChange, projectId, kind, editing, 
 
   const label = kind === 'debug' ? 'Program' : 'Command';
   const hint = kind === 'debug'
-    ? language === 'python' ? 'A .py file of the checkout, relative to the folder below — or -m and a module name.' : 'A .js, .mjs or .cjs file of the checkout, relative to the folder below.'
+    ? language === 'python' ? 'A .py file relative to the folder below, or -m and a module.' : 'A .js, .mjs or .cjs file relative to the folder below.'
     : 'Run by your shell in the folder below, exactly as typed.';
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -104,7 +104,7 @@ export function RunConfigDialog({ open, onOpenChange, projectId, kind, editing, 
         <DialogHeader>
           <DialogTitle>{editing ? `Change ${editing.name}` : kind === 'debug' ? 'New debug configuration' : 'New run configuration'}</DialogTitle>
           <DialogDescription>
-            {kind === 'debug' ? 'What the debugger launches, with the project’s own interpreter.' : 'A command a person starts from the Run tab. Nothing runs until you press Run.'}
+            {kind === 'debug' ? 'What the debugger launches, with the project’s own interpreter.' : 'Nothing runs until you press Run.'}
           </DialogDescription>
         </DialogHeader>
         <div className="grid max-h-[60vh] gap-3.5 overflow-y-auto pr-1">
@@ -129,15 +129,16 @@ export function RunConfigDialog({ open, onOpenChange, projectId, kind, editing, 
           </label>
           <label className="grid gap-1.5 text-[13px] text-ink-2">Folder
             <Input value={cwd} onChange={(e) => setCwd(e.target.value)} className="font-mono text-[12.5px]" placeholder="The checkout's root" />
-            <span className="text-[12px] text-dim">Relative to the project’s checkout, such as <span className="font-mono">services/api</span>. A further source’s folders start with its label, such as <span className="font-mono">api/src</span>.</span>
+            <span className="text-[12px] text-dim">Relative to the checkout (<span className="font-mono">services/api</span>); another source starts with its label (<span className="font-mono">api/src</span>).</span>
           </label>
+          <More label={env.length ? `Environment (${env.length})` : 'Environment'} open={env.length > 0}>
           <div className="grid gap-1.5">
-            <div className="flex items-center justify-between text-[13px] text-ink-2">Environment
+            <div className="flex items-center justify-between gap-2">
+              {env.length === 0 ? <p className="text-[12.5px] text-dim">None beyond the API’s own.</p> : <span />}
               <Button size="xs" variant="ghost" onClick={() => setEnv((rows) => [...rows, { key: Date.now(), name: '', value: '', kept: false, removed: false }])}>
                 <Plus />Add variable
               </Button>
             </div>
-            {env.length === 0 && <p className="text-[12.5px] text-dim">None beyond what the API itself runs with.</p>}
             {env.map((row) => (
               <div key={row.key} className={cx('grid grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_auto] items-center gap-2', row.removed && 'opacity-50')}>
                 <Input value={row.name} disabled={row.kept} aria-label="Variable name" placeholder="NAME" className="font-mono text-[12.5px]"
@@ -151,8 +152,9 @@ export function RunConfigDialog({ open, onOpenChange, projectId, kind, editing, 
                 </Button>
               </div>
             ))}
-            <p className="text-[12px] text-dim">Values are kept on the server and never shown again — only their names.</p>
+            <p className="text-[12px] text-dim">Values stay on the server; only names are shown again.</p>
           </div>
+          </More>
           {error && <p className="rounded-lg bg-danger/10 px-3 py-2 text-[13px] text-danger">{error}</p>}
         </div>
         <DialogFooter>
@@ -207,8 +209,13 @@ function DetectDialog({ open, onOpenChange, projectId, onSaved }: {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Suggested configurations</DialogTitle>
-          <DialogDescription>Read from the checkout’s files — package.json scripts, Makefile targets, pyproject scripts, manage.py, go.mod, Cargo.toml, notebooks. Nothing here has run; save the ones you want.</DialogDescription>
+          <DialogTitle className="flex items-center gap-1">Suggested configurations
+            <About label="What is read">
+              <p>It reads package.json scripts, Makefile targets, pyproject scripts, manage.py, go.mod, Cargo.toml and notebooks.</p>
+              <p>At the root and one folder down.</p>
+            </About>
+          </DialogTitle>
+          <DialogDescription>Nothing here has run; save the ones you want.</DialogDescription>
         </DialogHeader>
         <div className="max-h-[60vh] overflow-y-auto">
           {!fresh ? (
@@ -217,7 +224,7 @@ function DetectDialog({ open, onOpenChange, projectId, onSaved }: {
             <Empty title="The checkout could not be read" hint={fresh.error} />
           ) : fresh.data && fresh.data.suggestions.length === 0 ? (
             <Empty icon={<WandSparkles className="size-6" />} title="Nothing to suggest"
-              hint="No package.json, Makefile, pyproject.toml, manage.py, go.mod, Cargo.toml or notebook was found at the root or one folder down. Add a configuration by hand instead." />
+              hint="Nothing found near the root; add a configuration by hand." />
           ) : fresh.data && (
             <div className="divide-y divide-line/60">
               {fresh.data.suggestions.map((s) => {
@@ -244,7 +251,7 @@ function DetectDialog({ open, onOpenChange, projectId, onSaved }: {
               })}
             </div>
           )}
-          {fresh?.data?.capped && <p className="pt-2 text-[12px] text-dim">The list stopped at its ceiling; more may be found in deeper folders.</p>}
+          {fresh?.data?.capped && <p className="pt-2 text-[12px] text-dim">Capped; deeper folders may hold more.</p>}
         </div>
         <DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Done</Button></DialogFooter>
       </DialogContent>
@@ -341,11 +348,11 @@ export function RunPanel({ projectId }: { projectId: string | null }) {
 
   if (!allowed) {
     return <Empty icon={<Play className="size-6" />} title="Running needs the machine:access permission"
-      hint="A run is a command on the machine the API runs on, so only an Owner holds it unless an Owner grants it." />;
+      hint="Runs use the API's machine; Owners hold it unless they grant it." />;
   }
   if (!projectId) {
     return <Empty icon={<Play className="size-6" />} title="Run configurations belong to a project"
-      hint="Choose a project in the top bar, or onboard this folder as a project, to save and run its commands." />;
+      hint="Choose a project in the top bar, or onboard this folder." />;
   }
   if (error && !configs) {
     return <Empty title={error.status === 404 && error.message.startsWith('Machine access') ? 'Machine access is off on this server' : 'The run configurations did not load'}
@@ -365,7 +372,7 @@ export function RunPanel({ projectId }: { projectId: string | null }) {
         </div>
         {configs.length === 0 ? (
           <Empty icon={<Play className="size-5" />} title="No run configuration yet"
-            hint="Detect reads the checkout for scripts and targets to suggest, or add a command by hand."
+            hint="Detect suggests commands from the checkout, or add one by hand."
             action={<Button size="sm" variant="outline" onClick={() => setDetecting(true)}><WandSparkles className="size-3.5" />Detect</Button>} />
         ) : (
           <div className="min-h-0 flex-1 divide-y divide-line/60 overflow-y-auto">
@@ -416,7 +423,7 @@ export function RunPanel({ projectId }: { projectId: string | null }) {
           </>
         ) : (
           <Empty icon={<Play className="size-6" />} title={chosen ? `${chosen.name} has not run yet` : 'Nothing running'}
-            hint={chosen ? `Run starts ${chosen.command} in ${chosen.cwd || "the checkout's root"} and streams what it prints here.` : 'Choose a configuration and press Run; its output appears here.'} />
+            hint={chosen ? `Run starts ${chosen.command} in ${chosen.cwd || "the checkout's root"} and streams what it prints here.` : 'Press Run on a configuration to see its output.'} />
         )}
       </div>
       <RunConfigDialog open={dialog} onOpenChange={setDialog} projectId={projectId} kind="run" editing={editing}

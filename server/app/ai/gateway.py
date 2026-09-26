@@ -19,7 +19,7 @@ Slow counts as failed. Every call carries a **wall-clock budget** — one lane's
 — because a socket timeout is per read and a provider that dribbles a byte at a time resets it for
 ever. And a lane that fails for its own reasons rather than this request's — no answer, a refused
 connection, a 429, a 5xx — is **rested** for a minute instead of being chosen first again on the very
-next call, and says so on Models & Router rather than still reading "ready".
+next call, and says so on Models rather than still reading "ready".
 
 A call may also **stream**: given `on_delta`, the provider's answer and its reasoning arrive as they are
 written, and `stop` can end it halfway. Only the real provider calls stream — a stand-in, or a lane with
@@ -109,11 +109,11 @@ class OutOfBudget(RuntimeError):
     """The model spent its whole token budget reasoning and wrote no answer.
 
     Named, because it used to surface as "the answer holds no JSON object" — true, and no help at all.
-    The fix is on Models & Router: less thinking for that feature, or a lane that thinks less."""
+    The fix is on Models: less thinking for that feature, or a lane that thinks less."""
 
     def __init__(self, model: str, budget: int, reply: Reply | None = None) -> None:
         super().__init__(f"{model} thought past its budget: it spent all {budget:,} tokens reasoning and "
-                         "wrote no answer. Lower this feature's thinking on Models & Router.")
+                         "wrote no answer. Lower this feature's thinking on Models.")
         #: What came back — its tokens were spent and are ledgered like any others.
         self.reply = reply
 
@@ -517,7 +517,7 @@ class Gateway:
         return lanes.thinking(self.store, feature)
 
     def thinking_levels(self) -> dict[str, str]:
-        """Every feature's thinking level, as it stands — for Models & Router."""
+        """Every feature's thinking level, as it stands — for Models."""
         return {feature: self.thinking(feature) for feature in lanes.THINKING_FEATURES}
 
     def _asked(self, lane_id: str, feature: str, seconds: float | None = None) -> dict[str, Any]:
@@ -646,7 +646,7 @@ class Gateway:
         # A lane whose address carries an account id has none until somebody gives it one. Dialling an
         # empty base URL is a connection error a minute later; this is the same news, at once.
         if lane.needs_base_url:
-            return "no address yet — its base URL holds your own account id, and is set in Admin → AI providers"
+            return "no address yet — its base URL holds your own account id, and is set in Models → Keys"
         if lane.rpm and self._this_minute(lane.id) >= lane.rpm:
             return f"{lane.rpm} calls this minute — its free allowance"
         if lane.rpd and self._today(lane.id) >= lane.rpd:
@@ -711,7 +711,7 @@ class Gateway:
         out["lanes"] = len(open_now)
         if p is None:
             if self.rejected("deepseek") and self.preference() in ("auto", "deepseek"):
-                out["note"] = "DeepSeek rejected the API key. Set a valid key in Admin → AI providers."
+                out["note"] = "DeepSeek rejected the API key. Set a valid key in Models → Keys."
             elif self.preference() not in ("rules",):
                 out["note"] = "No lane can answer: add a free key, or pull an Ollama model."
         return out
@@ -811,7 +811,7 @@ class Gateway:
         says so, so a screen never shows two lanes' words stitched into one answer."""
         chain = self.chain(role=role, lane=lane, avoid=avoid)
         if not chain:
-            raise NoModel("No model is configured. Add a free key in Admin → AI providers, or pull an Ollama model.")
+            raise NoModel("No model is configured. Add a free key in Models → Keys, or pull an Ollama model.")
         reason, until = "", time.monotonic() + CHAIN_SECONDS
         for n, candidate in enumerate(chain):
             left = until - time.monotonic()

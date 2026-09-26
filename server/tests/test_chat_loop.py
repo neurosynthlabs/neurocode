@@ -128,14 +128,14 @@ async def test_it_stops_reaching_for_tools_and_answers_with_what_it_has(live: Da
 
 async def test_with_no_model_the_question_is_still_there(live: Database):
     await start(live, "kuch bhi poochh raha hoon")
-    gateway = FakeGateway(raises=NoModel("No model is configured. Add a free key in Admin → AI providers."))
+    gateway = FakeGateway(raises=NoModel("No model is configured. Add a free key in Models → Keys."))
 
     await think(live, gateway, CHAT, "Rajat")
 
     turns = await turns_of(live)
     assert [m.role for m in turns] == ["you", "note"]
     assert turns[0].body == "kuch bhi poochh raha hoon"
-    assert "Admin → AI providers" in turns[1].body
+    assert "Models → Keys" in turns[1].body
     async with live.read() as s:
         assert (await ChatRepository(s).by_ref(CHAT)).status == "idle"
 

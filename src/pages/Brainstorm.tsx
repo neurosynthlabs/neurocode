@@ -52,7 +52,8 @@ export default function Brainstorm() {
     <Page>
       <PageHeader
         title="Brainstorm"
-        subtitle="The OS does not start coding when you have an idea. It expands it into a brief, then argues against it."
+        subtitle="Turn an idea into a brief, then argue against it."
+        about={<p>Nothing is coded. A model expands the idea into a problem, audience, MVP, risks and a roadmap.</p>}
       >
         <div className="pb-3">
           <div className="focus-brand flex items-start gap-2 rounded-md border border-line bg-base p-2.5">
@@ -93,7 +94,7 @@ export default function Brainstorm() {
         {doc ? <BriefView doc={doc} onPlan={() => planIt(doc)} /> : (
           <div className="min-w-0 flex-1 p-5">
             <Empty icon={<Lightbulb className="size-6" />} title="No briefs yet"
-              hint="Pitch an idea above — it comes back as a problem, audience, MVP, risks and a roadmap. It needs a model: add a free key in Admin → AI providers if none is set up." />
+              hint="Pitch an idea above. It needs a model: see Models → Keys." />
           </div>
         )}
       </PageBody>
@@ -118,14 +119,14 @@ function BriefView({ doc, onPlan }: { doc: BrainstormDoc; onPlan: () => void }) 
       </Panel>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        <Panel eyebrow="Who feels it" title="Audience"><p className="text-[13.5px] leading-relaxed text-ink-2">{b.audience}</p></Panel>
-        <Panel eyebrow="Why it matters" title="Value"><p className="text-[13.5px] leading-relaxed text-ink-2">{b.value}</p></Panel>
+        <Panel title="Audience"><p className="text-[13.5px] leading-relaxed text-ink-2">{b.audience}</p></Panel>
+        <Panel title="Value"><p className="text-[13.5px] leading-relaxed text-ink-2">{b.value}</p></Panel>
       </div>
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
-        <Bullets eyebrow="The smallest thing worth building" title="MVP scope" items={b.mvp} tone="ok" />
-        <Bullets eyebrow="How you will know" title="Metrics" items={b.metrics} tone="brand" />
-        <Bullets eyebrow="Answer these first" title="Open questions" items={b.questions} tone="warn" />
+        <Bullets title="MVP scope" items={b.mvp} tone="ok" />
+        <Bullets title="Metrics" items={b.metrics} tone="brand" />
+        <Bullets title="Open questions" items={b.questions} tone="warn" />
       </div>
 
       <Panel
@@ -137,7 +138,7 @@ function BriefView({ doc, onPlan }: { doc: BrainstormDoc; onPlan: () => void }) 
         </div>
       </Panel>
 
-      <Panel eyebrow="Phased" title="Roadmap" flush>
+      <Panel title="Roadmap" flush>
         <DataTable head={['Phase', 'Items']}>
           {b.roadmap.map((r) => (
             <Row key={r.phase}>
@@ -151,9 +152,9 @@ function BriefView({ doc, onPlan }: { doc: BrainstormDoc; onPlan: () => void }) 
   );
 }
 
-function Bullets({ eyebrow, title, items, tone }: { eyebrow: string; title: string; items: string[]; tone: Tone }) {
+function Bullets({ title, items, tone }: { title: string; items: string[]; tone: Tone }) {
   return (
-    <Panel eyebrow={eyebrow} title={title}>
+    <Panel title={title}>
       {items.length === 0 ? <p className="text-[12.5px] text-dim">None in this brief.</p> : (
         <ul className="space-y-1.5">
           {items.map((it, i) => (

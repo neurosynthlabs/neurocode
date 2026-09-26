@@ -161,13 +161,13 @@ export default function Activity() {
           <div className="col-span-12 xl:col-span-8">
             <Panel flush>
               {all.length === 0 ? (
-                <Empty title="The log is empty" hint="Every change anyone makes — a task moved, a plan dispatched, an approval decided — is recorded here." />
+                <Empty title="The log is empty" hint="Every change anyone makes is recorded here." />
               ) : list.length === 0 ? <Empty title="Nothing matches" hint="Widen the filters or clear the search." /> : (
                 <div>
                   {grouped.map(([day, events]) => (
                     <div key={day}>
                       <div className="sticky top-0 z-10 flex items-center justify-between border-y border-line bg-surface-2 px-3.5 py-1.5">
-                        <span className="eyebrow">{day}</span>
+                        <span className="text-[12px] font-medium text-soft">{day}</span>
                         <span className="tnum text-[12px] text-dim">{events.length} events</span>
                       </div>
                       <div className="divide-y divide-line/60">
@@ -189,7 +189,7 @@ export default function Activity() {
                                 </span>
                                 <span className="block text-[12.5px] text-dim"><span className="text-soft sm:hidden">{e.actor} · </span>{e.detail}</span>
                               </span>
-                              <span className="eyebrow hidden shrink-0 md:inline">{projectLabel(projects, e.projectId)}</span>
+                              <span className="hidden shrink-0 text-[11.5px] text-dim md:inline">{projectLabel(projects, e.projectId)}</span>
                             </div>
                           );
                         })}
@@ -203,12 +203,13 @@ export default function Activity() {
 
           {/* Rail */}
           <div className="col-span-12 space-y-4 xl:col-span-4">
+            {all.length > 0 && <>
             <StatGrid cols={2}>
               <Stat label="Events today" value={figures ? figures.today : '—'} sub={figures ? 'since midnight UTC, every project' : waiting} />
               <Stat label="Your actions" value={figures ? figures.mine : '—'} tone="brand" sub={figures ? `as ${user?.name ?? 'you'}, all time` : waiting} />
             </StatGrid>
 
-            <Panel eyebrow="Who did the work" title="By actor kind" flush>
+            <Panel title="By actor kind" flush>
               <div className="divide-y divide-line">
                 {KINDS.map((k) => {
                   const Icon = KIND_ICON[k];
@@ -241,7 +242,7 @@ export default function Activity() {
               </div>}
             </Panel>
 
-            <Panel eyebrow={cut ? 'What you did, in the latest events' : 'What you did'} title="Your actions" flush>
+            <Panel eyebrow={cut ? 'Latest events only' : undefined} title="Your actions" flush>
               {mine.length === 0 ? (
                 <p className="px-3.5 py-2.5 text-[12.5px] text-dim">Nothing you have done is in the log yet.</p>
               ) : <div className="divide-y divide-line">
@@ -256,13 +257,14 @@ export default function Activity() {
                 ))}
               </div>}
             </Panel>
+            </>}
 
             {project && hooks && hooks.pid === projectId && (
               <Panel eyebrow={`Hooks · ${project.name}`} title={<span className="flex items-center gap-1.5"><Webhook className="size-3.5 text-warn" />Deterministic automation</span>} flush>
                 <div className="px-3.5 py-2">
                   <KV k="Configured" v={hooks.data.hooks.length} />
                   <KV k="Can refuse an action" v={hooks.data.hooks.filter((h) => h.blocking).length} />
-                  <p className="mt-1.5 text-[12px] text-dim">Claude Code keeps no readable record of a hook firing, so none appears in this log.</p>
+                  <p className="mt-1.5 text-[12px] text-dim">Claude Code records no hook firings, so none appear here.</p>
                 </div>
               </Panel>
             )}

@@ -162,7 +162,13 @@ function RunReviews({ tabs }: { tabs: ReactNode }) {
       <Page>
         <PageHeader
           title="Review"
-          subtitle="A different lane reads each run's diff and lists what it found; the run then waits for your signature."
+          subtitle="Read each run's diff before you sign it."
+          about={
+            <>
+              <p>A lane other than the writer's reads each run's diff and lists what it found.</p>
+              <p>The run then waits for your signature. Request changes to send it back with your notes.</p>
+            </>
+          }
           actions={tabs}
         />
         <PageBody>
@@ -229,7 +235,13 @@ function RunReviews({ tabs }: { tabs: ReactNode }) {
     <Page>
       <PageHeader
         title="Review"
-        subtitle="A different lane reads each run's diff and lists what it found; the run then waits for your signature."
+        subtitle="Read each run's diff before you sign it."
+        about={
+          <>
+            <p>A lane other than the writer's reads each run's diff and lists what it found.</p>
+            <p>The run then waits for your signature. Request changes to send it back with your notes.</p>
+          </>
+        }
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {reviewer && (
@@ -317,7 +329,7 @@ function RunReviews({ tabs }: { tabs: ReactNode }) {
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     aria-label="What should change"
-                    placeholder="What should change? The next run is told this, along with the findings below."
+                    placeholder="The next run gets this and the findings."
                     className="w-full resize-none rounded-sm border border-line bg-base px-2.5 py-1.5 text-[13px] text-ink placeholder:text-dim focus-visible:border-brand focus-visible:outline-none"
                   />
                   <div className="flex flex-wrap items-center gap-2">
@@ -400,7 +412,7 @@ function RunReviews({ tabs }: { tabs: ReactNode }) {
                 <Empty
                   icon={<Check className="size-5" />}
                   title="Nothing to fix"
-                  hint="The review raised no finding for this diff."
+                  hint="No finding for this diff."
                 />
               ) : (
                 <DataTable head={['Severity', 'File', 'Note']}>
@@ -471,7 +483,13 @@ function OnDemand({ tabs }: { tabs: ReactNode }) {
   const header = (
     <PageHeader
       title="Review"
-      subtitle="Any diff, read the way a run's is: a branch against its base, the working tree, or a range of commits — on a lane other than the writer's, with the repository's REVIEW.md as the brief."
+      subtitle="Review any branch, commit range or uncommitted change."
+      about={
+        <>
+          <p>Read the way a run's diff is: on a lane other than the writer's, briefed by REVIEW.md.</p>
+          <p>With no model, rules read it and say so. Nothing is changed.</p>
+        </>
+      }
       actions={
         <div className="flex flex-wrap items-center gap-2">
           {pid && can('runs:run') && (
@@ -506,7 +524,7 @@ function OnDemand({ tabs }: { tabs: ReactNode }) {
           <Empty
             icon={<ScanEye className="size-6" />}
             title="No project yet"
-            hint="Onboard a repository in Projects, and any branch, commit range or uncommitted change in it can be reviewed here."
+            hint="Onboard a repository in Projects to review its diffs."
           />
         </PageBody>
       </Page>
@@ -532,8 +550,8 @@ function OnDemand({ tabs }: { tabs: ReactNode }) {
         ) : reviews.length === 0 ? (
           <Empty
             icon={<GitBranch className="size-6" />}
-            title={`Nothing in ${project.name} has been reviewed on demand yet`}
-            hint="Pick a branch — one of yours, or one someone pushed — the working tree, or a range of commits. A model on a lane other than the writer's reads it; with no model, rules read it and say so."
+            title={`No reviews in ${project.name} yet`}
+            hint="Pick a branch, the working tree or a range of commits."
             action={
               can('runs:run') ? (
                 <Button size="sm" onClick={() => setAsking(true)}>
@@ -659,7 +677,7 @@ function DemandDetail({ r, onChanged }: { r: CodeReview; onChanged: () => void }
         {r.status === 'running' ? (
           <p className="flex items-center gap-2 text-[13px] text-soft">
             <Loader2 className="size-3.5 animate-spin" />
-            Reading the diff. It lands here when it is done, and in Activity.
+            Reading the diff. It lands here and in Activity.
           </p>
         ) : r.verdict ? (
           <div
@@ -671,7 +689,7 @@ function DemandDetail({ r, onChanged }: { r: CodeReview; onChanged: () => void }
         ) : null}
         {r.offline && (
           <p className="mt-2 text-[12.5px] text-warn">
-            No model could answer, so rules read this diff: secrets, debugging left in, TODOs and untouched tests.
+            No model answered, so rules read it: secrets, leftover debugging, TODOs, untouched tests.
           </p>
         )}
         {done && (
@@ -679,16 +697,16 @@ function DemandDetail({ r, onChanged }: { r: CodeReview; onChanged: () => void }
             {can('sessions:chat') && (
               <Button size="sm" variant="outline" disabled={!findings || busy !== null} onClick={() => void toSession()}>
                 {busy === 'session' ? <Loader2 className="size-3.5 animate-spin" /> : <MessageSquarePlus className="size-3.5" />}
-                Send to a session
+                Send to session
               </Button>
             )}
             {can('plans:compile') && (
               <Button size="sm" variant="outline" disabled={!findings || busy !== null} onClick={() => void toPlan()}>
                 {busy === 'plan' ? <Loader2 className="size-3.5 animate-spin" /> : <ListChecks className="size-3.5" />}
-                Make a plan from these findings
+                Make a plan
               </Button>
             )}
-            {!findings && <span className="text-[12.5px] text-dim">Nothing was found, so there is nothing to send.</span>}
+            {!findings && <span className="text-[12.5px] text-dim">Nothing found to send.</span>}
           </div>
         )}
         {r.sent.length > 0 && (
@@ -711,7 +729,7 @@ function DemandDetail({ r, onChanged }: { r: CodeReview; onChanged: () => void }
       </Panel>
 
       {r.status !== 'running' && (
-        <Panel eyebrow="What the reviewer was handed" title="The diff and its brief">
+        <Panel eyebrow="What the reviewer read" title="The diff and its brief">
           <div className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
             <KV k="Target" v={r.target === 'working-tree' ? 'the working tree' : r.target === 'branch' ? 'a branch' : 'a range of commits'} />
             <KV
@@ -741,7 +759,7 @@ function DemandDetail({ r, onChanged }: { r: CodeReview; onChanged: () => void }
           </div>
           {!r.brief && (
             <p className="mt-2 text-[12.5px] text-dim">
-              Add REVIEW.md (or .neurocode/REVIEW.md) to the repository to tell the reviewer what matters here and what to leave alone.
+              Add REVIEW.md (or .neurocode/REVIEW.md) to brief the reviewer.
             </p>
           )}
         </Panel>
@@ -750,7 +768,7 @@ function DemandDetail({ r, onChanged }: { r: CodeReview; onChanged: () => void }
       {done && (
         <Panel eyebrow={`${r.findings.length} findings`} title="Findings" flush>
           {r.findings.length === 0 ? (
-            <Empty icon={<Check className="size-5" />} title="Nothing to fix" hint="The review raised no finding for this diff." />
+            <Empty icon={<Check className="size-5" />} title="Nothing to fix" hint="No finding for this diff." />
           ) : (
             <DataTable head={['Severity', 'Where', 'Note']}>
               {r.findings.map((f, i) => (
@@ -861,7 +879,7 @@ function AskDialog({
         <DialogHeader>
           <DialogTitle>Review a diff in {projectName}</DialogTitle>
           <DialogDescription>
-            Read the way a run's diff is: on a lane other than the one that wrote it when that is known, held to the project's instructions and its REVIEW.md. Nothing is changed.
+            Read by a lane other than the writer's. Nothing is changed.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3">
@@ -886,11 +904,11 @@ function AskDialog({
               Reading the checkout…
             </p>
           ) : !t.git ? (
-            <p className="text-[13px] text-soft">This checkout is not a git repository, so there is no diff to read.</p>
+            <p className="text-[13px] text-soft">Not a git repository, so there is no diff.</p>
           ) : target === 'working-tree' ? (
             <p className="text-[13px] text-soft">
               {t.dirty
-                ? `${t.dirty} ${t.dirty === 1 ? 'path differs' : 'paths differ'} from the last commit, new files included. They are read as they are; nothing is staged.`
+                ? `${t.dirty} ${t.dirty === 1 ? 'path differs' : 'paths differ'} from the last commit, new files included. Nothing is staged.`
                 : 'Nothing in the working tree differs from its last commit.'}
             </p>
           ) : target === 'branch' ? (
@@ -915,7 +933,7 @@ function AskDialog({
                   Fetch {pickedHead} from its remote first, with your git credentials
                 </label>
               )}
-              <p className="text-[12.5px] text-dim">What the branch changed since it left the base — the diff a pull request shows.</p>
+              <p className="text-[12.5px] text-dim">The diff a pull request would show.</p>
             </>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2">
@@ -930,7 +948,7 @@ function AskDialog({
                   The reviewer is briefed by <Mono>{t.brief.path}</Mono>.
                 </>
               ) : (
-                'No REVIEW.md in this repository: the reviewer reads with the project’s instructions alone.'
+                'No REVIEW.md: the reviewer uses the project’s instructions alone.'
               )}
             </p>
           )}

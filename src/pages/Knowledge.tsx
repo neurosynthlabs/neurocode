@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Search, Library, Upload, Link2, Boxes, Loader2, RefreshCw, FileText } from 'lucide-react';
+import { Search, Library, Link2, Boxes, Loader2, RefreshCw, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Dot, Mono, Field, ListRow,
-  DataTable, Row, Cell, Stat, StatGrid, KV, Empty, SectionTitle, Bar,
+  DataTable, Row, Cell, Stat, StatGrid, KV, Empty, SectionTitle, Bar, More,
 } from '@/components/os';
 import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -20,7 +20,7 @@ import { NoProject } from './code/shared';
 /** The documents retrieval holds for the active project: the repository's own writing. */
 export default function Knowledge() {
   const { project } = useProject();
-  if (!project) return <NoProject title="Knowledge" hint="Onboard a repository in Projects, and its README, docs and notes appear here." />;
+  if (!project) return <NoProject title="Knowledge" hint="Onboard a repository to read its README, docs and notes." />;
   return <LiveKnowledge project={project} />;
 }
 
@@ -74,20 +74,24 @@ function LiveKnowledge({ project }: { project: Project }) {
     <Page>
       <PageHeader
         title="Knowledge"
-        subtitle={`What ${project.name}'s repository says about itself — README, docs, notes — split at its headings and found by its words, and by meaning when a lane embeds it.`}
+        subtitle="What the repository says about itself: README, docs and notes."
+        about={<>
+          <p>Each document is split at its headings.</p>
+          <p>A search finds it by its words, and by meaning when a lane embeds it.</p>
+        </>}
         actions={can('projects:onboard') && (
           <Button size="sm" variant="outline" disabled={building} onClick={() => void rebuild()}>
-            {building ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}{building ? 'Re-indexing…' : 'Re-index documents'}
+            {building ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}{building ? 'Re-indexing…' : 'Re-index'}
           </Button>
         )}
       >
         <div className="pb-3">
           <div className="focus-brand flex h-9 items-center gap-2 rounded-md border border-line bg-base px-3 transition-colors">
             <Search className="size-4 shrink-0 text-brand" />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Ask the corpus"
-              placeholder="Ask the corpus — words always, meaning when a lane embeds"
+            <input value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search the documents"
+              placeholder="Search the documents"
               className="min-w-0 flex-1 bg-transparent text-[14px] text-ink placeholder:text-dim focus-visible:outline-none" />
-            {search && <button onClick={() => setSearch('')} className="text-[12px] text-dim hover:text-ink">clear</button>}
+            {search && <button onClick={() => setSearch('')} className="text-[12px] text-dim hover:text-ink">Clear</button>}
           </div>
         </div>
       </PageHeader>
@@ -100,7 +104,7 @@ function LiveKnowledge({ project }: { project: Project }) {
         <PageBody className="space-y-4">
           {asking && <SearchResults query={query} loading={r.loading} error={r.error} data={r.data} onOpen={(path) => setSel(path)} />}
 
-          <StatGrid cols={5}>
+          {(data.docs.length > 0 || data.onDisk > 0) && <StatGrid cols={5}>
             {/* The server lists at most a few hundred documents but counts the ones on disk over all of
                 them, so the figures come from its counts and the list says when it was cut. */}
             <Stat label="Documents" value={Math.max(data.onDisk, data.docs.length).toLocaleString()}
@@ -114,11 +118,11 @@ function LiveKnowledge({ project }: { project: Project }) {
             <Stat label="Changed since index" value={changed} tone={changed ? 'warn' : 'ok'}
               sub={data.retrieval.at ? `index built ${ago(data.retrieval.at)}` : 'never indexed'}
               onClick={changed && can('projects:onboard') && !building ? () => void rebuild() : undefined} />
-          </StatGrid>
+          </StatGrid>}
 
           {data.docs.length === 0 ? (
             <Empty icon={<FileText className="size-6" />} title="No documents in this repository"
-              hint={`Nothing ending ${data.formats.map((f) => `.${f}`).join(', ')} was found outside the folders onboarding skips.`} />
+              hint={`No ${data.formats.map((f) => `.${f}`).join(', ')} file outside the skipped folders.`} />
           ) : (
             <LiveDocBrowser project={project} data={data} kind={kind} setKind={setKind} q={q} setQ={setQ} sel={sel} setSel={setSel} stamp={stamp} />
           )}
@@ -137,11 +141,11 @@ function SearchResults({ query, loading, error, data, onOpen }: {
   const counts = data?.counts;
   return (
     <Panel className="accent-top" flush
-      eyebrow={data ? `hybrid retrieval · ${results.length} results` : 'searching…'}
+      eyebrow={data ? `${results.length} results` : 'searching…'}
       title={<>Results for <span className="text-brand">“{query}”</span></>}>
       {error ? <Empty title="The search did not answer" hint={error} />
         : loading && !data ? <Empty icon={<Loader2 className="size-5 animate-spin" />} title="Searching…" />
-          : results.length === 0 ? <Empty title="Nothing here bears on that" hint="Try the words the documents themselves would use." /> : (
+          : results.length === 0 ? <Empty title="Nothing here bears on that" hint="Try the documents' own words." /> : (
             <DataTable head={['Result', 'Score', 'Found by', 'Why it ranked']}>
               {results.map((x) => (
                 <Row key={x.ref} onClick={x.kind === 'doc' ? () => onOpen(x.path) : undefined}>
@@ -176,7 +180,7 @@ function SearchResults({ query, loading, error, data, onOpen }: {
             <p className="mt-1.5 border-t border-line/60 pt-2 text-[11.5px] leading-relaxed text-dim">
               {counts.dropped > 0 && `${counts.dropped} skipped so one file could not fill the answer`}
               {counts.dropped > 0 && counts.floored > 0 && ' · '}
-              {counts.floored > 0 && `${counts.floored} shown here are below the relevance floor — a session is told there is nothing rather than handed these`}
+              {counts.floored > 0 && `${counts.floored} below the relevance floor, never handed to a session`}
             </p>
           )}
         </div>
@@ -210,7 +214,7 @@ function LiveDocBrowser({ project, data, kind, setKind, q, setQ, sel, setSel, st
         </button>
         {cut && (
           <p className="px-3.5 pt-1 text-[11.5px] leading-snug text-dim">
-            Showing {data.docs.length} of {data.onDisk.toLocaleString()}; the counts below are of these.
+            Showing {data.docs.length} of {data.onDisk.toLocaleString()}; counts are of these.
           </p>
         )}
         <div className="mx-3.5 my-1.5 h-px bg-line" />
@@ -232,7 +236,7 @@ function LiveDocBrowser({ project, data, kind, setKind, q, setQ, sel, setSel, st
             <div className="flex items-center gap-2">
               <Dot state={!x.indexed || x.stale ? 'warn' : 'ok'} />
               <Mono className="truncate">{x.ref}</Mono>
-              <span className="eyebrow ml-auto">{x.kind}</span>
+              <span className="ml-auto text-[11.5px] text-dim">{x.kind}</span>
             </div>
             <p className="mt-1 line-clamp-2 text-[13px] text-ink">{x.title}</p>
             <p className="mt-1 truncate text-[11.5px] text-dim">{x.source} · {x.addedAt ? ago(x.addedAt) : 'no date'}</p>
@@ -246,8 +250,8 @@ function LiveDocBrowser({ project, data, kind, setKind, q, setQ, sel, setSel, st
             title={<span className="flex flex-wrap items-center gap-2"><Mono tone="brand">{doc.ref}</Mono>{doc.title}</span>}
             actions={!doc.indexed ? <Tag tone="warn">awaiting index</Tag> : doc.stale ? <Tag tone="warn">changed since index</Tag> : <Tag tone="ok">indexed</Tag>}>
             {doc.summary
-              ? <><SectionTitle className="mb-1">The document's first paragraph</SectionTitle><p className="text-[13.5px] leading-relaxed text-ink-2">{doc.summary}</p></>
-              : <p className="text-[13px] text-dim">{doc.indexed ? 'Its first piece has no paragraph after the heading.' : 'Not indexed, so there is no text to quote yet.'}</p>}
+              ? <><SectionTitle className="mb-1">First paragraph</SectionTitle><p className="text-[13.5px] leading-relaxed text-ink-2">{doc.summary}</p></>
+              : <p className="text-[13px] text-dim">{doc.indexed ? 'No paragraph after its first heading.' : 'Not indexed yet, so nothing to quote.'}</p>}
             <div className="mt-3 grid grid-cols-1 gap-x-6 border-t border-line/60 pt-2.5 sm:grid-cols-2 xl:grid-cols-4">
               <KV k="Source" v={doc.source} />
               <KV k="Size" v={bytes(doc.bytes)} />
@@ -259,7 +263,7 @@ function LiveDocBrowser({ project, data, kind, setKind, q, setQ, sel, setSel, st
 
         {doc && (
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <Panel eyebrow={detail.data ? `${detail.data.entities.length} the index declares` : 'reading…'} title="Entities">
+            <Panel eyebrow={detail.data ? `${detail.data.entities.length} declared in code` : 'reading…'} title="Entities">
               {detail.error ? <p className="text-[12.5px] text-dim">{detail.error}</p>
                 : detail.data?.entities.length ? <div className="flex flex-wrap gap-1">{detail.data.entities.map((e) => <Mono key={e}>{e}</Mono>)}</div>
                   : <p className="text-[12.5px] text-dim">{detail.data ? 'It names no symbol this project declares.' : '…'}</p>}
@@ -272,7 +276,7 @@ function LiveDocBrowser({ project, data, kind, setKind, q, setQ, sel, setSel, st
         )}
 
         {detail.data && detail.data.sections.length > 0 && (
-          <Panel flush eyebrow={`${detail.data.sections.length} pieces, split at its headings`} title="Sections">
+          <Panel flush title={`Sections (${detail.data.sections.length})`}>
             <div className="divide-y divide-line/60">
               {detail.data.sections.map((s) => (
                 <div key={s.ref} className="flex items-center gap-2 px-5 py-1.5">
@@ -285,7 +289,7 @@ function LiveDocBrowser({ project, data, kind, setKind, q, setQ, sel, setSel, st
           </Panel>
         )}
 
-        <Panel eyebrow="What really happens to a document" title={<span className="flex items-center gap-1.5"><Upload className="size-3.5 text-brand" />Ingestion</span>} flush>
+        <More label="How a document is ingested"><Panel flush>
           <div className="divide-y divide-line/60">
             {data.pipeline.map((s) => (
               <div key={s.n} className="flex items-start gap-2.5 px-5 py-2">
@@ -301,7 +305,7 @@ function LiveDocBrowser({ project, data, kind, setKind, q, setQ, sel, setSel, st
             <SectionTitle>Accepted inputs</SectionTitle>
             <div className="flex flex-wrap gap-1">{data.formats.map((a) => <Tag key={a} tone="neutral">.{a}</Tag>)}</div>
           </div>
-        </Panel>
+        </Panel></More>
       </div>
     </div>
   );

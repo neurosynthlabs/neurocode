@@ -32,7 +32,7 @@ export default function ProjectOverview() {
         <PageHeader title="Project" />
         <PageBody>
           <Empty icon={<FolderGit2 className="size-6" />} title="No such project"
-            hint="It may have been removed, or the workspace was emptied. Pick one in Projects."
+            hint="It may have been removed. Pick one in Projects."
             action={<Button size="sm" variant="outline" onClick={() => nav('/projects')}>Open Projects</Button>} />
         </PageBody>
       </Page>
@@ -78,7 +78,7 @@ function Overview({ p }: { p: Project }) {
     setAsked(stamp);
     try {
       await api.code.reindex(p.id);
-      toast('Reading the code again', { description: 'The modules and hotspots refresh on their own when the index is ready.' });
+      toast('Reading the code again', { description: 'Modules and hotspots refresh when the index is ready.' });
     } catch (e) {
       setAsked(null);
       toast.error('Not re-indexed', { description: e instanceof ApiError ? e.message : 'The local API did not answer.' });
@@ -90,7 +90,7 @@ function Overview({ p }: { p: Project }) {
     setDrafting(true);
     try {
       const plan = await instructionsApi.draft(p.id);
-      toast.success(`${plan.ref} compiled`, { description: 'Dispatch it when its questions are settled; AGENTS.md is written in a worktree and lands with your signature.' });
+      toast.success(`${plan.ref} compiled`, { description: 'Dispatch it once its questions are settled. AGENTS.md lands from a worktree with your signature.' });
       openIn(`/plans?ref=${encodeURIComponent(plan.ref)}`);
     } catch (e) {
       toast.error('No draft compiled', { description: e instanceof ApiError ? e.message : 'The local API did not answer.' });
@@ -102,8 +102,8 @@ function Overview({ p }: { p: Project }) {
   const notIndexed = (
     <Empty icon={indexing ? <Loader2 className="size-5 animate-spin" /> : undefined}
       title={indexing ? `Reading ${p.name}…` : `${p.name} has no index yet`}
-      hint={!p.source ? 'Its code was not onboarded on this machine, so there is nothing to index.'
-        : indexing ? 'This fills in the moment the index is ready.' : 'Index it to see its modules and the files most depended on.'}
+      hint={!p.source ? 'Its code is not on this machine.'
+        : indexing ? 'This fills in when the index is ready.' : 'Index it to see its modules and hotspots.'}
       action={p.source && !indexing && can('projects:onboard') && summary?.canIndex
         ? <Button size="sm" onClick={() => void reindex()}>Index now</Button> : undefined} />
   );
@@ -122,7 +122,7 @@ function Overview({ p }: { p: Project }) {
             {p.source && machine && (
               <Button size="sm" variant="outline" onClick={() => openIn(`/workbench?project=${encodeURIComponent(p.id)}`)}><Code2 className="size-3.5" />Open in Workbench</Button>
             )}
-            <Button size="sm" variant="outline" onClick={() => openIn('/code')}><ExternalLink className="size-3.5" />Code intelligence</Button>
+            <Button size="sm" variant="outline" onClick={() => openIn('/code')}><ExternalLink className="size-3.5" />Open Code Intelligence</Button>
             {p.source && can('projects:onboard') && summary?.canIndex && (
               <Button size="sm" variant="outline" disabled={indexing} onClick={() => void reindex()}>
                 {indexing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}{indexing ? 'Indexing…' : 'Re-index'}
@@ -143,24 +143,22 @@ function Overview({ p }: { p: Project }) {
 
       <PageBody className="space-y-4">
         <div className="grid grid-cols-12 gap-3">
-          <Panel eyebrow="Measured when the code was indexed" className="col-span-12 xl:col-span-5"
-            title={p.understoodPct === null ? 'Not indexed yet' : `Project understood: ${p.understoodPct}%`}>
+          <Panel className="col-span-12 xl:col-span-5"
+            title={p.understoodPct === null ? 'Not indexed yet' : `Project understood: ${p.understoodPct}%`}
+            about="Understood is the share of scanned files the code index holds, measured at indexing.">
             {p.coverage.length === 0
               ? <p className="text-[13px] text-dim">Nothing has been measured yet.</p>
               : p.coverage.map((c) => <MeterRow key={c.label} label={c.label} pct={c.pct} />)}
-            <p className="mt-2 border-t border-line pt-2 text-[12px] text-dim">
-              Understood is the share of the files the onboarding scan found that the code index holds.
-            </p>
           </Panel>
 
           <div className="col-span-12 space-y-3 xl:col-span-7">
-            <StatGrid cols={4}>
+            {p.work.tasks > 0 && <StatGrid cols={4}>
               <Stat label="Tasks" value={p.work.tasks} sub={`${myTasks.filter((t) => t.status === 'done').length} done`} />
               <Stat label="Running" value={p.work.running} tone="ok" sub="in progress" />
               <Stat label="In review" value={p.work.review} tone="warn" sub="awaiting review" />
               <Stat label="Blocked" value={p.work.blocked} tone={p.work.blocked ? 'danger' : 'neutral'} sub="need a decision" />
-            </StatGrid>
-            <Panel eyebrow="Where the code came from" title="Source" flush>
+            </StatGrid>}
+            <Panel title="Source" flush>
               <div className="grid grid-cols-1 gap-x-6 px-3.5 py-1.5 md:grid-cols-2">
                 {p.source ? (
                   <>
@@ -205,9 +203,9 @@ function Overview({ p }: { p: Project }) {
         </div>
 
         {tab === 'modules' && (
-          <Panel flush eyebrow="From the code index" title="Modules">
+          <Panel flush title="Modules">
             {indexBody(modules.length === 0 ? (
-              <Empty title={q.trim() ? 'No module matches' : 'No modules found'} hint={q.trim() ? 'Try part of a module name.' : 'The index holds no source files grouped into modules.'} />
+              <Empty title={q.trim() ? 'No module matches' : 'No modules found'} hint={q.trim() ? 'Try part of a module name.' : 'No source files grouped into modules.'} />
             ) : (
               <DataTable head={['Module', 'Files', 'Lines', 'Symbols', 'Complexity', 'Depended on by', 'Depends on']}>
                 {modules.map((m) => (
@@ -227,7 +225,11 @@ function Overview({ p }: { p: Project }) {
         )}
 
         {tab === 'instructions' && (
-          <Panel flush eyebrow="Read from the checkout root when a plan is compiled or a session answers"
+          <Panel flush
+            about={<>
+              <p>AGENTS.md, CLAUDE.md and .claude/rules/*.md at the checkout root reach every plan and session.</p>
+              <p>A rule with <span className="font-mono">paths:</span> applies only when the plan's files fall under it. HTML comments are left out.</p>
+            </>}
             title={<span className="flex items-center gap-1.5"><FileText className="size-3.5 text-brand" />Instructions</span>}
             actions={told && told.files.length > 0 ? (
               <span className={told.capped ? 'text-[12px] text-warn' : 'text-[12px] text-dim'}>
@@ -235,7 +237,7 @@ function Overview({ p }: { p: Project }) {
               </span>
             ) : undefined}>
             {!p.source ? (
-              <Empty title="No instruction files here" hint="Its code was not onboarded on this machine, so there is no checkout to read them from." />
+              <Empty title="No instruction files here" hint="Its code is not on this machine." />
             ) : ins.error ? (
               <Empty title="The instructions did not load" hint={ins.error} action={<Button size="sm" variant="outline" onClick={ins.reload}>Try again</Button>} />
             ) : !told ? (
@@ -243,8 +245,8 @@ function Overview({ p }: { p: Project }) {
             ) : told.files.length === 0 ? (
               <Empty icon={<FileText className="size-6" />} title={`${p.name} has no instruction files`}
                 hint={summary?.indexed
-                  ? 'AGENTS.md, CLAUDE.md and .claude/rules/*.md at the checkout root are handed to every plan and session. Draft an AGENTS.md from the code index: it compiles a plan you dispatch and sign like any other.'
-                  : 'AGENTS.md, CLAUDE.md and .claude/rules/*.md at the checkout root are handed to every plan and session. Index the code to draft an AGENTS.md from it.'}
+                  ? 'Draft one from the code index.'
+                  : 'Index the code to draft one.'}
                 action={summary?.indexed && can('plans:compile') ? (
                   <Button size="sm" disabled={drafting} onClick={() => void draft()}>
                     {drafting && <Loader2 className="size-3.5 animate-spin" />}{drafting ? 'Compiling…' : 'Draft AGENTS.md'}
@@ -283,18 +285,15 @@ function Overview({ p }: { p: Project }) {
                     ))}
                   </div>
                 )}
-                <p className="border-t border-line px-5 py-2.5 text-[12px] text-dim">
-                  A rule with <span className="font-mono">paths:</span> is handed over only when the plan's files fall under it. HTML comments are left out.
-                </p>
               </>
             )}
           </Panel>
         )}
 
         {tab === 'rules' && (
-          <Panel eyebrow="Chosen when the project was onboarded · recorded, not yet enforced" title="Project rules" flush>
+          <Panel eyebrow="Recorded, not yet enforced" title="Project rules" flush>
             {rules.length === 0 ? (
-              <Empty title="No rules recorded" hint="Rules are chosen in the onboarding wizard. Nothing checks a change against them yet." />
+              <Empty title="No rules recorded" hint="Rules are chosen when a project is onboarded." />
             ) : (
               <div className="divide-y divide-line">
                 {rules.map((r) => (
@@ -309,10 +308,10 @@ function Overview({ p }: { p: Project }) {
         )}
 
         {tab === 'decisions' && (
-          <Panel eyebrow="Facts filed under Decisions, for this project and the workspace" title="Decisions" flush>
+          <Panel title="Decisions" flush about="Facts filed under Decisions, for this project and the workspace.">
             {decisions.length === 0 ? (
               <Empty icon={<Scale className="size-6" />} title="No decisions recorded yet"
-                hint="Facts filed under Decisions in Memory appear here — from Add from text, or from a plan's answered question."
+                hint="Facts filed under Decisions in Memory appear here."
                 action={<Button size="sm" variant="outline" onClick={() => openIn('/memory')}>Open Memory</Button>} />
             ) : decisions.map((f) => (
               <ListRow key={f.id} onClick={() => openIn(`/memory?ref=${encodeURIComponent(f.ref)}`)}>
@@ -329,9 +328,9 @@ function Overview({ p }: { p: Project }) {
         )}
 
         {tab === 'hotspots' && (
-          <Panel eyebrow="Ranked by how many files reach each one, then by its complexity" title="Most depended on" flush>
+          <Panel title="Most depended on" flush about="Ranked by how many files reach each one, then by complexity.">
             {indexBody(hotspots.length === 0 ? (
-              <Empty title="Nothing depends on anything yet" hint="The index found no file that another file uses." />
+              <Empty title="Nothing depends on anything yet" />
             ) : (
               <DataTable head={['Path', 'Risk', 'Reached by', 'Complexity', 'Lines']}>
                 {hotspots.map((h) => (
@@ -351,7 +350,7 @@ function Overview({ p }: { p: Project }) {
         <SectionTitle>Tasks in {p.name}</SectionTitle>
         <Panel flush>
           {myTasks.length === 0 ? (
-            <Empty title={`No tasks in ${p.name} yet`} hint="A requirement compiled for this project becomes a task here."
+            <Empty title={`No tasks in ${p.name} yet`} hint="A compiled requirement becomes a task."
               action={can('plans:compile') ? <Button size="sm" variant="outline" onClick={() => openIn('/')}>Compile a requirement</Button> : undefined} />
           ) : (
             <DataTable head={['Ref', 'Task', 'Status', 'Priority', 'Risk', 'Layers', 'Agents', 'Progress']}>

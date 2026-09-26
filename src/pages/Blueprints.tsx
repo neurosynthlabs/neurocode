@@ -44,7 +44,7 @@ function useFileImport(onText: (text: string) => void) {
         const file = e.target.files?.[0];
         e.target.value = '';
         if (!file) return;
-        if (file.size > 512 * 1024) { toast.error('That file is larger than 512 KB; a blueprint is a few kilobytes.'); return; }
+        if (file.size > 512 * 1024) { toast.error('That file is over 512 KB; a blueprint is a few KB.'); return; }
         void file.text().then(onText);
       }} />
   );
@@ -137,8 +137,8 @@ function Rows({ list, canDesign, onNew, onRetry }: {
   if (list.data.items.length === 0) {
     return (
       <Panel>
-        <Empty icon={<Compass className="size-6" />} title="No blueprint yet"
-          action={canDesign && <Button size="sm" onClick={onNew}><Plus className="size-3.5" />Design a new system</Button>} />
+        <Empty icon={<Compass className="size-6" />} title="No blueprint yet" hint="Start from a template or a blank page."
+          action={canDesign && <Button size="sm" onClick={onNew}><Plus className="size-3.5" />Design a system</Button>} />
       </Panel>
     );
   }
@@ -284,8 +284,8 @@ function BlueprintPage({ id }: { id: string }) {
   const why = canScaffold
     ? null
     : !machine && can('machine:access')
-      ? 'Scaffolding makes folders on the machine the API runs on, and this server opens none: it was started with NEUROCODE_MACHINE_ACCESS=false.'
-      : `Scaffolding needs ${[!canDesign && 'plans:compile', !can('projects:onboard') && 'projects:onboard', !can('machine:access') && 'machine:access'].filter(Boolean).join(', ')} — it makes folders on this machine and onboards a project.`;
+      ? 'Needs folders on this machine; this server runs with NEUROCODE_MACHINE_ACCESS=false.'
+      : `Scaffolding needs ${[!canDesign && 'plans:compile', !can('projects:onboard') && 'projects:onboard', !can('machine:access') && 'machine:access'].filter(Boolean).join(', ')}.`;
 
   return (
     <Page>
@@ -297,7 +297,7 @@ function BlueprintPage({ id }: { id: string }) {
           <Button size="sm" variant="outline" onClick={() => void exportAs('json')}><Download className="size-3.5" />JSON</Button>
           <Button size="sm" variant="outline" onClick={() => void exportAs('yaml')}><Download className="size-3.5" />YAML</Button>
           <Button size="sm" variant="outline" disabled={!canDesign || dirty} onClick={() => setAsTemplate(true)}
-            title={dirty ? 'Save your changes first' : 'Save this architecture as one of your templates'}>
+            title={dirty ? 'Save your changes first' : 'Save as one of your templates'}>
             <Bookmark className="size-3.5" />Save as template
           </Button>
           {!locked && <Button size="sm" variant="ghost" className="text-danger" disabled={!canDesign} onClick={() => setConfirmDelete(true)} aria-label="Delete blueprint"><Trash2 className="size-3.5" /></Button>}
@@ -326,7 +326,7 @@ function BlueprintPage({ id }: { id: string }) {
         )}
         {locked && tab !== 'scaffold' && (
           <p className="mb-4 rounded-xl bg-surface-2/70 px-4 py-2.5 text-[13px] text-soft">
-            Scaffolded into {bp.projectName ?? bp.projectId}: this blueprint is kept as it was built. Save it as a template to design the next version.
+            Scaffolded into {bp.projectName ?? bp.projectId} and kept as built. Save it as a template to design the next.
           </p>
         )}
 
@@ -347,7 +347,7 @@ function BlueprintPage({ id }: { id: string }) {
                 </label>
               </div>
             </Panel>
-            <Panel title="The answers" eyebrow="Every question may be skipped. A review and the document read them.">
+            <Panel title="The answers" eyebrow="All optional">
               <fieldset disabled={!canDesign || locked} className="space-y-5">
                 {catalogue.data.questions.filter((q) => q.kind !== 'text').map((q) => (
                   <Choices key={q.id} q={q} value={current.answers[q.id]}
@@ -387,7 +387,7 @@ function BlueprintPage({ id }: { id: string }) {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Delete {bp.name}?</DialogTitle>
-            <DialogDescription>The blueprint and its review go. Decisions it wrote into Memory stay there; facts are never deleted.</DialogDescription>
+            <DialogDescription>The blueprint and its review go. Decisions it wrote to Memory stay.</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setConfirmDelete(false)}>Keep it</Button>
@@ -407,7 +407,7 @@ function SaveAsTemplate({ open, onOpenChange, bp }: { open: boolean; onOpenChang
     setBusy(true);
     try {
       const t = await blueprintsApi.saveTemplate(bp.id, name.trim() || bp.name, description.trim());
-      toast.success(`Template ${t.name} saved`, { description: 'It is in the template bank under Yours.' });
+      toast.success(`Template ${t.name} saved`, { description: 'In the template bank, under Yours.' });
       onOpenChange(false);
       setName('');
       setDescription('');
@@ -422,7 +422,7 @@ function SaveAsTemplate({ open, onOpenChange, bp }: { open: boolean; onOpenChang
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Save as a template</DialogTitle>
-          <DialogDescription>The saved architecture becomes a starting point for new blueprints, in the template bank under Yours.</DialogDescription>
+          <DialogDescription>A starting point for new blueprints, under Yours.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <Field label="Name" value={name} onChange={setName} placeholder={bp.name} autoFocus />

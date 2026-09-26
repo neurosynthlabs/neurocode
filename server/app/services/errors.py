@@ -14,7 +14,7 @@ from ..ai.gateway import NoModel, ProviderError
 T = TypeVar("T")
 
 #: What a feature that cannot work without a model says when no lane can answer.
-NO_MODEL = ("No model is configured. Add a free key in Admin → AI providers — Groq, Cerebras or Gemini "
+NO_MODEL = ("No model is configured. Add a free key in Models → Keys — Groq, Gemini or Cloudflare "
             "take a minute.")
 
 

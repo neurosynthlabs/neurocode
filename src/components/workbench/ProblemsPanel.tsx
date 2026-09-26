@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, CircleAlert, CircleCheck, CircleX, Info, ListChecks, Loader2, Play, Square, TriangleAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Empty, Tag, cx, type Tone } from '@/components/os';
+import { About, Empty, Tag, cx, type Tone } from '@/components/os';
 import { ApiError } from '@/lib/api';
 import {
   announce, diagnosticsApi, type CheckDoc, type CheckTool, type CheckWhere, type Checkers, type Problem, type Severity,
@@ -173,7 +173,7 @@ export function ProblemsPanel({ projectId, cwd, openFile }: {
 
   if (!target) {
     return <Empty icon={<ListChecks className="size-6" />} title="Nothing to check yet"
-      hint="Open a project with a folder on this machine, or open a folder, and its own checkers run from here." />;
+      hint="Open a project or folder on this machine to run its checkers." />;
   }
   if (planError && loaded === targetKey) {
     return <Empty icon={<CircleAlert className="size-6" />} title="The checkers were not read" hint={planError} />;
@@ -233,11 +233,16 @@ export function ProblemsPanel({ projectId, cwd, openFile }: {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {!plan.checkers.length && !check ? (
           <Empty icon={<ListChecks className="size-6" />} title={`No checker to run in ${plan.target.name}`}
-            hint={plan.missing.length ? plan.missing.map((m) => m.why).join(' ')
-              : 'NeuroCode runs what a project declares: a tsconfig, an ESLint config, oxlint, ruff, mypy or pyright configured, a go.mod, a Cargo.toml, a Gradle or Maven build, or a .NET project. This folder has none of them.'} />
+            hint={plan.missing.length ? plan.missing.map((m) => m.why).join(' ') : 'This folder declares no checker.'}
+            action={plan.missing.length ? undefined : (
+              <About label="What counts as a checker">
+                <p>A tsconfig, an ESLint config, or oxlint, ruff, mypy or pyright configured.</p>
+                <p>Also a go.mod, a Cargo.toml, a Gradle or Maven build, or a .NET project.</p>
+              </About>
+            )} />
         ) : !check ? (
           <Empty icon={<ListChecks className="size-6" />} title="Not checked yet"
-            hint={`Check runs ${names(plan.checkers.map((c) => c.label))} — this project's own, as it installed them — and shows what they find here, by file.`}
+            hint={`Check runs ${names(plan.checkers.map((c) => c.label))}, as this project installed them.`}
             action={<Button size="sm" variant="outline" disabled={busy} onClick={() => void start()}><Play className="size-3.5" />Check</Button>} />
         ) : (
           <>
@@ -274,7 +279,7 @@ export function ProblemsPanel({ projectId, cwd, openFile }: {
             ) : check.status !== 'running' && check.total === 0 ? (
               <p className="px-3 py-4 text-[12.5px] text-dim">
                 {check.status === 'cancelled' ? 'Cancelled before the checkers finished; nothing they printed named a problem.'
-                  : 'No problem was read from what the checkers printed — see how each went above.'}
+                  : 'No problem read from their output; see how each went above.'}
               </p>
             ) : (
               <div className="py-1">
@@ -311,7 +316,7 @@ export function ProblemsPanel({ projectId, cwd, openFile }: {
                 })}
                 {(check.matching > check.problems.length || check.capped) && (
                   <p className="px-3 py-2 text-[12px] text-dim">
-                    {check.matching > check.problems.length ? `Showing ${check.problems.length.toLocaleString()} of ${check.matching.toLocaleString()} — narrow them with the filters above. ` : ''}
+                    {check.matching > check.problems.length ? `Showing ${check.problems.length.toLocaleString()} of ${check.matching.toLocaleString()}; filter to narrow. ` : ''}
                     {check.capped ? `The checkers named ${check.total.toLocaleString()} problems; the first ${check.kept.toLocaleString()} are kept.` : ''}
                   </p>
                 )}

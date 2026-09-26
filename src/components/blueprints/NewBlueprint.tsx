@@ -137,7 +137,7 @@ export function NewBlueprint({ open, onOpenChange, catalogue, startFrom, onCreat
             <label className="block">
               <span className="mb-1.5 block text-[12.5px] font-medium text-soft">{idea.question}</span>
               <textarea value={(answers.idea as string) ?? ''} onChange={(e) => set('idea', e.target.value)} rows={4}
-                placeholder="Clinics book appointments online; staff see the day's schedule; patients get reminders."
+                placeholder="Clinics book online; staff see the day; patients get reminders."
                 className="focus-brand w-full resize-y rounded-lg border border-line bg-surface-2/60 px-3 py-2 text-[13.5px] text-ink placeholder:text-dim focus-visible:outline-none" />
               <span className="mt-1.5 block text-[12px] text-dim">{idea.hint}</span>
             </label>
@@ -166,7 +166,7 @@ export function NewBlueprint({ open, onOpenChange, catalogue, startFrom, onCreat
 
   return (
     <Wizard open={open} onOpenChange={onOpenChange} title="New blueprint" busy={busy} finishLabel="Start designing"
-      description="Say what you are building, answer what you can, and start from the template that fits — or from a blank page."
+      description="Describe it, answer what you can, pick a starting point."
       steps={steps} onFinish={() => void finish()} className="sm:max-w-3xl" />
   );
 }
@@ -191,8 +191,8 @@ function StartingPoint({ ranked, ranking, onRank, picked, setPicked, card, answe
     <div className="space-y-5">
       <p className="text-[12.5px] text-dim">
         {answered === 0
-          ? 'No question was answered, so nothing is ranked: every template is listed as it ships.'
-          : `The number beside a template is how many of its conditions your ${answered} answer${answered === 1 ? '' : 's'} met, minus those that argue against it.`}
+          ? 'Nothing answered, so templates are listed unranked.'
+          : `Ranked by your ${answered} answer${answered === 1 ? '' : 's'}: conditions met, minus those against.`}
       </p>
       <button type="button" onClick={() => setPicked(BLANK)} aria-pressed={picked === BLANK}
         className={cn('flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors',

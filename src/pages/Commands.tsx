@@ -13,8 +13,9 @@ import { extensions, type LiveCommand } from '@/lib/live/extensions';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import {
+  More,
   Page, PageHeader, PageBody, Panel, Tag, Mono, ListRow, Stat, StatGrid, KV, Empty, SectionTitle,
-  Segmented, Field, SelectField, Toolbar,
+  Segmented, Field, SelectField, Toolbar, About,
 } from '@/components/os';
 import {
   work, extensionsAdmin, EXTENSIONS_PERMISSION, type CustomTool, type RuleTrial,
@@ -111,9 +112,10 @@ function LiveCommands({ nav: tabs }: { nav: ReactNode }) {
     <Page>
       <PageHeader
         title="Commands"
-        subtitle={project
-          ? `Slash commands read from this machine: the workspace's, ${project.name}'s and those of plugins enabled in Claude Code. Type one and press Enter to send it to a new session on ${project.name}.`
-          : 'Slash commands read from this machine: the workspace’s and those of plugins enabled in Claude Code. Onboard a project to add its own, and to send one to a session.'}
+        subtitle="Type a slash command to send it to a new session."
+        about={project
+          ? <p>Read from this machine: the workspace's, {project.name}'s and enabled Claude Code plugins' commands.</p>
+          : <p>Read from this machine: the workspace’s and enabled Claude Code plugins’. Onboard a project to add its own and send one.</p>}
         actions={<div className="flex items-center gap-2">{r.data && <Tag tone="ok">{all.filter((x) => isOn(x.id)).length} of {all.length} enabled</Tag>}{tabs}</div>}
       >
         <div className="pb-3">
@@ -128,7 +130,7 @@ function LiveCommands({ nav: tabs }: { nav: ReactNode }) {
             />
             <span className="shrink-0 text-[12px] text-dim">
               {sending ? 'Sending…' : target
-                ? (!project ? 'Onboard a project first: a command is sent to a session on one' : can('sessions:chat') ? `Enter sends ${target.name}` : 'Your role cannot use sessions')
+                ? (!project ? 'Onboard a project first' : can('sessions:chat') ? `Enter sends ${target.name}` : 'Your role cannot use sessions')
                 : `${list.length} match${list.length === 1 ? '' : 'es'}`}
             </span>
             {sending ? <Loader2 className="size-3.5 shrink-0 animate-spin text-dim" /> : <CornerDownLeft className="size-3.5 shrink-0 text-dim" />}
@@ -143,20 +145,23 @@ function LiveCommands({ nav: tabs }: { nav: ReactNode }) {
       ) : all.length === 0 ? (
         <PageBody>
           <Empty icon={<SquareSlash className="size-6" />} title="No commands on this machine"
-            hint={`Nothing was found under ${r.data.roots.map((x) => `${x.path}${x.exists ? '' : ' (missing)'}`).join(', ')}. A command is a markdown file in a commands folder.`} />
+            hint="Add a markdown file to a commands folder."
+            action={<More label="Folders read"><ul className="space-y-1 text-left">{r.data.roots.map((x) => (
+              <li key={x.path} className="text-[12px] text-dim"><Mono className="break-all">{x.path}</Mono>{x.exists ? '' : ' · missing'}</li>
+            ))}</ul></More>} />
         </PageBody>
       ) : (
         <PageBody className="space-y-4">
           <StatGrid cols={4}>
             <Stat label="Commands" value={all.length} sub={`${all.filter((x) => x.scope === 'project').length} project-scoped`} />
-            <Stat label="Runs" value={runs.toLocaleString()} sub={project ? `in sessions on ${project.name}` : 'sessions belong to a project, and there is none yet'} />
+            <Stat label="Runs" value={runs.toLocaleString()} sub={project ? `in sessions on ${project.name}` : 'no project yet'} />
             <Stat label="Busiest" value={busiest && busiest.runs > 0 ? busiest.name : '—'} tone="brand"
-              sub={busiest && busiest.runs > 0 ? `${busiest.runs} runs` : 'no command has run here yet'} />
-            <Stat label="Model-pinned" value={all.filter((x) => x.model).length} sub="named in the file; the router still picks" />
+              sub={busiest && busiest.runs > 0 ? `${busiest.runs} runs` : 'none run yet'} />
+            <Stat label="Model-pinned" value={all.filter((x) => x.model).length} sub="the router still picks" />
           </StatGrid>
 
           {r.data.conflicts.length > 0 && (
-            <Panel className="border-warn/35" eyebrow="The same name in more than one place" title={<span className="flex items-center gap-1.5"><TriangleAlert className="size-3.5 text-warn" />Conflicts</span>} flush>
+            <Panel className="border-warn/35" about="The same name in more than one place." title={<span className="flex items-center gap-1.5"><TriangleAlert className="size-3.5 text-warn" />Conflicts</span>} flush>
               <div className="divide-y divide-line">
                 {r.data.conflicts.map((x) => (
                   <div key={x.command} className="px-3.5 py-2.5">
@@ -172,7 +177,7 @@ function LiveCommands({ nav: tabs }: { nav: ReactNode }) {
 
           <div className="flex min-h-[520px] flex-col gap-3 md:flex-row">
             <div className="no-scrollbar w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[320px] overflow-y-auto rounded-md border border-line bg-surface">
-              {list.length === 0 ? <Empty title="No command matches" hint="Clear the bar to see them all." /> : list.map((x) => (
+              {list.length === 0 ? <Empty title="No command matches" hint="Clear the bar." /> : list.map((x) => (
                 <ListRow key={x.id} active={x.id === c?.id} onClick={() => setPicked(x.id)}>
                   <div className="flex items-center gap-2">
                     <span className={cn('size-1.5 shrink-0 rounded-full', isOn(x.id) ? 'bg-ok' : 'bg-dim')} />
@@ -202,17 +207,18 @@ function LiveCommands({ nav: tabs }: { nav: ReactNode }) {
                 </Panel>
 
                 {shell.length > 0 && (
-                  <Panel className="border-warn/35" eyebrow="Claude Code runs these when it expands the command" title={<span className="flex items-center gap-1.5"><TriangleAlert className="size-3.5 text-warn" />Shell lines</span>}>
+                  <Panel className="border-warn/35" about="Claude Code runs these when it expands the command." title={<span className="flex items-center gap-1.5"><TriangleAlert className="size-3.5 text-warn" />Shell lines</span>}>
                     <div className="flex flex-wrap gap-1">{shell.map((line) => <Mono key={line}>{line}</Mono>)}</div>
-                    <p className="mt-2 text-[12.5px] text-soft">NeuroCode never runs them. In a session each one is replaced by a note saying so.</p>
+                    <p className="mt-2 text-[12.5px] text-soft">NeuroCode never runs them; a session gets a note instead.</p>
                   </Panel>
                 )}
 
-                <Panel eyebrow={c.truncated ? 'The prompt body — cut off here at 32 KB' : 'The prompt body — $ARGUMENTS is filled in verbatim'} title="Definition">
+                <Panel eyebrow={c.truncated ? 'Truncated at 32 KB' : '$ARGUMENTS filled in verbatim'} title="Definition">
                   <pre className="ascii max-h-[360px] overflow-auto rounded-sm border border-line bg-base p-3.5 whitespace-pre-wrap">{c.body}</pre>
                 </Panel>
 
-                <Panel eyebrow="What a session receives" title="Resolved example">
+                <Panel eyebrow="What a session receives" title="Resolved example"
+                  about="The resolved prompt becomes its own turn in the session, so you see what the model was given. The router picks the lane.">
                   <div className="rounded-sm border border-line bg-base p-3">
                     <div className="mb-2 flex items-center gap-2 border-b border-line pb-2">
                       <SquareSlash className="size-3.5 text-brand" />
@@ -222,14 +228,9 @@ function LiveCommands({ nav: tabs }: { nav: ReactNode }) {
                       {expand(c.body, args)}
                     </pre>
                   </div>
-                  <SectionTitle className="mt-3 mb-1.5">Then</SectionTitle>
-                  <p className="text-[12.5px] text-soft">
-                    The resolved prompt is written into the session as its own turn, so you see exactly what the model was given,
-                    and the router picks the lane{c.model ? <> — <Mono>{c.model}</Mono> is named in the file, and NeuroCode does not use it</> : ''}.
-                  </p>
                 </Panel>
               </div>
-            ) : <div className="min-w-0 flex-1"><Empty title="Nothing selected" hint="Clear the bar to pick a command." /></div>}
+            ) : <div className="min-w-0 flex-1"><Empty title="Nothing selected" hint="Clear the bar." /></div>}
           </div>
         </PageBody>
       )}
@@ -353,9 +354,12 @@ function CustomTools({ nav: tabs }: { nav: ReactNode }) {
     <Page>
       <PageHeader
         title="Custom tools"
-        subtitle={project
-          ? `Tools the people here defined for ${project.name}: a command on this machine, or an HTTP call, with a schema for its arguments. A session may call one — and only where a tool rule allows its name.`
-          : 'Tools defined for the whole workspace: a command on this machine, or an HTTP call, with a schema for its arguments. Open a project to see and define its own as well.'}
+        subtitle="Commands and HTTP calls a session may call, where a rule allows."
+        about={<>
+          <p>{project ? `Defined for ${project.name} and the workspace, each with a schema for its arguments.`
+            : 'Defined for the whole workspace. Open a project to see and define its own.'}</p>
+          <p>A definition says what could happen; a tool rule says whether it may.</p>
+        </>}
         actions={<div className="flex items-center gap-2">
           {r.data && <Tag tone="neutral">{all.filter((x) => x.enabled).length} of {all.length} offered</Tag>}
           {tabs}
@@ -365,9 +369,7 @@ function CustomTools({ nav: tabs }: { nav: ReactNode }) {
           <Button size="sm" disabled={!mayWrite} onClick={() => { setDrafting(!drafting); setSpec(EXAMPLE[kind]); }}>
             <Plus className="size-3.5" />{drafting ? 'Cancel' : 'Define a tool'}
           </Button>
-          <span className="ml-auto text-[12.5px] text-dim">
-            {mayWrite ? 'A definition says what could happen; a rule says whether it may.' : `Defining one needs ${EXTENSIONS_PERMISSION}.`}
-          </span>
+          {!mayWrite && <span className="ml-auto text-[12.5px] text-dim">Defining one needs {EXTENSIONS_PERMISSION}.</span>}
         </Toolbar>
       </PageHeader>
 
@@ -377,34 +379,33 @@ function CustomTools({ nav: tabs }: { nav: ReactNode }) {
         <PageBody><Empty icon={<Loader2 className="size-5 animate-spin" />} title="Reading the tools defined here…" /></PageBody>
       ) : (
         <PageBody className="space-y-4">
-          <StatGrid cols={4}>
+          {all.length > 0 && <StatGrid cols={4}>
             <Stat label="Defined" value={all.length} icon={<Wrench className="size-3" />} sub={pid ? "the workspace's and this project's" : "the workspace's own"} />
-            <Stat label="Offered to sessions" value={all.filter((x) => x.enabled).length} tone="brand" sub="switched on; a rule still decides each call" />
-            <Stat label="Commands" value={all.filter((x) => x.kind === 'command').length} sub="run in the checkout, inside the machine's roots" />
+            <Stat label="Offered to sessions" value={all.filter((x) => x.enabled).length} tone="brand" sub="a rule still decides each call" />
+            <Stat label="Commands" value={all.filter((x) => x.kind === 'command').length} sub="run in the checkout" />
             <Stat label="HTTP calls" value={all.filter((x) => x.kind === 'http').length} sub="public addresses only, no redirects" />
-          </StatGrid>
+          </StatGrid>}
 
           {drafting && (
-            <Panel className="accent-left" eyebrow="It is refused at every call until a rule allows its name" title="Define a tool">
+            <Panel className="accent-left" title="Define a tool" about="It is refused at every call until a rule allows its name.">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <Field label="Name" value={name} onChange={setName} mono placeholder="deploy_preview"
-                  hint="What a model types to call it: lowercase letters, digits and underscores." />
+                  hint="Lowercase letters, digits and underscores." />
                 <SelectField label="Kind" value={kind} className="sm:col-span-1"
                   onChange={(v) => { setKind(v as 'command' | 'http'); setSpec(EXAMPLE[v as 'command' | 'http']); }}
                   options={[{ value: 'command', label: 'A command on this machine' }, { value: 'http', label: 'An HTTP call' }]} />
                 <Field label="What it does" value={what} onChange={setWhat} className="sm:col-span-1"
-                  placeholder="Builds a preview of one branch" hint="The model sees this line and nothing else." />
+                  placeholder="Builds a preview of one branch" hint="All the model sees." />
               </div>
-              <SectionTitle className="mt-3 mb-1.5">Definition</SectionTitle>
+              <SectionTitle className="mt-3 mb-1.5">
+                <span className="flex items-center gap-1">Definition<About>
+                  <p>A command is <Mono>argv</Mono>: the program and each argument on its own, never a shell line.</p>
+                  <p><Mono>{'{name}'}</Mono> is filled from the checked <Mono>arguments</Mono>. A value fills exactly one entry and is never split.</p>
+                </About></span>
+              </SectionTitle>
               <textarea value={spec} onChange={(e) => setSpec(e.target.value)} spellCheck={false} rows={14}
                 aria-label="Definition"
                 className="focus-brand block w-full rounded-lg border border-line bg-base p-3 font-mono text-[12.5px] leading-relaxed text-ink focus-visible:outline-none" />
-              <p className="mt-2 text-[12.5px] text-soft">
-                A command is <Mono>argv</Mono> — the program and each argument on its own — never a command
-                line, because a command line would need a shell. <Mono>{'{name}'}</Mono> anywhere in it is
-                filled from the arguments after they have been checked against <Mono>arguments</Mono>,
-                and a value fills exactly one entry: it is never split and never read as more.
-              </p>
               <div className="mt-3 flex flex-wrap gap-2 border-t border-line pt-3">
                 <Button size="sm" disabled={!name.trim() || !spec.trim() || busy || !mayWrite} onClick={() => void define()}>
                   {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}Define it
@@ -417,7 +418,7 @@ function CustomTools({ nav: tabs }: { nav: ReactNode }) {
           {all.length === 0 ? (
             <Panel>
               <Empty icon={<Wrench className="size-6" />} title="No tool is defined here"
-                hint="Define one, then allow it with a `tool` rule in Governance → Permissions. Until both are done, a session has nothing to call." />
+                hint="Define one, then allow it with a tool rule in Permissions." />
             </Panel>
           ) : (
             <div className="flex min-h-[420px] flex-col gap-3 md:flex-row">
@@ -447,7 +448,7 @@ function CustomTools({ nav: tabs }: { nav: ReactNode }) {
                       </Button>
                     </div>}
                   >
-                    <p className="text-[13.5px] leading-relaxed text-ink-2">{t.description || <span className="text-dim">No description, so the model is told nothing about what it is for.</span>}</p>
+                    <p className="text-[13.5px] leading-relaxed text-ink-2">{t.description || <span className="text-dim">No description; the model is told nothing about it.</span>}</p>
                     <div className="mt-3 border-t border-line pt-2.5">
                       <KV k="A rule decides" v={verdict
                         ? <span className={cn('flex items-center gap-1.5', verdict.ruleId === null ? 'text-dim' : verdict.action === 'allow' ? 'text-ok' : verdict.action === 'deny' ? 'text-danger' : 'text-warn')}>
@@ -456,13 +457,13 @@ function CustomTools({ nav: tabs }: { nav: ReactNode }) {
                           </span>
                         : <span className="text-dim">asking the rules…</span>} wrap />
                       <KV k="Offered to sessions" v={t.enabled ? 'yes, while a rule allows it' : 'no — switched off here'} />
-                      <KV k="Defined by" v={t.createdBy ?? 'somebody whose account is gone'} />
+                      <KV k="Defined by" v={t.createdBy ?? 'a removed account'} />
                     </div>
                   </Panel>
 
                   <Panel eyebrow="Checked before anything runs" title="Arguments">
                     {takes.length === 0 ? (
-                      <p className="text-[13px] text-dim">It takes no arguments, and a call that sends any is refused.</p>
+                      <p className="text-[13px] text-dim">No arguments; a call that sends any is refused.</p>
                     ) : (
                       <div className="divide-y divide-line/60">
                         {takes.map(([arg, rule]) => (
@@ -477,7 +478,7 @@ function CustomTools({ nav: tabs }: { nav: ReactNode }) {
                     )}
                   </Panel>
 
-                  <Panel eyebrow="Exactly what the server stored, and exactly what runs" title="Definition">
+                  <Panel eyebrow="Exactly what runs" title="Definition">
                     <pre className="ascii max-h-[360px] overflow-auto rounded-sm border border-line bg-base p-3.5 whitespace-pre-wrap">{JSON.stringify(t.spec, null, 2)}</pre>
                   </Panel>
                 </div>

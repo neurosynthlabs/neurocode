@@ -101,7 +101,7 @@ async def test_with_no_model_compiling_is_refused_and_writes_nothing(client: Asy
     before = await plan_count(session)
     refused = await client.post("/plans/compile", json={"requirement": TAX, "projectId": "erp"})
     assert refused.status_code == 409 and refused.json()["detail"] == NO_MODEL
-    assert "Admin → AI providers" in NO_MODEL and "Groq, Cerebras or Gemini" in NO_MODEL
+    assert "Models → Keys" in NO_MODEL and "Groq, Gemini or Cloudflare" in NO_MODEL
     assert await plan_count(session) == before
 
 

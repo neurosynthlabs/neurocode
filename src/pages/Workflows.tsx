@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Dot, Mono, ListRow, Field, Segmented, SelectField,
-  DataTable, Row, Cell, Stat, StatGrid, Ascii, KV, Empty, SectionTitle,
+  DataTable, Row, Cell, Stat, StatGrid, Ascii, KV, Empty, SectionTitle, More,
 } from '@/components/os';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -32,15 +32,15 @@ const RES_TONE = { success: 'ok', failed: 'danger', partial: 'warn' } as const;
 
 const LIVE_MODE_TONE = { parallel: 'brand', pipeline: 'violet', single: 'neutral' } as const;
 const LIVE_DOT: Record<LiveState, string> = { todo: 'todo', active: 'running', waiting: 'waiting', done: 'done', failed: 'failed', skipped: 'todo' };
-const NO_WRITE = 'You can read workflows. Writing one needs the workflows:write permission.';
+const NO_WRITE = 'Writing a workflow needs the workflows:write permission.';
 
 /** What the runtime guarantees, from docs/ARCHITECTURE.md. These are true of every run, so they are stated, not measured. */
 const GUARANTEES = [
-  { name: 'Nothing touches your working tree', note: 'Every agent writes in a git worktree, on a branch of its own. Your checkout is never the place work happens.' },
-  { name: 'Nothing a model says is executed', note: 'A model may only propose file contents. Paths that are absolute, climb out with .., or point into .git are refused.' },
-  { name: 'One command, behind your approval', note: 'The only thing that runs is the project’s own test command. The first time in a project, the run waits for you.' },
-  { name: 'Collisions are caught at the merge', note: 'Agents never share a tree. Branches come in one by one; a collision is named and undone, never half-applied.' },
-  { name: 'The review prefers another lane', note: 'The diff is read by a different model when one is free, and by rules when none answers — and the review says which.' },
+  { name: 'Nothing touches your working tree', note: 'Every agent writes in its own git worktree and branch.' },
+  { name: 'Nothing a model says is executed', note: 'A model only proposes file contents. Absolute paths, .. and .git are refused.' },
+  { name: 'One command, behind your approval', note: 'Only the project’s own test command runs. The first time, the run waits for you.' },
+  { name: 'Collisions are caught at the merge', note: 'Branches come in one by one; a collision is named and undone, never half-applied.' },
+  { name: 'The review prefers another lane', note: 'Another model reads the diff when one is free; rules when none answers.' },
 ];
 
 const minutes = (s: number | null) => (s === null ? '—' : `${Math.floor(s / 60)}m ${s % 60}s`);
@@ -130,7 +130,7 @@ function LiveWorkflows() {
 
   const stop = async (live: WorkflowLiveRun) => {
     if (await cancelRun(live.ref)) {
-      toast(`${live.ref} is stopping`, { description: 'Its agents stop with it. The worktrees stay for you to look at.' });
+      toast(`${live.ref} is stopping`, { description: 'Its agents stop with it. Worktrees are kept.' });
       refresh();
     }
   };
@@ -146,7 +146,7 @@ function LiveWorkflows() {
             {mayRun && w && (
               <Button size="sm" onClick={() => setRunning(true)} disabled={!withCode.length}
                 title={withCode.length ? undefined : 'No project has code on this machine yet'}>
-                <Play className="size-3.5" />Run {w.name}
+                <Play className="size-3.5" />Run workflow
               </Button>
             )}
           </div>
@@ -161,21 +161,21 @@ function LiveWorkflows() {
           <Empty icon={<Loader2 className="size-5 animate-spin" />} title="Loading workflows…" />
         ) : (
           <>
-            <StatGrid cols={5}>
+            {(o.stats.runsTotal > 0 || o.stats.liveNow > 0) && <StatGrid cols={5}>
               <Stat label="Workflows" value={o.stats.workflows} icon={<Workflow className="size-3" />} sub="including the built-in" />
               <Stat label="Runs total" value={o.stats.runsTotal} />
               <Stat label="Live now" value={o.stats.liveNow} tone={o.stats.liveNow ? 'ok' : 'neutral'} sub={o.live ? o.live.workflow : 'nothing running'} />
               <Stat label="Agents in flight" value={o.stats.agentsInFlight} tone={o.stats.agentsInFlight ? 'brand' : 'neutral'} sub={`${o.stats.lanesOpen} lane${o.stats.lanesOpen === 1 ? '' : 's'} open now`} icon={<Layers className="size-3" />} />
-              <Stat label="Tokens today" value={fmtTokens(o.stats.tokensToday)} sub={o.stats.tokensToday ? `agents and reviews · ${o.stats.costToday === null ? 'cost unknown: a model with no price' : money(o.stats.costToday)}` : 'no model call yet today'} icon={<Coins className="size-3" />} />
-            </StatGrid>
+              <Stat label="Tokens today" value={fmtTokens(o.stats.tokensToday)} sub={o.stats.tokensToday ? `agents and reviews · ${o.stats.costToday === null ? 'cost unknown: unpriced model' : money(o.stats.costToday)}` : 'no model call yet today'} icon={<Coins className="size-3" />} />
+            </StatGrid>}
 
             {!withCode.length && (
               <Panel>
                 <Empty icon={<FolderGit2 className="size-6" />}
                   title={all.length === 0 ? 'No project has been onboarded yet' : 'None of your projects has code on this machine'}
                   hint={all.length === 0
-                    ? 'A run branches from a real repository, so nothing can run yet. Onboard a repository in Projects.'
-                    : 'A run branches from a real repository, so Run is refused until one is onboarded with its code.'}
+                    ? 'A run branches from a real repository. Onboard one first.'
+                    : 'A run branches from a real repository; onboard one with its code.'}
                   action={<Button size="sm" variant="outline" onClick={() => nav('/projects')}>Open Projects</Button>} />
               </Panel>
             )}
@@ -183,7 +183,7 @@ function LiveWorkflows() {
             {o.live ? (
               <LivePanel live={o.live} mayStop={can('runs:run')} onStop={() => void stop(o.live!)} onOpen={() => nav('/runs')} />
             ) : (
-              <p className="text-[12.5px] text-dim">No workflow is running. The last runs that finished are in the history below.</p>
+              <p className="text-[12.5px] text-dim">No workflow is running.</p>
             )}
 
             <div className="flex min-h-[560px] flex-col gap-3 md:flex-row">
@@ -239,7 +239,7 @@ function LiveWorkflows() {
 
                     {tab === 'graph' ? (
                       <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-                        <Panel eyebrow={w.tests.project ? `Drawn for ${w.tests.project}` : 'Pick a project with code to see its Test phase'} title="Fan-out">
+                        <Panel eyebrow={w.tests.project ? `Drawn for ${w.tests.project}` : 'Pick a project to see its Test phase'} title="Fan-out">
                           <Ascii className="overflow-auto">{liveShape(w.phases)}</Ascii>
                         </Panel>
                         <Panel eyebrow={`${w.phases.length} phases`} title="Phases" flush>
@@ -261,7 +261,7 @@ function LiveWorkflows() {
                         </Panel>
                       </div>
                     ) : (
-                      <Panel eyebrow="Read-only · the definition the runtime executes" title={w.name}>
+                      <Panel eyebrow="Read-only, as executed" title={w.name}>
                         {detail.error ? <Empty title="The definition did not load" hint={detail.error} />
                           : !detail.data ? <Empty icon={<Loader2 className="size-5 animate-spin" />} title="Loading…" />
                             : <pre className="ascii max-h-[440px] overflow-auto rounded-sm border border-line bg-base p-3.5">{detail.data.definitionText}</pre>}
@@ -272,10 +272,10 @@ function LiveWorkflows() {
               </div>
             </div>
 
-            <div className="grid grid-cols-12 gap-3">
-              <Panel className="col-span-12 xl:col-span-8" eyebrow={o.history.length ? `Last ${o.history.length} ${o.history.length === 1 ? 'run' : 'runs'} that finished` : 'Recent runs'} title="History" flush>
+            <div className="space-y-3">
+              <Panel eyebrow={o.history.length ? `Last ${o.history.length} ${o.history.length === 1 ? 'run' : 'runs'} that finished` : 'Recent runs'} title="History" flush>
                 {o.history.length === 0 ? (
-                  <Empty title="No workflow has finished a run yet" hint="A run shows here once it is done, failed or stopped — with its real duration, and the tokens its own model calls spent." />
+                  <Empty title="No workflow has finished a run yet" hint="Finished runs show here, with duration and tokens." />
                 ) : (
                   <DataTable head={['Workflow', 'Trigger', 'Agents', 'Duration', 'Tokens', 'Cost', 'Result', 'When']}>
                     {o.history.map((h) => (
@@ -293,14 +293,15 @@ function LiveWorkflows() {
                   </DataTable>
                 )}
               </Panel>
-              <div className="col-span-12 space-y-2 xl:col-span-4">
-                <SectionTitle>What every run guarantees</SectionTitle>
-                {GUARANTEES.map((p) => (
-                  <Panel key={p.name} className="hover-lift" title={p.name}>
-                    <p className="text-[12.5px] leading-relaxed text-soft">{p.note}</p>
-                  </Panel>
-                ))}
-              </div>
+              <More label="What every run guarantees">
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  {GUARANTEES.map((p) => (
+                    <Panel key={p.name} title={p.name}>
+                      <p className="text-[12.5px] leading-relaxed text-soft">{p.note}</p>
+                    </Panel>
+                  ))}
+                </div>
+              </More>
             </div>
           </>
         )}
@@ -343,7 +344,7 @@ function LivePanel({ live, mayStop, onStop, onOpen }: { live: WorkflowLiveRun; m
       </DataTable>
       <div className="border-t border-line px-3.5 py-2.5 text-[12px] text-dim">
         <span className="text-ink-2">Nothing dropped silently.</span>{' '}
-        {live.skipped.length ? live.skipped.join(' · ') : 'Nothing has been skipped or collided so far.'}
+        {live.skipped.length ? live.skipped.join(' · ') : 'Nothing skipped or collided so far.'}
       </div>
     </Panel>
   );
@@ -386,8 +387,8 @@ function RunDialog({ workflow, projects, active, onClose, onStarted }: {
           <DialogTitle>Run {workflow.name}</DialogTitle>
           <DialogDescription>
             {workflow.builtin
-              ? 'Your requirement is compiled into a plan. If it leaves a question open, the plan waits for you in Plans instead of guessing.'
-              : 'A plan is written from this workflow’s steps and dispatched. The runs start in worktrees of their own.'}
+              ? 'Compiled into a plan; an open question waits in Plans.'
+              : 'Its steps become a plan, dispatched into worktrees.'}
           </DialogDescription>
         </DialogHeader>
         {allowed.length === 0 ? (
@@ -400,7 +401,7 @@ function RunDialog({ workflow, projects, active, onClose, onStarted }: {
               <span className="mb-1.5 block text-[12.5px] font-medium text-soft">{workflow.builtin ? 'Requirement' : 'Input'}</span>
               <textarea
                 value={input} onChange={(e) => setInput(e.target.value)} rows={5} autoFocus
-                placeholder={workflow.builtin ? 'What should change, e.g. invoice totals are rounded per line instead of per invoice' : 'What this run is about, e.g. the invoice tax report'}
+                placeholder={workflow.builtin ? 'What should change, e.g. round totals per invoice' : 'What this run is about, e.g. the invoice tax report'}
                 className="focus-brand w-full resize-none rounded-lg border border-line bg-surface-2/60 p-3 text-[13.5px] leading-relaxed text-ink placeholder:text-dim focus-visible:outline-none"
               />
             </label>
@@ -454,7 +455,7 @@ function EditorDialog({ initial, writers, projects, onClose, onSaved }: {
         <DialogHeader>
           <DialogTitle>{initial ? `Edit ${initial.name}` : 'New workflow'}</DialogTitle>
           <DialogDescription>
-            A workflow is its write steps. After them every run merges, runs the project’s own tests behind your approval, is reviewed, and stops at your signature — that part is the runtime’s, and is the same for every workflow.
+            A workflow is its write steps. Merge, approved tests, review and your signature always follow.
           </DialogDescription>
         </DialogHeader>
         <div className="grid max-h-[62vh] gap-3 overflow-y-auto pr-1">
@@ -490,7 +491,7 @@ function EditorDialog({ initial, writers, projects, onClose, onSaved }: {
               ))}
             </div>
             <p className="mt-2 text-[12px] text-dim">
-              Several agents write at once, each in a worktree of its own. A step that asks for an approval is refused: the gate is always yours, at the end.
+              Agents write at once, in their own worktrees. Approval steps are refused; the gate is yours.
             </p>
           </div>
         </div>

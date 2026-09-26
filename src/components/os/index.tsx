@@ -5,6 +5,8 @@
    Built on the shadcn token contract so every theme repaints them.
    ═══════════════════════════════════════════════════════════════ */
 import { useId, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
+import { ChevronRight, Info } from 'lucide-react';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import type { Risk } from '@/types';
 
@@ -19,9 +21,41 @@ export function Page({ children }: { children: ReactNode }) {
   return <div className="flex h-full min-h-0 flex-col">{children}</div>;
 }
 
+/* ── Explanations live one click deeper ──────────────────────────
+   A screen says what it is in a few words; how it works sits behind an
+   info button (About) or a collapsed section (More), never as a paragraph
+   above the work. */
+export function About({ children, label = 'About this' }: { children: ReactNode; label?: string }) {
+  return (
+    <Popover>
+      <PopoverTrigger aria-label={label} title={label}
+        className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-dim transition-colors hover:bg-surface-2 hover:text-ink-2 focus-visible:outline-2 focus-visible:outline-brand">
+        <Info className="size-3.5" />
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80 max-w-[calc(100vw-2rem)] space-y-2 p-4 text-[13px] leading-relaxed text-ink-2">
+        {children}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** Advanced options or reference material, folded until someone asks for it. */
+export function More({ label = 'More', children, className, open }: {
+  label?: ReactNode; children: ReactNode; className?: string; open?: boolean;
+}) {
+  return (
+    <details className={cn('group', className)} open={open}>
+      <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-[13px] font-medium text-soft select-none hover:text-ink-2 [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />{label}
+      </summary>
+      <div className="mt-3">{children}</div>
+    </details>
+  );
+}
+
 export function PageHeader({
-  title, subtitle, actions, children, icon,
-}: { title: string; subtitle?: string; actions?: ReactNode; children?: ReactNode; icon?: ReactNode }) {
+  title, subtitle, actions, children, icon, about,
+}: { title: string; subtitle?: string; actions?: ReactNode; children?: ReactNode; icon?: ReactNode; about?: ReactNode }) {
   return (
     <header className="relative shrink-0 bg-bg px-5 pt-6 sm:px-8 sm:pt-7">
       <span className="title-rule pointer-events-none absolute inset-x-0 bottom-0 h-px" />
@@ -29,7 +63,10 @@ export function PageHeader({
         <div className="flex min-w-0 items-start gap-3">
           {icon && <span className="mt-1.5 text-brand">{icon}</span>}
           <div className="min-w-0">
-            <h1 className="text-[24px] leading-tight font-bold tracking-[-0.025em] text-ink sm:text-[28px]">{title}</h1>
+            <div className="flex items-center gap-1.5">
+              <h1 className="text-[24px] leading-tight font-bold tracking-[-0.025em] text-ink sm:text-[28px]">{title}</h1>
+              {about && <About label={`About ${title}`}>{about}</About>}
+            </div>
             {subtitle && <p className="mt-1.5 max-w-3xl text-[14px] leading-relaxed text-soft">{subtitle}</p>}
           </div>
         </div>
@@ -53,10 +90,10 @@ export function PageBody({ children, className }: { children: ReactNode; classNa
 
 /* ── Panel: a grouped card. The header is text, not a box. ────── */
 export function Panel({
-  title, eyebrow, actions, children, className, bodyClass, flush,
+  title, eyebrow, actions, children, className, bodyClass, flush, about,
 }: {
   title?: ReactNode; eyebrow?: string; actions?: ReactNode;
-  children: ReactNode; className?: string; bodyClass?: string; flush?: boolean;
+  children: ReactNode; className?: string; bodyClass?: string; flush?: boolean; about?: ReactNode;
 }) {
   const head = !!(title || actions || eyebrow);
   return (
@@ -66,7 +103,12 @@ export function Panel({
           flush ? 'border-b border-line/60 pb-3.5' : 'pb-1')}>
           <div className="min-w-0">
             {eyebrow && <div className="mb-0.5 text-[12px] font-medium text-dim [overflow-wrap:anywhere] first-letter:uppercase">{eyebrow}</div>}
-            {title && <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-ink [overflow-wrap:anywhere] [&>span]:flex-wrap">{title}</h2>}
+            {title && (
+              <div className="flex items-center gap-1">
+                <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-ink [overflow-wrap:anywhere] [&>span]:flex-wrap">{title}</h2>
+                {about && <About>{about}</About>}
+              </div>
+            )}
           </div>
           {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
         </div>

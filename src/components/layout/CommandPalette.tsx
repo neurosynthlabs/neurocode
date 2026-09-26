@@ -97,14 +97,14 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       <Command className="rounded-none! bg-transparent p-0">
       <CommandInput
         value={query} onValueChange={setQuery}
-        placeholder={indexed ? `Search screens, work, sessions, memory, and symbols in ${indexed.name}…` : 'Search screens, projects, tasks, plans, runs, sessions and memory…'}
+        placeholder={indexed ? `Search screens, work, memory and ${indexed.name} symbols…` : 'Search screens, work, sessions and memory…'}
       />
       <CommandList className="max-h-[440px]">
         <CommandEmpty>
           <div className="py-6 text-center">
             <p className="text-[14px] text-ink-2">Nothing matches yet.</p>
             <p className="mt-1 text-[12.5px] text-dim">
-              Projects, tasks, plans, runs, sessions, memory and tools appear here as you create them.
+              Your work appears here as you create it.
               {indexed ? ` Symbols come from ${indexed.name}’s code index.` : ''}
             </p>
           </div>
@@ -125,7 +125,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                     <span className="block truncate text-[13.5px] text-ink">{hit.title}</span>
                     <span className="block truncate text-[12px] text-dim">{hit.subtitle}</span>
                   </span>
-                  {hit.meta && <span className="eyebrow shrink-0">{hit.meta}</span>}
+                  {hit.meta && <span className="shrink-0 text-[11px] font-medium text-dim">{hit.meta}</span>}
                 </CommandItem>
               ))}
             </CommandGroup>

@@ -834,6 +834,33 @@ def undo_merge(repo: Path, before: str, commit: str) -> bool:
     return git(["reset", "--hard", before], repo).returncode == 0
 
 
+
+def unmerge_refusal(repo: Path, commit: str) -> str | None:
+    """Why a merge this runtime made cannot be taken back right now, in words — or None when it can: the
+    checkout still stands exactly on the merge, its tree is clean, and the commit really is a merge."""
+    head = git(["rev-parse", "HEAD"], repo).stdout.strip()
+    if not head or not head.startswith(commit):
+        return (f"The checkout has moved on since the merge (it is at {head[:7] or 'an unknown commit'}, the merge "
+                f"was {commit}), so undoing it here would lose that work. Use git revert -m 1 {commit} instead.")
+    if dirty(repo):
+        return "Your working tree has changes that are not committed. Commit or stash them, then undo the merge."
+    if len(git(["rev-list", "--parents", "-n", "1", head], repo).stdout.split()) != 3:
+        return f"{commit} is not a merge commit, so there is no merge to undo."
+    return None
+
+
+def take_back_merge(repo: Path, commit: str) -> str:
+    """Undo, for a person, a merge this runtime made: back to the merge's first parent, which is where the
+    checkout stood before it. Only while `unmerge_refusal` finds nothing, so no one's later work is lost.
+    Returns the commit the checkout is back at."""
+    refusal = unmerge_refusal(repo, commit)
+    if refusal:
+        raise Refused(refusal)
+    before = git(["rev-parse", "HEAD^1"], repo).stdout.strip()
+    if git(["reset", "--hard", before], repo).returncode != 0:
+        raise Refused("git could not move the checkout back; nothing was changed.")
+    return before
+
 # ── the checkout a person works in: the Workbench's own changes ──
 #: How many paths one commit or discard may name. A person picks these in a panel, file by file.
 MAX_CHANGE_PATHS = 100

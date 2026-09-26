@@ -160,6 +160,8 @@ export interface DataActions {
   discardRun: (ref: string) => Promise<RunDoc | null>;
   /** Merge an accepted run into the branch the repository has checked out. */
   mergeRun: (ref: string) => Promise<MergeResult | null>;
+  /** Take a merge back while the checkout still stands on it. */
+  unmergeRun: (ref: string) => Promise<RunDoc | null>;
   /** Each line a run writes, as it writes it. Returns the unsubscribe. */
   onRunLog: (listener: (line: RunLogEvent) => void) => () => void;
   /** Each turn a session writes — your question, a tool call, the answer. Returns the unsubscribe. */
@@ -423,7 +425,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const permitted = useCallback((perm: string) => {
     if (who.current.can(perm)) return true;
     toast.error('Your role cannot do that', {
-      description: `${who.current.roleNames || 'This account'} does not include “${permissionLabel(who.current.catalogue, perm)}”. An Owner or Admin can grant it in Admin → Roles & permissions.`,
+      description: `${who.current.roleNames || 'This account'} does not include “${permissionLabel(who.current.catalogue, perm)}”. An Owner or Admin can grant it in Admin → Roles.`,
     });
     return false;
   }, []);
@@ -792,6 +794,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
     [attempt, put, permitted],
   );
 
+  const unmergeRun = useCallback(
+    async (ref: string) => {
+      if (!permitted('runs:merge')) return null;
+      const doc = await attempt(() => api.unmergeRun(ref), 'The merge was not undone');
+      if (doc) put('runs', doc);
+      return doc;
+    },
+    [attempt, put, permitted],
+  );
+
   const onRunLog = useCallback((listener: (line: RunLogEvent) => void) => {
     listeners.current.add(listener);
     return () => {
@@ -868,6 +880,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       cancelRun,
       discardRun,
       mergeRun,
+      unmergeRun,
       onRunLog,
       onChat,
     }),
@@ -899,6 +912,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       cancelRun,
       discardRun,
       mergeRun,
+      unmergeRun,
       onRunLog,
       onChat,
     ],

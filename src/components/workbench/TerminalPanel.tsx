@@ -287,13 +287,13 @@ export function TerminalPanel({ projectId, cwd = null }: { projectId: string | n
 
   if (!allowed) {
     return <Empty icon={<SquareTerminal className="size-6" />} title="Terminals need the machine:access permission"
-      hint="A terminal is a shell on the machine the API runs on, so only an Owner holds it unless an Owner grants it." />;
+      hint="A shell on the API's machine; Owners hold it unless they grant it." />;
   }
   if (error && !list) {
     return (
       <Empty icon={<SquareTerminal className="size-6" />}
         title={error.status === 404 ? 'Machine access is off on this server' : 'The terminals did not load'}
-        hint={error.status === 404 ? 'The API was started with NEUROCODE_MACHINE_ACCESS=false, so it opens no shells. Start it without that to use terminals here.' : error.message}
+        hint={error.status === 404 ? 'Started with NEUROCODE_MACHINE_ACCESS=false, so it opens no shells.' : error.message}
         action={error.status === 404 ? undefined : <Button size="sm" variant="outline" onClick={load}>Try again</Button>} />
     );
   }
@@ -336,7 +336,7 @@ export function TerminalPanel({ projectId, cwd = null }: { projectId: string | n
         <TerminalView key={current.id} terminalId={current.id} onMessage={onMessage} />
       ) : (
         <Empty icon={<SquareTerminal className="size-6" />} title="No terminal open"
-          hint={cwd ? `A shell opens in ${cwd}.` : projectId ? "A shell opens in this project's checkout." : 'A shell opens in the first folder this server may open.'}
+          hint={cwd ? `A shell opens in ${cwd}.` : projectId ? "A shell opens in this project's checkout." : 'A shell opens in the first folder this server allows.'}
           action={<Button size="sm" variant="outline" disabled={busy} onClick={() => void open()}><Plus className="size-3.5" />New terminal</Button>} />
       )}
     </div>

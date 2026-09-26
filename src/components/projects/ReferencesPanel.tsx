@@ -101,7 +101,7 @@ export function ReferencesPanel({ p }: { p: Project }) {
           <span className="font-mono text-[11.5px] text-dim">{r.project.id}:</span>
           {i !== null && <Tag>read only</Tag>}
           {i !== null && data && i >= data.readAtMost && (
-            <span title={`Retrieval searches the first ${data.readAtMost} references; sessions still read this one's files by its prefix.`}>
+            <span title={`Only the first ${data.readAtMost} are searched; sessions still read its files.`}>
               <Tag tone="warn">not searched</Tag>
             </span>
           )}
@@ -118,7 +118,7 @@ export function ReferencesPanel({ p }: { p: Project }) {
           </form>
         ) : (
           <span className={cn('mt-0.5 block text-[12.5px] [overflow-wrap:anywhere]', r.note ? 'text-soft' : 'text-dim')}>
-            {r.note || (i !== null ? 'No note — say why it is read; a model reads the note beside what it finds there.' : 'No note')}
+            {r.note || (i !== null ? 'No note: say why it is read. A model reads it too.' : 'No note')}
           </span>
         )}
       </div>
@@ -137,7 +137,8 @@ export function ReferencesPanel({ p }: { p: Project }) {
   );
 
   return (
-    <Panel flush eyebrow="Other projects this one reads from — read only"
+    <Panel flush
+      about="Other projects this one reads from. Their code, documents and memory are searched beside its own, never written."
       title={<span className="flex items-center gap-1.5"><BookOpen className="size-3.5 text-brand" />References</span>}
       actions={mayChange ? <Button size="sm" variant="outline" onClick={() => setAdding(true)}><Plus className="size-3.5" />Add reference</Button> : undefined}>
       {list.error ? (
@@ -147,13 +148,12 @@ export function ReferencesPanel({ p }: { p: Project }) {
       ) : (
         <>
           {data.references.length === 0 ? (
-            <Empty title="No references yet"
-              hint="Add the service this project calls, a library it uses or the system it replaces. Its code, documents and memory are searched beside this project's own, labelled as a reference — and never written from here." />
+            <Empty title="No references yet" hint="Add a service it calls, or a library it uses." />
           ) : (
             <div className="divide-y divide-line/60">{data.references.map((r, i) => row(r, i))}</div>
           )}
           <div className="border-t border-line/60 px-5 pt-3 pb-1">
-            <p className="eyebrow">Referenced by</p>
+            <p className="text-[12px] font-medium text-dim">Referenced by</p>
           </div>
           {data.referencedBy.length === 0 ? (
             <p className="px-5 pb-3 text-[12.5px] text-dim">No project reads from {p.name}.</p>
@@ -168,8 +168,8 @@ export function ReferencesPanel({ p }: { p: Project }) {
           <DialogHeader>
             <DialogTitle>Read another project from {p.name}</DialogTitle>
             <DialogDescription>
-              Its code, documents and memory are searched beside {p.name}'s own and handed to models labelled as a
-              reference. Sessions read its files as <span className="font-mono">id:path</span>. Agents never write there.
+              Searched beside {p.name}'s own and handed to models as a reference. Sessions read its files
+              as <span className="font-mono">id:path</span>. Agents never write there.
             </DialogDescription>
           </DialogHeader>
           <form id="add-reference" onSubmit={(e) => void add(e)} className="space-y-3">
@@ -177,7 +177,7 @@ export function ReferencesPanel({ p }: { p: Project }) {
             <div className="max-h-56 overflow-y-auto rounded-lg border border-line">
               {choices.length === 0 ? (
                 <p className="px-3 py-5 text-center text-[12.5px] text-dim">
-                  {projects.length <= 1 ? 'There is no other project yet. Onboard one first.' : q.trim() ? `No project matches “${q.trim()}”.` : 'Every other project is already referenced.'}
+                  {projects.length <= 1 ? 'No other project yet.' : q.trim() ? `No project matches “${q.trim()}”.` : 'Every other project is already referenced.'}
                 </p>
               ) : choices.map((x) => (
                 <button key={x.id} type="button" onClick={() => setPicked(x.id)} aria-pressed={picked === x.id}
@@ -192,8 +192,7 @@ export function ReferencesPanel({ p }: { p: Project }) {
                 </button>
               ))}
             </div>
-            <Field label="Why it is read (optional)" value={note} onChange={setNote} placeholder="The payments service checkout calls"
-              hint="A model reads this beside what it finds there." />
+            <Field label="Why it is read (optional)" value={note} onChange={setNote} placeholder="The payments service checkout calls" />
           </form>
           <DialogFooter>
             <Button variant="ghost" onClick={close}>Cancel</Button>

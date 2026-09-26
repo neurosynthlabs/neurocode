@@ -119,13 +119,13 @@ export default function Login() {
           {!showPasswords ? (
             <div className="mt-6 text-center text-[13px] leading-relaxed text-dim">
               {shown && <p role="alert" className="mb-3 text-danger">{shown}</p>}
-              <p>This workspace signs in through {sso.label}.</p>
+              <p>This workspace signs in through {sso.label}. Owners may use a password.</p>
               <button
                 type="button"
                 onClick={() => setWithPassword(true)}
                 className="mt-1 text-ink underline decoration-line underline-offset-4 hover:decoration-ink"
               >
-                An Owner can use a password
+                Use a password
               </button>
             </div>
           ) : (
@@ -193,14 +193,14 @@ export default function Login() {
 
           {showPasswords && (
             <p className="mt-6 max-w-[300px] text-center text-[13px] leading-relaxed text-dim">
-              Forgot your password? An Owner or Admin can set a new one in People.
+              Forgot it? An Owner or Admin can set a new one.
             </p>
           )}
         </div>
       </main>
 
       <footer className="relative pb-7 text-center text-[12px] text-dim">
-        NeuroCode {__APP_VERSION__}. Your workspace lives in your own database.
+        NeuroCode {__APP_VERSION__} · in your own database
       </footer>
     </div>
   );

@@ -26,7 +26,7 @@ const VERDICT_TONE: Record<string, 'ok' | 'danger' | 'warn' | 'neutral'> = {
 /** Research over the active project's retrieval: its code, its documentation and its memory. */
 export default function Research() {
   const { project } = useProject();
-  if (!project) return <NoProject title="Research" hint="Research reads a project's code, documentation and memory. Onboard a repository in Projects first." />;
+  if (!project) return <NoProject title="Research" hint="Onboard a repository to research its code, docs and memory." />;
   return <LiveResearch project={project} />;
 }
 
@@ -102,7 +102,11 @@ function LiveResearch({ project }: { project: Project }) {
     <Page>
       <PageHeader
         title="Research"
-        subtitle={`A question split into angles, each answered on its own from ${project.name}'s code, documentation and memory. A citation is only ever a piece that angle was handed, and the report says what it could not cover.`}
+        subtitle="Investigate a question across the project's code, docs and memory."
+        about={<>
+          <p>A question is split into angles, each answered on its own.</p>
+          <p>A citation is only ever a piece that angle was handed. The report says what it could not cover.</p>
+        </>}
       >
         <div className="space-y-2 pb-3">
           <div className="focus-brand flex h-9 items-center gap-2 rounded-md border border-line bg-base px-3">
@@ -116,7 +120,7 @@ function LiveResearch({ project }: { project: Project }) {
             </Button>
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="eyebrow mr-1">Sources</span>
+            <span className="mr-1 text-[12px] text-dim">Sources</span>
             {LIVE_SOURCES.map(({ id, label, icon: I }) => (
               <button key={id} onClick={() => toggle(id)} aria-pressed={kinds.has(id)}
                 className={cn('flex items-center gap-1.5 rounded-sm border px-2 py-1 text-[12.5px] transition-colors',
@@ -125,13 +129,13 @@ function LiveResearch({ project }: { project: Project }) {
               </button>
             ))}
             <button onClick={() => setWeb((w) => !w)} aria-pressed={web && webReady} disabled={!webReady}
-              title={webReady ? 'Search the web for each angle and read the top pages. The tool rules apply to every search and page.'
+              title={webReady ? 'Reads the top web pages for each angle, under the tool rules.'
                 : search.data ? 'Web search is not configured. Add a key in Settings → Web.' : undefined}
               className={cn('flex items-center gap-1.5 rounded-sm border px-2 py-1 text-[12.5px] transition-colors disabled:cursor-not-allowed',
                 web && webReady ? 'border-brand/40 bg-brand/10 text-brand' : 'border-line bg-surface text-dim line-through')}>
               <Globe className="size-3" />The web
             </button>
-            {search.data && !webReady && <span className="text-[11.5px] text-dim">web search is set up in Settings → Web</span>}
+            {search.data && !webReady && <span className="text-[11.5px] text-dim">set up in Settings → Web</span>}
           </div>
         </div>
       </PageHeader>
@@ -143,7 +147,7 @@ function LiveResearch({ project }: { project: Project }) {
       ) : items.length === 0 ? (
         <PageBody>
           <Empty icon={<Microscope className="size-6" />} title={`No research on ${project.name} yet`}
-            hint="Ask a question above. It is split into angles, each angle reads only what retrieval hands it, and every claim carries the piece it came from." />
+            hint="Ask a question above. Every claim cites the piece it came from." />
         </PageBody>
       ) : (
         <PageBody className="flex h-full flex-col gap-0 p-0 md:flex-row">
@@ -216,7 +220,7 @@ function LiveReport({ r, canStop, onStopped }: { r: ResearchDoc; canStop: boolea
 
       {r.angles.length > 0 && (
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-          <Panel eyebrow="Each angle blind to the others" title="Multi-modal sweep">
+          <Panel title="Multi-modal sweep" about="Each angle is answered blind to the others.">
             {r.angles.map((a) => (
               <div key={a.n} className="py-1">
                 <div className="flex items-center gap-3">
@@ -231,7 +235,7 @@ function LiveReport({ r, canStop, onStopped }: { r: ResearchDoc; canStop: boolea
             ))}
           </Panel>
           {r.status === 'complete' && (
-            <Panel className="border-warn/30" eyebrow="What this report could not cover"
+            <Panel className="border-warn/30"
               title={<span className="flex items-center gap-1.5"><EyeOff className="size-3.5 text-warn" />Not covered</span>}>
               <ul className="space-y-1.5">
                 {r.gaps.map((g) => <li key={g} className="flex gap-1.5 text-[13px] text-ink-2"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-warn" />{g}</li>)}
@@ -257,7 +261,7 @@ function LiveReport({ r, canStop, onStopped }: { r: ResearchDoc; canStop: boolea
           )}
 
           {r.alternatives.length > 0 && (
-            <Panel eyebrow="Compared from the findings" title="Alternatives" flush>
+            <Panel title="Alternatives" flush>
               <DataTable head={['Option', 'Pros', 'Cons', 'Verdict']}>
                 {r.alternatives.map((a) => (
                   <Row key={a.name}>
@@ -274,7 +278,7 @@ function LiveReport({ r, canStop, onStopped }: { r: ResearchDoc; canStop: boolea
           {(r.architecture || r.risks.length > 0) && (
             <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
               {r.architecture && (
-                <Panel eyebrow="Shape of the solution" title="Architecture">
+                <Panel title="Architecture">
                   <p className="text-[13.5px] leading-relaxed text-ink-2">{r.architecture}</p>
                 </Panel>
               )}
@@ -289,7 +293,7 @@ function LiveReport({ r, canStop, onStopped }: { r: ResearchDoc; canStop: boolea
           )}
 
           {r.recommendation && (
-            <Panel className="accent-left" eyebrow="From the findings" title="Recommendation">
+            <Panel className="accent-left" title="Recommendation">
               <p className="text-[14px] leading-relaxed text-ink">{r.recommendation}</p>
             </Panel>
           )}

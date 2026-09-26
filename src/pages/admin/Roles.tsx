@@ -204,7 +204,7 @@ export default function Roles() {
     if (!r) return;
     replace(r);
     setDraft(null);
-    toast.success(`${r.name} saved`, { description: `It applies at once to the ${people(r.members)} who hold it.` });
+    toast.success(`${r.name} saved`, { description: `Applies now to ${people(r.members)}.` });
   };
   const remove = async () => {
     if (!role || busy) return;
@@ -221,14 +221,18 @@ export default function Roles() {
   return (
     <Page>
       <PageHeader
-        title="Roles & permissions"
-        subtitle="A role is a named set of permissions, filed where the sidebar files them: a module, what it lets someone do, and the rights behind each cell. A person’s access is everything their roles allow."
+        title="Roles"
+        subtitle="Named sets of permissions, filed by module."
+        about={<>
+          <p>Rows are the sidebar’s modules; columns are what a right lets someone do.</p>
+          <p>A person’s access is everything their roles allow.</p>
+        </>}
         actions={<Button size="sm" onClick={() => setCreating(true)} disabled={!manage}><Plus className="size-3.5" />New role</Button>}
       />
       <PageBody>
         {error ? <LoadError error={error} onRetry={reload} /> : !data || !role ? <Loading /> : (
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-[290px_minmax(0,1fr)]">
-            <Panel flush title="Roles" eyebrow={`${data.roles.length} in this workspace · ${data.roles.filter((r) => r.builtin).length} built in`} className="hidden self-start lg:block">
+            <Panel flush title="Roles" eyebrow={`${data.roles.length} · ${data.roles.filter((r) => r.builtin).length} built in`} className="hidden self-start lg:block">
               <div className="py-1">
                 {data.roles.map((r) => (
                   <ListRow key={r.id} active={r.id === role.id} onClick={() => pick(r.id)}>
@@ -266,14 +270,12 @@ export default function Roles() {
               </div>
               {role.builtin && (
                 <p className="mt-3 text-[12.5px] leading-relaxed text-dim">
-                  Built-in roles never drift, so everyone can rely on what they mean. To grant a different set, create a custom role.
+                  Built-in roles never change. For a different set, create a custom role.
                 </p>
               )}
 
               <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
-                <p className="text-[12.5px] text-dim">
-                  A cell stands for the rights of that kind in that part of the product. Open one to see them by name.
-                </p>
+                <p className="text-[12.5px] text-dim">Open a cell to see its rights by name.</p>
                 <SelectField
                   className="w-full sm:w-[220px]" label="Compare with"
                   value={against} onChange={setAgainst}

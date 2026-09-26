@@ -129,7 +129,7 @@ class Remembered:
     Choosing a lane is nothing but settings. Every lane is settled from `ai.lane.<id>`, then asked
     whether an admin switched it off — the same row again — then asked what it has spent; and the
     router does that for eight lanes, several times, to answer one question. Measured: one `chain()`
-    was 36 queries, and Models & Router, which asks for the whole picture, was 350. All of it through
+    was 36 queries, and Models, which asks for the whole picture, was 350. All of it through
     the gateway's own two-connection pool, so opening that screen while four agents were working made
     the screen and the agents wait on each other.
 

@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Mono, ListRow, Toolbar, Field, SelectField,
-  Stat, StatGrid, KV, Empty, SectionTitle, DataTable, Row, Cell,
+  Stat, StatGrid, KV, Empty, SectionTitle, DataTable, Row, Cell, More,
 } from '@/components/os';
 import { cn } from '@/lib/utils';
 import { ago, tokens as fmtTokens } from './code/format';
@@ -60,9 +60,13 @@ function LiveSkills() {
     <Page>
       <PageHeader
         title="Skills"
-        subtitle={project
-          ? `Read from SKILL.md files on this machine: the workspace's, ${project.name}'s and those of plugins enabled in Claude Code. A NeuroCode session sees one line per enabled skill and reads the body only when it asks for it.`
-          : 'Read from SKILL.md files on this machine: the workspace’s and those of plugins enabled in Claude Code. Onboard a project to add its own skills and see what its sessions load.'}
+        subtitle="Instructions a session reads only when it asks for them."
+        about={<>
+          <p>{project
+            ? `Read from SKILL.md files on this machine: the workspace's, ${project.name}'s and enabled Claude Code plugins'.`
+            : 'Read from SKILL.md files: the workspace’s and enabled Claude Code plugins’. Onboard a project to add its own.'}</p>
+          <p>A session sees one line per enabled skill and reads the body on request. A skill is read, never run.</p>
+        </>}
         actions={r.data && <Tag tone="ok"><Sparkles className="size-3" />{enabled.length} of {all.length} enabled</Tag>}
       >
         <Toolbar>
@@ -82,33 +86,27 @@ function LiveSkills() {
       ) : all.length === 0 ? (
         <PageBody>
           <Empty icon={<Sparkles className="size-6" />} title="No skills on this machine"
-            hint={`Nothing was found in ${r.data.roots.map((x) => `${x.path}${x.exists ? '' : ' (missing)'}`).join(', ')}. A skill is a folder with a SKILL.md in one of them.`} />
+            hint="Add a folder with a SKILL.md to a skills folder."
+            action={<More label="Folders read"><ul className="space-y-1 text-left">{r.data.roots.map((x) => (
+              <li key={x.path} className="text-[12px] text-dim"><Mono className="break-all">{x.path}</Mono>{x.exists ? '' : ' · missing'}</li>
+            ))}</ul></More>} />
         </PageBody>
       ) : (
         <PageBody className="space-y-4">
           <StatGrid cols={5}>
             <Stat label="Skills" value={all.length} sub={`${enabled.length} enabled`} icon={<Sparkles className="size-3" />} />
-            <Stat label="Loads 24h" value={loads.toLocaleString()} sub={project ? `across ${sessions} session${sessions === 1 ? '' : 's'} on ${project.name}` : 'sessions belong to a project, and there is none yet'} icon={<Zap className="size-3" />} />
+            <Stat label="Loads 24h" value={loads.toLocaleString()} sub={!project ? 'no project yet'
+              : sessions && loads ? `${(loads / sessions).toFixed(1)} a session · ${sessions} session${sessions === 1 ? '' : 's'}`
+                : `across ${sessions} session${sessions === 1 ? '' : 's'} on ${project.name}`} icon={<Zap className="size-3" />} />
             <Stat label="If always loaded" value={fmtTokens(ifAlwaysOn)} tone="danger" sub={sessions ? `est. ${fmtTokens(standing)} tokens × ${sessions} sessions` : `est. ${fmtTokens(standing)} tokens a session`} />
             <Stat label="Actually loaded" value={fmtTokens(loaded)} tone="ok" sub="est. tokens sessions read in 24h" />
             <Stat label="Context saved" value={sessions && loads && ifAlwaysOn ? `${Math.round((1 - loaded / ifAlwaysOn) * 100)}%` : '—'} tone={loads ? 'ok' : undefined}
               sub={!sessions ? 'no session in 24h to compare' : !loads ? 'no skill loaded in 24h' : 'estimated tokens (characters ÷ 4)'} icon={<Gauge className="size-3" />} />
           </StatGrid>
 
-          {/* "Never run" is the fact the cut paragraph carried that nothing else on this screen did: a skill
-              is text handed to a model, not something this app executes. It stays, in two words. */}
-          <Panel className="accent-left" eyebrow="Read, never run" title="A description in the prompt, the body only on request">
-            <p className="max-w-4xl text-[13.5px] leading-relaxed text-ink-2">
-              {all.length} skills are here. {!project
-                ? 'No project is onboarded, so no NeuroCode session has run to load one.'
-                : sessions === 0 || loads === 0
-                  ? `No NeuroCode session on ${project.name} has loaded one in the last 24 hours.`
-                  : `${sessions} session${sessions === 1 ? '' : 's'} on ${project.name} loaded ${(loads / sessions).toFixed(1)} on average in the last 24 hours.`}
-            </p>
-            {r.data.unreadable.length > 0 && (
-              <p className="mt-2 text-[12.5px] text-warn">Front matter could not be read in {r.data.unreadable.join(', ')}.</p>
-            )}
-          </Panel>
+          {r.data.unreadable.length > 0 && (
+            <p className="text-[12.5px] text-warn">Front matter could not be read in {r.data.unreadable.join(', ')}.</p>
+          )}
 
           <div className="flex min-h-[560px] flex-col gap-3 md:flex-row">
             <div className="no-scrollbar w-full shrink-0 max-h-[42vh] md:max-h-none md:w-[320px] overflow-y-auto rounded-md border border-line bg-surface">
@@ -129,14 +127,15 @@ function LiveSkills() {
               <LiveSkillDetail key={s.id} skill={s} projectId={pid} projectName={project?.name ?? null} sessions={sessions}
                 on={isOn(s.id)} canSwitch={can('settings:write')}
                 onSwitch={(v) => { setOn({ ...on, [s.id]: v }, `Skill ${s.name} ${v ? 'enabled' : 'disabled'} in NeuroCode sessions`); toast(`${s.name} ${v ? 'enabled' : 'disabled'}`, { description: 'In NeuroCode sessions. Claude Code is not affected.' }); }} />
-            ) : <div className="min-w-0 flex-1"><Empty title="Nothing selected" hint="Widen the filters to pick a skill." /></div>}
+            ) : <div className="min-w-0 flex-1"><Empty title="Nothing selected" hint="Widen the filters." /></div>}
           </div>
 
           {/* Every figure in this table is `tokens` × a count, and `tokens` is the server's characters ÷ 4 —
               a guess, not a measurement. The caption says so once, for the whole table, rather than each
               column reading like a price. */}
+          <More label="Always-on vs loaded on request">
           <SectionTitle right={<span className="text-[12px] text-dim">estimated tokens, characters ÷ 4</span>}>
-            Always-on vs loaded on request
+            Top 10 by size
           </SectionTitle>
           <Panel flush>
             <DataTable head={['Skill', 'Scope', 'Tokens', 'Loads 24h', 'Tokens if always on', 'Tokens as loaded']}>
@@ -152,6 +151,7 @@ function LiveSkills() {
               ))}
             </DataTable>
           </Panel>
+          </More>
         </PageBody>
       )}
     </Page>
@@ -185,8 +185,8 @@ function LiveSkillDetail({ skill: s, projectId, projectName: name, sessions, on,
       </Panel>
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-        <Panel eyebrow="What decides when it loads" title="Trigger rules">
-          <p className="text-[13px] text-soft">This skill declares no rules — it is offered to the model by its description, and the model decides.</p>
+        <Panel title="Trigger rules">
+          <p className="text-[13px] text-soft">None declared. The model decides from its description.</p>
         </Panel>
 
         <div className="space-y-3">
@@ -200,15 +200,15 @@ function LiveSkillDetail({ skill: s, projectId, projectName: name, sessions, on,
               ? <div className="flex flex-wrap gap-1">{s.tools.map((t) => <Tag key={t} tone="ok">{t}</Tag>)}</div>
               : <p className="text-[13px] text-dim">It names no allowed tools.</p>}
           </Panel>
-          <Panel eyebrow="Loaded in sessions by" title="Loaded by">
+          <Panel title="Loaded by">
             {s.usedBy.length
               ? <div className="flex flex-wrap gap-1">{s.usedBy.map((a) => <Tag key={a} tone="neutral">{a}</Tag>)}</div>
-              : <p className="text-[13px] text-dim">No NeuroCode session has loaded this skill yet.</p>}
+              : <p className="text-[13px] text-dim">No session has loaded it yet.</p>}
           </Panel>
         </div>
       </div>
 
-      <Panel eyebrow={d.data?.truncated ? 'What a session reads — cut off here at 64 KB' : 'What a session reads'} title="Instruction body">
+      <Panel eyebrow={d.data?.truncated ? 'Truncated at 64 KB' : undefined} title="Instruction body">
         {d.error ? <p className="text-[13px] text-danger">{d.error}</p>
           : !d.data ? <p className="flex items-center gap-2 text-[13px] text-dim"><Loader2 className="size-3.5 animate-spin" />Reading the file…</p>
             : <pre className="ascii max-h-[320px] overflow-auto rounded-sm border border-line bg-base p-3.5 whitespace-pre-wrap">{d.data.body}</pre>}

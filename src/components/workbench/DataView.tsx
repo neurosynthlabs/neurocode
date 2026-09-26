@@ -116,7 +116,7 @@ function RowsView({ where, total, nonce }: { where: DataWhere; total: number; no
   if (page.error) return <Empty icon={<FileWarning className="size-6" />} title="These rows could not be read" hint={page.error} />;
   if (!shown) return <div className="flex flex-1 items-center justify-center gap-2 text-[13px] text-dim"><Loader2 className="size-4 animate-spin" />Reading rows…</div>;
   if (total === 0 && shown.total === 0) {
-    return <Empty icon={<Table2 className="size-6" />} title="No rows" hint="The file has its columns but no rows under them yet." />;
+    return <Empty icon={<Table2 className="size-6" />} title="No rows" hint="Columns, but no rows yet." />;
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -261,7 +261,7 @@ function Chart({ where, column, numbers, nonce }: { where: DataWhere; column: Co
       {plot.data?.kind === 'histogram' && (plot.data.bins.length ? <Histogram plot={plot.data} /> : <p className="text-[13px] text-dim">Every value is empty.</p>)}
       {plot.data?.kind === 'top' && (plot.data.values.length ? <TopValues plot={plot.data} /> : <p className="text-[13px] text-dim">Every value is empty.</p>)}
       {plot.data?.kind === 'line' && <Line plot={plot.data} />}
-      {plot.data && plot.data.nulls > 0 && <p className="text-[12px] text-dim tnum">{count(plot.data.nulls)} of {count(plot.data.total)} rows have no value here and are left out.</p>}
+      {plot.data && plot.data.nulls > 0 && <p className="text-[12px] text-dim tnum">{count(plot.data.nulls)} of {count(plot.data.total)} rows are empty here and left out.</p>}
     </section>
   );
 }
@@ -301,7 +301,7 @@ function ColumnsView({ where, nonce }: { where: DataWhere; nonce: number }) {
                 <td className="border-b border-line/40 px-3 py-2 text-right text-soft tnum">
                   {count(c.nulls)}{rows > 0 && c.nulls > 0 && <span className="text-dim"> · {Math.round((c.nulls / rows) * 1000) / 10}%</span>}
                 </td>
-                <td className="border-b border-line/40 px-3 py-2 text-right text-soft tnum" title={c.distinctApprox ? 'An estimate: above a million rows DuckDB counts distinct values approximately.' : undefined}>
+                <td className="border-b border-line/40 px-3 py-2 text-right text-soft tnum" title={c.distinctApprox ? 'Estimated: DuckDB approximates above a million rows.' : undefined}>
                   {c.distinct === null ? '—' : `${c.distinctApprox ? '≈' : ''}${count(c.distinct)}`}
                 </td>
                 <td className="max-w-[10rem] truncate border-b border-line/40 px-3 py-2 text-ink-2"><CellText value={c.min} /></td>
@@ -360,8 +360,8 @@ function SqlView({ where, sqlite, table }: { where: DataWhere; sqlite: boolean; 
           <span>⌘↵ runs it.</span>
           <span className="min-w-0">
             {sqlite
-              ? 'One SELECT over this database’s tables; nothing here can change the file.'
-              : 'One SELECT over this file as the table data; it cannot read any other file.'}
+              ? 'One read-only SELECT over its tables.'
+              : 'One SELECT over this file as data; no other file is read.'}
           </span>
         </div>
       </div>
@@ -373,14 +373,14 @@ function SqlView({ where, sqlite, table }: { where: DataWhere; sqlite: boolean; 
             : <Grid columns={result.columns} rows={result.rows} offset={0} />}
           <p className="shrink-0 border-t border-line/70 px-3 py-1.5 text-[12.5px] text-soft tnum">
             {result.rows.length === 0 ? 'No rows' : `${count(result.rows.length)} row${result.rows.length === 1 ? '' : 's'}`}
-            {result.truncated && ` · the first ${count(result.cap)} are shown; add a LIMIT or a WHERE for the rest`}
+            {result.truncated && ` · first ${count(result.cap)} shown; add a LIMIT or WHERE for the rest`}
             {` · ${count(result.ms)} ms`}
           </p>
         </>
       )}
       {!result && !error && (
         <Empty icon={<Database className="size-6" />} title="Ask the file a question"
-          hint={sqlite ? 'Name any of its tables. The answer shows here, up to 1,000 rows.' : 'The file is the table data. The answer shows here, up to 1,000 rows.'} />
+          hint={sqlite ? 'Name any of its tables; up to 1,000 rows come back.' : 'The file is the table data; up to 1,000 rows come back.'} />
       )}
     </div>
   );
@@ -427,7 +427,7 @@ function DataFile({ path, projectId }: { path: string; projectId: string | null 
         </span>
       </div>
       {sqlite && doc.tables?.length === 0 && view !== 'sql'
-        ? <Empty icon={<Database className="size-6" />} title="No tables yet" hint="This SQLite database has no tables or views. The SQL tab still answers a SELECT." />
+        ? <Empty icon={<Database className="size-6" />} title="No tables yet" hint="No tables or views. SQL still answers a SELECT." />
         : view === 'rows' ? <RowsView key={`${doc.table ?? ''}|${nonce}`} where={where} total={doc.rows} nonce={nonce} />
           : view === 'columns' ? <ColumnsView key={doc.table ?? ''} where={where} nonce={nonce} />
             : <SqlView key={doc.table ?? ''} where={where} sqlite={sqlite} table={doc.table} />}

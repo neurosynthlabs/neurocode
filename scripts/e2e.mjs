@@ -246,7 +246,24 @@ try {
     await open(`/review?ref=${run.ref}`);
     await page.getByRole('button', { name: 'Accept', exact: true }).click();
     run = await until(async () => { const r = await call(`/runs/${run.ref}`); return r.status === 'done' && r; }, 'the signed run finishing', 10000);
+  });
+
+  await step('the signed run merges into the checkout, and Undo merge puts the checkout back', async () => {
+    const head = () => spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).stdout.trim();
+    const before = head();
     await open(`/runs?ref=${run.ref}`);
+    // Two clicks: the first arms it, the second writes to the real repository.
+    await page.getByRole('button', { name: 'Merge', exact: true }).click();
+    await page.getByRole('button', { name: /Click again to merge/ }).click();
+    const merged = await until(async () => { const r = await call(`/runs/${run.ref}`); return r.merged && r; }, 'the merge being recorded', 15000);
+    expect(head() !== before && head().startsWith(merged.merged.commit), `the checkout is at ${head()}, the merge says ${merged.merged.commit}`);
+    expect(fs.readFileSync(path.join(repo, 'pkg', 'core.py'), 'utf8').includes('changed by the stub model')
+      || fs.readFileSync(path.join(repo, 'pkg', 'api.py'), 'utf8').includes('changed by the stub model'), 'the merge brought no change in');
+    await page.getByRole('button', { name: 'Undo merge' }).click();
+    await page.getByRole('button', { name: /Click again to undo/ }).click();
+    await until(async () => !(await call(`/runs/${run.ref}`)).merged, 'the merge being undone', 15000);
+    expect(head() === before, `the checkout is at ${head()}, not back at ${before}`);
+    expect(!spawnSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }).stdout.trim(), 'undoing left the tree dirty');
     await page.getByRole('button', { name: /Discard worktree/ }).click();
     await until(async () => !fs.existsSync(run.worktree), 'the worktree going away', 5000);
   });
@@ -538,7 +555,7 @@ try {
   });
 
   await step('a model key is saved masked, never logged, and can be removed', async () => {
-    await open('/admin/ai');
+    await open('/admin/ai');   // the old address: it lands on Models → Keys
     await page.getByLabel('API key').fill('sk-e2e-test-0000abcd');
     await page.getByRole('button', { name: 'Save key' }).click();
     await page.getByText('••••abcd').first().waitFor({ timeout: 5000 });

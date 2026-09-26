@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import {
+  More,
   Page, PageHeader, PageBody, Panel, Tag, Dot, Mono, Ascii, ListRow, DataTable, Row, Cell,
   Stat, StatGrid, Trend, Sparkline, Ring, Empty, Segmented, Field, SelectField,
 } from '@/components/os';
@@ -100,7 +101,11 @@ function LiveEvals() {
     <Page>
       <PageHeader
         title="Evals"
-        subtitle="Does a feature still answer the way it should? Suites run when someone runs them — against the real compiler, memory, retrieval or a lane — and a regression is reported as loudly as a win."
+        subtitle="Check that each feature still answers the way it should."
+        about={<>
+          <p>A suite runs when someone runs it, against the real compiler, memory, retrieval or a lane.</p>
+          <p>Answers are checked by stated rules, or by a judge that is a model call of its own. A regression is reported as loudly as a win.</p>
+        </>}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {can('evals:write') && <Button size="sm" variant="outline" onClick={() => setCreating(true)}><Plus className="size-3.5" />New suite</Button>}
@@ -121,20 +126,20 @@ function LiveEvals() {
         <PageBody><Empty icon={<Loader2 className="size-5 animate-spin" />} title="Loading the suites…" /></PageBody>
       ) : (
         <PageBody className="space-y-4">
-          <StatGrid cols={5}>
+          {suites.length > 0 && <StatGrid cols={5}>
             <Stat label="Suites" value={suites.length} icon={<Gauge className="size-3" />} sub={`${scored.length} scored`} />
             <Stat label="Cases" value={suites.reduce((n, x) => n + x.cases, 0)} sub={scored.length ? `${scored.reduce((n, x) => n + x.passed, 0)} passing in the last runs` : 'none run yet'} />
             <Stat label="Mean score" value={mean ?? '—'} tone="brand" sub={mean === null ? 'no finished run' : `across ${scored.length} scored suite${scored.length === 1 ? '' : 's'}`} />
             <Stat label="Regressions" value={regressions.length} tone={regressions.length ? 'danger' : undefined} sub={regressions.map((r) => r.name).join(' · ') || 'vs the run before'} icon={<TrendingDown className="size-3" />} />
             <Stat label="Improved" value={improved.length} tone={improved.length ? 'ok' : undefined} sub="vs the run before" icon={<TrendingUp className="size-3" />} />
-          </StatGrid>
+          </StatGrid>}
 
           {suites.length === 0 ? (
             <Panel>
               <Empty
                 icon={<Gauge className="size-6" />}
                 title="No eval suites yet"
-                hint="A suite points at something this app really calls — the requirement compiler, ask memory, retrieval, the reviewer's prompt or a bare lane prompt — with cases whose answers are checked by stated rules, or by a judge that is a model call of its own."
+                hint="Point one at the compiler, memory, retrieval or a lane."
                 action={can('evals:write') && <Button size="sm" onClick={() => setCreating(true)}><Plus className="size-3.5" />New suite</Button>}
               />
             </Panel>
@@ -167,14 +172,10 @@ function LiveEvals() {
             </div>
           )}
 
-          <Panel eyebrow="How a failure becomes something the next run reads" title="The loop, as it really runs">
-            <Ascii>{TRUE_LOOP}</Ascii>
-            <p className="mt-2.5 text-[12.5px] text-dim">Nothing here rewrites a rule or a skill on its own. A lesson is a memory fact a person writes from a result; the compiler and ask memory search memory on every call, so it reaches their next answer.</p>
-          </Panel>
-
-          <Panel eyebrow="Saved to memory from a result" title="Lessons learned" flush>
+          {suites.length > 0 && <Panel title="Lessons learned" flush
+            about="A lesson is a memory fact a person saves from a result. The compiler and Ask memory read it on their next call; nothing rewrites a rule on its own.">
             {overview.data.lessons.length === 0 ? (
-              <p className="px-5 py-4 text-[13px] text-dim">No lessons yet. Save one from a failed or partial case, and it lands in memory with the run it came from.</p>
+              <p className="px-5 py-4 text-[13px] text-dim">No lessons yet. Save one from a failed case.</p>
             ) : (
               <div className="divide-y divide-line/60">
                 {overview.data.lessons.map((l) => (
@@ -187,7 +188,9 @@ function LiveEvals() {
                 ))}
               </div>
             )}
-          </Panel>
+          </Panel>}
+
+          <More label="How a failure reaches the next run"><Ascii>{TRUE_LOOP}</Ascii></More>
         </PageBody>
       )}
 
@@ -268,20 +271,20 @@ function SuitePanel({ suite, detail, error, lanes, runRef, onRun, onChanged, onD
             ? <div className="grid size-16 place-items-center rounded-full ring-1 ring-line ring-inset text-[11.5px] text-dim">not run</div>
             : <Ring pct={suite.score} size={64} tone={tone} />}
           <div className="grid min-w-0 flex-1 grid-cols-2 gap-3 sm:grid-cols-4">
-            <div><div className="figure text-[20px] text-ink">{run ? run.passed : '—'}</div><div className="eyebrow mt-1">passed</div></div>
-            <div><div className="figure text-[20px] text-ink">{run ? run.failed + run.partial : '—'}</div><div className="eyebrow mt-1">failed · partial</div></div>
-            <div><div className="figure text-[20px] text-ink">{run ? run.errored : '—'}</div><div className="eyebrow mt-1">errored</div></div>
+            <div><div className="figure text-[20px] text-ink">{run ? run.passed : '—'}</div><div className="mt-1 text-[12px] text-dim">passed</div></div>
+            <div><div className="figure text-[20px] text-ink">{run ? run.failed + run.partial : '—'}</div><div className="mt-1 text-[12px] text-dim">failed · partial</div></div>
+            <div><div className="figure text-[20px] text-ink">{run ? run.errored : '—'}</div><div className="mt-1 text-[12px] text-dim">errored</div></div>
             <div>
               {(detail?.trend.length ?? 0) > 1
                 ? <Sparkline points={detail?.trend ?? []} width={120} height={32} tone={regressed ? 'danger' : 'ok'} />
                 : <div className="text-[12.5px] text-dim">{detail?.trend.length ? 'one finished run' : 'no finished run'}</div>}
-              <div className="eyebrow mt-1">trend</div>
+              <div className="mt-1 text-[12px] text-dim">trend</div>
             </div>
           </div>
         </div>
         {regressed && (
           <p className="mt-3 border-t border-line pt-2.5 text-[12.5px] text-danger">
-            Down {Math.abs(suite.delta ?? 0)} points against the finished run before {suite.lastRunRef}. The cases below say which moved.
+            Down {Math.abs(suite.delta ?? 0)} points against the run before {suite.lastRunRef}; the cases show which moved.
           </p>
         )}
         {detail?.description && <p className="mt-3 text-[13px] text-soft">{detail.description}</p>}
@@ -323,7 +326,7 @@ function SuitePanel({ suite, detail, error, lanes, runRef, onRun, onChanged, onD
         ) : !detail ? (
           <Empty icon={<Loader2 className="size-5 animate-spin" />} title="Loading the cases…" />
         ) : cases.length === 0 ? (
-          <Empty title="No cases yet" hint="A case is one input and the checks its answer must pass. Add one to be able to run this suite." />
+          <Empty title="No cases yet" hint="Add an input and the checks its answer must pass." />
         ) : (
           <DataTable head={['Case', 'Expected', 'Got', 'Status', 'Δ', 'Judge', '']}>
             {cases.map((c) => (
@@ -398,7 +401,7 @@ function SuiteDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenC
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New eval suite</DialogTitle>
-          <DialogDescription>One target this app really calls, and the score its cases must reach.</DialogDescription>
+          <DialogDescription>One real target, and the score its cases must reach.</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <Field label="Name" value={form.name} onChange={(v) => set({ name: v })} placeholder="compiler-risk-grading" mono autoFocus />
@@ -409,24 +412,27 @@ function SuiteDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenC
           {needsProject && (
             projects.length
               ? <SelectField label="Project it reads" value={form.projectId ?? ''} onChange={(v) => set({ projectId: v })} options={projects.map((p) => ({ value: p.id, label: p.name }))} />
-              : <p className="text-[12.5px] text-warn">This target reads a project's workspace, and there is no project yet.</p>
+              : <p className="text-[12.5px] text-warn">This target needs a project, and there is none yet.</p>
           )}
           {form.targetKind === 'prompt' && (
             <label className="block">
               <span className="mb-1.5 block text-[12.5px] font-medium text-soft">System prompt</span>
               <Textarea value={form.systemPrompt} onChange={(e) => set({ systemPrompt: e.target.value })} rows={4}
                 placeholder='Answer as one JSON object: {"answer": "..."}' className="font-mono text-[12.5px]" />
-              <span className="mt-1 block text-[12px] text-dim">Lanes answer in JSON mode, so ask for a JSON object; text checks read the JSON as text.</span>
+              <span className="mt-1 block text-[12px] text-dim">Lanes answer in JSON; text checks read that JSON as text.</span>
             </label>
           )}
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Pass at (0–100)" type="number" value={String(form.threshold)} onChange={(v) => set({ threshold: Math.max(0, Math.min(100, Number(v) || 0)) })} />
-            <label className="flex items-center justify-between gap-3 pt-6 text-[13px] text-ink-2">
-              Count offline answers
-              <Switch checked={form.allowOffline} onCheckedChange={(v) => set({ allowOffline: v })} />
-            </label>
-          </div>
-          <Field label="Description" value={form.description} onChange={(v) => set({ description: v })} placeholder="What this suite protects" />
+          <Field label="Pass at (0–100)" type="number" value={String(form.threshold)} onChange={(v) => set({ threshold: Math.max(0, Math.min(100, Number(v) || 0)) })}
+            className="sm:w-1/2" />
+          <More label="More options">
+            <div className="space-y-3">
+              <label className="flex items-center justify-between gap-3 text-[13px] text-ink-2">
+                Count offline answers
+                <Switch checked={form.allowOffline} onCheckedChange={(v) => set({ allowOffline: v })} />
+              </label>
+              <Field label="Description" value={form.description} onChange={(v) => set({ description: v })} placeholder="What this suite protects" />
+            </div>
+          </More>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
@@ -493,7 +499,7 @@ function CaseDialog({ suite, draft, onClose, onSaved }: { suite: LiveEvalSuite; 
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Add a case to {suite.name}</DialogTitle>
-          <DialogDescription>The input goes to the {suite.target.toLowerCase()} exactly as written; each check scores what comes back.</DialogDescription>
+          <DialogDescription>Sent to the {suite.target.toLowerCase()} as written; each check scores the answer.</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <Field label="Name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder="Interstate invoice is HIGH risk" autoFocus />
@@ -550,14 +556,14 @@ function FromPlanDialog({ open, suite, onOpenChange, onDraft }: {
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>A case from a plan</DialogTitle>
-          <DialogDescription>The plan's requirement becomes the input; its risk and its owners become the checks. You edit it before it is saved.</DialogDescription>
+          <DialogDescription>Its requirement becomes the input; its risk and owners, the checks.</DialogDescription>
         </DialogHeader>
         {mine.length === 0
           ? <p className="text-[13px] text-dim">This suite's project has no plan yet.</p>
           : <SelectField label="Plan" value={chosen} onChange={setRef} options={mine.map((p) => ({ value: p.ref, label: `${p.ref} · ${p.rawRequirement.slice(0, 60)}` }))} />}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={() => void draft()} disabled={!chosen || loading}>{loading && <Loader2 className="size-3.5 animate-spin" />}Draft the case</Button>
+          <Button onClick={() => void draft()} disabled={!chosen || loading}>{loading && <Loader2 className="size-3.5 animate-spin" />}Draft case</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -589,7 +595,7 @@ function OverrideDialog({ row, onClose, onSaved }: { row: EvalCaseRow; onClose: 
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Override {row.name}</DialogTitle>
-          <DialogDescription>The checks said {row.machineStatus}. Your verdict is shown beside it; the computed score stays as it was computed.</DialogDescription>
+          <DialogDescription>The checks said {row.machineStatus}. Your verdict shows beside it; the score is unchanged.</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           {row.output && <pre className="max-h-40 overflow-auto rounded-lg bg-base p-3 font-mono text-[12px] whitespace-pre-wrap text-ink-2 ring-1 ring-line/60 ring-inset">{row.output}</pre>}
@@ -631,7 +637,7 @@ function LessonDialog({ row, runRef, onClose, onSaved }: { row: EvalCaseRow; run
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>A lesson from {row.name}</DialogTitle>
-          <DialogDescription>Saved to memory with {runRef} as its source, so it can be traced back to this case.</DialogDescription>
+          <DialogDescription>Saved to memory with {runRef} as its source.</DialogDescription>
         </DialogHeader>
         <p className="text-[12.5px] text-soft">Expected {row.expected}; got {row.got || '—'}.</p>
         <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} autoFocus

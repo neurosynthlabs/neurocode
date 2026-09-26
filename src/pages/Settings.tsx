@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
-  Page, PageHeader, PageBody, Panel, Mono, Ascii, SelectField, SectionTitle, KV, Field, Tag,
+  More, Page, PageHeader, PageBody, Panel, Mono, Ascii, SelectField, SectionTitle, KV, Field, Tag,
 } from '@/components/os';
 import { API_BASE, ApiError } from '@/lib/api';
 import { useRemote } from '@/lib/remote';
@@ -48,8 +48,8 @@ export default function Settings() {
     if (!done) return;
     toast.success('Workspace emptied', {
       description: [
-        done.backup ? `A backup was taken first: ${done.backup}, listed in Admin → Database.` : 'No backup was taken: pg_dump is not on this machine.',
-        `${plural(done.counts.projects ?? 0, 'project')} and ${plural(done.counts.tasks ?? 0, 'task')} remain; the ${plural(done.counts.agents ?? 0, 'agent')} on the roster were kept.`,
+        done.backup ? `Backup first: ${done.backup}, in Admin → Database.` : 'No backup: pg_dump is not on this machine.',
+        `${plural(done.counts.projects ?? 0, 'project')} and ${plural(done.counts.tasks ?? 0, 'task')} remain; ${plural(done.counts.agents ?? 0, 'agent')} kept.`,
       ].join(' '),
     });
   };
@@ -64,13 +64,14 @@ export default function Settings() {
     <Page>
       <PageHeader
         title="Settings"
-        subtitle="Appearance, where the data lives, and reset."
+        subtitle="Appearance, web search, access tokens and reset."
+        about={<p>Routing, model keys, approvals and roles each have a screen of their own, linked under Set elsewhere.</p>}
       />
 
       <PageBody>
         <div className="grid grid-cols-12 gap-4">
           <div className="col-span-12 space-y-3 2xl:col-span-8">
-            <Panel className="accent-top" eyebrow="This browser · every control here changes the app immediately" title="Appearance">
+            <Panel className="accent-top" eyebrow="This browser" title="Appearance">
               <SectionTitle>Preset</SectionTitle>
               <div className="grid grid-cols-2 gap-1.5 lg:grid-cols-3">
                 {THEMES.map((p) => (
@@ -83,7 +84,7 @@ export default function Settings() {
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-1.5">
                         <span className="text-[13px] font-medium text-ink">{p.name}</span>
-                        <span className="eyebrow">{p.mode}</span>
+                        <span className="text-[11px] text-dim">{p.mode}</span>
                       </span>
                       <span className="block truncate text-[11.5px] text-dim">{p.note}</span>
                     </span>
@@ -131,21 +132,21 @@ export default function Settings() {
 
             <TokensPanel />
 
-            <Panel eyebrow="Changed on their own screens" title="Set elsewhere">
+            <Panel title="Set elsewhere">
               <div className="divide-y divide-line/60">
-                <Elsewhere what="Routing policy and lanes" where="Models & Router" onOpen={() => nav('/models')} />
-                {admin && <Elsewhere what="Model keys and each lane's limits" where="AI providers" onOpen={() => nav('/admin/ai')} />}
-                <Elsewhere what="What needs your approval, and the tool rules" where="Permissions" onOpen={() => nav('/permissions')} />
-                {canAny('roles:manage', 'users:manage') && <Elsewhere what="Who may do what" where="Roles & permissions" onOpen={() => nav('/admin/roles')} />}
+                <Elsewhere what="Routing policy and lanes" where="Models" onOpen={() => nav('/models')} />
+                {admin && <Elsewhere what="Model keys and lane limits" where="Models → Keys" onOpen={() => nav('/models?tab=keys')} />}
+                <Elsewhere what="Approvals and tool rules" where="Permissions" onOpen={() => nav('/permissions')} />
+                {canAny('roles:manage', 'users:manage') && <Elsewhere what="Who may do what" where="Roles" onOpen={() => nav('/admin/roles')} />}
               </div>
             </Panel>
           </div>
 
           <div className="col-span-12 space-y-3 2xl:col-span-4">
             <Panel eyebrow="Read-only" title="Config export">
-              <Ascii className="max-h-[420px] overflow-auto">{exported}</Ascii>
+              <More label="Show JSON"><Ascii className="max-h-[420px] overflow-auto">{exported}</Ascii></More>
             </Panel>
-            <Panel eyebrow="Where this lives" title="Storage">
+            <Panel title="Storage">
               <KV k="Appearance" v="this browser" mono />
               <KV k="Screen preferences" v="Postgres · prefs table" mono />
               <KV k="Project rules" v="Postgres · projects.rules" mono />
@@ -158,12 +159,11 @@ export default function Settings() {
                 <KV k="Requirement compiler" v={compiler.note ?? (compiler.provider === 'rules' ? 'no model configured' : compiler.model)} />
               )}
             </Panel>
-            <Panel eyebrow="Danger zone" title="Reset" className="border-danger/30">
-              <p className="text-[12.5px] text-soft">
-                Resetting appearance is instant and only touches this browser. Resetting the workspace empties projects, tasks,
-                plans, runs, memory, approvals and the activity log, after taking a backup. People, roles, teams, keys, the
-                agent roster, the usage ledger and the audit log are kept.
-              </p>
+            <Panel eyebrow="Danger zone" title="Reset" className="border-danger/30"
+              about={<><p>Appearance resets in this browser only.</p><p>The workspace reset takes a backup, then empties projects, tasks,
+                plans, runs, memory, approvals and the activity log.</p><p>People, roles, teams, keys, agents, the usage ledger
+                and the audit log are kept.</p></>}>
+              <p className="text-[12.5px] text-soft">Workspace reset empties all work, after a backup.</p>
               <div className="mt-2.5 flex flex-wrap gap-1.5">
                 <Button size="xs" variant="outline" onClick={() => { t.setTheme('graphite'); t.setRail('tinted'); t.setRadius(0.5); t.setFontFamily('system'); t.setFontSize('default'); toast('Appearance reset'); }}>
                   Reset appearance
@@ -174,7 +174,7 @@ export default function Settings() {
                   </Button>
                 )}
               </div>
-              {!admin && <p className="mt-2 text-[12px] text-dim">Resetting the workspace needs workspace admin.</p>}
+              {!admin && <p className="mt-2 text-[12px] text-dim">Workspace reset needs workspace admin.</p>}
             </Panel>
             <Panel eyebrow="Build" title="About">
               <KV k="Version" v={<Mono>v{__APP_VERSION__}</Mono>} />
@@ -191,8 +191,8 @@ export default function Settings() {
 function Elsewhere({ what, where, onOpen }: { what: string; where: string; onOpen: () => void }) {
   return (
     <div className="flex items-center justify-between gap-3 py-2.5">
-      <span className="text-[13.5px] text-ink-2">{what}</span>
-      <Button size="xs" variant="outline" onClick={onOpen}>Open {where}</Button>
+      <span className="min-w-0 text-[13.5px] text-ink-2">{what} <span className="text-dim">· {where}</span></span>
+      <Button size="xs" variant="outline" aria-label={`Open ${where}`} onClick={onOpen}>Open</Button>
     </div>
   );
 }
@@ -255,8 +255,10 @@ function WebPanel() {
   };
 
   return (
-    <Panel eyebrow={s ? `${s.label} · the tool rules apply to every search and page` : 'Search and pages'}
+    <Panel eyebrow={s ? s.label : 'Search and pages'}
       title={<span className="flex items-center gap-1.5"><Globe className="size-3.5 text-brand" />Web</span>}
+      about={<><p>Research searches the web for each angle and reads the top pages when “The web” is ticked.</p>
+        <p>The key is kept beside the model keys and never shown again. The tool rules apply to every search and page.</p></>}
       actions={s && <Tag tone={s.configured ? 'ok' : 'neutral'}>{s.configured ? 'search configured' : 'search not configured'}</Tag>}>
       {status.loading ? (
         <p className="text-[13px] text-dim"><Loader2 className="mr-2 inline size-3.5 animate-spin" />asking the API…</p>
@@ -264,16 +266,12 @@ function WebPanel() {
         <p className="text-[13px] text-danger">{status.error ?? 'No answer.'}</p>
       ) : (
         <>
-          <p className="text-[12.5px] text-ink-2">
-            Research can search the web for each angle and read the top pages when you tick “The web”. Search goes
-            through the {s.label}; its key is kept beside the model keys and never shown again.
-          </p>
           {admin ? (
-            <div className="mt-3 flex flex-wrap items-end gap-2">
+            <div className="flex flex-wrap items-end gap-2">
               <Field className="min-w-0 flex-1 basis-56" label={s.keyMask ? `Key · ${s.keyMask}` : 'Key'} type="password"
-                value={key} onChange={setKey} placeholder={s.keyMask ? 'Paste a new key to replace it' : 'BSA…'}
+                value={key} onChange={setKey} placeholder={s.keyMask ? 'Paste to replace' : 'BSA…'}
                 autoComplete="off" mono
-                hint={<>Made in the <a className="text-brand hover:underline" href={s.keysAt} target="_blank" rel="noreferrer noopener">Brave Search API dashboard ↗</a>. Setting it is written to the audit log.</>} />
+                hint={<>From the <a className="text-brand hover:underline" href={s.keysAt} target="_blank" rel="noreferrer noopener">Brave Search API dashboard ↗</a>. Changes are audit-logged.</>} />
               <div className="flex gap-1.5 pb-6">
                 <Button size="sm" disabled={!key.trim() || saving} onClick={() => void saveKey(key.trim())}>
                   {saving && <Loader2 className="size-3.5 animate-spin" />}Save key
@@ -282,7 +280,7 @@ function WebPanel() {
               </div>
             </div>
           ) : (
-            <p className="mt-2 text-[12px] text-dim">
+            <p className="text-[12px] text-dim">
               {s.configured ? 'An admin has set the key.' : `Setting the key needs ${WEB_KEY_PERMISSION}.`}
             </p>
           )}
@@ -332,8 +330,7 @@ function WebPanel() {
                 </div>
               )}
               <p className="mt-2 text-[11.5px] text-dim">
-                http and https only, never a local or private address; up to {s.fetch.maxHops} redirects, each checked
-                again; {Math.round(s.fetch.maxBytes / 1048576)} MB and {s.fetch.timeoutS} s at most.
+                Public http(s) only · {s.fetch.maxHops} redirects, each checked · {Math.round(s.fetch.maxBytes / 1048576)} MB · {s.fetch.timeoutS} s
               </p>
             </div>
           </div>
@@ -413,19 +410,16 @@ function TokensPanel() {
   };
 
   return (
-    <Panel eyebrow="Yours alone · for the nc terminal client and your scripts"
+    <Panel eyebrow="For nc and scripts"
       title={<span className="flex items-center gap-1.5"><KeyRound className="size-3.5 text-brand" />Access tokens</span>}
+      about={<><p>A token signs in as you, limited to the permissions it names and never beyond yours.</p>
+        <p>With none named it carries all you hold except <Mono>{MACHINE_PERMISSION}</Mono>. Only a token that names it opens a terminal here.</p>
+        <p><Mono>nc login</Mono> makes one for its machine and keeps it in the keychain. Making and revoking is audit-logged.</p></>}
       actions={<Button size="sm" variant="outline" onClick={() => setMaking(true)}><Plus className="size-3.5" />New token</Button>}>
-      <p className="text-[12.5px] text-ink-2">
-        A token signs in as you, limited to the permissions it names and never more than you hold. With none named it
-        carries everything you hold except <Mono>{MACHINE_PERMISSION}</Mono> — a terminal on this machine is only ever
-        opened by a token that names it. Making and revoking tokens is written to the audit log.
-      </p>
-      <div className="mt-2.5 flex min-w-0 flex-wrap items-center gap-2 text-[12.5px] text-soft">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 text-[12.5px] text-soft">
         <Terminal className="size-3.5 shrink-0 text-dim" />
-        <span>In a terminal,</span>
+        <span>From a terminal</span>
         <Mono className="min-w-0 [overflow-wrap:anywhere]">{loginLine()}</Mono>
-        <span>makes one for that machine and keeps it in its keychain.</span>
       </div>
 
       <div className="mt-4 border-t border-line pt-1">
@@ -437,9 +431,7 @@ function TokensPanel() {
             <Button size="xs" variant="outline" onClick={reload}>Try again</Button>
           </div>
         ) : items.length === 0 ? (
-          <p className="py-3 text-[13px] text-dim">
-            No tokens yet. Make one here for a script, or run <Mono>nc login</Mono> in a terminal.
-          </p>
+          <p className="py-3 text-[13px] text-dim">No tokens yet.</p>
         ) : (
           <>
             <div className="divide-y divide-line/60">
@@ -550,7 +542,7 @@ function MakeToken({ open, onOpenChange, onMade }: {
             <DialogHeader>
               <DialogTitle>{made.name} is ready</DialogTitle>
               <DialogDescription>
-                Copy it now: this is the only time it is shown. Only its first characters are kept to tell it apart.
+                Copy it now. It is never shown again.
               </DialogDescription>
             </DialogHeader>
             <div className="min-w-0 rounded-xl border border-line bg-surface-2/50 px-4 py-3">
@@ -563,7 +555,7 @@ function MakeToken({ open, onOpenChange, onMade }: {
               </div>
             </div>
             <div className="min-w-0 text-[12.5px] text-soft">
-              <p>Use it as <Mono>Authorization: Bearer …</Mono>, or hand it to the terminal client:</p>
+              <p>Use as <Mono>Authorization: Bearer …</Mono>, or in a terminal:</p>
               <Mono className="mt-1.5 inline-block [overflow-wrap:anywhere]">{`${loginLine()} --token -`}</Mono>
             </div>
             <DialogFooter><Button onClick={close}>Done</Button></DialogFooter>
@@ -572,7 +564,7 @@ function MakeToken({ open, onOpenChange, onMade }: {
           <form onSubmit={submit} className="grid min-w-0 gap-4">
             <DialogHeader>
               <DialogTitle>New access token</DialogTitle>
-              <DialogDescription>It signs in as you, within what you choose here, until it expires or you revoke it.</DialogDescription>
+              <DialogDescription>Signs in as you, within the rights you choose.</DialogDescription>
             </DialogHeader>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Field label="Name" value={name} onChange={setName} autoFocus autoComplete="off" placeholder="CI on the build server" />
@@ -581,8 +573,8 @@ function MakeToken({ open, onOpenChange, onMade }: {
             <div className="min-w-0">
               <div className="mb-1.5 text-[12.5px] font-medium text-soft">What it may do</div>
               <div className="grid gap-1.5">
-                {[{ on: false, title: 'Everything you hold, except machine access', note: 'The usual choice for nc and scripts. A terminal on this machine stays out of reach.' },
-                  { on: true, title: 'Only what I choose', note: 'Named permissions only. Choose machine access here if the token must open a terminal.' }].map((o) => (
+                {[{ on: false, title: 'Everything you hold, except machine access', note: 'The usual choice. Cannot open a terminal here.' },
+                  { on: true, title: 'Only what I choose', note: 'Pick machine access if it must open a terminal.' }].map((o) => (
                   <label key={String(o.on)} className={cn('flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors',
                     limited === o.on ? 'border-brand/45 bg-brand/6' : 'border-line hover:bg-surface-2/60')}>
                     <input type="radio" name="token-scope" className="mt-0.5 size-4 shrink-0 accent-[var(--os-brand)]"
@@ -597,7 +589,7 @@ function MakeToken({ open, onOpenChange, onMade }: {
               {limited && (
                 <div className="mt-2 max-h-[240px] space-y-1 overflow-y-auto rounded-lg border border-line p-2">
                   {held.length === 0 ? (
-                    <p className="px-1 py-1.5 text-[12.5px] text-dim">Your roles hold no permissions, so there is nothing to give a token.</p>
+                    <p className="px-1 py-1.5 text-[12.5px] text-dim">Your roles hold no permissions to give.</p>
                   ) : held.map((p) => {
                     const on = picked.includes(p.id);
                     return (
@@ -609,7 +601,7 @@ function MakeToken({ open, onOpenChange, onMade }: {
                             {p.label} <span className="font-mono text-[11.5px] text-dim">{p.id}</span>
                           </span>
                           {p.id === MACHINE_PERMISSION
-                            ? <span className="block text-[12px] text-warn">Lets the token open a terminal and change files on this machine.</span>
+                            ? <span className="block text-[12px] text-warn">Can open a terminal and change files here.</span>
                             : p.description && <span className="block text-[12px] leading-snug text-dim">{p.description}</span>}
                         </span>
                       </label>

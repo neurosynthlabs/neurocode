@@ -218,7 +218,7 @@ export function FileTree({ roots, activePath, hidden, refresh, onOpen, onCreated
                 )}
                 {root.readOnly && (
                   <span className="ml-1 inline-flex shrink-0 items-center gap-1 rounded-full border border-line px-1.5 text-[10.5px] text-dim"
-                    title="Read for search and grounding; agents never write here, and the editor opens its files read only.">
+                    title="Read for search and grounding; never written here.">
                     <Lock className="size-2.5" />read only
                   </span>
                 )}

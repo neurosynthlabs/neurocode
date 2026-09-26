@@ -1,18 +1,19 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { Cpu, HardDrive, Cloud, Loader2, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Dot, Mono, Ascii, Toolbar, Field, SelectField,
-  DataTable, Row, Cell, Stat, StatGrid, Bar, Segmented, Empty, KV,
+  DataTable, Row, Cell, Stat, StatGrid, Bar, Segmented, Empty, KV, More,
 } from '@/components/os';
 import { ApiError, api, type AiPatch, type AiPreference, type LaneId, type ThinkingLevel } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { fetchModels, type FleetLane, type ModelsReport, type RouteLine } from '@/lib/live/models';
 import { useRemote } from '@/lib/remote';
 import { cn } from '@/lib/utils';
+import { ProviderKeys } from '@/pages/admin/AiProviders';
 
 /** The gateway's real lanes and routes, and a day of its ledger. */
 export default function Models() {
@@ -21,6 +22,7 @@ export default function Models() {
 
 /* ── Live: the gateway's own view, and a day of its ledger ────── */
 
+type Tab = 'fleet' | 'routing' | 'keys';
 const ROLE_TONE = { write: 'brand', review: 'violet', plan: 'info', chat: 'ok' } as const;
 const GENERAL: { id: 'auto' | 'free' | 'local' | 'rules'; label: string }[] = [
   { id: 'auto', label: 'Auto' }, { id: 'free', label: 'Free only' }, { id: 'local', label: 'Local only' }, { id: 'rules', label: 'No model' },
@@ -53,7 +55,9 @@ function LiveModels() {
   const { can } = useAuth();
   const admin = can('workspace:admin');
   const report = useRemote('models', fetchModels);
-  const [tab, setTab] = useState<'fleet' | 'routing'>('fleet');
+  const [params, setParams] = useSearchParams();
+  const tab: Tab = params.get('tab') === 'routing' ? 'routing' : params.get('tab') === 'keys' && admin ? 'keys' : 'fleet';
+  const setTab = (t: Tab) => setParams(t === 'fleet' ? {} : { tab: t }, { replace: true });
   const [q, setQ] = useState('');
   const [good, setGood] = useState('all');
   const [host, setHost] = useState('all');
@@ -97,9 +101,12 @@ function LiveModels() {
   return (
     <Page>
       <PageHeader
-        title="Models & Router"
-        subtitle="Every model call goes through one gateway and its lanes. Which lane answers, what each feature asks for, and what happened in the last day, measured."
-        actions={r && <Segmented options={[{ id: 'fleet', label: `Lanes (${r.lanes.length})` }, { id: 'routing', label: `Routing (${r.routes.length})` }]} value={tab} onChange={setTab} />}
+        title="Models"
+        subtitle="Which lane answers each feature, and the last day, measured."
+        about={<p>Every model call goes through one gateway and its lanes.</p>}
+        actions={r && <Segmented<Tab> value={tab} onChange={setTab} options={[
+          { id: 'fleet', label: `Lanes (${r.lanes.length})` }, { id: 'routing', label: `Routing (${r.routes.length})` },
+          ...(admin ? [{ id: 'keys' as const, label: 'Keys' }] : [])]} />}
       >
         {r && tab === 'fleet' && (
           <Toolbar>
@@ -117,18 +124,19 @@ function LiveModels() {
         <PageBody><Empty title="The router did not load" hint={report.error} action={<Button size="sm" variant="outline" onClick={report.reload}>Try again</Button>} /></PageBody>
       ) : !r ? (
         <PageBody><Empty icon={<Loader2 className="size-5 animate-spin" />} title="Asking the gateway…" /></PageBody>
+      ) : tab === 'keys' ? (
+        <PageBody><ProviderKeys /></PageBody>
       ) : (
         <PageBody className="space-y-4">
-          <Totals r={r} />
+          {r.totals24h.calls > 0 && <Totals r={r} />}
 
           <div className="grid grid-cols-12 gap-3">
-            <Panel className="col-span-12 xl:col-span-7" eyebrow="What each feature would try now" title="Router">
+            <Panel className="col-span-12 xl:col-span-7" title="Router" about={<><p>What each feature would try now.</p><p>{r.ordering}</p></>}>
               <Ascii className="overflow-auto">{diagram(r.routes)}</Ascii>
-              <p className="mt-2 text-[12.5px] text-dim">{r.ordering}</p>
               <Split24h r={r} />
             </Panel>
 
-            <Panel className="col-span-12 xl:col-span-5" eyebrow="Which lanes the router may use" title="Policy">
+            <Panel className="col-span-12 xl:col-span-5" title="Policy" about="Which lanes the router may use.">
               <Policy r={r} admin={admin} busy={busy === 'preference'}
                 onChange={(preference) => void save({ preference }, `Routing set to ${preference}`, 'preference')} />
             </Panel>
@@ -144,7 +152,7 @@ function LiveModels() {
                       <Row key={l.id}>
                         <Cell className="font-medium text-ink">
                           {l.label} <Mono className="ml-1">{l.model}</Mono>
-                          <span className="mt-0.5 block max-w-[380px] truncate text-[12px] font-normal text-dim">
+                          <span className="mt-0.5 block max-w-[380px] truncate text-[12px] font-normal text-dim" title={l.note}>
                             {l.freedom}{l.expires ? ` · ${l.expires}` : ''}{l.window ? ` · ${compact(l.window)} context` : ''}{caps(l)}{l.embed ? ` · embeds with ${l.embed}` : ''} · {l.note}
                           </span>
                           {l.allowance && <span className="mt-0.5 block max-w-[380px] text-[12px] font-normal whitespace-normal text-soft">{l.allowance}</span>}
@@ -190,7 +198,7 @@ function LiveModels() {
               )}
             </Panel>
           ) : (
-            <Panel eyebrow="Fixed in the code that makes each call" title="What each feature asks for" flush>
+            <Panel title="What each feature asks for" flush about="Fixed in the code that makes each call.">
               <DataTable head={['Feature', 'Asks for', 'Would try now', 'Thinking', 'With no lane', 'Calls 24h', 'Offline 24h', 'Failed 24h']}>
                 {r.routes.map((line) => (
                   <Row key={line.feature}>
@@ -216,11 +224,11 @@ function LiveModels() {
                   </Row>
                 ))}
               </DataTable>
-              <div className="border-t border-line px-5 py-3">
+              <More label="Fallbacks and thinking" className="border-t border-line px-5 py-3">
                 <KV k="When a lane fails" v="the call moves to the next lane in the chain" />
                 <KV k="When every lane fails" v="features with an offline answer give it and say so; the rest say no lane answered" />
-                <KV k="Thinking" v="sent only to lanes that take it — DeepSeek's thinking, and Gemini's reasoning effort, where high is its most; every other lane is sent none" />
-              </div>
+                <KV k="Thinking" v="only DeepSeek's thinking and Gemini's reasoning effort (high at most); other lanes get none" />
+              </More>
             </Panel>
           )}
         </PageBody>
@@ -258,12 +266,12 @@ function Totals({ r }: { r: ModelsReport }) {
     <StatGrid cols={5}>
       <Stat label="Local share" value={`${pct(t.local, model)}%`} tone="ok" sub={`${t.local.toLocaleString()} of ${model.toLocaleString()} model calls`} icon={<HardDrive className="size-3" />} />
       <Stat label="Remote share" value={`${pct(t.remote, model)}%`} tone="brand" sub={`${t.remote.toLocaleString()} calls · ${free.toLocaleString()} on free lanes`} icon={<Cloud className="size-3" />} />
-      <Stat label="Offline answers" value={t.offline.toLocaleString()} sub={offlineReviews ? `rules answered, last 24h · plus ${offlineReviews} rules-read review${offlineReviews === 1 ? '' : 's'}` : 'rules answered, no model, last 24h'} />
+      <Stat label="Offline answers" value={t.offline.toLocaleString()} sub={offlineReviews ? `rules answered · plus ${offlineReviews} rules-read review${offlineReviews === 1 ? '' : 's'}` : 'rules answered, no model'} />
       <Stat
         label="Spend 24h"
         value={t.costComplete ? money(t.costUsd) : t.costUsd === 0 ? 'unpriced' : `≥ ${money(t.costUsd)}`}
         tone={t.costComplete && t.costUsd === 0 ? 'ok' : undefined}
-        sub={t.costComplete ? `${(t.tokensIn + t.tokensOut).toLocaleString()} tokens at each lane's price` : 'a lane with no declared price answered: this is a floor'}
+        sub={t.costComplete ? `${(t.tokensIn + t.tokensOut).toLocaleString()} tokens at each lane's price` : 'a floor: an unpriced lane answered'}
       />
       <Stat label="Ready" value={ready} sub={`of ${r.lanes.length} lanes, now`} icon={<Cpu className="size-3" />} />
     </StatGrid>
@@ -275,7 +283,7 @@ function Split24h({ r }: { r: ModelsReport }) {
   return (
     <div className="mt-3 border-t border-line pt-2.5">
       <div className="mb-1.5 flex items-baseline justify-between">
-        <span className="eyebrow">local · remote · offline, last 24h</span>
+        <span className="text-[12px] text-dim">Local · remote · offline, last 24h</span>
         <span className="tnum text-[12.5px] text-soft">{t.local} / {t.remote} / {t.offline}</span>
       </div>
       {t.calls === 0 ? <p className="text-[12.5px] text-dim">No call in the last day.</p> : (
@@ -315,9 +323,9 @@ function Policy({ r, admin, busy, onChange }: { r: ModelsReport; admin: boolean;
       <KV k="Answering now" wrap v={r.active.provider === 'rules' ? 'no model' : <Mono tone="brand">{r.active.provider} · {r.active.model}</Mono>} />
       {r.active.note && <p className="text-[12.5px] text-warn">{r.active.note}</p>}
       {locked ? (
-        <p className="text-[12.5px] text-warn">NEUROCODE_COMPILER is set on the server, and it wins over this setting.</p>
+        <p className="text-[12.5px] text-warn">NEUROCODE_COMPILER is set on the server and overrides this.</p>
       ) : !admin && (
-        <p className="text-[12.5px] text-dim">Read-only: changing the routing needs workspace admin. Keys and limits live in <Link to="/admin/ai" className="text-brand hover:underline">Admin → AI providers</Link>.</p>
+        <p className="text-[12.5px] text-dim">Read-only: routing and keys need workspace admin.</p>
       )}
     </div>
   );

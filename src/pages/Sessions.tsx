@@ -336,7 +336,7 @@ export default function Sessions() {
     setActing('plan');
     try {
       const plan = await sessionsApi.toPlan(session.ref);
-      toast.success(`${plan.ref} compiled`, { description: 'From the last question and what its answer read.', action: { label: 'Open', onClick: () => navigate(`/plans?ref=${encodeURIComponent(plan.ref)}`) } });
+      toast.success(`${plan.ref} compiled`, { description: 'From the last question and its sources.', action: { label: 'Open', onClick: () => navigate(`/plans?ref=${encodeURIComponent(plan.ref)}`) } });
     } catch (e) {
       toast.error('No plan was made', { description: failed(e) });
     } finally {
@@ -349,7 +349,7 @@ export default function Sessions() {
       setImporting(JSON.parse(await file.text()) as unknown);
       setChoosing('import');
     } catch {
-      toast.error(`${file.name} is not JSON`, { description: 'Import reads a session exported as JSON from NeuroCode.' });
+      toast.error(`${file.name} is not JSON`, { description: 'Import takes a session exported as JSON.' });
     }
   };
 
@@ -374,7 +374,7 @@ export default function Sessions() {
       const { summary, session: after } = await api.compactSession(session.ref);
       replace(after);
       detail.reload();
-      toast.success(`${summary.folded?.turns ?? 0} turns folded`, { description: 'The model is sent the summary instead. Every turn is still here to read.' });
+      toast.success(`${summary.folded?.turns ?? 0} turns folded`, { description: 'The model gets the summary; every turn stays readable.' });
     } catch (e) {
       toast.error('Nothing was folded', { description: failed(e) });
     } finally {
@@ -418,7 +418,7 @@ export default function Sessions() {
               <Button size="xs" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
               <Button size="xs" disabled={!editing.text.trim()} onClick={() => void saveEdit()}>Ask this instead</Button>
             </div>
-            <p className="px-1.5 pt-1 text-[11.5px] text-dim">The question and what followed it stay, as an earlier version.</p>
+            <p className="px-1.5 pt-1 text-[11.5px] text-dim">The original stays as a version.</p>
           </div>
         ) : (
           <p className={cn('max-w-[85%] rounded-xl rounded-br-sm bg-brand/12 px-3.5 py-2 text-[13.5px] whitespace-pre-wrap text-ink', old && 'opacity-75')}>{m.text}</p>
@@ -486,7 +486,7 @@ export default function Sessions() {
       <Panel key={m.id} className="border-brand/30" eyebrow={`Written by ${m.lane ?? 'a model'}${m.model ? ` · ${m.model}` : ''}`}
         title={<span className="flex items-center gap-2"><FoldVertical className="size-4 text-brand" />Summary of {m.folded?.turns ?? 0} earlier turns</span>}>
         <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">{m.text}</p>
-        <p className="mt-2 text-[12px] text-dim">The model is sent this summary instead of those turns. They are kept above, folded, to read.</p>
+        <p className="mt-2 text-[12px] text-dim">Sent instead of the folded turns above.</p>
       </Panel>
     );
     const files = cited.get(m.id) ?? [];
@@ -545,7 +545,7 @@ export default function Sessions() {
       <p className="border-b border-line/60 px-4 py-2 text-[12px] text-dim">Who answers in {answerers.name}?</p>
       <ListRow onClick={() => void begin(answerers.projectId, answerers.name)}>
         <p className="truncate text-[13.5px] text-ink">NeuroCode</p>
-        <p className="mt-0.5 truncate text-[11.5px] text-dim">The ordinary session: every tool, the router's lane</p>
+        <p className="mt-0.5 truncate text-[11.5px] text-dim">Every tool, the router's lane</p>
       </ListRow>
       {answerers.agents.map((a) => (
         <ListRow key={a.key} onClick={() => void begin(answerers.projectId, answerers.name, a)}>
@@ -561,7 +561,7 @@ export default function Sessions() {
   ) : (
     <>
       {choosing === 'import' && <p className="border-b border-line/60 px-4 py-2 text-[12px] text-dim">Import into which project?</p>}
-      {projects.length === 0 && <p className="px-4 py-3 text-[12.5px] text-dim">No projects yet. Onboard one on Projects first.</p>}
+      {projects.length === 0 && <p className="px-4 py-3 text-[12.5px] text-dim">No projects yet.</p>}
       {projects.map((p) => (
         <ListRow key={p.id} onClick={() => void (choosing === 'import' ? doImport(p.id) : pickProject(p.id, p.name))}>
           <p className="truncate text-[13.5px] text-ink">{p.name}</p>
@@ -576,6 +576,10 @@ export default function Sessions() {
       <PageHeader
         title="Sessions"
         subtitle="Ask about the code; it answers from what its tools found."
+        about={<>
+          <p>A session reads this project's code and, with your say-so, the web and MCP tools. Every turn is written down first.</p>
+          <p>A call no rule allows waits on a card until you answer. An edit or a regenerated answer is a new turn; the old one stays as a version.</p>
+        </>}
         actions={mayChat && (
           <div className="flex items-center gap-2">
             <input ref={importFile} type="file" accept="application/json,.json" hidden
@@ -603,8 +607,7 @@ export default function Sessions() {
             <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
               {choosing ? picker : seeking && listed.length === 0 ? (
                 <p className="px-4 py-4 text-[12.5px] leading-relaxed text-dim">
-                  No session's reference, title or project matches “{findSession.trim()}”. What was said inside a
-                  session is searched in the session itself, above its turns.
+                  No session matches “{findSession.trim()}”. Turns are searched inside each session.
                 </p>
               ) : listed.map((s) => (
                 <ListRow key={s.ref} active={s.ref === ref} onClick={() => setPicked(s.ref)}>
@@ -627,7 +630,7 @@ export default function Sessions() {
           {!session ? (
             <div className="flex min-w-0 flex-1 items-center justify-center rounded-xl border border-line bg-surface">
               <Empty icon={<Bot className="size-6" />} title="No session yet"
-                hint="Start one on a project, or import one exported as JSON." />
+                hint="Start one on a project." />
             </div>
           ) : (
             <div className="flex min-w-0 flex-1 flex-col gap-3">
@@ -657,13 +660,13 @@ export default function Sessions() {
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[12px] text-dim">
                   {agentKey && (
                     <Link to="/agents" className="inline-flex items-center gap-1 rounded-full border border-brand/30 bg-brand/8 px-2 py-px text-ink-2 hover:text-ink"
-                      title="Every answer here is given by this agent: its instructions, the lane it prefers and only the tools it lists — each still under the tool rules.">
-                      <Bot className="size-3 text-brand" />Answered by {answeredBy ?? (theirs.loading ? '…' : 'an agent that is no longer there')}
+                      title="Its instructions, lane and tools, under the tool rules">
+                      <Bot className="size-3 text-brand" />Answered by {answeredBy ?? (theirs.loading ? '…' : 'a removed agent')}
                     </Link>
                   )}
                   {readsFrom.length > 0 && (
                     <span className="inline-flex items-center gap-1 rounded-full border border-line px-2 py-px text-ink-2"
-                      title={`Read only, labelled as references: ${readsFrom.join(', ')}. Their files are read as <project id>:<path>.`}>
+                      title={`Read only: ${readsFrom.join(', ')} · paths as <project id>:<path>`}>
                       <BookOpen className="size-3" />Reads {readsFrom.length} referenced {readsFrom.length === 1 ? 'project' : 'projects'}
                     </span>
                   )}
@@ -682,7 +685,7 @@ export default function Sessions() {
               {messages.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2">
                   <Field className="min-w-[200px] flex-1" value={findTurn} onChange={setFindTurn} icon={<Search className="size-3.5" />}
-                    placeholder="Search what was said in this session" onClear={() => setFindTurn('')} />
+                    placeholder="Search this session" onClear={() => setFindTurn('')} />
                   {looking && (
                     <span className="text-[12px] text-dim">{matching.length} of {placed.length} turns match</span>
                   )}
@@ -696,20 +699,15 @@ export default function Sessions() {
                   </div>
                 )}
                 {detail.loading && messages.length === 0 && <p className="flex items-center gap-2 text-[12.5px] text-dim"><Loader2 className="size-3.5 animate-spin" />Reading the session…</p>}
-                {!detail.loading && !detail.error && messages.length === 0 && <p className="text-[13px] text-soft">Ask it anything about {session.projectName}. Type @ to attach a file, a symbol, a fact or a plan.</p>}
+                {!detail.loading && !detail.error && messages.length === 0 && <p className="text-[13px] text-soft">Ask about {session.projectName}. Type @ to attach context.</p>}
                 {detail.data?.earlier && (
-                  <p className="text-[12px] text-dim">
-                    This session is longer than this screen holds: its earliest turns are not drawn here. They are in the
-                    database, and in the Markdown or JSON export.
-                  </p>
+                  <p className="text-[12px] text-dim">The earliest turns are only in the export.</p>
                 )}
                 {detail.data && !detail.data.whole && (
-                  <p className="text-[12px] text-warn">
-                    Reading this session stopped at its own ceiling, so turns after these were not read. Export it to read the rest.
-                  </p>
+                  <p className="text-[12px] text-warn">Later turns were not read. Export to read them.</p>
                 )}
                 {placed.some((p) => p.m.supersededBy) && (
-                  <p className="text-[12px] text-dim">You are reading an earlier version. The model is sent only the latest one.</p>
+                  <p className="text-[12px] text-dim">Earlier version · the model sees only the latest</p>
                 )}
                 {looking && matching.length === 0 && (
                   <p className="text-[13px] text-soft">No turn here says “{findTurn.trim()}”.</p>
@@ -725,7 +723,7 @@ export default function Sessions() {
                         {writing.answer}<span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-brand/70 align-middle" />
                       </p>
                     )}
-                    {writing.broken && <p className="text-[11.5px] text-dim">A piece was missed on the way; the whole answer replaces this when it is in.</p>}
+                    {writing.broken && <p className="text-[11.5px] text-dim">A piece was missed; the full answer follows.</p>}
                   </div>
                 ) : (
                   <p className="flex items-center gap-2 text-[12.5px] text-dim"><Loader2 className="size-3.5 animate-spin" />reading, then answering…</p>
@@ -763,7 +761,7 @@ function Chips({ session, items }: { session: SessionDoc | null; items: ChatAtta
           </>
         );
         const cls = 'inline-flex max-w-[220px] items-center gap-1 rounded-md bg-surface-2 px-1.5 py-0.5 text-[11.5px] text-ink-2';
-        const title = a.image ? 'A picture: sent only to a lane that reads images' : a.chars !== undefined ? `${a.chars.toLocaleString()} characters handed to the model` : a.kind;
+        const title = a.image ? 'Sent only to a lane that reads images' : a.chars !== undefined ? `${a.chars.toLocaleString()} characters sent` : a.kind;
         if (session && a.kind === 'upload' && !a.missing) {
           return <a key={`${a.kind}:${a.ref}`} href={sessionsApi.fileUrl(session.ref, a.ref)} target="_blank" rel="noreferrer" title={title} className={cn(cls, 'hover:text-brand')}>{label}</a>;
         }
@@ -794,7 +792,7 @@ function Folded({ count, children }: { count: number; children: ReactNode }) {
       <button onClick={() => setShown((v) => !v)} aria-expanded={shown}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px] text-dim transition-colors hover:text-ink-2">
         <ChevronRight className={cn('size-3.5 shrink-0 transition-transform', shown && 'rotate-90')} />
-        {count} earlier {count === 1 ? 'turn' : 'turns'}, folded into a summary — no longer sent to the model
+        {count} earlier {count === 1 ? 'turn' : 'turns'}, folded · not sent to the model
       </button>
       {shown && <div className="space-y-2.5 border-t border-dashed border-line/80 p-3 opacity-80">{children}</div>}
     </div>
@@ -831,12 +829,12 @@ function Context({ session, files, busy, canCompact, onCompact, actions }: {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border border-line bg-surface px-3.5 py-2">
       <div className="flex min-w-0 flex-1 items-center gap-2.5">
-        <span className="eyebrow shrink-0">Context</span>
+        <span className="shrink-0 text-[12px] font-medium text-dim">Context</span>
         {used === null ? (
           <span className="truncate text-[12.5px] text-dim">No model has answered yet</span>
         ) : share === null ? (
           <span className="truncate text-[12.5px] text-ink-2">
-            <span className="tnum">{tokens(used)}</span> tokens on the last call <span className="text-dim">· {session.model ?? 'this model'} publishes no window here</span>
+            <span className="tnum">{tokens(used)}</span> tokens on the last call <span className="text-dim">· no window known for {session.model ?? 'this model'}</span>
           </span>
         ) : (
           <>
@@ -855,7 +853,7 @@ function Context({ session, files, busy, canCompact, onCompact, actions }: {
       <div className="flex items-center gap-1.5">
         {canCompact && (
           <Button size="xs" variant="outline" disabled={busy} onClick={onCompact}
-            title="Fold the older turns into one summary a model writes. Every turn stays here to read.">
+            title="Summarize older turns; all stay readable">
             {busy ? <Loader2 className="size-3 animate-spin" /> : <FoldVertical className="size-3" />}Compact
           </Button>
         )}

@@ -58,12 +58,12 @@ export function ChangesPanel({ projectId, git, source, onChanged, openFile }: Ch
     () => checkoutApi.fileDiff(projectId ?? '', file ?? '', source));
 
   if (!git) {
-    return <Empty title="Not a git repository" hint="This folder has no repository, so there is nothing to commit or take back here." />;
+    return <Empty title="Not a git repository" hint="Nothing to commit or take back here." />;
   }
   if (!projectId) {
     return (
       <Empty title="Opened as a folder, not a project"
-        hint="Committing goes through the project a repository belongs to, so its changes are read and written under that project's own rights. Switch back to the project to commit from here." />
+        hint="Commits go through the project and its rights. Switch back to commit." />
     );
   }
   if (changed.length === 0) {
@@ -123,7 +123,7 @@ export function ChangesPanel({ projectId, git, source, onChanged, openFile }: Ch
               onPick={() => setPicked(c.path)} onToggle={() => toggle(c.path)}
               onOpen={() => openFile(joinPath(git.root, c.path))} onDiscard={() => void discard(c.path)} />
           ))}
-          {git.capped && <p className="px-3 py-2 text-[12px] text-warn">More files have changed than this list holds; the rest are not shown.</p>}
+          {git.capped && <p className="px-3 py-2 text-[12px] text-warn">More files changed than this list holds; the rest are hidden.</p>}
         </div>
         <div className="shrink-0 space-y-1.5 border-t border-line/60 p-2.5">
           <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={2} disabled={!mine || busy}
@@ -149,12 +149,12 @@ export function ChangesPanel({ projectId, git, source, onChanged, openFile }: Ch
             <div className="mb-2 flex flex-wrap items-center gap-2 text-[12.5px]">
               <Mono className="min-w-0 truncate">{diff.data.path}</Mono>
               <span className="tnum"><span className="text-ok">+{diff.data.additions}</span> <span className="text-danger">−{diff.data.deletions}</span></span>
-              {!diff.data.tracked && <Tag tone="ok">new — git has never seen it</Tag>}
+              {!diff.data.tracked && <Tag tone="ok">new, untracked</Tag>}
             </div>
             {diff.data.patch ? <DiffLines body={diff.data.patch} /> : (
-              <p className="text-[13px] text-soft">Git reports this file as changed but prints no lines for it — a mode or a rename, or the file is binary.</p>
+              <p className="text-[13px] text-soft">Changed, but git prints no lines: a mode change, a rename or a binary file.</p>
             )}
-            {diff.data.truncated && <p className="mt-1.5 text-[12.5px] text-warn">This is the first 200 kB of the file’s diff; the rest was not sent.</p>}
+            {diff.data.truncated && <p className="mt-1.5 text-[12.5px] text-warn">Only the first 200 kB of this diff was sent.</p>}
           </>
         )}
       </div>

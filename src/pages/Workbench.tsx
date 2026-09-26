@@ -102,10 +102,10 @@ export default function Workbench() {
       <Page>
         {can('machine:access') ? (
           <Empty icon={<ShieldAlert className="size-6" />} title="This server opens no folders"
-            hint="The Workbench works on the machine the NeuroCode API runs on, and this API was started with NEUROCODE_MACHINE_ACCESS=false — so it opens no files, terminals, runs or debuggers. Run NeuroCode on your own machine for those; everything else here works either way." />
+            hint="Started with NEUROCODE_MACHINE_ACCESS=false. Run it locally for files, terminals and runs." />
         ) : (
           <Empty icon={<ShieldAlert className="size-6" />} title="The Workbench opens folders on this machine"
-            hint="It reads and saves files, and opens terminals, on the machine the NeuroCode API runs on. That needs the “Use this machine” permission, which the Owner role holds." />
+            hint="It needs the “Use this machine” permission, held by the Owner role." />
         )}
       </Page>
     );
@@ -122,7 +122,7 @@ function sourceRoots(sources: ProjectSource[]): TreeRoot[] {
     path: s.root ?? null,
     git: null,
     readOnly: readOnly(s),
-    note: s.status === 'onboarding' ? 'Still onboarding. Its folder appears here once it is on this machine.'
+    note: s.status === 'onboarding' ? 'Still onboarding. Its folder appears here once ready.'
       : s.status === 'failed' ? `Onboarding failed${s.note ? `: ${s.note}` : '.'}`
         : `Not on this machine${s.kind === 'git' ? ` — ${s.repo} has no checkout here` : ''}.`,
   }));
@@ -379,7 +379,7 @@ function Bench() {
     const tab = tabsRef.current.find((t) => t.path === path);
     if (!tab || tab.text === null) return false;
     if (isLocked(path)) {
-      toast(`${baseName(path)} is read only`, { description: 'It is in a reference: read for search and grounding, never written from here.' });
+      toast(`${baseName(path)} is read only`, { description: 'A reference is read for search and grounding, never written.' });
       return false;
     }
     try {
@@ -562,7 +562,7 @@ function Bench() {
   const tree = (
     <div className="min-h-0 flex-1 overflow-y-auto">
       {place.kind === 'project' && !project ? (
-        <p className="px-4 py-4 text-[12.5px] leading-relaxed text-dim">No project yet. Open a folder, or onboard a project in Projects.</p>
+        <p className="px-4 py-4 text-[12.5px] leading-relaxed text-dim">No project yet. Open a folder instead.</p>
       ) : place.kind === 'project' && sources.error ? (
         <div className="px-4 py-4 text-[12.5px] leading-relaxed">
           <p className="text-danger">The project's folders could not be read: {sources.error}</p>
@@ -571,7 +571,7 @@ function Bench() {
       ) : place.kind === 'project' && !sources.data ? (
         <div className="flex items-center gap-2 px-4 py-4 text-[12.5px] text-dim"><Loader2 className="size-3.5 animate-spin" />Reading the project's folders…</div>
       ) : roots.length === 0 ? (
-        <p className="px-4 py-4 text-[12.5px] leading-relaxed text-dim">This project has no folder on this machine. It was onboarded somewhere else, or not from code. Open a folder to work on one here.</p>
+        <p className="px-4 py-4 text-[12.5px] leading-relaxed text-dim">No folder of this project is on this machine.</p>
       ) : (
         <FileTree roots={roots} activePath={active} hidden={hidden} refresh={treeNonce} onOpen={(p) => void openFile(p)} onCreated={onCreated} />
       )}
@@ -662,8 +662,8 @@ function Bench() {
             {!activeTab && (
               <Empty icon={<File className="size-6" />} title={roots.length ? 'Open a file from the tree' : 'Open a folder to start'}
                 hint={roots.length
-                  ? '⌘P finds a file by name. ⌘S saves it to the file on this machine; if someone changed it meanwhile, you are asked first.'
-                  : 'Pick any folder on this machine, or onboard a project whose code is here.'}
+                  ? '⌘P finds a file by name; ⌘S saves it.'
+                  : 'Pick a folder on this machine, or onboard a project.'}
                 action={roots.length ? <Button size="sm" variant="outline" onClick={() => setQuickOpen(true)}><Search className="size-3.5" />Go to file</Button>
                   : <div className="flex flex-wrap justify-center gap-2">
                       <Button size="sm" onClick={() => setPicking(true)}><FolderOpen className="size-3.5" />Open folder…</Button>
@@ -672,7 +672,7 @@ function Bench() {
             )}
             {activeTab && activeTab.text === null && !activeTab.view && (
               <Empty icon={<FileWarning className="size-6" />} title={activeTab.reason === 'binary' ? 'A binary file' : 'Not UTF-8 text'}
-                hint={`${baseName(activeTab.path)} is ${bytes(activeTab.size)}${activeTab.reason === 'binary' ? ' of binary data' : ' in an encoding other than UTF-8'}. The editor opens UTF-8 text, so it is not shown rather than shown wrong.`} />
+                hint={`${baseName(activeTab.path)} is ${bytes(activeTab.size)}${activeTab.reason === 'binary' ? ' of binary data' : ' in another encoding'}. Only UTF-8 text is shown.`} />
             )}
             {textTab && (
               <div className={cn('h-full', textTab.path !== active && 'hidden')}>
@@ -759,7 +759,7 @@ function Bench() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Close {closing ? baseName(closing) : ''} without saving?</DialogTitle>
-            <DialogDescription>It has changes that are not saved to the file.</DialogDescription>
+            <DialogDescription>Its changes are not saved.</DialogDescription>
           </DialogHeader>
           <DialogFooter className="flex-col gap-2 sm:flex-row">
             <Button variant="ghost" onClick={() => setClosing(null)}>Cancel</Button>
@@ -842,7 +842,7 @@ function QuickOpen({ open, onClose, roots, onPick }: { open: boolean; onClose: (
         </div>
         {found.data && (
           <div className="border-t border-line/70 px-4 py-2 text-[11.5px] text-dim">
-            {all.length.toLocaleString()} files{capped ? ' (the list stops at 20,000 per folder)' : ''} · ↑↓ to move · Enter to open
+            {all.length.toLocaleString()} files{capped ? ' (capped at 20,000 per folder)' : ''} · ↑↓ to move · Enter to open
           </div>
         )}
       </DialogContent>

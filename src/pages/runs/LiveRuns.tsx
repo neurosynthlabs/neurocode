@@ -47,7 +47,7 @@ const progress = (r: RunDoc) => Math.round((100 * r.steps.filter(done).length) /
 const LIVE_LINES = 2000;
 
 export function LiveRuns() {
-  const { runs, approvals, onRunLog, cancelRun, discardRun, mergeRun } = useData();
+  const { runs, approvals, onRunLog, cancelRun, discardRun, mergeRun, unmergeRun } = useData();
   const { can } = useAuth();
   const linked = useSearchParams()[0].get('ref');
   const [picked, setPicked] = useState<{ link: string | null; ref: string } | null>(null);
@@ -68,6 +68,7 @@ export function LiveRuns() {
   const [armedRef, setArmedRef] = useState<string | null>(null);
   const [merged, setMerged] = useState<{ ref: string; result: MergeResult } | null>(null);
   const armed = run !== null && armedRef === run.ref;
+  const undoArmed = run !== null && armedRef === `undo:${run.ref}`;
   const mergeResult = run && merged?.ref === run.ref ? merged.result : null;
   const logBox = useRef<HTMLDivElement>(null);
   const diff = useRemote(showDiff && run ? `diff:${run.ref}:${run.diff.commits}` : null, () => api.runDiff(run?.ref ?? ''));
@@ -118,7 +119,7 @@ export function LiveRuns() {
     setBusy(true);
     const out = await cancelRun(run.ref);
     setBusy(false);
-    if (out) toast('Stopped', { description: 'The worktree stays where it is, for you to look at.' });
+    if (out) toast('Stopped', { description: 'Its worktree is kept.' });
   };
   const push = async () => {
     if (!run) return;
@@ -126,7 +127,7 @@ export function LiveRuns() {
     try {
       const out = asRuntime(await runtimeApi.push(run.ref));
       toast.success(`Pushed to ${out.pushed?.remote ?? 'the remote'}`, {
-        description: out.pushed?.compareUrl ? 'Open the pull request from here, under your own account.' : `${out.branch} at ${out.pushed?.sha.slice(0, 7) ?? ''}.`,
+        description: out.pushed?.compareUrl ? 'Open the pull request from here.' : `${out.branch} at ${out.pushed?.sha.slice(0, 7) ?? ''}.`,
       });
     } catch (e) {
       toast.error('Nothing was pushed', { description: failed(e) });
@@ -154,7 +155,7 @@ export function LiveRuns() {
     setBusy(true);
     try {
       await runtimeApi.reviewAgain(run.ref);
-      toast('Reading it again', { description: 'The review reads the branch as it is now, and keeps a new receipt.' });
+      toast('Reading it again', { description: 'The review reads the branch as it is now.' });
     } catch (e) {
       toast.error('Not reviewed again', { description: failed(e) });
     } finally {
@@ -168,8 +169,8 @@ export function LiveRuns() {
       await runtimeApi.revert(run.ref, n, redo);
       setReverting(null);
       toast.success(`Reverted to step ${n}`, {
-        description: redo ? 'The worktree is back where that step left it, and the later steps run again.'
-          : 'The worktree is back where that step left it. The later steps are marked taken back.',
+        description: redo ? 'Back where that step left it; later steps run again.'
+          : 'Back where that step left it; later steps are taken back.',
       });
     } catch (e) {
       toast.error('Not reverted', { description: failed(e) });
@@ -184,7 +185,7 @@ export function LiveRuns() {
       const from = carryOn.data?.from;
       await runtimeApi.resume(run.ref);
       toast.success(`Carrying on from step ${from ?? ''}`.trim(), {
-        description: 'The steps already done stand, with the commits they made. Nothing is written again.',
+        description: 'Steps already done stand, with their commits.',
       });
     } catch (e) {
       toast.error('Not carried on', { description: failed(e) });
@@ -212,6 +213,20 @@ export function LiveRuns() {
     if (result.merged) toast.success(`Merged into ${result.into}`, { description: `${result.commit} · undo with ${result.undo}` });
     else toast.error(`${result.conflicts.length} files collide with ${result.into}`, { description: 'Nothing was merged.' });
   };
+  // Undoing is a reset of the real checkout, so it takes two clicks too; the server refuses it once anyone moved on.
+  const unmerge = async () => {
+    if (!run?.merged) return;
+    const { ref } = run;
+    const into = run.merged.into;
+    if (!undoArmed) { setArmedRef(`undo:${ref}`); return; }
+    setArmedRef(null);
+    setBusy(true);
+    const doc = await unmergeRun(ref);
+    setBusy(false);
+    if (!doc) return;
+    setMerged(null);
+    toast.success('Merge undone', { description: `${into} is back where it was before ${ref}.` });
+  };
   useEffect(() => {
     if (!armedRef) return;
     const id = window.setTimeout(() => setArmedRef(null), 4000);
@@ -225,7 +240,8 @@ export function LiveRuns() {
         <PageBody>
           <Empty
             icon={<FolderGit2 className="size-6" />} title="No run yet"
-            hint="Compile a requirement, settle its questions, and dispatch the plan. If that project's code is on this machine, the agents get a worktree and start there."
+            hint="Dispatch a plan and its run starts here."
+            action={<Link to="/plans" className={buttonVariants({ size: 'sm' })}>Open plans</Link>}
           />
         </PageBody>
       </Page>
@@ -256,18 +272,19 @@ export function LiveRuns() {
       <PageHeader
         title="Live Runs"
         subtitle="One git worktree and branch per run."
+        about={<><p>A run starts when a plan is dispatched.</p><p>If the project's code is on this machine, its agents get a worktree there. Your checkout changes only when you merge.</p></>}
         actions={
           <>
             {can('runs:run') && (working || run.status === 'waiting') && (
               <Button size="sm" variant="outline" onClick={() => void stop()} disabled={busy}><Square className="size-3.5" />Stop</Button>
             )}
             {canReread && (
-              <Button size="sm" variant="outline" onClick={() => void reviewAgain()} disabled={busy} title="Read the branch as it is now, and keep a new receipt">
+              <Button size="sm" variant="outline" onClick={() => void reviewAgain()} disabled={busy} title="Re-read the branch, with a new receipt">
                 <RefreshCw className="size-3.5" />Review again
               </Button>
             )}
             {canPush && (
-              <Button size="sm" variant="outline" onClick={() => void push()} disabled={busy} title="Push this run's branch with your own git credentials. Never forced.">
+              <Button size="sm" variant="outline" onClick={() => void push()} disabled={busy} title="With your own git credentials. Never forced.">
                 {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}{run.pushed ? 'Push again' : 'Push branch'}
               </Button>
             )}
@@ -280,18 +297,24 @@ export function LiveRuns() {
               </a>
             ) : canPush && run.pushed ? (
               <Button size="sm" variant="outline" onClick={() => void openPullRequest()} disabled={busy}
-                title="Opens it on the forge with your own gh or glab — a draft while findings stand unanswered, ready once it is signed.">
+                title="Draft while findings stand, ready once signed. Uses your gh or glab.">
                 {busy ? <Loader2 className="size-3.5 animate-spin" /> : <GitPullRequest className="size-3.5" />}Open pull request
               </Button>
             ) : run.pushed?.compareUrl ? (
               <a href={run.pushed.compareUrl} target="_blank" rel="noopener noreferrer" className={buttonVariants({ size: 'sm', variant: 'outline' })}
-                title="Opens the remote's pull request page, under your own account">
+                title="On the remote, under your account">
                 Open pull request<ExternalLink className="size-3.5" />
               </a>
             ) : null}
             {can('runs:merge') && run.status === 'done' && !run.merged && !run.removed && run.diff.files > 0 && (
               <Button size="sm" onClick={() => void merge()} disabled={busy}>
                 <GitMerge className="size-3.5" />{armed ? 'Click again to merge' : 'Merge'}
+              </Button>
+            )}
+            {can('runs:merge') && run.merged && (
+              <Button size="sm" variant="outline" onClick={() => void unmerge()} disabled={busy}
+                title="Only while the checkout still stands on the merge">
+                <Undo2 className="size-3.5" />{undoArmed ? 'Click again to undo' : 'Undo merge'}
               </Button>
             )}
             {can('runs:run') && !working && run.status !== 'waiting' && !run.removed && (
@@ -349,7 +372,7 @@ export function LiveRuns() {
             </StatGrid>
 
             {run.status === 'waiting' && (
-              <Panel className="border-warn/40" eyebrow={gate && gateKind(gate) === 'question' ? 'The agent asks rather than guesses' : 'Nothing moves until you answer'}
+              <Panel className="border-warn/40" eyebrow={gate && gateKind(gate) === 'question' ? 'The agent asks' : 'Paused until you answer'}
                 title={<span className="flex items-center gap-2"><TriangleAlert className="size-4 text-warn" />{gate?.title ?? `Waiting for you · ${run.waitingOn ?? ''}`}</span>}>
                 <p className="text-[13.5px] text-ink-2">{run.steps.find((s) => s.status === 'waiting')?.label}</p>
                 {gate && gate.payload && gateKind(gate) !== 'signature' && (
@@ -357,7 +380,7 @@ export function LiveRuns() {
                 )}
                 {gate && <p className="mt-2 text-[12.5px] leading-relaxed text-dim">{gate.reason}</p>}
                 {gate ? <GateActions approval={gate} /> : null}
-                <Link to="/permissions" className="mt-2 inline-block text-[13px] text-brand hover:underline">Open the approvals inbox →</Link>
+                <Link to="/permissions" className="mt-2 inline-block text-[13px] text-brand hover:underline">Open approvals →</Link>
               </Panel>
             )}
             {run.note && run.status !== 'waiting' && (
@@ -387,7 +410,7 @@ export function LiveRuns() {
             )}
 
             {run.children.length > 0 && (
-              <Panel flush title="Agents in parallel" eyebrow={`${run.children.length} worktrees, a branch each, merged here`}>
+              <Panel flush title="Agents in parallel" eyebrow={`${run.children.length} branches, merged here`}>
                 <div className="divide-y divide-line/60">
                   {run.children.map((ref) => {
                     const child = runs.find((r) => r.ref === ref);
@@ -410,7 +433,7 @@ export function LiveRuns() {
             )}
 
             {run.parent && (
-              <Panel title="One of several agents" eyebrow="its branch is merged in the run below">
+              <Panel title="One of several agents" eyebrow="merged in the run below">
                 <button onClick={() => setPicked({ link: linked, ref: run.parent ?? '' })} className="text-[13px] text-brand hover:underline">
                   Open {run.parent} →
                 </button>
@@ -418,7 +441,7 @@ export function LiveRuns() {
             )}
 
             {run.conflicts.length > 0 && (
-              <Panel flush className="border-danger/35" title="Collisions" eyebrow="found at the merge, never half-applied">
+              <Panel flush className="border-danger/35" title="Collisions" eyebrow="never half-applied">
                 <div className="divide-y divide-line/60">
                   {run.conflicts.map((x) => (
                     <div key={x.branch} className="px-5 py-2.5">
@@ -433,7 +456,7 @@ export function LiveRuns() {
             {mergeResult && !mergeResult.merged && (
               <Panel className="border-danger/35" eyebrow={`Nothing was merged into ${mergeResult.into}`} title="The merge collides">
                 <div className="flex flex-wrap gap-1">{mergeResult.conflicts.map((f) => <Mono key={f}>{f}</Mono>)}</div>
-                <p className="mt-2 text-[12.5px] text-dim">Your repository is untouched. Merge it by hand, or dispatch again from your current branch.</p>
+                <p className="mt-2 text-[12.5px] text-dim">Your repository is untouched. Merge by hand, or dispatch again.</p>
               </Panel>
             )}
 
@@ -514,18 +537,18 @@ export function LiveRuns() {
               <Panel flush title="Diff" eyebrow={`${stat.files} files · +${stat.insertions} −${stat.deletions}${diff.data?.truncated ? ' · cut at 200 kB' : ''}`}>
                 {diff.loading ? <p className="px-5 py-3 text-[13px] text-dim"><Loader2 className="mr-2 inline size-3.5 animate-spin" />reading the worktree…</p>
                   : diff.error ? <p className="px-5 py-3 text-[13px] text-soft">{diff.error}</p>
-                    : diff.data?.gone ? <p className="px-5 py-3 text-[13px] text-soft">The worktree was removed, so there is no diff to show.</p>
+                    : diff.data?.gone ? <p className="px-5 py-3 text-[13px] text-soft">The worktree was removed; no diff to show.</p>
                       : !diff.data?.patch ? <p className="px-5 py-3 text-[13px] text-soft">Nothing changed yet.</p>
                         : <PatchFiles patch={diff.data.patch} truncated={diff.data.truncated} />}
               </Panel>
             )}
 
-            <Panel title="Where it lives" eyebrow="Merge it yourself when you are ready">
+            <Panel title="Where it lives">
               <KV k="Branch" v={run.branch} mono />
               <KV k="Worktree" v={run.removed ? 'removed' : run.worktree} mono />
               <KV k="Branched from" v={run.shortBase} mono />
               <KV k="Started" v={`${ago(run.startedAt)} by ${run.requestedBy}`} />
-              {run.references.length > 0 && <KV k="Read only" v={`${run.references.join(', ')} — ${run.references.length === 1 ? 'a reference source' : 'reference sources'}: read for grounding, never written`} />}
+              {run.references.length > 0 && <KV k="Read only" v={`${run.references.join(', ')} · reference, never written`} />}
               {run.review.instructions && run.review.instructions.length > 0 && (
                 <KV k="Reviewer was given" v={<span className="break-words">{run.review.instructions.map((f) => f.path).join(', ')}</span>} />
               )}
@@ -537,7 +560,7 @@ export function LiveRuns() {
                 <KV k="Reverted" v={`to step ${lastRevert.to} by ${lastRevert.by}, ${ago(lastRevert.at)}${lastRevert.redo ? ' · later steps ran again' : ''}`} />
               )}
               {lastResume && (
-                <KV k="Carried on" v={`from step ${lastResume.from} by ${lastResume.by}, ${ago(lastResume.at)}${lastResume.adopted ? ` · step ${lastResume.adopted} had already committed` : ''}${Object.keys(lastResume.kept ?? {}).length > 0 ? ' · what was half written is kept on a ref of its own' : ''}`} />
+                <KV k="Carried on" v={`from step ${lastResume.from} by ${lastResume.by}, ${ago(lastResume.at)}${lastResume.adopted ? ` · step ${lastResume.adopted} had already committed` : ''}${Object.keys(lastResume.kept ?? {}).length > 0 ? ' · half-written work kept on its own ref' : ''}`} />
               )}
               {receipt && (
                 <KV k="Reviewed diff" v={<span><Mono>{shortReceipt(receipt.sha256)}</Mono> at <Mono>{receipt.head.slice(0, 7) || '—'}</Mono>{receipt.by ? ` · ${receipt.by}` : ''}</span>} />
@@ -555,14 +578,14 @@ export function LiveRuns() {
                     <span className="text-dim">{request.draftBecause}</span>
                     <span className="text-dim">Opened by {request.by} with {request.via === 'token' ? 'a stored token' : `your own ${request.via}`}, {ago(request.at)} · into <Mono>{request.base}</Mono></span>
                     {/* What is on screen is what the forge last said, and when it said it. */}
-                    <span className="text-dim">{request.checkFailed ? `Last read ${ago(request.checkedAt)}; it could not be read again just now.` : `Read from ${request.host} ${ago(request.checkedAt)}.`}</span>
+                    <span className="text-dim">{request.checkFailed ? `Last read ${ago(request.checkedAt)}; could not re-read just now.` : `Read from ${request.host} ${ago(request.checkedAt)}.`}</span>
                   </span>
                 ) : run.pushed.compareUrl ? (
                   <span className="flex flex-col gap-0.5">
-                    <span>{canPush ? 'Not opened yet — “Open pull request” above does it from here.' : 'Not opened yet.'}</span>
-                    <a href={run.pushed.compareUrl} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">Open it on the remote yourself ↗</a>
+                    <span>{canPush ? 'Not opened yet. Use “Open pull request” above.' : 'Not opened yet.'}</span>
+                    <a href={run.pushed.compareUrl} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">Open on the remote ↗</a>
                   </span>
-                ) : 'This remote has no pull request page NeuroCode knows how to open.'} />
+                ) : 'No known pull request page for this remote.'} />
               )}
               {run.merged ? (
                 <>
@@ -602,7 +625,7 @@ function StepDetail({ step: s, projectId, last, canRevert, asking, busy, onAsk, 
         <details>
           <summary className="cursor-pointer text-brand">Instructions given to this step · {plural(g.instructions.length, 'file')}{g.capped ? ' · cut to fit' : ''}</summary>
           {g.instructions.length === 0 ? (
-            <p className="mt-1 text-dim">None: the project has no AGENTS.md, CLAUDE.md or rule file that applies to these files.</p>
+            <p className="mt-1 text-dim">None: no AGENTS.md, CLAUDE.md or rule file applies here.</p>
           ) : (
             <ul className="mt-1 space-y-0.5">
               {g.instructions.map((f) => (
@@ -619,7 +642,7 @@ function StepDetail({ step: s, projectId, last, canRevert, asking, busy, onAsk, 
         <details>
           <summary className="cursor-pointer text-brand">Read from retrieval · {plural(g.pieces.length, 'piece')}</summary>
           {g.pieces.length === 0 ? (
-            <p className="mt-1 text-dim">Nothing: retrieval found no code or document for this step’s words, or the project is not indexed yet.</p>
+            <p className="mt-1 text-dim">Nothing found, or the project is not indexed yet.</p>
           ) : (
             <ul className="mt-1 space-y-0.5">
               {g.pieces.map((p) => (
@@ -648,21 +671,21 @@ function StepDetail({ step: s, projectId, last, canRevert, asking, busy, onAsk, 
         <p className="flex flex-wrap items-center gap-x-2"><span className="text-dim">Taste applied</span>{g.taste.map((t) => <Mono key={t}>{t}</Mono>)}</p>
       )}
       {(s.attempts ?? 0) > 1 && (
-        <p><span className="text-dim">Tried </span>{s.attempts} times of {s.maxAttempts} allowed<span className="text-dim"> — the first answer was one the runtime could not use.</span></p>
+        <p><span className="text-dim">Tried </span>{s.attempts} times of {s.maxAttempts} allowed<span className="text-dim"> — the first answer was unusable.</span></p>
       )}
       {s.commitSha && <p><span className="text-dim">Left commit </span><Mono>{s.commitSha.slice(0, 7)}</Mono></p>}
-      {s.takenBack && <p className="text-dim">Taken back when the run was reverted to step {s.takenBack.to} by {s.takenBack.by}, {ago(s.takenBack.at)}.</p>}
+      {s.takenBack && <p className="text-dim">Taken back: reverted to step {s.takenBack.to} by {s.takenBack.by}, {ago(s.takenBack.at)}.</p>}
       {canRevert && !asking && (
-        <Button size="xs" variant="outline" onClick={onAsk} disabled={busy} title="Take the run's worktree back to how it stood after this step">
+        <Button size="xs" variant="outline" onClick={onAsk} disabled={busy} title="Reset the worktree to after this step">
           <Undo2 className="size-3" />Revert to here
         </Button>
       )}
       {canRevert && asking && (
         <div className="rounded-lg bg-surface-2/70 px-3 py-2.5">
-          <p className="text-ink">Take the worktree back to how it stood after step {s.n}?</p>
-          <p className="mt-0.5 text-dim">Steps {s.n + 1}–{last} are taken back. Only the run’s own worktree moves; your checkout is untouched.</p>
+          <p className="text-ink">Reset the worktree to after step {s.n}?</p>
+          <p className="mt-0.5 text-dim">Steps {s.n + 1}–{last} are taken back. Your checkout is untouched.</p>
           <div className="mt-2 flex flex-wrap gap-2">
-            <Button size="xs" onClick={() => onRevert(true)} disabled={busy}>{busy ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}Revert and redo steps {s.n + 1}–{last}</Button>
+            <Button size="xs" onClick={() => onRevert(true)} disabled={busy}>{busy ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}Revert and redo</Button>
             <Button size="xs" variant="outline" onClick={() => onRevert(false)} disabled={busy}><Undo2 className="size-3" />Revert and stop</Button>
             <Button size="xs" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
           </div>
@@ -676,7 +699,8 @@ function StepDetail({ step: s, projectId, last, canRevert, asking, busy, onAsk, 
 function ChecksPanel({ checks }: { checks: RunCheck[] }) {
   const failedN = checks.filter((c) => c.status === 'failed').length;
   return (
-    <Panel flush title="Checks" eyebrow={failedN ? `${failedN} failed · the signature says so` : 'the project\'s own commands, allowed once per project'}>
+    <Panel flush title="Checks" eyebrow={failedN ? `${failedN} failed` : undefined}
+      about="The project's own lint and typecheck, allowed once per project. A failure shows at your signature.">
       <div className="divide-y divide-line/60">
         {checks.map((c) => (
           <div key={c.step} className="px-5 py-2.5">
@@ -722,7 +746,7 @@ function CheckProblems({ check }: { check: RunCheck }) {
           </li>
         ))}
       </ul>
-      {total > shown.length && <p className="mt-1 text-[12px] text-dim">and {total - shown.length} more — the full output is in the run's log.</p>}
+      {total > shown.length && <p className="mt-1 text-[12px] text-dim">and {total - shown.length} more in the run's log.</p>}
     </details>
   );
 }
@@ -732,10 +756,11 @@ function GoalPanel({ goal, attempt, budget }: { goal: RunGoal; attempt: number; 
   const next = goal.next === 'rework' ? `attempt ${attempt + 1} of ${budget} does it again` : goal.verdict === 'not run' ? 'runs after the review' : 'your signature decides';
   return (
     <Panel flush title={<span className="flex items-center gap-2">Completion check<Tag tone={GOAL_TONE[goal.verdict]}>{goal.verdict}</Tag></span>}
-      eyebrow={`attempt ${attempt} of ${budget} · ${next}`}>
+      eyebrow={`attempt ${attempt} of ${budget} · ${next}`}
+      about="A model on a lane that did not write this change judges each criterion against the diff.">
       <div className="px-5 py-2.5 text-[13px] text-ink-2">
         {goal.verdict === 'not run'
-          ? 'Once the tests, checks and review are done, a model on a lane that did not write this change judges each acceptance criterion against the diff, citing evidence.'
+          ? 'Runs after the tests, checks and review.'
           : goal.why}
         {goal.by && <span className="text-dim"> · judged by {goal.by}</span>}
       </div>

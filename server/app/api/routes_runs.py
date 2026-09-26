@@ -157,6 +157,23 @@ async def merge(ref: str, request: Request, who: Person = Depends(require("runs:
     return {**result, "run": _one(merged, await _context(open_session, [merged]))}
 
 
+@router.post("/{ref}/unmerge")
+async def unmerge(ref: str, request: Request, who: Person = Depends(require("runs:merge")),
+                  open_session: AsyncSession = Depends(session),
+                  gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    """Undo a merge this app made, while the checkout still stands exactly on it."""
+    found = await RunRepository(open_session).by_ref(ref)
+    if found is None:
+        raise NotFound(f"run {ref}")
+    await must_see(who, open_session, found.project_id, f"run {ref}")
+    run, undone = await RunService(open_session, gw).unmerge(ref, who.name)
+    await AuditRepository(open_session).record(
+        action="run.unmerge", user_id=who.id, target=f"{run.branch} ↩ {undone['into']}",
+        detail={"commit": undone["commit"], "run": ref},
+        ip=request.client.host if request.client else "")
+    return _one(run, await _context(open_session, [run]))
+
+
 @router.post("/{ref}/push")
 async def push(ref: str, request: Request, body: PushIn | None = None,
                who: Person = Depends(require("runs:merge")), open_session: AsyncSession = Depends(session),

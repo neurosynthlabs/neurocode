@@ -57,7 +57,8 @@ export function LiveCode({ project }: { project: Project }) {
     <Page>
       <PageHeader
         title="Code Intelligence"
-        subtitle={`Read from ${project.name} on this machine, each language by the parser named below. Every number here is measured.`}
+        subtitle="Files, symbols and dependencies, as the index measured them."
+        about={<p>Read from {project.name} on this machine, each language by the parser named below. Every number is measured.</p>}
         actions={can('projects:onboard') && s.data?.canIndex && (
           <Button size="sm" variant="outline" onClick={() => void reindex()} disabled={indexing}>
             {indexing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}{indexing ? 'Indexing…' : 'Re-index'}
@@ -87,7 +88,7 @@ export function LiveCode({ project }: { project: Project }) {
           <Empty
             icon={indexing ? <Loader2 className="size-5 animate-spin" /> : <FileCode className="size-6" />}
             title={indexing ? `Reading ${project.name}…` : `${project.name} has no index yet`}
-            hint={indexing ? 'Files, symbols and dependencies appear here the moment the index is ready.' : 'Index it to see its files, symbols, dependencies and the blast radius of every change.'}
+            hint={indexing ? 'This fills in when the index is ready.' : 'Index it to see its files, dependencies and blast radius.'}
             action={!indexing && can('projects:onboard') && <Button size="sm" onClick={() => void reindex()}>Index now</Button>}
           />
         </PageBody>
@@ -267,7 +268,7 @@ function Retrieval({ pid, stamp, canBuild, onOpen }: {
         <Search className="size-3.5 shrink-0 text-dim" />
         <input
           value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search by meaning"
-          placeholder="Ask by meaning: where is this handled, and why there?"
+          placeholder="Where is this handled, and why?"
           className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-dim focus-visible:outline-none"
         />
       </div>
@@ -310,11 +311,11 @@ function Overview({ summary, onOpen, onModule }: { summary: LiveCodeSummary; onO
         <Stat label="Symbols" value={run.symbols.toLocaleString()} sub="classes, functions, tables…" />
         <Stat label="Dependencies" value={run.edges.toLocaleString()} sub="imports, uses, reads, writes" />
         <Stat label="Unresolved imports" value={run.unresolved} tone={run.unresolved ? 'warn' : 'ok'}
-          sub={run.unresolved ? 'the graph has gaps there' : 'every internal import was found'} />
+          sub={run.unresolved ? 'the graph has gaps there' : 'all resolved'} />
       </StatGrid>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <Panel flush title="Most depended on" eyebrow="Change these with the most care">
+        <Panel flush title="Most depended on">
           {hotspots.length === 0 ? <Empty title="No file depends on another yet" /> : (
             <div className="divide-y divide-line/60">
               {hotspots.map((h) => (
@@ -331,7 +332,7 @@ function Overview({ summary, onOpen, onModule }: { summary: LiveCodeSummary; onO
             </div>
           )}
         </Panel>
-        <Panel flush title="Languages" eyebrow="and the parser that read each">
+        <Panel flush title="Languages">
           <DataTable head={['Language', 'Files', 'Symbols', 'Parser']}>
             {(summary.languages ?? []).map((l) => {
               const read = parsing.get(l.name);
@@ -347,13 +348,13 @@ function Overview({ summary, onOpen, onModule }: { summary: LiveCodeSummary; onO
           </DataTable>
           {unparsed.length > 0 && (
             <p className="border-t border-line px-5 py-2.5 text-[12px] text-dim">
-              Seen but not read: {unparsed.join(', ')}. Their files are counted; nothing on this machine parses them, so they add no symbols or dependencies.
+              Counted, not parsed: {unparsed.join(', ')}. They add no symbols or dependencies.
             </p>
           )}
         </Panel>
       </div>
 
-      <Panel flush title="Modules" eyebrow="Open one in Architecture to see its blast radius">
+      <Panel flush title="Modules" about="Open one in Architecture to see its blast radius.">
         <DataTable head={['Module', 'Files', 'Lines', 'Symbols', 'Used by', 'Uses']}>
           {(summary.modules ?? []).map((m) => (
             <Row key={m.name} onClick={() => onModule(m.name)}>
@@ -369,7 +370,7 @@ function Overview({ summary, onOpen, onModule }: { summary: LiveCodeSummary; onO
       </Panel>
 
       {db && db.objects > 0 && (
-        <Panel flush title="Database objects" eyebrow={`${db.objects} declared in SQL · who reads, writes and calls them`}>
+        <Panel flush title="Database objects" eyebrow={`${db.objects} declared in SQL`}>
           <DataTable head={['Object', 'Kind', 'Read by', 'Written by', 'Called by']}>
             {db.top.map((o) => (
               <Row key={o.name} onClick={() => onOpen(o.path)}>
@@ -435,7 +436,7 @@ function FileView({ pid, stamp, path, onOpen, onGraph, onPlan }: {
                 <div key={`${sym.name}:${i}`} className="flex items-center gap-2 px-5 py-1.5"
                   onContextMenu={(e) => onPathMenu(e, onDisk, { line: sym.line })}
                   onDoubleClick={onDisk ? () => openInEditor(onDisk, sym.line) : undefined}
-                  title={onDisk ? `Double-click to open ${baseName(f.path)} at line ${sym.line} in your editor` : undefined}>
+                  title={onDisk ? `Double-click to open line ${sym.line}` : undefined}>
                   <Tag tone={KIND_TONE[sym.kind] ?? 'neutral'}>{sym.kind}</Tag>
                   <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-ink-2">{sym.name}</span>
                   <span className="tnum shrink-0 font-mono text-[11.5px] text-dim">:{sym.line}</span>
@@ -445,7 +446,7 @@ function FileView({ pid, stamp, path, onOpen, onGraph, onPlan }: {
           )}
         </Panel>
         <Panel flush eyebrow={`${usedBy.length}`} title="Used by">
-          {usedBy.length === 0 ? <p className="px-5 py-3 text-[12.5px] text-dim">Nothing in the repository uses it.</p> : (
+          {usedBy.length === 0 ? <p className="px-5 py-3 text-[12.5px] text-dim">Nothing uses it.</p> : (
             <div className="max-h-[320px] divide-y divide-line/60 overflow-y-auto">
               {usedBy.map((u) => (
                 <button key={u.path} onClick={() => onOpen(u.path)} className="flex w-full items-center gap-2 px-5 py-1.5 text-left transition-colors hover:bg-surface-2/60">
@@ -476,7 +477,7 @@ function FileView({ pid, stamp, path, onOpen, onGraph, onPlan }: {
           )}
         </Panel>
         <Panel flush eyebrow={`${database.length}`} title="Database">
-          {database.length === 0 ? <p className="px-5 py-3 text-[12.5px] text-dim">It touches no declared table or procedure.</p> : (
+          {database.length === 0 ? <p className="px-5 py-3 text-[12.5px] text-dim">No declared table or procedure.</p> : (
             <div className="divide-y divide-line/60">
               {database.map((d) => (
                 <div key={`${d.object}:${d.kind}`} className="flex items-center gap-2 px-5 py-1.5">

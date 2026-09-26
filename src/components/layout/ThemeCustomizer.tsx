@@ -11,9 +11,9 @@ import { cn } from '@/lib/utils';
 const RADII = [0, 0.25, 0.375, 0.5, 0.75, 1];
 
 const RAILS: { id: Rail; label: string; icon: typeof PanelLeft; note: string }[] = [
-  { id: 'tinted', label: 'Tinted', icon: PanelLeftDashed, note: 'Palette hue washed into the ground. Reads well in every palette.' },
-  { id: 'solid',  label: 'Solid',  icon: PanelLeft,       note: 'A full slab of the accent. Best on mid-tone palettes — bold, not subtle.' },
-  { id: 'flush',  label: 'Flush',  icon: PanelLeftClose,  note: 'Edge to edge, no float. Maximum density for long sessions.' },
+  { id: 'tinted', label: 'Tinted', icon: PanelLeftDashed, note: 'Palette hue washed into the ground.' },
+  { id: 'solid',  label: 'Solid',  icon: PanelLeft,       note: 'A full slab of the accent; best on mid-tone palettes.' },
+  { id: 'flush',  label: 'Flush',  icon: PanelLeftClose,  note: 'Edge to edge, for the most density.' },
 ];
 
 /** Reads the palette's own vars so each swatch previews its real colour. */
@@ -52,8 +52,7 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
         <SheetHeader className="shrink-0 border-b border-line px-4 pt-4 pb-3">
           <SheetTitle className="text-[14px] font-semibold text-ink">Appearance</SheetTitle>
           <SheetDescription className="text-[13px] text-soft">
-            {t.availableColors.length} palettes · {t.surfaceTones.length} grounds · {MODES.length} modes · live radius and type.
-            Everything applies instantly and persists.
+            {t.availableColors.length} palettes · {t.surfaceTones.length} grounds · {MODES.length} modes. Applies at once.
           </SheetDescription>
         </SheetHeader>
 
@@ -144,7 +143,7 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
                       <span className="text-[13.5px] font-medium text-ink">{p.name}</span>
-                      <span className="eyebrow">{p.mode}</span>
+                      <span className="text-[11px] text-dim">{p.mode}</span>
                     </span>
                     <span className="block truncate text-[12px] text-dim">{p.note}</span>
                   </span>
@@ -199,8 +198,7 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
           {tab === 'ground' && (
             <>
               <p className="mb-2.5 text-[12.5px] text-dim">
-                Ground shades for <span className="text-ink-2">{t.baseMode}</span> mode. These move the page and card
-                surfaces without touching the accent.
+                Page and card shades for <span className="text-ink-2">{t.baseMode}</span> mode; the accent stays.
               </p>
               <div className="grid grid-cols-2 gap-1.5">
                 {tones.map((s) => {
@@ -323,16 +321,16 @@ export function ThemeCustomizer({ open, onOpenChange }: { open: boolean; onOpenC
           <div className="flex items-center gap-2">
             {/* Shapes, not figures: a preview of the palette should not look like a report on the workspace. */}
             <div className="flex-1 rounded-md border border-line bg-surface p-2.5" aria-hidden>
-              <div className="eyebrow">Card</div>
+              <div className="text-[11px] font-medium text-dim">Card</div>
               <div className="mt-1.5 h-3 w-20 rounded-xs bg-ink/80" />
               <div className="mt-2 h-1 overflow-hidden rounded-full bg-surface-3">
                 <div className="h-full w-2/3 rounded-full bg-brand" />
               </div>
             </div>
             <div className="flex flex-col gap-1.5">
-              <span className="rounded-xs border border-ok/30 bg-ok/10 px-1.5 py-px text-[11.5px] font-medium tracking-wide text-ok uppercase">pass</span>
-              <span className="rounded-xs border border-warn/30 bg-warn/10 px-1.5 py-px text-[11.5px] font-medium tracking-wide text-warn uppercase">review</span>
-              <span className="rounded-xs border border-danger/30 bg-danger/10 px-1.5 py-px text-[11.5px] font-medium tracking-wide text-danger uppercase">blocked</span>
+              <span className="rounded-xs border border-ok/30 bg-ok/10 px-1.5 py-px text-[11.5px] font-medium text-ok">Pass</span>
+              <span className="rounded-xs border border-warn/30 bg-warn/10 px-1.5 py-px text-[11.5px] font-medium text-warn">Review</span>
+              <span className="rounded-xs border border-danger/30 bg-danger/10 px-1.5 py-px text-[11.5px] font-medium text-danger">Blocked</span>
             </div>
             <Button size="sm">Approve</Button>
           </div>

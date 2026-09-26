@@ -1039,6 +1039,31 @@ class RunService:
         await self.session.flush()
         return result
 
+    async def unmerge(self, ref: str, by: str) -> tuple[Run, dict[str, Any]]:
+        """Take back a merge this app made — in every source or in none — while each checkout still stands
+        exactly on it with a clean tree. Returns the run and the merge it undid."""
+        run = await self.runs.by_ref(ref)
+        if run is None:
+            raise NotFound(f"run {ref}")
+        merged = run.merged
+        if not merged:
+            raise Refused(f"{ref} is not merged, so there is no merge to undo.")
+        parts = _parts(run)
+        made = {x.get("label", ""): x.get("commit") for x in merged.get("sources") or [] if x.get("commit")}
+        pairs = [(part, made.get(part.label) or merged["commit"]) for part in parts] if made \
+            else [(parts[0], merged["commit"])]
+        try:
+            back = await asyncio.to_thread(_unmerge_parts, pairs)
+        except agent.Refused as refused:
+            raise Refused(str(refused)) from refused
+        run.merged = None
+        await self.logs.write(run.id, level="warn", line=f"merge undone: {merged['into']} is back at {back[:7]}")
+        await self.activity.record(actor=by, actor_kind="human", action="Merge undone",
+                                   detail=f"{ref} · {merged['into']} back at {back[:7]}, before {merged['commit']}",
+                                   level="warn", project_id=run.project_id)
+        await self.session.flush()
+        return run, merged
+
     async def push(self, ref: str, by: str, remote: str | None = None) -> Run:
         """Push an accepted run's branch — its own branch, nothing else — to the project's remote, with
         the person's own git credentials, never forced. The pull request is theirs to open: the run
@@ -1637,6 +1662,16 @@ def _merge_parts(parts: list[Part], message: str) -> dict[str, Any]:
     return {"merged": True, "into": first["into"], "conflicts": [], "commit": first["commit"], "undo": first["undo"],
             "sources": [{"label": x.label, "into": r["into"], "commit": r["commit"], "undo": r["undo"]}
                         for x, r in done]}
+
+
+def _unmerge_parts(pairs: list[tuple[Part, str]]) -> str:
+    """Blocking. Every source is asked first, so a refusal in the last leaves the first untouched: the merge
+    comes out of all of them or none. Returns where the first source's checkout is back at."""
+    for part, commit in pairs:
+        refusal = agent.unmerge_refusal(part.repo, commit)
+        if refusal:
+            raise agent.Refused(f"{part.label}: {refusal}" if part.label else refusal)
+    return [agent.take_back_merge(part.repo, commit) for part, commit in pairs][0]
 
 
 def _push_parts(parts: list[Part], remote: str | None) -> dict[str, Any]:

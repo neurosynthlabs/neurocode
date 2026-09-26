@@ -42,7 +42,7 @@ export function TemplateBank({ catalogue, onUse, onChanged }: {
       {shown.length === 0 ? (
         <Panel>
           <Empty title={which === 'mine' ? 'No template of your own yet' : 'No template matches'}
-            hint={which === 'mine' ? 'Save a blueprint as a template from its page, or import a template file (JSON or YAML).' : 'Try other words.'} />
+            hint={which === 'mine' ? 'Save a blueprint as a template, or import a JSON or YAML file.' : 'Try other words.'} />
         </Panel>
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
@@ -116,7 +116,7 @@ function Preview({ id, onClose, byId, canDesign, onUse, canDelete, onDeleted }: 
             <p className="text-[14px] leading-relaxed text-ink-2">{t.summary}</p>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" disabled={!canDesign} onClick={() => onUse(t.id)} title={canDesign ? undefined : 'Needs the plans:compile permission'}>
-                <Plus className="size-3.5" />Start a blueprint from it
+                <Plus className="size-3.5" />Use template
               </Button>
               <Button size="sm" variant="outline" onClick={() => void exportAs('json')}><Download className="size-3.5" />JSON</Button>
               <Button size="sm" variant="outline" onClick={() => void exportAs('yaml')}><Download className="size-3.5" />YAML</Button>

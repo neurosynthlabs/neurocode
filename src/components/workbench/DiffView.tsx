@@ -59,9 +59,9 @@ function FileRow({ file, open, onToggle }: { file: PatchFile; open: boolean; onT
       </button>
       {open && (
         <div className="mt-1.5">
-          {file.binary ? <p className="text-[12.5px] text-dim">Git records that this file differs and prints no lines for it.</p>
+          {file.binary ? <p className="text-[12.5px] text-dim">Binary: git prints no lines for it.</p>
             : file.body ? <DiffLines body={file.body} />
-              : <p className="text-[12.5px] text-dim">Only the file itself moved: the patch carries no changed lines for it.</p>}
+              : <p className="text-[12.5px] text-dim">Only moved; no lines changed.</p>}
         </div>
       )}
     </div>
@@ -99,8 +99,7 @@ export function PatchFiles({ patch, truncated = false, ceiling }: { patch: strin
       ))}
       {truncated && (
         <p className="px-5 py-2.5 text-[12.5px] text-warn">
-          This is the first {ceiling ?? '200 kB'} of the patch — the rest was not sent, so files after the last one here are
-          not shown at all. Read the whole diff with git in the worktree.
+          Only the first {ceiling ?? '200 kB'} of the patch was sent; later files are missing. Read the rest with git in the worktree.
         </p>
       )}
     </div>

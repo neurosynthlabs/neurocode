@@ -50,15 +50,15 @@ export class RouteBoundary extends Component<Props, State> {
           </div>
           <p className="mt-2 text-[13.5px] leading-relaxed text-soft">
             {stale
-              ? 'This screen’s code changed after the tab was opened — a new build was deployed. Reload to pick it up; nothing you did caused this.'
-              : 'The rest of the app is fine — the failure was contained to this route. The error below is also in the console.'}
+              ? 'A new build was deployed after this tab opened. Reload to pick it up.'
+              : 'Only this screen failed; the rest of the app is fine. The error is also in the console.'}
           </p>
           <pre className="ascii mt-3 max-h-40 overflow-auto rounded-sm border border-line bg-base p-3 whitespace-pre-wrap text-danger">
             {error.message}
           </pre>
           <div className="mt-4 flex gap-2">
             <Button size="sm" onClick={this.retry}><RotateCcw className="size-3.5" />{stale ? 'Reload' : 'Try again'}</Button>
-            <Button size="sm" variant="outline" onClick={() => window.location.assign('/')}><Home className="size-3.5" />Command Center</Button>
+            <Button size="sm" variant="outline" onClick={() => window.location.assign('/')}><Home className="size-3.5" />Open Command Center</Button>
           </div>
         </div>
       </div>

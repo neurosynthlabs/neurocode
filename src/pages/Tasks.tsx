@@ -120,18 +120,19 @@ export default function Tasks() {
   };
   const dispatch = async () => {
     if (!openPlan) return;
-    if (await dispatchPlan(openPlan.ref)) toast.success(`${openPlan.ref} dispatched`, { description: 'Its run, once one starts, is in Live runs.' });
+    if (await dispatchPlan(openPlan.ref)) toast.success(`${openPlan.ref} dispatched`, { description: 'Its run shows in Live runs.' });
   };
   const stop = async () => {
     if (!openRun) return;
-    if (await cancelRun(openRun.ref)) toast(`${openRun.ref} stopped`, { description: 'The worktree stays for you to look at.' });
+    if (await cancelRun(openRun.ref)) toast(`${openRun.ref} stopped`, { description: 'Its worktree is kept.' });
   };
 
   return (
     <Page>
       <PageHeader
         title="Tasks"
-        subtitle="A compiled requirement becomes a task. Once its plan is dispatched, the work runs in worktrees of its own — see Live runs."
+        subtitle="Every compiled requirement, and how far its run got."
+        about="A compiled requirement becomes a task. Once its plan is dispatched, the work runs in a worktree of its own."
         actions={
           <Segmented
             options={[{ id: 'board', label: 'Board' }, { id: 'table', label: 'Table' }, { id: 'epics', label: 'Epics' }]}
@@ -143,7 +144,7 @@ export default function Tasks() {
         <div className="flex flex-wrap items-center gap-2 pb-3">
           <div className="flex h-9 w-64 items-center gap-2 rounded-lg border border-line bg-surface-2 px-2.5 focus-within:border-brand">
             <Search className="size-3.5 shrink-0 text-dim" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tasks, refs, requirements…"
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tasks…"
               className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-dim focus-visible:outline-none" />
           </div>
           <select value={proj} onChange={(e) => setProj(e.target.value)} className="h-9 rounded-lg border border-line-strong bg-surface-2 px-2.5 text-[13px] text-ink-2">
@@ -167,7 +168,7 @@ export default function Tasks() {
       <PageBody className="space-y-4">
         {tasks.length === 0 && (
           <Empty icon={<ListTodo className="size-6" />} title="No tasks yet"
-            hint="A task is created when you compile a requirement or start a workflow."
+            hint="Compiling a requirement or starting a workflow makes one."
             action={<Button size="sm" onClick={() => nav('/')}>Compile a requirement</Button>} />
         )}
 
@@ -279,7 +280,7 @@ export default function Tasks() {
               </SheetHeader>
 
               <div className="space-y-3 p-5">
-                <Panel eyebrow="What you actually typed" title="Raw requirement">
+                <Panel title="Raw requirement">
                   <p className="text-[14px] leading-relaxed text-ink-2">{open.requirement}</p>
                 </Panel>
 
@@ -290,7 +291,7 @@ export default function Tasks() {
                 )}
 
                 <div className="grid grid-cols-2 gap-3">
-                  <Panel eyebrow="Assignment" title="Agents">
+                  <Panel title="Agents">
                     {open.agents.length === 0 ? <p className="text-[13px] text-dim">The plan named no agent.</p> : (
                       <div className="space-y-1.5">
                         {open.agents.map((a) => (
@@ -302,7 +303,7 @@ export default function Tasks() {
                       </div>
                     )}
                   </Panel>
-                  <Panel eyebrow="Scope" title="Surface">
+                  <Panel title="Surface">
                     {open.layers.length > 0 && <KV k="Layers" v={open.layers.join(' · ')} />}
                     <KV k="Files named" v={open.files} />
                     {openRun && <KV k="Branch" v={openRun.removed ? `${openRun.branch} (removed)` : openRun.branch} mono />}
@@ -311,7 +312,7 @@ export default function Tasks() {
                 </div>
 
                 {open.checklist.length > 0 && (
-                  <Panel eyebrow="Progress" title="Checklist" flush>
+                  <Panel title="Checklist" flush>
                     <div className="divide-y divide-line">
                       {open.checklist.map((c) => {
                         const done = c.done;
@@ -335,13 +336,13 @@ export default function Tasks() {
                   {openRuns.map((r) => (
                     <Link key={r.ref} to={`/runs?ref=${r.ref}`}><Mono><GitBranch className="mr-1 inline size-2.5" />{r.ref}</Mono></Link>
                   ))}
-                  {!openPlan && openRuns.length === 0 && <span className="text-[12.5px] text-dim">Nothing is linked to this task yet.</span>}
+                  {!openPlan && openRuns.length === 0 && <span className="text-[12.5px] text-dim">Nothing linked yet.</span>}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">
                   {openPlan && openPlan.status !== 'dispatched' && (
                     <Button size="sm" disabled={openPlan.openQuestions.length > 0} onClick={() => void dispatch()}
-                      title={openPlan.openQuestions.length > 0 ? 'Answer or defer the plan\'s open questions first' : undefined}>
+                      title={openPlan.openQuestions.length > 0 ? 'Answer or defer its open questions first' : undefined}>
                       <Play className="size-3.5" />Dispatch plan
                     </Button>
                   )}

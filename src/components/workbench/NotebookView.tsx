@@ -18,7 +18,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Dot, Empty } from '@/components/os';
+import { Dot, Empty, More } from '@/components/os';
 import { ApiError, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { baseName } from '@/lib/live/machine';
@@ -278,7 +278,7 @@ function RichOutput({ data, metadata }: { data: Record<string, unknown>; metadat
   if (mime === 'application/vnd.jupyter.widget-view+json') {
     return (
       <div>
-        <p className="text-[12px] text-dim">An interactive widget: widgets run in Jupyter's own front end, not here.</p>
+        <p className="text-[12px] text-dim">An interactive widget. It runs only in Jupyter's own front end.</p>
         {plain !== null && <pre className="mt-1 whitespace-pre-wrap font-mono text-[12.5px] text-ink-2">{plain}</pre>}
       </div>
     );
@@ -321,7 +321,7 @@ function Outputs({ outputs, onFix }: { outputs: LiveOutput[]; onFix?: (error: Ex
       </div>
       {long && (
         <button type="button" onClick={() => setOpen((x) => !x)} className="flex w-full items-center justify-center gap-1 border-t border-line/50 py-1 text-[11.5px] text-dim hover:text-ink">
-          <ChevronsUpDown className="size-3" />{open ? 'Scroll the output' : 'Show all of the output'}
+          <ChevronsUpDown className="size-3" />{open ? 'Scroll the output' : 'Show all output'}
         </button>
       )}
     </div>
@@ -767,7 +767,7 @@ export default function NotebookView({ path, projectId, dark, readOnly = false, 
   const save = useCallback(async (expect?: string): Promise<boolean> => {
     const doc = document_();
     if (!doc || !fileRef.current) return false;
-    if (readOnly) { toast(`${baseName(path)} is read only`, { description: 'It is in a reference: read, never written from here.' }); return false; }
+    if (readOnly) { toast(`${baseName(path)} is read only`, { description: 'A reference is read, never written.' }); return false; }
     setSaving(true);
     try {
       const saved = await notebooks.save(fileRef.current.path, doc, expect ?? sha1);
@@ -992,7 +992,7 @@ export default function NotebookView({ path, projectId, dark, readOnly = false, 
                       ) : (
                         <div className="cursor-text px-3 py-1.5 text-[13.5px] text-ink-2" onDoubleClick={() => { if (!readOnly) { setEditing((s) => new Set(s).add(cell.id)); setFocusAt({ id: cell.id, nonce: Date.now() }); } }}>
                           {cell.source.trim() ? <Markdown text={cell.source} attachments={cell.attachments} />
-                            : <p className="text-dim italic">An empty markdown cell. Double-click to write in it.</p>}
+                            : <p className="text-dim italic">Empty markdown cell. Double-click to write.</p>}
                         </div>
                       )}
                       {cell.cell_type === 'code' && cell.outputs && cell.outputs.length > 0 && (
@@ -1035,9 +1035,14 @@ export default function NotebookView({ path, projectId, dark, readOnly = false, 
               </div>
             );
           })}
-          <p className="px-14 pt-4 pb-8 text-[11.5px] text-dim">
-            Shift+Enter runs a cell and moves on · ⌘Enter runs it in place · Esc, then A or B adds a cell above or below · ⌘S saves
-          </p>
+          <More label="Shortcuts" className="px-14 pt-4 pb-8">
+            <ul className="space-y-0.5 text-[11.5px] text-dim">
+              <li>Shift+Enter runs a cell and moves on</li>
+              <li>⌘Enter runs it in place</li>
+              <li>Esc, then A or B adds a cell above or below</li>
+              <li>⌘S saves</li>
+            </ul>
+          </More>
         </div>
       </div>
 
@@ -1045,7 +1050,7 @@ export default function NotebookView({ path, projectId, dark, readOnly = false, 
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{confirmRestart === 'run-all' ? 'Restart the kernel and run every cell?' : 'Restart the kernel?'}</DialogTitle>
-            <DialogDescription>Every variable it holds is lost, and a cell still running is stopped. The notebook itself is not changed.</DialogDescription>
+            <DialogDescription>Its variables are lost and a running cell stops. The notebook is unchanged.</DialogDescription>
           </DialogHeader>
           <DialogFooter className="flex-col gap-2 sm:flex-row">
             <Button variant="ghost" onClick={() => setConfirmRestart(null)}>Cancel</Button>

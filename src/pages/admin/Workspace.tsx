@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { Field, KV, Page, PageBody, PageHeader, Panel, Stat, StatGrid, Tag } from '@/components/os';
+import { Field, KV, More, Page, PageBody, PageHeader, Panel, Stat, StatGrid, Tag } from '@/components/os';
 import { api, type SandboxInfo, type SsoConfig, type WorkspaceInfo } from '@/lib/api';
 import { useAccess } from '@/lib/access';
 import { useAuth } from '@/lib/auth';
@@ -53,14 +53,14 @@ export default function WorkspacePage() {
     toast.success('Workspace emptied', {
       description: [
         done.backup ? `A backup was taken first: ${done.backup}.` : 'No backup was taken: pg_dump is not on this machine.',
-        `People, roles, teams, keys, the audit log and the ${plural(done.counts.agents ?? 0, 'agent')} on the roster were kept.`,
+        `People, roles, teams, keys, the audit log and ${plural(done.counts.agents ?? 0, 'agent')} were kept.`,
       ].join(' '),
     });
   };
 
   return (
     <Page>
-      <PageHeader title="Workspace" subtitle="What everyone here shares: its name, what it holds, and how it keeps people and keys safe." />
+      <PageHeader title="Workspace" subtitle="Name, security, sign-on and sandbox, shared by everyone here." />
       <PageBody>
         {error ? <LoadError error={error} onRetry={reload} /> : !ws ? <Loading /> : (
           <div className="space-y-5">
@@ -76,9 +76,9 @@ export default function WorkspacePage() {
                   <Field className="flex-1" label="Workspace name" value={name ?? ws.name} onChange={setName} disabled={!manage} />
                   <Button type="submit" disabled={!manage || !renamed}>Rename</Button>
                 </form>
-                <p className="mt-2 text-[12.5px] text-dim">Shown on the sign-in screen and in everyone’s account menu.</p>
+                <p className="mt-2 text-[12.5px] text-dim">Shown at sign-in and in every account menu.</p>
               </Panel>
-              <Panel title="Security" eyebrow="How access is kept safe">
+              <Panel title="Security">
                 <KV k="Sessions" v={`${plural(ws.security.sessionDays, 'day')}, in an HttpOnly cookie`} />
                 <KV k="Passwords" v={`scrypt, at least ${plural(ws.security.minPassword, 'character')}`} />
                 <KV k="Wrong passwords" v={`${ws.security.loginAttempts} in a row pause that email for ${pause(ws.security.lockoutSeconds)}`} />
@@ -95,7 +95,9 @@ export default function WorkspacePage() {
               </div>
             )}
 
-            <Panel title="Work data" eyebrow="PostgreSQL, on this machine" className="border-danger/30">
+            <Panel title="Work data" eyebrow="PostgreSQL, on this machine" className="border-danger/30"
+              about={<><p>Reset empties projects, tasks, plans, runs, memory, approvals and the activity log. A backup is taken first.</p>
+                <p>People, roles, teams, the agent roster, keys and the audit log are kept.</p></>}>
               {health && <KV k="Database" v={health.db} mono />}
               {health && (
                 // The planner's estimates, as /health reports them: a table it has not analysed yet reads 0.
@@ -106,8 +108,7 @@ export default function WorkspacePage() {
               )}
               <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                 <p className="max-w-xl text-[12.5px] leading-relaxed text-soft">
-                  Reset empties the work: projects, tasks, plans, runs, memory, approvals and the activity log. A backup is
-                  taken first. People, roles, teams, the agent roster, keys and the audit log are kept.
+                  Empties all work, after a backup.
                 </p>
                 <Button size="sm" variant="destructive" onClick={() => void resetData()} disabled={!manage}>
                   {armed ? 'Click again to confirm' : 'Reset work data'}
@@ -152,7 +153,7 @@ function Sandbox() {
   return (
     <Panel
       title="Sandbox"
-      eyebrow="Around every command a run executes"
+      eyebrow="Around run commands"
       actions={<Tag tone={fenced ? 'ok' : box.inForce.kind === 'none' ? 'warn' : 'info'}>{box.inForce.name}</Tag>}
     >
       <p className="mb-3 text-[12.5px] leading-relaxed text-soft">{box.inForce.words}</p>
@@ -162,8 +163,7 @@ function Sandbox() {
         <div>
           <p className="text-[13px] font-medium text-ink">Let a command reach the network</p>
           <p className="mt-0.5 max-w-md text-[12px] leading-relaxed text-dim">
-            Off, so a test suite cannot send anything anywhere. Turn it on when a project installs its packages
-            as part of running its tests.
+            Off blocks every send. Turn on if tests install packages.
           </p>
         </div>
         <Switch
@@ -179,8 +179,8 @@ function Sandbox() {
           <p className="text-[13px] font-medium text-ink">Sandbox the runtime's commands</p>
           <p className="mt-0.5 max-w-md text-[12px] leading-relaxed text-dim">
             {box.serverAllows
-              ? 'Turning this off runs a project’s tests and checks with everything this account can reach.'
-              : 'This server was started with NEUROCODE_SANDBOX=false, which a screen cannot undo.'}
+              ? 'Off runs tests and checks with everything this account can reach.'
+              : 'Started with NEUROCODE_SANDBOX=false; a screen cannot undo it.'}
           </p>
         </div>
         <Switch
@@ -240,27 +240,28 @@ function SingleSignOn({ roles }: { roles: { id: string; name: string }[] }) {
   return (
     <Panel
       title="Single sign-on"
-      eyebrow="OpenID Connect — Google, Okta, Entra, or any provider with a discovery document"
+      eyebrow="OpenID Connect"
+      about="Google, Okta, Entra, or any provider with a discovery document."
       actions={<Tag tone={doc.ready ? 'ok' : 'neutral'}>{doc.ready ? 'On' : 'Off'}</Tag>}
     >
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Issuer" value={at('issuer')} onChange={(v) => setDraft((d) => ({ ...d, issuer: v }))}
           mono placeholder="https://accounts.google.com"
-          hint="NeuroCode reads its .well-known/openid-configuration and nothing else." />
+          hint="Only its .well-known/openid-configuration is read." />
         <Field label="Client id" value={at('clientId')} onChange={(v) => setDraft((d) => ({ ...d, clientId: v }))}
           mono />
         <Field label="Client secret" type="password" value={draft.clientSecret ?? ''} mono autoComplete="off"
           onChange={(v) => setDraft((d) => ({ ...d, clientSecret: v }))}
           hint={doc.hasSecret ? `Set · ${doc.secretMask}. Type a new one to replace it.`
-                              : 'Kept on this machine beside the model keys, never shown again in full.'} />
+                              : 'Kept beside the model keys, never shown again in full.'} />
         <Field label="Button label" value={at('label')} onChange={(v) => setDraft((d) => ({ ...d, label: v }))}
           hint="The sign-in screen says “Continue with …”." />
         <Field className="sm:col-span-2" label="Redirect address" value={at('redirectUri')} mono
           onChange={(v) => setDraft((d) => ({ ...d, redirectUri: v }))}
-          hint={<>Register this at the provider. For this browser that is <code className="font-mono [overflow-wrap:anywhere]">{suggested}</code>.</>} />
+          hint={<>Register at the provider. For this browser: <code className="font-mono [overflow-wrap:anywhere]">{suggested}</code></>} />
       </div>
 
-      <div className="mt-4 border-t border-line/70 pt-3">
+      <More className="mt-4 border-t border-line/70 pt-3" label={mapped.length ? `Roles from claims · ${mapped.length}` : 'Roles from claims'}>
         <div className="flex flex-wrap items-end gap-3">
           <Field className="w-44" label="Role claim" value={at('roleClaim')} mono
             onChange={(v) => setDraft((d) => ({ ...d, roleClaim: v }))}
@@ -280,20 +281,19 @@ function SingleSignOn({ roles }: { roles: { id: string; name: string }[] }) {
           </ul>
         )}
         <p className="mt-2 text-[12px] leading-relaxed text-dim">
-          Applied on every sign-in, so taking somebody out of a group there takes the role away here. An Owner’s
-          roles are never touched by a claim, and no claim can grant the Owner role.
+          Applied at every sign-in. No claim touches an Owner or grants the Owner role.
         </p>
-      </div>
+      </More>
 
       <div className="mt-4 space-y-3 border-t border-line/70 pt-3">
         <Choice label="Turn it on" hint="The sign-in screen then offers the provider’s button."
           on={at('enabled')} disabled={busy}
           onChange={(v) => setDraft((d) => ({ ...d, enabled: v }))} />
-        <Choice label="Make an account for anyone the provider vouches for"
-          hint="Off means somebody the provider knows and this workspace does not is told to ask an admin."
+        <Choice label="Make accounts for new people"
+          hint="Off: someone new to this workspace is told to ask an admin."
           on={at('createUsers')} disabled={busy}
           onChange={(v) => setDraft((d) => ({ ...d, createUsers: v }))} />
-        <Choice label="Require it" hint="Passwords stop working for everyone but an Owner, so a broken provider can never lock the workspace."
+        <Choice label="Require it" hint="Only Owners keep passwords, so a broken provider cannot lock everyone out."
           on={at('requireSso')} disabled={busy || !doc.ready}
           onChange={(v) => setDraft((d) => ({ ...d, requireSso: v }))} />
       </div>

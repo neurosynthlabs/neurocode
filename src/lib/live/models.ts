@@ -1,6 +1,6 @@
 import { request, type AiLane, type AiPreference, type CompilerInfo, type LaneId, type ThinkingLevel } from '@/lib/api';
 
-/* The Models & Router screen's live data: GET /models. The gateway's own view of its lanes, what each
+/* The Models screen's live data: GET /models. The gateway's own view of its lanes, what each
    feature asks it for, and a day of its ledger. Key material is removed on the server. */
 
 export type LaneRole = 'write' | 'review' | 'plan' | 'chat';

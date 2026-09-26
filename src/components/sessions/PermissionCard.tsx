@@ -31,7 +31,7 @@ export function PermissionCard({ message, canAnswer, onAnswer }: {
 
   if (p.state !== 'pending') {
     const label = p.state === 'allowed' ? (p.scope === 'session' ? 'Allowed for this session' : 'Allowed once')
-      : p.state === 'refused' ? 'Refused' : 'Not answered here (copied from another session)';
+      : p.state === 'refused' ? 'Refused' : 'Copied, not answered here';
     return (
       <div className="flex items-center gap-2 rounded-lg border border-line/70 bg-surface-2/40 px-3 py-1.5 text-[12.5px] text-ink-2">
         <Icon className="size-3.5 shrink-0 text-dim" />
@@ -48,7 +48,7 @@ export function PermissionCard({ message, canAnswer, onAnswer }: {
   };
 
   return (
-    <Panel className="border-warn/50" eyebrow="Waiting for you · nothing has been sent"
+    <Panel className="border-warn/50" eyebrow="Waiting · nothing sent"
       title={<span className="flex items-center gap-2"><Icon className="size-4 text-warn" />It wants to {what.verb}</span>}>
       <div className="space-y-2.5">
         <p className="text-[13px] break-all text-ink"><Mono>{p.subject}</Mono></p>
@@ -63,7 +63,7 @@ export function PermissionCard({ message, canAnswer, onAnswer }: {
               {busy === 'once' ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}Allow once
             </Button>
             <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void answer('session')} title={`Covers ${p.covers}, until this session ends`}>
-              {busy === 'session' ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}Allow for this session
+              {busy === 'session' ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}Allow for session
             </Button>
             <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => void answer('refuse')}>
               {busy === 'refuse' ? <Loader2 className="size-3.5 animate-spin" /> : <X className="size-3.5" />}Refuse

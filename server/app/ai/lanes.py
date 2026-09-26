@@ -18,7 +18,7 @@ Cerebras — "Is there a permanently free tier? No" — is priced here as what i
 
 Every number is sourced in a comment beside it, with the page and the day it was read, and a number
 nobody publishes is marked as the router's own (`caps="ours"`) rather than dressed up as a provider's
-promise. Free tiers change, so every number is editable in Admin → AI providers, and a lane that has
+promise. Free tiers change, so every number is editable in Models → Keys, and a lane that has
 spent its allowance is treated as busy, not broken. Nothing here holds a key; keys live in
 `secrets.json` (or an environment variable), and a lane with no key is invisible to the router.
 """
@@ -427,7 +427,7 @@ RETIRED: dict[str, dict[str, str]] = {
     "deepseek": {
         "deepseek-chat": "DeepSeek retired this model name on 2026-07-24. Calls to it fail: choose deepseek-flash.",
         "deepseek-reasoner": "DeepSeek retired this model name on 2026-07-24. Calls to it fail: choose "
-                             "deepseek-flash, whose thinking is set per feature on Models & Router.",
+                             "deepseek-flash, whose thinking is set per feature on Models.",
         "deepseek-v4-flash": "Retired on 2026-09-10. DeepSeek serves it with V4.1 Flash for now; choose "
                              "deepseek-flash before that stops.",
         "deepseek-v4-flash-vision-exp": "Retired on 2026-09-10. DeepSeek serves it with V4.1 Flash for now; "
@@ -531,7 +531,7 @@ def freedom(lane: Lane) -> str:
         return f"{words} · needs {asks}" if lane.gate else words
     if lane.api == "ollama":
         return "Free and unmetered · this machine's own model"
-    return f"Free · {asks}" if not lane.gate else f"Free, after {asks}"
+    return "Free, nothing asked" if not lane.gate else f"Free, after {asks}"
 
 
 def _catalogue(lane_id: str) -> Lane | None:

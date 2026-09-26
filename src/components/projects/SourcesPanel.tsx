@@ -140,13 +140,13 @@ export function SourcesPanel({ p }: { p: Project }) {
   };
 
   return (
-    <Panel flush eyebrow="Folders and repositories worked on as one project"
+    <Panel flush about="Folders and repositories worked on as one project. Each file appears under its source's label."
       title={<span className="flex items-center gap-1.5"><Layers className="size-3.5 text-brand" />Sources</span>}
       actions={p.source && mayChange ? (
         <Button size="sm" variant="outline" onClick={() => setAdding(true)}><Plus className="size-3.5" />Add source</Button>
       ) : undefined}>
       {!p.source ? (
-        <Empty title="No sources on this machine" hint="Its code was not onboarded here, so there is nothing to add beside it." />
+        <Empty title="No sources on this machine" hint="Its code is not on this machine." />
       ) : list.error ? (
         <Empty title="The sources did not load" hint={list.error} action={<Button size="sm" variant="outline" onClick={reload}>Try again</Button>} />
       ) : !list.data ? (
@@ -183,7 +183,7 @@ export function SourcesPanel({ p }: { p: Project }) {
                     </span>
                     {s.status === 'failed' && s.note && <span className="mt-0.5 block text-[12px] text-danger [overflow-wrap:anywhere]">{s.note}</span>}
                     {s.primary && i === 0 && sources.length > 1 && (
-                      <span className="mt-0.5 block text-[11.5px] text-dim">Its files keep their own paths; the others appear under their labels.</span>
+                      <span className="mt-0.5 block text-[11.5px] text-dim">Keeps its own paths; the others sit under their labels.</span>
                     )}
                   </div>
                   {mayChange && (
@@ -217,12 +217,6 @@ export function SourcesPanel({ p }: { p: Project }) {
               );
             })}
           </div>
-          {sources.length === 1 && (
-            <p className="border-t border-line/60 px-5 py-3 text-[12.5px] text-dim">
-              One source so far. Add the API beside the web app, a shared library or a data repository, and search,
-              impact and runs span all of them — each file under its source's label.
-            </p>
-          )}
         </>
       )}
 
@@ -230,9 +224,7 @@ export function SourcesPanel({ p }: { p: Project }) {
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Add a source to {p.name}</DialogTitle>
-            <DialogDescription>
-              It is onboarded like a project — cloned or read in place, measured and indexed — and its files appear in {p.name} under its label.
-            </DialogDescription>
+            <DialogDescription>Onboarded like a project. Its files appear in {p.name} under its label.</DialogDescription>
           </DialogHeader>
           <form id="add-source" onSubmit={add} className="space-y-3">
             <Segmented options={[{ id: 'git', label: 'Git remote' }, { id: 'local', label: 'Local path' }]}
@@ -251,8 +243,8 @@ export function SourcesPanel({ p }: { p: Project }) {
             <div className="flex flex-wrap items-center gap-2.5">
               <RolePick value={draft.role ?? 'code'} onChange={(role) => setDraft((d) => ({ ...d, role }))} label="What this source is" />
               <span className="text-[12px] text-dim">
-                {draft.role === 'reference' ? 'Read only: indexed and read for grounding — documents, a design system, another team’s repository. Agents never write there.'
-                  : 'Worked on: agents may change it in their own worktrees.'}
+                {draft.role === 'reference' ? 'Read only, for grounding. Agents never write there.'
+                  : 'Agents may change it in their worktrees.'}
               </span>
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

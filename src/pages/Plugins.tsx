@@ -124,7 +124,11 @@ function LivePlugins() {
     <Page>
       <PageHeader
         title="Plugins"
-        subtitle="The plugins on this machine: Claude Code's own, which are read and never written, and this workspace's, which NeuroCode installed from a git URL or a folder and can remove again. A plugin's hooks stay refused until a rule allows one."
+        subtitle="Plugins on this machine: Claude Code's own and this workspace's."
+        about={<>
+          <p>Claude Code's plugins are read, never written. This workspace's were installed here, from a git URL or a folder, and can be removed.</p>
+          <p>A plugin's hooks stay refused until a rule allows one.</p>
+        </>}
         actions={<Segmented options={[{ id: 'installed', label: `Installed (${installed.length})` }, { id: 'market', label: `Marketplaces (${market.length})` }, { id: 'registry', label: `Offered (${registry?.plugins.length ?? 0})` }]} value={tab} onChange={(v) => { setTab(v); setCat('all'); }} />}
       >
         <Toolbar>
@@ -142,16 +146,16 @@ function LivePlugins() {
         <PageBody><Empty icon={<Loader2 className="size-5 animate-spin" />} title="Reading Claude Code's plugins…" /></PageBody>
       ) : (
         <PageBody className="space-y-4">
-          <StatGrid cols={5}>
-            <Stat label="Agents added" value={totals.agents} icon={<Blocks className="size-3" />} sub="by plugins enabled in Claude Code" />
+          {installed.length > 0 && <StatGrid cols={5}>
+            <Stat label="Agents added" value={totals.agents} icon={<Blocks className="size-3" />} sub="by enabled plugins" />
             <Stat label="Skills added" value={totals.skills} tone="brand" />
             <Stat label="Commands added" value={totals.commands} />
             <Stat label="Hooks added" value={totals.hooks} tone="warn" sub="never run by NeuroCode" />
             <Stat label="MCP servers" value={totals.mcp} tone="ok" />
-          </StatGrid>
+          </StatGrid>}
 
           {r.data.conflicts.length > 0 && tab === 'installed' && (
-            <Panel className="border-warn/35" eyebrow="The same command name in more than one place" title={<span className="flex items-center gap-1.5"><TriangleAlert className="size-3.5 text-warn" />Conflicts</span>} flush>
+            <Panel className="border-warn/35" about="The same command name in more than one place." title={<span className="flex items-center gap-1.5"><TriangleAlert className="size-3.5 text-warn" />Conflicts</span>} flush>
               <div className="divide-y divide-line">
                 {r.data.conflicts.map((c) => (
                   <div key={c.command} className="px-3.5 py-2.5">
@@ -166,16 +170,15 @@ function LivePlugins() {
           )}
 
           {tab === 'installed' && (
-            <Panel className="accent-left" eyebrow={`This workspace's own folder · ${r.data.workspaceRoot}`}
-              title={mine.length ? `${mine.length} installed by NeuroCode` : 'Install one into this workspace'}>
-              <p className="max-w-4xl text-[13.5px] leading-relaxed text-ink-2">
-                An https git URL is cloned; a folder on this machine is copied. Either way it lands in this
-                workspace's own folder — never in Claude Code's cache — and its skills and commands reach
-                NeuroCode sessions. Its hooks are refused until you write a rule for one, like every hook.
-              </p>
-              <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-line pt-3">
+            <Panel className="accent-left" eyebrow={`Folder · ${r.data.workspaceRoot}`}
+              title={mine.length ? `${mine.length} installed by NeuroCode` : 'Install one into this workspace'}
+              about={<>
+                <p>An https git URL is cloned; a folder on this machine is copied. It lands in this workspace's folder, never Claude Code's cache.</p>
+                <p>Its skills and commands reach sessions. Its hooks are refused until a rule allows one.</p>
+              </>}>
+              <div className="flex flex-wrap items-end gap-2">
                 <Field className="min-w-[280px] flex-1" value={source} onChange={setSource}
-                  placeholder="https://github.com/acme/toolbox.git, or /Users/you/plugins/toolbox"
+                  placeholder="https://github.com/acme/toolbox.git or a folder path"
                   onClear={() => setSource('')} />
                 <Field className="w-44" value={name} onChange={setName} placeholder="folder name"
                   onClear={() => setName('')} />
@@ -192,17 +195,13 @@ function LivePlugins() {
           )}
 
           {tab === 'registry' ? (
-            <Panel flush eyebrow={registry?.exists ? registry.path : `No registry file at ${registry?.path ?? 'the plugins folder'}`}
-              title={registry?.exists ? registry.name : 'Nothing is offered yet'}>
-              <p className="px-5 pt-3 text-[13px] leading-relaxed text-ink-2">
-                This is a file on this machine, not an index anybody fetches from: whoever keeps this
-                workspace writes <Mono>registry.json</Mono> in the plugins folder, and what they wrote is
-                what this list offers. That is the whole of the marketplace, and there is no other.
-              </p>
+            <Panel flush eyebrow={registry?.exists ? `File · ${registry.path}` : `No registry file at ${registry?.path ?? 'the plugins folder'}`}
+              title={registry?.exists ? registry.name : 'Nothing is offered yet'}
+              about={<p>A file on this machine, not an index anyone fetches from. Whoever keeps this workspace writes <Mono>registry.json</Mono> in the plugins folder, with a "plugins" list of {'{name, source, description}'}. That is the whole marketplace.</p>}>
               {offers.length === 0 ? (
                 <div className="px-5 pb-4">
                   <Empty icon={<Blocks className="size-6" />} title="No registry file"
-                    hint={`Put a registry.json at ${registry?.path ?? 'the plugins folder'} with a "plugins" list of {name, source, description}, and its entries appear here with an Install button.`} />
+                    hint={`Add registry.json at ${registry?.path ?? 'the plugins folder'}.`} />
                 </div>
               ) : (
                 <div className="divide-y divide-line/60">
@@ -217,7 +216,7 @@ function LivePlugins() {
                             {o.publisher && <span className="text-[12px] text-dim">{o.publisher}</span>}
                             {already && <Tag tone="ok">installed</Tag>}
                           </div>
-                          <p className="mt-0.5 text-[12.5px] text-soft">{o.description || 'No description in the registry file.'}</p>
+                          <p className="mt-0.5 text-[12.5px] text-soft">{o.description || 'No description.'}</p>
                           <Mono className="mt-0.5 block truncate text-[11.5px]">{o.source}</Mono>
                         </div>
                         <Button size="xs" variant="outline" disabled={already || !!busy || !can(EXTENSIONS_PERMISSION)}
@@ -233,7 +232,7 @@ function LivePlugins() {
             </Panel>
           ) : list.length === 0 ? (
             <Empty title={tab === 'installed' ? (installed.length ? 'Nothing installed in this category' : 'No plugin is installed on this machine') : (market.length ? 'Nothing in this category' : 'No marketplace is known on this machine')}
-              hint={tab === 'installed' && !installed.length ? 'Install one in Claude Code with /plugin install, and it shows up here.' : 'Switch tabs or widen the category filter.'} />
+              hint={tab === 'installed' && !installed.length ? 'Install one in Claude Code with /plugin install.' : 'Widen the filters.'} />
           ) : (
             <div className="grid grid-cols-1 gap-3 stagger lg:grid-cols-2 2xl:grid-cols-3">
               {list.map((p) => (
@@ -241,10 +240,10 @@ function LivePlugins() {
                   title={<span className="flex items-center gap-2">{p.name}<Tag tone="neutral">{p.category}</Tag></span>}
                   actions={p.stars > 0 && <span className="flex items-center gap-1 text-[12px] text-dim"><Download className="size-3" />{p.stars.toLocaleString()} installs</span>}>
                   <div onClick={() => setOpenId(p.id)}>
-                    <p className="line-clamp-3 min-h-[48px] text-[12.5px] leading-relaxed text-soft">{p.description || 'No description in its marketplace entry.'}</p>
+                    <p className="line-clamp-3 min-h-[48px] text-[12.5px] leading-relaxed text-soft">{p.description || 'No description.'}</p>
                     <div className="mt-2.5 flex flex-wrap gap-1 border-t border-line pt-2.5">
-                      {!p.providesKnown ? <span className="text-[11.5px] text-dim">contents not on this machine</span>
-                        : KINDS.every((k) => p.provides[k] === 0) ? <span className="text-[11.5px] text-dim">no agents, skills, commands, hooks or MCP servers</span>
+                      {!p.providesKnown ? <span className="text-[11.5px] text-dim">contents unknown</span>
+                        : KINDS.every((k) => p.provides[k] === 0) ? <span className="text-[11.5px] text-dim">contributes nothing</span>
                           : KINDS.map((k) => p.provides[k] > 0 && (
                             <span key={k} className="rounded-xs border border-line bg-surface-2 px-1.5 py-px text-[11.5px] text-ink-2">{p.provides[k]} {k}</span>
                           ))}
@@ -262,7 +261,7 @@ function LivePlugins() {
                         {busy === p.id ? <Loader2 className="size-3 animate-spin" /> : <Trash2 className="size-3" />}Remove
                       </Button>
                     ) : (
-                      <Button size="xs" variant="outline" onClick={() => void copyCommand(p)}><Copy className="size-3" />{p.installed ? 'Uninstall command' : 'Install command'}</Button>
+                      <Button size="xs" variant="outline" onClick={() => void copyCommand(p)}><Copy className="size-3" />Copy {p.installed ? 'uninstall' : 'install'} command</Button>
                     )}
                     <Button size="xs" variant="ghost" onClick={() => setOpenId(p.id)}>Details</Button>
                   </div>
@@ -294,8 +293,8 @@ function LivePlugins() {
                 </SheetDescription>
               </SheetHeader>
               <div className="space-y-3 p-5">
-                <p className="text-[13.5px] leading-relaxed text-ink-2">{open.description || 'No description in its marketplace entry.'}</p>
-                <Panel eyebrow={open.providesKnown ? 'Counted from its files' : 'Its files are not on this machine'} title="Contributions" flush>
+                <p className="text-[13.5px] leading-relaxed text-ink-2">{open.description || 'No description.'}</p>
+                <Panel eyebrow={open.providesKnown ? 'Counted from its files' : 'Files not on this machine'} title="Contributions" flush>
                   <div className="px-3.5 py-1.5">
                     <KV k="Agents" v={open.providesKnown ? open.provides.agents : 'not known'} />
                     <KV k="Skills" v={open.providesKnown ? open.provides.skills : 'not known'} />
@@ -314,21 +313,21 @@ function LivePlugins() {
                   )}
                   <li className="flex gap-1.5"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-brand" />
                     {open.provides.hooks > 0
-                      ? `Its ${open.provides.hooks} hook${open.provides.hooks === 1 ? '' : 's'} appear on the Hooks screen and stay refused until a tool rule allows one by name.`
+                      ? `Its ${open.provides.hooks} hook${open.provides.hooks === 1 ? '' : 's'} are listed in Hooks, refused until a rule allows one.`
                       : 'It brings no hooks.'}
                   </li>
                   <li className="flex gap-1.5"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-brand" />
                     {!open.installed
-                      ? 'Installing happens in Claude Code. Once it is installed and enabled there, it shows up here.'
+                      ? 'Install it in Claude Code; once enabled there, it shows up here.'
                       : open.workspace
-                        ? `NeuroCode put this here and can remove it. Its skills and commands reach sessions while Use in NeuroCode is on${isUsed(open.id) ? ' — it is.' : ' — it is off.'}`
-                        : `Its skills and commands appear in NeuroCode sessions only while it is enabled in Claude Code and Use in NeuroCode is on${open.enabledInClaude ? (isUsed(open.id) ? ' — it is.' : ' — it is off.') : ' — it is disabled in Claude Code.'}`}
+                        ? `Installed here; removable. Reaches sessions while Use in NeuroCode is on${isUsed(open.id) ? ' — it is.' : ' — it is off.'}`
+                        : `Reaches sessions while enabled in Claude Code and Use in NeuroCode is on${open.enabledInClaude ? (isUsed(open.id) ? ' — it is.' : ' — it is off.') : ' — it is disabled in Claude Code.'}`}
                   </li>
                 </ul>
                 <div className="flex flex-wrap gap-2 border-t border-line pt-3">
                   {open.workspace ? (
                     <Button size="sm" variant="outline" disabled={!!busy || !can(EXTENSIONS_PERMISSION)} onClick={() => void remove(open)}>
-                      {busy === open.id ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}Remove from this machine
+                      {busy === open.id ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}Remove
                     </Button>
                   ) : (
                     <Button size="sm" onClick={() => void copyCommand(open)}><Copy className="size-3.5" />Copy {open.installed ? 'uninstall' : 'install'} command</Button>

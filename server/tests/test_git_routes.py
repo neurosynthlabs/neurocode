@@ -18,9 +18,11 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models as m
+from app import agent as agent_pkg
 from app.agent.git import AUTHOR
 from app.api import deps
 from app.api.app import create_api
+from app.services import runs as runtime
 from tests.fixtures.workspace import load_workspace
 
 OWNER = {"workspace": "Acme", "name": "Rajat", "email": "owner@example.com", "password": "correct horse battery"}
@@ -143,6 +145,53 @@ async def test_merge_is_offered_exactly_when_the_merge_route_would_accept_it(cli
     await session.flush()
     one = next(w for w in (await client.get(f"/projects/{PID}/git")).json()["worktrees"] if w["id"] == "RUN-1")
     assert one["canMerge"] is False and one["mergeBlocked"] == "Nothing to merge: the branch has no commits."
+
+
+async def test_a_merge_is_undone_only_while_the_checkout_still_stands_on_it(api, client: AsyncClient, repo: Path,
+                                                                             session: AsyncSession):
+    # The run was reviewed: its receipt is the fingerprint of exactly the patch that lands.
+    run = await session.get(m.Run, "r-RUN-1")
+    patch, _ = runtime._patch(runtime._parts(run))
+    run.review = {"receipt": {"sha256": agent_pkg.fingerprint(patch)}}
+    await session.flush()
+    merged = (await client.post("/runs/RUN-1/merge")).json()
+    assert merged["merged"] is True and merged["into"] == "main"
+    head = run_git(["rev-parse", "HEAD"], repo).strip()
+    before = run_git(["rev-parse", "HEAD^1"], repo).strip()
+    assert (repo / "app.py").read_text() == "a = 1\nb = 'one'\nc = 3\n"
+
+    # Somebody committed on top: going back now would throw their commit away, so nothing moves.
+    (repo / "README.md").write_text("# Shop, later\n")
+    run_git(["commit", "-qam", "later"], repo)
+    moved = await client.post("/runs/RUN-1/unmerge")
+    assert moved.status_code == 409 and "moved on" in moved.json()["detail"] and "git revert -m 1" in moved.json()["detail"]
+    assert (repo / "README.md").read_text() == "# Shop, later\n"
+    run_git(["reset", "--hard", head], repo)
+
+    # A tree with work in it is never reset underneath that work.
+    (repo / "notes.txt").write_text("in progress\n")
+    dirty = await client.post("/runs/RUN-1/unmerge")
+    assert dirty.status_code == 409 and "not committed" in dirty.json()["detail"]
+    assert (repo / "notes.txt").exists() and run_git(["rev-parse", "HEAD"], repo).strip() == head
+    (repo / "notes.txt").unlink()
+
+    await client.post("/admin/users", json=VIEWER)
+    async with _client(api) as viewer:
+        await viewer.post("/auth/login", json={"email": VIEWER["email"], "password": VIEWER["password"]})
+        assert (await viewer.post("/runs/RUN-1/unmerge")).status_code == 403
+
+    undone = await client.post("/runs/RUN-1/unmerge")
+    assert undone.status_code == 200 and undone.json()["merged"] is None
+    assert run_git(["rev-parse", "HEAD"], repo).strip() == before
+    assert (repo / "app.py").read_text() == "a = 1\nb = 2\nc = 3\n"
+    assert (await client.post("/runs/RUN-1/unmerge")).json()["detail"] == "RUN-1 is not merged, so there is no merge to undo."
+    assert (await client.post("/runs/RUN-404/unmerge")).status_code == 404
+
+    audit = (await client.get("/admin/audit", params={"q": "run.unmerge"})).json()
+    rows = audit["rows"] if isinstance(audit, dict) else audit
+    assert any(r.get("action") == "run.unmerge" for r in rows)
+    # The branch was never touched, so it can be merged again.
+    assert (await client.post("/runs/RUN-1/merge")).json()["merged"] is True
 
 
 async def test_a_branch_that_collides_with_the_checkout_is_named_with_its_file(client: AsyncClient, repo: Path):

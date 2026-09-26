@@ -51,10 +51,10 @@ from .work import when
 #: command that runs and its approval (services/runs._test), the signature (_handoff), the merge
 #: permission (api/routes_runs.py), and the second lane for a review (_review).
 ENFORCED = (
-    "Works in a git worktree and branch of its own. Your checked-out tree is never touched.",
+    "Works in a git worktree and branch of its own. Your checkout changes only when you merge.",
     "A file path a model returns that is absolute, climbs out with '..', or points into .git is refused.",
-    "Nothing a model says is ever executed. The only command that runs is the project's own test "
-    "command, and the first time in a project only after you approve it.",
+    "Nothing a model says is executed. Only the project's own test and check commands run, each "
+    "approved by you first.",
     "A run that changed a file stops at your signature. Refuse it and the branch and worktree are removed.",
     "Merging an accepted branch needs the runs:merge permission.",
     "The diff is reviewed through a different lane from the one that wrote it whenever another is open.",
@@ -205,15 +205,14 @@ ROUTES = (
 )
 
 #: How the gateway orders the lanes for a call, in the order `Gateway.chain` sorts them.
-ORDERING = ("Open lanes are taken in turn, rotated so agents working at the same time start on different "
-            "lanes. The lane a run was given goes first, then lanes good at the role, and a lane the call "
-            "should avoid goes last rather than away. A lane that fails hands the call to the next one.")
+ORDERING = ("Open lanes take turns, so agents working at once start on different lanes. A run's own lane goes "
+            "first, then lanes good at the role; a lane to avoid goes last, not away. A failing lane hands the "
+            "call to the next.")
 
 #: What each preference lets the router use — `Gateway._allowed`, in words.
 PREFERENCE_TEXT = {
     "auto": "Every lane that is switched on, has its key and has allowance left.",
-    "free": "Only lanes whose calls cost no money. Neither paid lane is used — not DeepSeek, and not "
-            "Cerebras, whose trial credit is free only after a payment card.",
+    "free": "Only lanes whose calls cost no money. DeepSeek and Cerebras are paid, so neither is used.",
     "local": "Only Ollama, on this machine. Nothing leaves it.",
     "rules": "No model at all. Features with an offline answer give it; the rest say no model is set up.",
 }

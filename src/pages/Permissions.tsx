@@ -15,6 +15,7 @@ import {
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
+  More,
   Page,
   PageHeader,
   PageBody,
@@ -69,8 +70,8 @@ const TIERS = [
     tone: 'ok' as const,
     icon: ShieldCheck,
     verdict: 'no gate',
-    what: 'writes files in its own git worktree and branch · reads the files the plan names · has its diff read by a reviewer lane',
-    why: 'None of it touches your checkout. What a model returns is written as files; nothing it says is executed.',
+    what: 'Writes files in its own worktree and branch; a reviewer lane reads the diff.',
+    why: 'None of it touches your checkout. Nothing a model says is executed.',
   },
   {
     key: 'once',
@@ -78,8 +79,8 @@ const TIERS = [
     tone: 'warn' as const,
     icon: ShieldAlert,
     verdict: 'you, the first time',
-    what: "runs the project's own test command inside the run's worktree",
-    why: 'The first run in a project stops and asks. Your answer is kept as a standing rule, so it never asks again.',
+    what: "Runs the project's test command in the run's worktree.",
+    why: 'The first run in a project asks. The answer is kept as a standing rule.',
   },
   {
     key: 'always',
@@ -87,8 +88,8 @@ const TIERS = [
     tone: 'danger' as const,
     icon: ShieldX,
     verdict: 'you, every time',
-    what: 'accepting a run that changed a file · merging an accepted branch into your repository (needs runs:merge)',
-    why: 'Refuse a run and its branch and worktree are removed. Nothing is merged unless someone allowed to merge does it.',
+    what: 'Accepting a run that changed a file, and merging it (needs runs:merge).',
+    why: 'A refused run loses its branch and worktree. Only someone allowed to merge does it.',
   },
 ];
 
@@ -155,6 +156,11 @@ export default function Permissions() {
     <Page>
       <PageHeader
         title="Permissions"
+        subtitle="Answer what runs ask, and set the rules they follow."
+        about={<>
+          <p>An agent works alone in its own worktree. A project's first test run asks once, and the answer is kept.</p>
+          <p>A run that changed a file stops at your signature. The sandbox tab is read from the runtime itself.</p>
+        </>}
         actions={
           <Segmented
             options={[
@@ -173,40 +179,9 @@ export default function Permissions() {
       />
 
       <PageBody className="space-y-4">
-        {/* The gate model is the Inbox's subject, and the three cards are how it is explained. On the Rules,
-            Tool rules and Sandbox tabs it is a hundred words of theory above a table that names its own
-            rule, so they stay here — word for word — on the one tab they belong to. */}
-        {tab === 'inbox' && (
-        <div className="grid grid-cols-1 gap-3 stagger lg:grid-cols-3">
-          {TIERS.map((t) => {
-            const I = t.icon;
-            return (
-              <Panel
-                key={t.key}
-                className={cn(
-                  'accent-top',
-                  t.tone === 'danger' && 'border-danger/35',
-                  t.tone === 'warn' && 'border-warn/30',
-                )}
-                eyebrow={t.key === 'once' && rules.data ? `${rules.data.length} projects answered` : t.verdict}
-                title={
-                  <span className="flex items-center gap-2">
-                    <I className={cn('size-4', `text-${t.tone}`)} />
-                    {t.label}
-                  </span>
-                }
-              >
-                <p className="text-[12.5px] text-ink-2">{t.what}</p>
-                <p className="mt-2 border-t border-line pt-2 text-[12.5px] text-dim">{t.why}</p>
-              </Panel>
-            );
-          })}
-        </div>
-        )}
-
         {tab === 'inbox' && (
           <>
-            <StatGrid cols={3}>
+            {approvals.length > 0 && <StatGrid cols={3}>
               <Stat
                 label="Waiting on you"
                 value={pending.length}
@@ -219,7 +194,7 @@ export default function Permissions() {
                 sub={week.median === null ? 'no decision this week' : `median decision ${span(week.median)}`}
               />
               <Stat label="Denied 7d" value={week.denied} tone="danger" />
-            </StatGrid>
+            </StatGrid>}
 
             {pending.length === 0 ? (
               <Empty
@@ -294,6 +269,36 @@ export default function Permissions() {
           </>
         )}
 
+        {tab === 'inbox' && (
+        <More label="The three gates">
+        <div className="grid grid-cols-1 gap-3 stagger lg:grid-cols-3">
+          {TIERS.map((t) => {
+            const I = t.icon;
+            return (
+              <Panel
+                key={t.key}
+                className={cn(
+                  'accent-top',
+                  t.tone === 'danger' && 'border-danger/35',
+                  t.tone === 'warn' && 'border-warn/30',
+                )}
+                eyebrow={t.key === 'once' && rules.data ? `${rules.data.length} projects answered` : t.verdict}
+                title={
+                  <span className="flex items-center gap-2">
+                    <I className={cn('size-4', `text-${t.tone}`)} />
+                    {t.label}
+                  </span>
+                }
+              >
+                <p className="text-[12.5px] text-ink-2">{t.what}</p>
+                <p className="mt-2 border-t border-line pt-2 text-[12.5px] text-dim">{t.why}</p>
+              </Panel>
+            );
+          })}
+        </div>
+        </More>
+        )}
+
         {tab === 'rules' && (
           <>
             <Toolbar>
@@ -341,7 +346,7 @@ export default function Permissions() {
                 <Empty
                   icon={<ShieldAlert className="size-6" />}
                   title="No standing rules yet"
-                  hint="The first time a run wants to run a project's tests it asks you, and your answer is kept here per project."
+                  hint="A project's first test run asks you; the answer lands here."
                 />
               ) : shown.length === 0 ? (
                 <Empty title="No rule matches" />
@@ -402,6 +407,7 @@ export default function Permissions() {
             </Panel>
             <Panel
               eyebrow="What reaches a model"
+              about="An edit step sends the files it may change to the writing lane. A review sends the diff."
               title={
                 <span className="flex items-center gap-1.5">
                   <Globe className="size-3.5 text-brand" />
@@ -425,9 +431,6 @@ export default function Permissions() {
                         ? models.data.preferences[models.data.preference as keyof typeof models.data.preferences]
                         : `Only the ${models.data.preference} lane.`}
                     </p>
-                    <p className="mt-2 text-[12.5px] text-dim">
-                      An edit step sends the files it may change to the lane that writes; a review sends the diff.
-                    </p>
                     <SectionTitle className="mt-3 mb-1.5">Lanes that can answer now</SectionTitle>
                     {lanes.length === 0 ? (
                       <p className="text-[12.5px] text-dim">None — no model is configured.</p>
@@ -442,8 +445,8 @@ export default function Permissions() {
                     )}
                     <p className="mt-3 border-t border-line pt-2.5 text-[12px] text-dim">
                       {calls === 0
-                        ? 'No model call in the last 24 hours.'
-                        : `Of ${calls} calls in the last 24 hours, ${models.data.totals24h.local} were answered on this machine, ${models.data.totals24h.remote} by a remote lane and ${models.data.totals24h.offline} without a model.`}
+                        ? 'No model call in 24 h.'
+                        : `${calls} calls in 24 h: ${models.data.totals24h.local} local · ${models.data.totals24h.remote} remote · ${models.data.totals24h.offline} offline`}
                     </p>
                   </>
                 )
@@ -602,7 +605,7 @@ function ToolRules({ projects }: { projects: Project[] }) {
       {draft && draftTool && (
         <Panel
           className="accent-left"
-          eyebrow={draft.id === null ? 'New rule' : `Rule #${draft.id} · its tool and scope stay as they are`}
+          eyebrow={draft.id === null ? 'New rule' : `Rule #${draft.id} · tool and scope fixed`}
           title={draft.id === null ? 'Write a tool rule' : 'Change this rule'}
         >
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -666,8 +669,7 @@ function ToolRules({ projects }: { projects: Project[] }) {
           </div>
           {!draftTool.consultedBy && (
             <p className="mt-3 rounded-sm border border-warn/30 bg-warn/8 px-3 py-2 text-[12.5px] text-warn">
-              Nothing consults {draftTool.label.toLowerCase()} rules yet. The rule is kept, and applies once runs and
-              sessions read it.
+              Nothing consults {draftTool.label.toLowerCase()} rules yet; the rule is kept.
             </p>
           )}
           <div className="mt-3 flex items-center gap-2 border-t border-line pt-3">
@@ -678,7 +680,7 @@ function ToolRules({ projects }: { projects: Project[] }) {
             <Button size="sm" variant="outline" onClick={() => setDraft(null)}>
               Cancel
             </Button>
-            <span className="ml-auto text-[12px] text-dim">Written to the audit log under your name.</span>
+            <span className="ml-auto text-[12px] text-dim">Audit-logged under your name.</span>
           </div>
         </Panel>
       )}
@@ -703,7 +705,7 @@ function ToolRules({ projects }: { projects: Project[] }) {
           <Empty
             icon={<ShieldAlert className="size-6" />}
             title="No tool rules yet"
-            hint="With no rule every tool asks: a person answers first. Add one to allow what you trust or deny what must never happen."
+            hint="With no rule, every tool asks a person first."
           />
         ) : shown.length === 0 ? (
           <Empty title="No rule matches" hint="Choose another scope or tool." />
@@ -759,24 +761,26 @@ function ToolRules({ projects }: { projects: Project[] }) {
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
         <TryRule projects={projects} scopes={scopes} />
-        <Panel eyebrow="The same order every time" title="How a rule is chosen">
-          <ol className="list-decimal space-y-1.5 pl-4 text-[12.5px] text-ink-2">
-            <li>A project's own rule beats the workspace's, whatever either says.</li>
-            <li>Then the longer pattern, counted without its wildcards: src/api/* beats src/*.</li>
-            <li>Then deny beats ask beats allow, when two rules are equally specific.</li>
-            <li>No rule matches: it asks — except for custom tools and repository hooks, where no rule is a no.</li>
-          </ol>
-          <p className="mt-2 text-[12.5px] text-soft">
-            Those two are the whole of the permission rather than a narrowing of it: a custom tool and a
-            hook in somebody's settings file do nothing at all until a rule allows them, so silence about
-            one is a refusal and nobody is asked.
-          </p>
-          <SectionTitle className="mt-3">Consulted today</SectionTitle>
+        <Panel
+          title="What reads the rules"
+          about={
+            <>
+              <p className="font-medium text-ink">How a rule is chosen</p>
+              <ol className="list-decimal space-y-1 pl-4">
+                <li>A project's own rule beats the workspace's.</li>
+                <li>Then the longer pattern, without wildcards: src/api/* beats src/*.</li>
+                <li>Then deny beats ask beats allow.</li>
+                <li>No match: it asks, except custom tools and repository hooks.</li>
+              </ol>
+              <p>A custom tool or hook does nothing until a rule allows it. Nobody is asked.</p>
+            </>
+          }
+        >
           <div className="space-y-1">
             {RULE_TOOLS.map((t) => (
               <p key={t.id} className="text-[12.5px] text-ink-2">
                 <span className="font-medium text-ink">{t.label}:</span>{' '}
-                {t.consultedBy ?? <span className="text-dim">nothing yet — the rule is kept for when runs read it</span>}
+                {t.consultedBy ?? <span className="text-dim">nothing yet · kept for later</span>}
                 {REFUSED_UNLESS_ALLOWED.includes(t.id) && <span className="text-warn"> · no rule means no</span>}
               </p>
             ))}

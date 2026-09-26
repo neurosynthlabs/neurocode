@@ -1,7 +1,7 @@
 import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { Plus, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Panel, Segmented } from '@/components/os';
+import { About, Panel, Segmented } from '@/components/os';
 import {
   INFRA_KINDS, SERVICE_KINDS, type Adr, type Architecture, type Catalogue, type DataStore, type Environment, type Layer,
   type ScaffoldRepo, type Service,
@@ -104,12 +104,12 @@ export function ArchitectureEditor({ draft, change, catalogue, readOnly, section
       {section === 'layers' && (
         <>
           <Panel title="What it is">
-            <textarea value={draft.summary} disabled={readOnly} rows={3} placeholder="Two or three sentences on the system and its shape."
+            <textarea value={draft.summary} disabled={readOnly} rows={3} placeholder="The system and its shape, briefly"
               onChange={(e) => change((a) => ({ ...a, summary: e.target.value }))} className={area} aria-label="Summary" />
           </Panel>
           {layers.length === 0 && (
             <p className="rounded-xl border border-dashed border-line px-5 py-6 text-center text-[13px] text-dim">
-              No layer is chosen yet. Add the layers this system has — front end, back end, database — below.
+              No layer yet. Add one below.
             </p>
           )}
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -137,7 +137,7 @@ export function ArchitectureEditor({ draft, change, catalogue, readOnly, section
                             onChange={(v) => setLayer(id, (l) => ({ ...l, alternatives: v.filter((x) => x !== l.choice) }))} />}
                     </div>
                     <Labelled text="Why">
-                      <textarea value={layer.why} rows={2} disabled={readOnly} placeholder="What makes it the right choice for these answers."
+                      <textarea value={layer.why} rows={2} disabled={readOnly} placeholder="Why it fits these answers"
                         onChange={(e) => setLayer(id, (l) => ({ ...l, why: e.target.value }))} className={area} />
                     </Labelled>
                   </div>
@@ -168,7 +168,7 @@ export function ArchitectureEditor({ draft, change, catalogue, readOnly, section
             </Button>
           )}>
             {draft.services.length === 0 ? (
-              <p className="px-5 py-6 text-[13px] text-dim">No service yet. A service is something that runs: the web app, the API, a worker.</p>
+              <p className="px-5 py-6 text-[13px] text-dim">No service yet: a web app, an API, a worker.</p>
             ) : (
               <div className="divide-y divide-line/60">
                 {draft.services.map((s, n) => (
@@ -207,7 +207,7 @@ export function ArchitectureEditor({ draft, change, catalogue, readOnly, section
                             </button>
                           );
                         })}
-                        {nodes.length <= 1 && <span className="text-[12.5px] text-dim">Add another service or a data store to connect it.</span>}
+                        {nodes.length <= 1 && <span className="text-[12.5px] text-dim">Add another service or store to connect.</span>}
                         {s.talksTo.filter((t) => !nodes.includes(t)).map((t) => (
                           <span key={t} className="inline-flex items-center gap-1 rounded-full bg-warn/12 px-2.5 py-1 font-mono text-[12px] text-warn">
                             {t} is gone
@@ -227,7 +227,7 @@ export function ArchitectureEditor({ draft, change, catalogue, readOnly, section
             </Button>
           )}>
             {draft.dataStores.length === 0 ? (
-              <p className="px-5 py-6 text-[13px] text-dim">No data store yet: databases, caches, queues and buckets the services keep things in.</p>
+              <p className="px-5 py-6 text-[13px] text-dim">No data store yet: a database, cache, queue or bucket.</p>
             ) : (
               <div className="divide-y divide-line/60">
                 {draft.dataStores.map((d, n) => (
@@ -256,7 +256,7 @@ export function ArchitectureEditor({ draft, change, catalogue, readOnly, section
 
       {section === 'delivery' && (
         <>
-          <Rows<Environment> title="Environments" empty="No environment yet — dev, staging and prod are the usual three." readOnly={readOnly}
+          <Rows<Environment> title="Environments" empty="No environment yet: usually dev, staging and prod." readOnly={readOnly}
             items={draft.environments} add={() => ({ name: slug(['dev', 'staging', 'prod'].find((x) => !draft.environments.some((e) => e.name === x)) ?? 'env'), purpose: '', hosting: '' })}
             set={(v) => change((a) => ({ ...a, environments: v }))}
             fields={[{ key: 'name', label: 'Name', width: '140px', mono: true, clean: (v) => slug(v, 30) }, { key: 'purpose', label: 'Purpose' }, { key: 'hosting', label: 'Where it runs' }]} />
@@ -333,16 +333,13 @@ export function ArchitectureEditor({ draft, change, catalogue, readOnly, section
       )}
 
       {section === 'decisions' && (
-        <Panel title="Decisions" flush actions={!readOnly && (
+        <Panel title="Decisions" about="Finalizing writes each layer's choice, and each decision here, into Memory." flush actions={!readOnly && (
           <Button size="sm" variant="outline" onClick={() => change((a) => ({ ...a, adrs: [...a.adrs, { title: '', decision: '', why: '', alternatives: [] }] }))}>
             <Plus className="size-3.5" />Add a decision
           </Button>
         )}>
-          <p className="px-5 pt-3 text-[12.5px] text-dim">
-            Finalizing writes one decision for every layer with a choice, plus each one here, into Memory under Decisions.
-          </p>
           {draft.adrs.length === 0 ? (
-            <p className="px-5 py-5 text-[13px] text-dim">No decision of its own yet. Write down the choices that are not a single layer — a monolith first, events over calls.</p>
+            <p className="px-5 py-5 text-[13px] text-dim">None yet. Record choices beyond one layer, like events over calls.</p>
           ) : (
             <div className="divide-y divide-line/60">
               {draft.adrs.map((d, n) => {
@@ -421,10 +418,13 @@ function ScaffoldRecipe({ repos, set, readOnly }: { repos: ScaffoldRepo[]; set: 
   const fresh = () => { let n = 1; let l = 'app'; while (repos.some((r) => r.label === l)) l = `app-${++n}`; return l; };
   return (
     <div className="space-y-4">
-      <p className="text-[13px] leading-relaxed text-soft">
-        Scaffolding makes one empty repository per entry here and compiles a plan that asks agents to write these files.
-        They are written in worktrees and land only after the review and your signature. Each repository also gets an AGENTS.md.
-      </p>
+      <div className="flex items-center gap-1 text-[13px] text-soft">
+        One repository per entry, and the files agents write in it.
+        <About>
+          <p>Scaffolding makes an empty repository per entry and compiles a plan for these files.</p>
+          <p>Agents write them in worktrees; they land only after review and your signature. Each repository also gets an AGENTS.md.</p>
+        </About>
+      </div>
       {repos.length === 0 && <p className="rounded-xl border border-dashed border-line px-5 py-6 text-center text-[13px] text-dim">No repository in the recipe yet.</p>}
       {repos.map((r, n) => (
         <Panel key={n} title={<span className="font-mono">{r.label || 'repository'}</span>} flush actions={!readOnly && (
