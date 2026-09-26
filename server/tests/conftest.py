@@ -29,6 +29,11 @@ os.environ.setdefault("NEUROCODE_CHANNELS", "false")
 # A model running on this machine (Ollama) must never answer a test: a test that expects "no model" would
 # find one, and one that expects a stub would wait on real generation. Port 9 answers nothing.
 os.environ.setdefault("NEUROCODE_OLLAMA_URL", "http://127.0.0.1:9")
+# An app a test builds without a database of its own (`create_api(db=None)`) opens the default one, and a
+# route that takes the database straight from the app state reads it. That default must be the test database:
+# on a developer's machine it is their real workspace, and on CI it was never migrated.
+os.environ["NEUROCODE_DATABASE_URL"] = os.environ.get(
+    "NEUROCODE_TEST_DATABASE_URL", "postgresql+asyncpg://neurocode:neurocode@127.0.0.1:5432/neurocode_test")
 atexit.register(shutil.rmtree, _SCRATCH, ignore_errors=True)
 
 import pytest  # noqa: E402 — the environment above must be in place first
