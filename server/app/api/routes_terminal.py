@@ -34,7 +34,7 @@ from ..services.identity import IdentityService, Person
 from ..services.terminal import MACHINE, RunConfigService, Terminals, open_shell, suggestions
 from ..services.tokens import PREFIX as TOKEN_PREFIX, TokenService
 from ..settings import Settings
-from .deps import COOKIE, current_person, session, token_from
+from .deps import COOKIE, current_person, holds_in, scoped, session, token_from
 
 #: What every machine route answers when the server was set up without machine access.
 OFF = "Machine access is off on this server"
@@ -95,6 +95,15 @@ async def machine_person(request: Request, who: Person = Depends(current_person)
     return who
 
 
+async def project_machine_person(_: Person = Depends(machine_person),
+                                 who: Person = Depends(scoped(MACHINE))) -> Person:
+    """`machine_person`, then the same permission asked inside the project the path names, as `routes_git`
+    asks it. A configuration is what runs when that project's people press Run, so a restricted project
+    the person holds no grant in answers 404 here too, and a grant that leaves out machine access is
+    honoured. The setting is still weighed first: `machine_person` is solved before `scoped`."""
+    return who
+
+
 def terminals(request: Request) -> Terminals:
     return terminals_of(request.app)
 
@@ -109,13 +118,14 @@ def origin_allowed(websocket: WebSocket, config: Settings, *, by_cookie: bool) -
     """This app's own page, and nothing else a browser could be showing.
 
     Same-origin is the Origin naming the host the socket was opened on; beyond that, the origins CORS
-    already trusts with the cookie. A socket with no Origin at all is not a browser's, so it cannot be
-    riding on someone's cookie without their knowing — but it may use the cookie only if it says where
-    it comes from, and a script with a token sends the token instead."""
+    already trusts with the cookie — matched whole, as CORS matches them, so an operator's pattern
+    written without `$` admits no more here than it does there. A socket with no Origin at all is not a
+    browser's, so it cannot be riding on someone's cookie without their knowing — but it may use the
+    cookie only if it says where it comes from, and a script with a token sends the token instead."""
     origin = websocket.headers.get("origin")
     if not origin:
         return not by_cookie
-    if re.match(config.cors_origin_regex, origin):
+    if re.fullmatch(config.cors_origin_regex, origin):
         return True
     host = websocket.headers.get("host", "")
     return bool(host) and urlparse(origin).netloc == host
@@ -187,7 +197,10 @@ class SizeIn(BaseModel):
 async def open_terminal(body: TerminalIn, request: Request, who: Person = Depends(machine_person),
                         open_session: AsyncSession = Depends(session),
                         held: Terminals = Depends(terminals)) -> dict[str, Any]:
-    """A shell on this machine, in a folder inside the roots. Audited: who, where, which shell."""
+    """A shell on this machine, in a folder inside the roots. Audited: who, where, which shell. Opened by
+    project, it is that project's machine access that counts — the fence `scoped` puts on its routes."""
+    if body.projectId:
+        who = await holds_in(who, open_session, body.projectId, f"project {body.projectId}", MACHINE)
     return await open_shell(open_session, held, _settings(request), who, cwd=body.cwd, project_id=body.projectId,
                             cols=body.cols, rows=body.rows, ip=_ip(request))
 
@@ -348,14 +361,14 @@ class RunConfigPatch(BaseModel):
 
 @router.get("/projects/{pid}/run-configs")
 async def run_configs(pid: str, kind: Kind | None = None, limit: int = Query(default=100, ge=1),
-                      offset: int = Query(default=0, ge=0), _: Person = Depends(machine_person),
+                      offset: int = Query(default=0, ge=0), _: Person = Depends(project_machine_person),
                       open_session: AsyncSession = Depends(session)) -> list[dict[str, Any]]:
     """A project's run and debug configurations. Environment values never leave: only their names."""
     return await RunConfigService(open_session).listed(pid, kind=kind, limit=min(limit, MAX_LIST), offset=offset)
 
 
 @router.post("/projects/{pid}/run-configs", status_code=201)
-async def add_run_config(pid: str, body: RunConfigIn, request: Request, who: Person = Depends(machine_person),
+async def add_run_config(pid: str, body: RunConfigIn, request: Request, who: Person = Depends(project_machine_person),
                          open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     return await RunConfigService(open_session).create(
         pid, name=body.name, kind=body.kind, language=body.language, command=body.command, args=body.args,
@@ -363,7 +376,7 @@ async def add_run_config(pid: str, body: RunConfigIn, request: Request, who: Per
 
 
 @router.get("/projects/{pid}/run-configs/detect")
-async def detect_run_configs(pid: str, _: Person = Depends(machine_person),
+async def detect_run_configs(pid: str, _: Person = Depends(project_machine_person),
                              open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     """What the checkout suggests running — read from its files, never run. A person saves the ones they
     want; each says where it was read from, and whether the project already has it."""
@@ -378,7 +391,7 @@ async def _owned(open_session: AsyncSession, pid: str, config_id: int) -> None:
 
 @router.patch("/projects/{pid}/run-configs/{config_id}")
 async def change_run_config(pid: str, config_id: int, body: RunConfigPatch, request: Request,
-                            who: Person = Depends(machine_person),
+                            who: Person = Depends(project_machine_person),
                             open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     await _owned(open_session, pid, config_id)
     return await RunConfigService(open_session).update(
@@ -387,7 +400,7 @@ async def change_run_config(pid: str, config_id: int, body: RunConfigPatch, requ
 
 
 @router.delete("/projects/{pid}/run-configs/{config_id}")
-async def remove_run_config(pid: str, config_id: int, request: Request, who: Person = Depends(machine_person),
+async def remove_run_config(pid: str, config_id: int, request: Request, who: Person = Depends(project_machine_person),
                             open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
     await _owned(open_session, pid, config_id)
     return await RunConfigService(open_session).delete(config_id, who, ip=_ip(request))
@@ -398,8 +411,14 @@ async def start_run_config(config_id: int, request: Request, body: SizeIn | None
                            who: Person = Depends(machine_person), open_session: AsyncSession = Depends(session),
                            held: Terminals = Depends(terminals)) -> dict[str, Any]:
     """A terminal running the configuration's command in its folder with its environment. Its output
-    streams through the terminal socket like any shell's; stop and restart are the terminal's."""
+    streams through the terminal socket like any shell's; stop and restart are the terminal's.
+
+    The path names only the configuration, so its project is fenced once it is known, as a run's is: a
+    restricted project the person holds no grant in has no configuration here, and a grant that leaves
+    out machine access is honoured."""
     size = body or SizeIn()
+    config, _ = await RunConfigService(open_session).one(config_id)
+    who = await holds_in(who, open_session, config.project_id, f"run configuration {config_id}", MACHINE)
     return await RunConfigService(open_session).start(config_id, who, held, cols=size.cols, rows=size.rows,
                                                       ip=_ip(request))
 
@@ -420,7 +439,7 @@ class DebugIn(BaseModel):
 
 
 @router.post("/projects/{pid}/debug", status_code=201)
-async def start_debug(pid: str, body: DebugIn, request: Request, who: Person = Depends(machine_person),
+async def start_debug(pid: str, body: DebugIn, request: Request, who: Person = Depends(project_machine_person),
                       open_session: AsyncSession = Depends(session),
                       held: debugging.Debuggers = Depends(debuggers)) -> dict[str, Any]:
     """Launch a program under the debugger and answer once it is running (or already stopped at a
@@ -432,7 +451,7 @@ async def start_debug(pid: str, body: DebugIn, request: Request, who: Person = D
 
 
 @router.get("/projects/{pid}/debug")
-async def project_debug_sessions(pid: str, who: Person = Depends(machine_person),
+async def project_debug_sessions(pid: str, who: Person = Depends(project_machine_person),
                                  held: debugging.Debuggers = Depends(debuggers)) -> list[dict[str, Any]]:
     """Your debug sessions in this project, oldest first — a handful at most, so the list needs no paging."""
     return [s.json(output=0) for s in held.mine(who.id, pid)]

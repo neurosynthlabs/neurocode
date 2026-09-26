@@ -836,6 +836,18 @@ class RunService:
         await self.session.flush()
 
     # ── what a person can ask of a run ───────────────────────────
+    async def _claim(self, run: Run, busy: str) -> None:
+        """This run's advisory lock, held to the end of the transaction — or `busy`, refused, while another
+        request holds it. Then the run is read again: a request that read it just before the other one
+        committed must weigh what that one wrote, not what both of them read before either wrote. Taken by
+        everything that rewrites a run's worktree or starts it again — revert, rework and carrying on — so
+        a double click or a retry does it once, and pays for its model calls once."""
+        held = (await self.session.execute(text("SELECT pg_try_advisory_xact_lock(:key)"),
+                                           {"key": _run_lock(run.id)})).scalar_one()
+        if not held:
+            raise Refused(busy)
+        await self.session.refresh(run)
+
     async def cancel(self, ref: str, by: str) -> Run:
         run = await self.runs.by_ref(ref)
         if run is None:
@@ -915,6 +927,7 @@ class RunService:
         run = await self.runs.by_ref(ref)
         if run is None:
             raise NotFound(f"run {ref}")
+        await self._claim(run, f"{ref} is already being sent back.")
         notes = notes.strip()
         if not notes:
             raise Refused("Say what should change, so the next run knows.", status=422)
@@ -1002,6 +1015,13 @@ class RunService:
             raise Refused(f"{ref}'s branch was removed, so there is nothing to merge.")
         if run.merged:
             raise Refused(f"{ref} is already merged into {run.merged['into']}.")
+        # A run that ends at a signature is merged only once a person gave it, as push asks. "Done" is not
+        # that: a run whose signature was skipped as having nothing to accept is done too.
+        gate = next((x for x in run.steps if x.kind == "handoff"), None)
+        if gate is not None and gate.status != "done":
+            raise Refused("Nothing to merge: the branch has no commits." if gate.status == "skipped" else
+                          f"{ref} has not been accepted, so there is nothing settled to merge. Approve its "
+                          "signature first.")
         # The checkout is asked first, as the Git screen asks it, so the reason a person sees there is
         # the one the merge gives; then the branch, then whether it is still what was reviewed.
         parts = _parts(run)
@@ -1020,9 +1040,11 @@ class RunService:
             result = await asyncio.to_thread(_merge_parts, parts, message)
         except agent.Refused as refused:                    # a dirty tree: the reason is for the person
             raise Refused(str(refused)) from refused
+        if result.get("nothing"):
+            raise Refused(f"{result['into']} already has every commit on {run.branch}.")
         if result["merged"]:
             run.merged = {"into": result["into"], "commit": result["commit"], "at": utcnow().isoformat(),
-                          "by": by, "undo": result["undo"],
+                          "by": by, "undo": result["undo"], "tip": result.get("tip", ""),
                           **({"sources": result["sources"]} if "sources" in result else {})}
             await self.logs.write(run.id, level="ok",
                                   line=f"merged into {result['into']} as {result['commit']} · undo: {result['undo']}")
@@ -1049,9 +1071,13 @@ class RunService:
         if not merged:
             raise Refused(f"{ref} is not merged, so there is no merge to undo.")
         parts = _parts(run)
-        made = {x.get("label", ""): x.get("commit") for x in merged.get("sources") or [] if x.get("commit")}
-        pairs = [(part, made.get(part.label) or merged["commit"]) for part in parts] if made \
-            else [(parts[0], merged["commit"])]
+        # Only the sources a merge commit was really made in: one that already held the branch was left as
+        # it was, and has nothing to take back.
+        listed = {x.get("label", ""): x for x in merged.get("sources") or [] if x.get("commit")}
+        pairs = [(part, listed[part.label]) for part in parts if part.label in listed] if merged.get("sources") \
+            else [(parts[0], merged)]
+        if not pairs:
+            raise Refused(f"No source of {ref} holds a merge NeuroCode made, so there is nothing to undo here.")
         try:
             back = await asyncio.to_thread(_unmerge_parts, pairs)
         except agent.Refused as refused:
@@ -1315,6 +1341,8 @@ class RunService:
         run = await self.runs.by_ref(ref)
         if run is None:
             raise NotFound(f"run {ref}")
+        # Two presses of "revert and redo" would otherwise both pass the checks below and both start it.
+        await self._claim(run, f"{ref} is already being taken back.")
         if run.role == "check":
             raise Refused(f"{ref} only ran the project's tests; there is no step to go back to.")
         if run.parent_id:
@@ -1478,18 +1506,24 @@ class RunService:
         a grant for the run is still the same run's grant, a once-grant already spent stays spent, and a
         gate nobody answered is asked again when the step reaches it.
         """
-        run = await self._for_resume(ref)
+        found = await self.runs.by_ref(ref)
+        if found is None:
+            raise NotFound(f"run {ref}")
         # Two people pressing the button at once, or two API workers, must not both reset one worktree.
-        # The lock is this transaction's; the status it sets is what stops the second attempt afterwards.
-        held = (await self.session.execute(text("SELECT pg_try_advisory_xact_lock(:key)"),
-                                           {"key": _run_lock(run.id)})).scalar_one()
-        if not held:
-            raise Refused(f"{ref} is already carrying on.")
+        # The lock is this transaction's; the status it sets is what stops the second attempt afterwards —
+        # which is why the run is weighed only once the lock is held, and read again when it is.
+        await self._claim(found, f"{ref} is already carrying on.")
+        run = await self._for_resume(ref)
         survey = await asyncio.to_thread(_survey, run)
         if survey.reason:
             raise Refused(survey.reason)
         parts = _parts(run)
         kept = await asyncio.to_thread(_carry_worktrees, run, parts, survey)
+        # What the branch holds now, measured: an adopted commit was never counted, and a signature skipped
+        # for a stale "0 files" would let a model's code finish unsigned.
+        stat = await asyncio.to_thread(_stats, parts)
+        run.diff_files, run.diff_insertions = stat["files"], stat["insertions"]
+        run.diff_deletions, run.diff_commits = stat["deletions"], stat["commits"]
 
         review = {k: v for k, v in (run.review or {}).items() if k != "reviewing"}
         adopted = {label: sha for label, sha in survey.adopt.items() if sha}
@@ -1647,8 +1681,12 @@ def _merge_parts(parts: list[Part], message: str) -> dict[str, Any]:
     if len(parts) == 1 and not parts[0].label:
         return agent.merge_into_checkout(parts[0].repo, parts[0].branch, message)
     done: list[tuple[Part, dict[str, Any]]] = []
+    every: list[tuple[Part, dict[str, Any]]] = []
     for part in parts:
         result = agent.merge_into_checkout(part.repo, part.branch, message)
+        every.append((part, result))
+        if result.get("nothing"):
+            continue                    # this source already holds its branch: nothing merged, nothing to undo
         if not result["merged"]:
             undone = [x.name for x, merged in done if agent.undo_merge(x.repo, merged["before"], merged["commit"])]
             kept = [f"{x.name}: {merged['undo']}" for x, merged in done if x.name not in undone]
@@ -1658,20 +1696,30 @@ def _merge_parts(parts: list[Part], message: str) -> dict[str, Any]:
                     + [{"label": part.label, "merged": False, "conflicts": result["conflicts"]}],
                     "kept": kept}
         done.append((part, result))
+    if not done:
+        return {**every[0][1], "nothing": True}
     first = done[0][1]
     return {"merged": True, "into": first["into"], "conflicts": [], "commit": first["commit"], "undo": first["undo"],
-            "sources": [{"label": x.label, "into": r["into"], "commit": r["commit"], "undo": r["undo"]}
-                        for x, r in done]}
+            "tip": first["tip"],
+            "sources": [{"label": x.label, "into": r["into"], "commit": r["commit"], "undo": r["undo"],
+                         **({"tip": r["tip"]} if r.get("tip") else {"nothing": True})} for x, r in every]}
 
 
-def _unmerge_parts(pairs: list[tuple[Part, str]]) -> str:
+def _unmerge_parts(pairs: list[tuple[Part, dict[str, Any]]]) -> str:
     """Blocking. Every source is asked first, so a refusal in the last leaves the first untouched: the merge
-    comes out of all of them or none. Returns where the first source's checkout is back at."""
-    for part, commit in pairs:
-        refusal = agent.unmerge_refusal(part.repo, commit)
+    comes out of all of them or none. Returns where the first source's checkout is back at.
+
+    Each pair is a source and the merge recorded there. A merge recorded before merges kept the branch's
+    commit is checked against the branch as it stands, which a merged run's branch does not move from."""
+    asked: list[tuple[Part, str, str, str]] = []
+    for part, merged in pairs:
+        commit, into = str(merged.get("commit") or ""), str(merged.get("into") or "")
+        tip = str(merged.get("tip") or "") or branch_tip(part.repo, part.branch) or ""
+        refusal = agent.unmerge_refusal(part.repo, commit, into=into, tip=tip)
         if refusal:
             raise agent.Refused(f"{part.label}: {refusal}" if part.label else refusal)
-    return [agent.take_back_merge(part.repo, commit) for part, commit in pairs][0]
+        asked.append((part, commit, into, tip))
+    return [agent.take_back_merge(part.repo, commit, into=into, tip=tip) for part, commit, into, tip in asked][0]
 
 
 def _push_parts(parts: list[Part], remote: str | None) -> dict[str, Any]:
@@ -2230,6 +2278,8 @@ def _apply(parts: list[Part], elsewhere: frozenset[str], files: list[tuple[str, 
                                     "for grounding and never write there")
             raise agent.Refused(f"refused to write {path}: {head} is a source this run did not open")
         routed.setdefault(parts.index(hit[0]), []).append((hit[1], content))
+    for n, items in routed.items():
+        agent.check_files(parts[n].work, items)             # a size or a place refused before any write
     written: list[str] = []
     for n, items in routed.items():
         written += [parts[n].lead + rel for rel in agent.apply_files(parts[n].work, items)]
@@ -2983,10 +3033,17 @@ async def _gate_summary(s: AsyncSession, run: Run) -> tuple[str, str, str, str]:
 
 
 async def _handoff(db: Database, ref: str, step_n: int) -> bool:
+    """Your signature. Skipped only when the branch itself changes nothing, read from git as the review and
+    the merge read it — never from a stored count, which a step adopted after a restart never updated, and
+    a signature skipped for a stale "0 files" is a model's code finishing unsigned. A branch that cannot be
+    read is asked about, not waved through."""
     async with db.read() as s:
-        run = await RunRepository(s).by_ref(ref)
-        nothing = run.diff_files == 0
-        if not nothing:
+        parts = _parts(await RunRepository(s).by_ref(ref))
+    patch, head = await asyncio.to_thread(_patch, parts)
+    nothing = bool(head) and not patch.strip()
+    if not nothing:
+        async with db.read() as s:
+            run = await RunRepository(s).by_ref(ref)
             title, tool, risk, payload = await _gate_summary(s, run)
             branch = run.branch
 

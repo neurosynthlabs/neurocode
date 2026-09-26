@@ -19,6 +19,7 @@ import { categoryLabel } from '@/lib/live/knowledge';
 import { ARCHIVES, bytes, joinPath, machineApi, type NewProjectOptions } from '@/lib/live/machine';
 import { LABEL, SOURCE_DOT, labelFrom, readOnly, referencesApi, sourcesApi, sourcesOf, type SourceInput } from '@/lib/live/sources';
 import { useRemote } from '@/lib/remote';
+import { runtimeApi } from '@/lib/live/runtime';
 import { cn } from '@/lib/utils';
 import { ago } from '@/lib/time';
 import type { MemoryFact, Project } from '@/types';
@@ -58,6 +59,12 @@ const EMPTY_STAGES = [
 
 /** The four ways a project begins. Importing and starting empty write on this machine, so they need machine:access. */
 type Door = 'folder' | 'archive' | 'clone' | 'empty';
+/** Served from somewhere other than this computer: then "this machine" is the server, which cannot see the
+    person's own folders, so the wizard says "the server" and leads with a clone or an upload. */
+const HOSTED = typeof window !== 'undefined' && !['localhost', '127.0.0.1', '::1', '[::1]'].includes(window.location.hostname);
+/** Forges a token can be kept for, to clone a private repository. */
+const TOKEN_FORGES = ['github.com', 'gitlab.com'];
+const forgeOf = (url: string) => /^(?:[a-z+]+:\/\/)?(?:[^@/\s]+@)?([\w.-]+)[:/]/i.exec(url.trim())?.[1]?.toLowerCase() ?? '';
 const DOORS: { id: Door; title: string; hint: string; icon: typeof FolderOpen; machine: boolean }[] = [
   { id: 'folder', title: 'Open a folder on this machine', hint: 'Read where it is. Nothing is copied.', icon: FolderOpen, machine: false },
   { id: 'archive', title: 'Import an archive', hint: 'A .zip, .tar.gz or .tgz, unpacked into a new folder', icon: FileArchive, machine: true },
@@ -114,11 +121,12 @@ export default function Projects() {
   const [sort, setSort] = useState<Sort>('active');
   const [newOpen, setNewOpen] = useState(false);
   const [repo, setRepo] = useState('');
-  const [door, setDoor] = useState<Door>('folder');
+  const [door, setDoor] = useState<Door>(HOSTED ? 'clone' : 'folder');
+  const [token, setToken] = useState('');
   const source: 'git' | 'local' = door === 'clone' ? 'git' : 'local';
   const [branch, setBranch] = useState('main');
   // An archive: one on this machine (surveyed before anything is written) or one this browser uploads.
-  const [archiveFrom, setArchiveFrom] = useState<'machine' | 'upload'>('machine');
+  const [archiveFrom, setArchiveFrom] = useState<'machine' | 'upload'>(HOSTED ? 'upload' : 'machine');
   const [archivePath, setArchivePath] = useState('');
   const [upload, setUpload] = useState<File | null>(null);
   const [into, setInto] = useState('');
@@ -231,6 +239,16 @@ export default function Projects() {
       rules: SUGGESTED_RULES.filter((r) => picked.has(r.id)),
     };
     if (door === 'clone' || door === 'folder') {
+      const host = forgeOf(repo);
+      if (door === 'clone' && token.trim() && TOKEN_FORGES.includes(host)) {
+        try {
+          await runtimeApi.setForgeToken(host, token.trim());
+          setToken('');
+        } catch (e) {
+          toast.error('The token was not saved', { description: e instanceof ApiError ? e.message : 'The API did not answer.' });
+          return null;
+        }
+      }
       return createProject({ source, repo: repo.trim(), branch: branch.trim(), ...options });
     }
     try {
@@ -506,7 +524,10 @@ export default function Projects() {
             content: (
               <div className="space-y-3">
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="group" aria-label="How the project begins">
-                  {DOORS.map((d) => {
+                  {(HOSTED ? [...DOORS].sort((a, b) => Number(b.id === 'clone') - Number(a.id === 'clone')) : DOORS).map((raw) => {
+                    const d = HOSTED && raw.id === 'folder'
+                      ? { ...raw, title: 'Open a folder on the server', hint: 'The server’s own disk. It cannot see your computer.' }
+                      : HOSTED && raw.id === 'archive' ? { ...raw, hint: 'Upload a .zip of your project from this browser' } : raw;
                     const off = d.machine && !browse;
                     const Icon = d.icon;
                     return (
@@ -530,7 +551,7 @@ export default function Projects() {
                         className="min-w-0 flex-1"
                         label={source === 'git' ? 'Clone URL' : 'Absolute path'}
                         value={repo} onChange={setRepo} mono
-                        placeholder={source === 'git' ? 'git@github.com:org/repo.git' : '/Users/you/code/repo'}
+                        placeholder={source === 'git' ? 'https://github.com/org/repo.git' : '/Users/you/code/repo'}
                       />
                       {source === 'local' && browse && (
                         <Button type="button" variant="outline" size="sm" className="mb-px h-9" onClick={() => setBrowsing('first')}>
@@ -539,6 +560,11 @@ export default function Projects() {
                       )}
                     </div>
                     {source === 'git' && <Field label="Branch" value={branch} onChange={setBranch} mono />}
+                    {source === 'git' && can('workspace:admin') && TOKEN_FORGES.includes(forgeOf(repo)) && (
+                      <Field label="Access token (private repositories)" type="password" mono value={token} onChange={setToken}
+                        autoComplete="off" placeholder={forgeOf(repo) === 'github.com' ? 'github_pat_…' : 'glpat-…'}
+                        hint={`Kept for ${forgeOf(repo)}; used to clone, push and open requests.`} />
+                    )}
                   </>
                 )}
 
@@ -602,7 +628,7 @@ export default function Projects() {
                 )}
 
                 <div className="rounded-sm border border-line bg-base px-3 py-1.5">
-                  {door === 'clone' && <KV k="Access" v="cloned with your git credentials, read only" />}
+                  {door === 'clone' && <KV k="Access" v="cloned read only, with the forge token kept here if any" />}
                   {door === 'folder' && <KV k="Access" v="read in place, nothing copied" />}
                   {door === 'archive' && <KV k="Writes" v={`only ${target ?? 'the new folder'}, after every entry is checked`} />}
                   {door === 'empty' && <KV k="Writes" v={`${target ?? 'the new folder'}: git init, a README, one commit`} />}

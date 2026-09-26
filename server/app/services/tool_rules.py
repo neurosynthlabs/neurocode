@@ -25,11 +25,13 @@ for a person, or treats the person who pressed the button as the one who was ask
 allowed that asked before unless a person wrote a rule saying so.
 
 Globs are `fnmatch`'s: `*` matches anything, including `/`, `?` one character, `[abc]` a set. Matching is
-case-sensitive, because paths and URLs are.
+case-sensitive, because paths and URLs are — except a URL's scheme and host, which are not, and are
+matched in lower case on both sides.
 """
 from __future__ import annotations
 
 import fnmatch
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -80,18 +82,40 @@ def _literal(pattern: str) -> int:
     return sum(1 for ch in pattern if ch not in WILDCARDS)
 
 
+#: A URL's scheme and host — the part of a web_fetch subject or pattern that is the same in any letters.
+SITE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)([^/?#]*)")
+
+
+def _site(found: re.Match[str]) -> str:
+    """A URL's scheme and host the way `web._checked` fetches them: lower case, a name in another script
+    in its IDNA form. A label that is not a name (a wildcard, a port) is left as it is."""
+    labels = found.group(2).lower().split(".")
+    try:
+        host = ".".join(label if label.isascii() else label.encode("idna").decode("ascii") for label in labels)
+    except UnicodeError:
+        host = ".".join(labels)
+    return found.group(1).lower() + host
+
+
 def normalise(tool: str, subject: str) -> str:
-    """The subject as rules see it. A path is matched as written in the checkout, never with `./`."""
+    """The subject as rules see it. A path is matched as written in the checkout, never with `./`. A URL's
+    scheme and host are matched as `web._checked` fetches them: a host is the same host in any letters, so
+    a rule written `https://Blocked.Example/*` still denies the one page it names."""
     text = subject.strip()
     if tool in ("edit", "read"):
         while text.startswith("./"):
             text = text[2:]
+    if tool == "web_fetch":
+        text = SITE.sub(_site, text, count=1)
     return text
 
 
 def weigh(rules: list[ToolRule], tool: str, subject: str) -> Decision:
-    """Pure: which of these rules decides, by scope, then length, then caution. Exposed for tests."""
-    matching = [r for r in rules if r.tool == tool and fnmatch.fnmatchcase(subject, r.pattern)]
+    """Pure: which of these rules decides, by scope, then length, then caution. Exposed for tests.
+
+    A pattern is matched as `normalise` would write it today, so a rule stored before a spelling was
+    normalised (a web_fetch host in capitals) still matches what it was written about."""
+    matching = [r for r in rules if r.tool == tool and fnmatch.fnmatchcase(subject, normalise(tool, r.pattern))]
     if not matching:
         # The answer is the same word for every kind — ask — but what the caller then does differs, and a
         # person reading the "try it" box deserves to be told which it is rather than left to find out.

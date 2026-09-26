@@ -31,6 +31,7 @@ from . import (
     routes_ai,
     routes_auth,
     routes_blueprints,
+    routes_channels,
     routes_code,
     routes_data,
     routes_diagnostics,
@@ -68,7 +69,7 @@ ROUTERS = (routes_auth.router, routes_work.router, routes_plans.router, routes_k
            routes_evals.router, routes_research.router, routes_ops.router, routes_permissions.router,
            routes_machine.router, routes_terminal.router, routes_blueprints.router, routes_routines.router,
            routes_tokens.router, routes_agents.router, routes_diagnostics.router,
-           routes_notebooks.router, routes_data.router, stream.router)
+           routes_notebooks.router, routes_data.router, routes_channels.router, stream.router)
 
 #: What a row that was in flight when the process died says about itself afterwards.
 INTERRUPTED = "interrupted: the server restarted"
@@ -98,10 +99,12 @@ async def reconcile_interrupted(open_session: AsyncSession) -> dict[str, int]:
     path already has.
     """
     params = {"why": INTERRUPTED}
+    # `queued` too: a run is queued the moment it is handed to a job, so one handed off just before the
+    # process stopped is owned by nothing now — and a queued run refuses resume, revert and rework alike.
     runs = (await open_session.execute(text(
         "WITH gone AS ("
         "  UPDATE runs SET status = 'failed', note = :why, finished_at = now() "
-        "  WHERE status = 'running' RETURNING id), "
+        "  WHERE status IN ('queued', 'running') RETURNING id), "
         "steps AS ("
         "  UPDATE run_steps SET status = 'failed', detail = :why "
         "  WHERE status = 'running' AND run_id IN (SELECT id FROM gone)) "
@@ -253,7 +256,20 @@ def create_api(db: Database | None = None, *, config: Settings | None = None) ->
         chores: asyncio.Task[None] | None = None
         if cfg.prune_daily:
             chores = asyncio.create_task(_housekeep(app.state.db, cfg))
+        # Telegram, when a bot token is set: the gates that wait on a person, sent to their phone. The loop
+        # idles until an admin adds a token, so saving one in Settings starts it without a restart.
+        relay = None
+        relaying: asyncio.Task[None] | None = None
+        if cfg.channels:
+            from ..services.telegram import Relay
+            relay = Relay(app.state.db, app.state.gateway, app.state.gateway.secrets, app.state.bus,
+                          public_url=cfg.public_url, base=cfg.telegram_url)
+            relaying = asyncio.create_task(relay.run())
         yield
+        if relaying is not None and relay is not None:
+            relaying.cancel()
+            await asyncio.gather(relaying, return_exceptions=True)
+            await relay.stop()
         if chores is not None:
             chores.cancel()
             await asyncio.gather(chores, return_exceptions=True)

@@ -7,7 +7,9 @@ address that is public once the name is resolved — never loopback, private, li
 metadata lives) or shared. Unlike an MCP check, nobody may lift that for a page: an admin who wants a
 local page read can read it. Redirects are followed by hand, at most `MAX_HOPS`, and every hop is
 checked again — its scheme, its address (by the guard, when it connects) and the tool rules — so an
-allowed page cannot bounce the request somewhere a rule denies. What comes back is capped in bytes and
+allowed page cannot bounce the request somewhere a rule denies; a session's fetch also stops at a host
+no rule and no person allowed. Every address is weighed and opened in one spelling (`_checked`), so a
+host written in other letters is still the host a rule names. What comes back is capped in bytes and
 in time, and HTML is read down to its text: the title, the headings, the paragraphs, without scripts,
 styles or navigation.
 
@@ -33,7 +35,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from html.parser import HTMLParser
 from typing import Any
 
@@ -71,6 +73,7 @@ READABLE = ("text/", "application/xhtml+xml", "application/json", "application/x
             "application/atom+xml", "application/ld+json")
 REDIRECTS = (301, 302, 303, 307, 308)
 REFUSAL = "NeuroCode never fetches a page there."
+DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 class FetchFailed(Exception):
@@ -157,6 +160,12 @@ class _Stop(urllib.request.HTTPRedirectHandler):
 
 
 def _checked(url: str) -> str:
+    """The address every rule is weighed on and every fetch opens, in one spelling of it: the scheme and the
+    host in lower case, the host without a trailing dot, in its IDNA form, and no port where it is the default.
+
+    A host is the same host in any letters, so an address weighed as typed let `https://Blocked.Example/page`
+    past a rule denying `https://blocked.example/*` — and then fetched that very host. The path and the query
+    are left as they are: those are the site's to read, and may mean something in upper case."""
     text = url.strip()
     if not text or len(text) > MAX_URL:
         raise FetchFailed(f"A web address is 1 to {MAX_URL} characters.", 422)
@@ -165,7 +174,22 @@ def _checked(url: str) -> str:
         raise FetchFailed("Only http and https addresses are fetched.", 422)
     if parsed.username or parsed.password:
         raise FetchFailed("An address that carries a user name or password is never fetched.", 422)
-    return text
+    try:
+        port = parsed.port
+        host = parsed.hostname.rstrip(".").encode("idna").decode("ascii")
+    except (ValueError, UnicodeError) as e:
+        raise FetchFailed(f"{text[:200]} is not an address a page can be fetched from.", 422) from e
+    if not host:
+        raise FetchFailed("Only http and https addresses are fetched.", 422)
+    shown = f"[{host}]" if ":" in host else host         # an IPv6 address keeps its brackets
+    netloc = shown if port is None or port == DEFAULT_PORTS[parsed.scheme] else f"{shown}:{port}"
+    return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+
+def _host(url: str) -> str:
+    """The host and port of an address `_checked` already made canonical — what "the same site" means for a
+    redirect. The scheme is left out, so http going to https on the same host is not a new site."""
+    return urllib.parse.urlsplit(url).netloc
 
 
 def _charset(content_type: str) -> str:
@@ -338,12 +362,29 @@ class WebService:
         return {"query": text, "results": results, "decision": decision.json()}
 
     async def fetch(self, url: str, *, actor: str, project_id: str | None = None,
-                    actor_kind: str = "human") -> dict[str, Any]:
-        """Fetch one page, once the rules allow it and every redirect it takes."""
+                    actor_kind: str = "human", allowed_hosts: Collection[str] | None = None) -> dict[str, Any]:
+        """Fetch one page, once the rules allow it and every redirect it takes.
+
+        `allowed_hosts` is for a fetch nobody pressed a button for — a session's model — and names the hosts
+        a person allowed it (`host[:port]`). Its redirects then go on only to the host it started on, to one
+        of those, or to one a rule allows: a rule or a person that let it read one site said nothing about
+        the site that one bounces it to. It stops there in words that name the address, so the model can
+        ask for it as a call of its own, which a person is then asked about. None: the person fetching
+        asked for this page, and a redirect stops only where a rule denies it, as it always did."""
         rules = await ToolRuleRepository(self.session).applicable("web_fetch", project_id)
+
+        def permit(at: str) -> Decision:
+            decision = weigh(rules, "web_fetch", at)
+            if (allowed_hosts is not None and decision.action == "ask" and _host(at) != _host(start)
+                    and _host(at) not in allowed_hosts):
+                return Decision("deny", None, f"nobody has allowed {_host(at)}. Fetch that address as a call of "
+                                              "its own, so a person can be asked about it.")
+            return decision
+
         try:
-            first = weigh(rules, "web_fetch", _checked(url))
-            page = await asyncio.to_thread(fetch_page, url, lambda at: weigh(rules, "web_fetch", at))
+            start = _checked(url)
+            first = weigh(rules, "web_fetch", start)
+            page = await asyncio.to_thread(fetch_page, start, permit)
         except FetchFailed as failed:
             raise Refused(failed.reason, status=failed.status) from failed
         await self.activity.record(

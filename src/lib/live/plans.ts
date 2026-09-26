@@ -107,11 +107,13 @@ export const plansApi = {
     request<PlanComment>(`/plans/${seg(ref)}/comments/${id}/resolve`, { method: 'POST', json: { resolved } }),
   revise: (ref: string) =>
     request<ShapedPlan & { changes: StepChange[] }>(`/plans/${seg(ref)}/revise`, { method: 'POST', signal: modelTimeout() }),
-  /** Dispatch with its options: "run until done" with a budget, and "pause before each step". */
-  dispatch: (ref: string, opts: { goalBudget?: number; stepGate?: boolean }) =>
-    request<ShapedPlan & { runRef?: string }>(`/plans/${seg(ref)}/dispatch`, {
+  /** Dispatch with its options: "run until done" with a budget, "pause before each step", and "skip and
+      start" — the open questions deferred on the record, and the plan goes. */
+  dispatch: (ref: string, opts: { goalBudget?: number; stepGate?: boolean; skipQuestions?: boolean }) =>
+    request<ShapedPlan & { runRef?: string; noRun?: string }>(`/plans/${seg(ref)}/dispatch`, {
       method: 'POST',
-      json: { ...(opts.goalBudget ? { goalBudget: opts.goalBudget } : {}), stepGate: !!opts.stepGate },
+      json: { ...(opts.goalBudget ? { goalBudget: opts.goalBudget } : {}), stepGate: !!opts.stepGate,
+        ...(opts.skipQuestions ? { skipQuestions: true } : {}) },
     }),
 };
 

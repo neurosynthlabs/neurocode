@@ -23,18 +23,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..ai.compiler import MAX_CRITERIA
 from ..ai.gateway import Gateway
 from ..data.engine import Database
+from ..repositories import NotFound, PlanRepository
 from ..schemas import plan_json, task_json
 from ..schemas.work import comment_json
 from ..services import runs as runtime
 from ..services.identity import Person
 from ..services.plans import MAX_DETAIL, MAX_LABEL, MAX_STEPS, PlanService
-from .deps import current_person, database, gateway, hand_off, require, scoped, session
+from .deps import current_person, database, gateway, hand_off, holds_in, require, scoped, session
 
 router = APIRouter()
 
 
+#: A requirement is whatever a person writes, a paragraph or a whole specification pasted in. It used to be
+#: cut at 4,000 characters and a detailed prompt was refused before any model saw it; the model a request
+#: goes to decides what it can hold (`Gateway.ask` sends it whole to a lane that can take it).
+MAX_REQUIREMENT = 50_000
+
+
 class CompileIn(BaseModel):
-    requirement: str = Field(min_length=3, max_length=4000)
+    requirement: str = Field(min_length=3, max_length=MAX_REQUIREMENT)
     projectId: str = Field(max_length=80)
 
 
@@ -44,12 +51,23 @@ class PlanPatch(BaseModel):
     acceptanceCriteria: list[Annotated[str, Field(max_length=2_000)]] = Field(max_length=MAX_CRITERIA)
 
 
+async def _fenced(ref: str, who: Person, open_session: AsyncSession, *permissions: str) -> Person:
+    """A plan reached by its reference is fenced the way its read is (`routes_work.plan`): 404 when its
+    project is one this person may not see, and the permission weighed against what they hold in that
+    project. Returns the person narrowed to it, so "may they also run agents?" is asked there too."""
+    found = await PlanRepository(open_session).by_ref(ref)
+    if found is None:
+        raise NotFound(f"plan {ref}")
+    return await holds_in(who, open_session, found.project_id, f"plan {ref}", *permissions)
+
+
 @router.post("/plans/compile", status_code=201)
 async def compile_requirement(body: CompileIn, who: Person = Depends(require("plans:compile")),
                               open_session: AsyncSession = Depends(session),
                               gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """A requirement becomes a plan and the task that carries it. Open questions are kept, not guessed.
     Needs a model: 409 when none is configured, 502 with the provider's reason when every lane failed."""
+    who = await holds_in(who, open_session, body.projectId, f"project {body.projectId}", "plans:compile")
     plan, task = await PlanService(open_session, gw).compile(
         body.projectId, body.requirement, by=who.name, by_id=who.id)
     return {**plan_json(plan, task_ref=task.ref), "task": task_json(task)}
@@ -60,6 +78,7 @@ async def recompile(ref: str, who: Person = Depends(require("plans:decide")),
                     open_session: AsyncSession = Depends(session),
                     gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Compile it again with everything that has been answered since. Refused once it is under way."""
+    who = await _fenced(ref, who, open_session, "plans:decide")
     plan = await PlanService(open_session, gw).recompile(ref, by=who.name, by_id=who.id)
     return plan_json(plan)
 
@@ -70,6 +89,7 @@ async def edit_plan(ref: str, body: PlanPatch, who: Person = Depends(require("pl
                     gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Set the plan's acceptance criteria — the sentences a goal run is judged against. Refused once
     the plan is under way. Blank lines are dropped; a re-compile keeps what a person wrote."""
+    who = await _fenced(ref, who, open_session, "plans:decide")
     plan = await PlanService(open_session, gw).set_criteria(ref, body.acceptanceCriteria, by=who.name)
     return plan_json(plan)
 
@@ -90,6 +110,8 @@ class DispatchIn(BaseModel):
     goalBudget: int | None = Field(default=None, ge=1, le=5)
     #: "Pause before each step": the runtime waits for a person's approval between steps.
     stepGate: bool = False
+    #: "Skip and start": the plan's open questions are deferred — on the record, still shown — and it starts.
+    skipQuestions: bool = False
 
 
 @router.post("/plans/{ref}/dispatch")
@@ -100,15 +122,17 @@ async def dispatch(ref: str, jobs: BackgroundTasks, body: DispatchIn | None = No
     """Hand the plan to the agents. The runs are created here; they start after the response. With a
     `goalBudget` the run ends with a completion check and tries again on its own while it misses; with
     `stepGate` it pauses for an approval before each step after the first."""
-    plan, made = await PlanService(open_session, gw).dispatch(
+    who = await _fenced(ref, who, open_session, "plans:decide")
+    service = PlanService(open_session, gw)
+    plan, made = await service.dispatch(
         ref, by=who.name, may_run=who.can("runs:run"), goal_budget=body.goalBudget if body else None,
-        step_gate=body.stepGate if body else False)
+        step_gate=body.stepGate if body else False, skip_questions=body.skipQuestions if body else False)
     if made:
         lead = made[-1]
         starter = runtime.execute_batch if len(made) > 1 else runtime.execute
         await hand_off(open_session, jobs, starter, db, gw, lead.ref)
         return {**plan_json(plan), "runRef": lead.ref}
-    return plan_json(plan)
+    return {**plan_json(plan), **({"noRun": service.no_run} if service.no_run else {})}
 
 
 # ── shaping a plan before dispatch ───────────────────────────────
@@ -148,6 +172,7 @@ async def edit_step(ref: str, step_id: str, body: StepPatch, who: Person = Depen
                     gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Change a step's label, owner (a roster name) or detail. 409 once the plan is under way; 422 for an
     owner who is not an agent here."""
+    who = await _fenced(ref, who, open_session, "plans:compile")
     plan = await PlanService(open_session, gw).edit_step(ref, step_id, label=body.label, agent=body.agent,
                                                          detail=body.detail, by=who.name, by_id=who.id)
     return plan_json(plan)
@@ -158,6 +183,7 @@ async def add_step(ref: str, body: StepIn, who: Person = Depends(require("plans:
                    open_session: AsyncSession = Depends(session),
                    gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """A step of a person's own, at `at` (1 is first) or last. The task's checklist follows."""
+    who = await _fenced(ref, who, open_session, "plans:compile")
     plan = await PlanService(open_session, gw).add_step(ref, label=body.label, agent=body.agent, detail=body.detail,
                                                         at=body.at, by=who.name, by_id=who.id)
     return plan_json(plan)
@@ -168,6 +194,7 @@ async def remove_step(ref: str, step_id: str, who: Person = Depends(require("pla
                       open_session: AsyncSession = Depends(session),
                       gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Drop a step; the rest are numbered again. A plan's only step is refused (409)."""
+    who = await _fenced(ref, who, open_session, "plans:compile")
     plan = await PlanService(open_session, gw).remove_step(ref, step_id, by=who.name, by_id=who.id)
     return plan_json(plan)
 
@@ -177,14 +204,17 @@ async def reorder_steps(ref: str, body: OrderIn, who: Person = Depends(require("
                         open_session: AsyncSession = Depends(session),
                         gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Put the steps in this order. 422 unless it names every step exactly once."""
+    who = await _fenced(ref, who, open_session, "plans:compile")
     plan = await PlanService(open_session, gw).reorder_steps(ref, body.order, by=who.name, by_id=who.id)
     return plan_json(plan)
 
 
-@router.get("/plans/{ref}/comments", dependencies=[Depends(current_person)])
-async def comments(ref: str, open_session: AsyncSession = Depends(session),
+@router.get("/plans/{ref}/comments")
+async def comments(ref: str, who: Person = Depends(current_person),
+                   open_session: AsyncSession = Depends(session),
                    gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Every comment on the plan, oldest first, open and resolved, each with the revision it was on."""
+    await _fenced(ref, who, open_session)
     plan, found, names = await PlanService(open_session, gw).comments(ref)
     items = [comment_json(c, plan, by=names.get(c.by_user_id or "")) for c in found]
     return {"items": items, "open": sum(1 for c in found if not c.resolved), "revision": plan.revision}
@@ -196,6 +226,7 @@ async def comment(ref: str, body: CommentIn, who: Person = Depends(require("plan
                   gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """A note on the plan or one step: comment, split, remove, why or risky. It never changes the plan by
     itself; revising hands the open ones to the compiler."""
+    who = await _fenced(ref, who, open_session, "plans:compile")
     plan, made = await PlanService(open_session, gw).comment(ref, kind=body.kind, body=body.body,
                                                              step_id=body.stepId, by=who.name, by_id=who.id)
     return comment_json(made, plan, by=who.name)
@@ -208,6 +239,7 @@ async def resolve_comment(ref: str, comment_id: int, body: ResolveIn | None = No
                           gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Resolve a comment — or reopen it with `{"resolved": false}`. A resolved comment is not handed to
     the next revision."""
+    who = await _fenced(ref, who, open_session, "plans:compile")
     plans = PlanService(open_session, gw)
     plan, found = await plans.resolve_comment(ref, comment_id, resolved=body.resolved if body else True,
                                               by=who.name)
@@ -220,5 +252,6 @@ async def revise(ref: str, who: Person = Depends(require("plans:compile")),
                  gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Hand the open comments to the compiler and write the next revision. Answers the plan and what
     changed, step by step. 409 with no open comment, or no model; 502 when every lane failed."""
+    who = await _fenced(ref, who, open_session, "plans:compile")
     plan, changes = await PlanService(open_session, gw).revise(ref, by=who.name, by_id=who.id)
     return {**plan_json(plan), "changes": changes}

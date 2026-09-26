@@ -32,7 +32,7 @@ from ..services.identity import Person
 from ..services.knowledge import MemoryService, NewFact
 from ..services.runs import resume as resume_run
 from ..services.work import Actor, PlanQuestions, TaskService
-from .deps import current_person, database, gateway, hand_off, must_see, require, session, unseen_by
+from .deps import current_person, database, gateway, hand_off, holds_in, must_see, require, session, unseen_by
 
 router = APIRouter()
 TaskStatus = Literal["backlog", "planning", "in_progress", "review", "blocked", "done"]
@@ -163,7 +163,8 @@ async def decide(ref: str, decision: Literal["approve", "deny"], jobs: Backgroun
     # a run inside that project. The gate is read first only to learn which project it belongs to.
     waiting = await ApprovalRepository(open_session).by_ref(ref)
     if waiting is not None:
-        await must_see(who, open_session, waiting.project_id, f"approval {ref}")
+        # Seen, and decided with what this person holds *in that project*: a per-project role narrows.
+        who = await holds_in(who, open_session, waiting.project_id, f"approval {ref}", "approvals:decide")
     answered = await ApprovalService(open_session).decide(
         ref, decision, by_id=who.id, by_name=who.name, scope=body.scope if body else None,
         answer=body.answer if body else None, who=who, ip=request.client.host if request.client else "")

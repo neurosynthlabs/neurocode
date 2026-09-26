@@ -156,6 +156,8 @@ try {
   });
 
   await step('a requirement compiles through the model into a stored plan and its task', async () => {
+    // This one waits for its questions to be answered by hand; "Start right away" is walked further down.
+    await page.evaluate(() => localStorage.setItem('nc.composer.autoStart', 'off'));
     await open('/');
     await page.getByLabel('Requirement').fill('Round invoice totals in pkg/core.py at the invoice level.');
     await page.getByRole('button', { name: /Compile Plan/ }).click();
@@ -310,7 +312,10 @@ try {
     const api = path.join(stack.tmp, 'ledger-api');
     fs.mkdirSync(api, { recursive: true });
     fs.writeFileSync(path.join(api, 'billing.py'), 'def charge_customer(amount):\n    return round(amount, 2)\n');
-    spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: api });
+    for (const args of [['init', '-q', '-b', 'main'], ['config', 'user.email', 'e2e@test'], ['config', 'user.name', 'E2E'],
+      ['add', '-A'], ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'start']]) {
+      spawnSync('git', args, { cwd: api });   // a real repository: a run can branch from it later
+    }
     await post(`/projects/${project.id}/sources`, { label: 'api', kind: 'local', repo: api, branch: '' });
     await until(async () => (await call(`/projects/${project.id}/sources`)).find((x) => x.label === 'api' && x.status === 'active'),
       'the second source onboarding', 30000);
@@ -399,12 +404,24 @@ try {
   });
 
   await step('asking memory answers through the model, cites its facts and records the recall', async () => {
+    await open('/memory');
+    await page.getByRole('button', { name: 'Ask', exact: true }).click();
+    const dlg = page.locator('[data-slot="dialog-content"]');
+    await dlg.getByLabel('Question').fill('What must a credit note reference?');
+    await dlg.getByRole('button', { name: 'Ask memory' }).click();
+    await dlg.locator('a[href^="/memory?ref="]').first().waitFor({ timeout: 15000 });
+    expect((await call('/memory/hits')).some((h) => h.feature === 'ask'), 'the recall was not recorded');
+    await page.keyboard.press('Escape');
+  });
+
+  await step('a question on the home screen opens a session on the project, and the model answers it there', async () => {
     await open('/');
     await page.getByRole('radio', { name: 'Ask' }).click();
-    await page.getByLabel('Requirement').fill('What must a credit note reference?');
-    await page.getByRole('button', { name: 'Ask memory' }).click();
-    await page.locator('a[href^="/memory?ref="]').first().waitFor({ timeout: 15000 });
-    expect((await call('/memory/hits')).some((h) => h.feature === 'ask'), 'the recall was not recorded');
+    await page.getByLabel('Requirement').fill('Where are invoice totals added up?');
+    await page.keyboard.press('ControlOrMeta+Enter');
+    await page.waitForURL('**/sessions?ref=*', { timeout: 15000 });
+    await page.getByText('The stub model answers without reading anything.').first().waitFor({ timeout: 20000 });
+    await open('/');                          // the steps after this one start from the home screen
   });
 
   await step('a brainstorm becomes a stored brief', async () => {
@@ -564,6 +581,22 @@ try {
     expect(!JSON.stringify(await call('/admin/audit')).includes('0000abcd'), 'the key leaked into the audit log');
     await page.getByRole('button', { name: 'Remove key' }).click();
     await page.getByText('Not set').first().waitFor({ timeout: 5000 });
+  });
+
+  await step('with Start right away, a prompt compiles and its agents start at once', async () => {
+    await page.evaluate(() => localStorage.setItem('nc.composer.autoStart', 'on'));
+    await open('/');
+    await page.getByRole('radio', { name: 'Plan' }).click();
+    await page.getByRole('switch', { name: /Start right away/ }).waitFor({ timeout: 5000 });
+    await page.getByLabel('Requirement').fill('Round invoice totals in pkg/api.py at the invoice level too.');
+    await page.getByRole('button', { name: /Compile Plan/ }).click();
+    const landed = await page.waitForURL('**/runs?ref=*', { timeout: 30000 }).then(() => null, async () => {
+      const said = (await call('/activity')).find((e) => e.action === 'No run started');
+      return said ? said.detail : `landed on ${page.url()}`;
+    });
+    expect(!landed, `no run started: ${landed}`);
+    const [newest] = await call('/plans');
+    expect(newest.status === 'dispatched' && newest.openQuestions.length === 0, `the plan is ${newest.status}`);
   });
 
   let viewer = '';

@@ -33,6 +33,7 @@ from ..data.engine import Database
 from ..models import Chunk, CodeFile, Project, ProjectSource, Setting
 from ..repositories import ActivityRepository, NotFound, ProjectRepository
 from ..repositories.sources import MAX_SOURCES, ProjectSourceRepository
+from ..secrets import forge_token
 from .code import LABEL, Source, checkout, roots, source_root
 from .errors import Refused
 from .indexing import INDEXING, build_project_index
@@ -99,6 +100,11 @@ def reading(project_id: str) -> asyncio.Lock:
     return _READING.setdefault((id(asyncio.get_running_loop()), project_id), asyncio.Lock())
 
 
+def _token(gateway: Gateway, repo: str) -> str | None:
+    """The workspace's own token for the forge a repository lives on, so a private one can be cloned."""
+    return forge_token(onboarding.host_of(repo), gateway.secrets)
+
+
 async def onboard(db: Database, gateway: Gateway, project_id: str, spec: Spec) -> None:
     """Clone or read, measure, index, and build retrieval. Every stage is reported as it finishes."""
     async with reading(project_id):
@@ -117,7 +123,7 @@ async def _onboard(db: Database, gateway: Gateway, project_id: str, spec: Spec) 
         if spec.source == "git":
             root = onboarding.REPOS_DIR / project_id
             await _say(db, project_id, name, "Cloning", f"{where} @ {spec.branch}", "info")
-            await asyncio.to_thread(onboarding.clone, spec.repo, spec.branch, root)
+            await asyncio.to_thread(onboarding.clone, spec.repo, spec.branch, root, _token(gateway, spec.repo))
             await _say(db, project_id, name, "Repository cloned", f"shallow clone of {spec.branch}")
         else:
             root = Path(os.path.expanduser(spec.repo.strip()))
@@ -404,7 +410,7 @@ async def onboard_source(db: Database, gateway: Gateway, project_id: str, source
             raise RuntimeError("it names no folder")
         if kind == "git":
             await _say(db, project_id, name, "Cloning", f"{label} · {repo} @ {branch}", "info")
-            await asyncio.to_thread(onboarding.clone, repo, branch, where)
+            await asyncio.to_thread(onboarding.clone, repo, branch, where, _token(gateway, repo))
         elif not await asyncio.to_thread(where.is_dir):
             raise RuntimeError(f"{repo} is not a folder on this machine")
     except Exception as e:      # a refused clone or a vanished folder: said on the source, and stop

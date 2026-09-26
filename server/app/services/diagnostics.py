@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from ..agent.env import child_env
 from . import sandbox
 from .errors import Refused
 
@@ -771,7 +772,9 @@ class Check:
         folder = self.target.folder
         tool.status = "running"
         started = time.monotonic()
-        env = {**os.environ, "CI": "1", "NO_COLOR": "1", "FORCE_COLOR": "0", "TERM": "dumb"}
+        # The machine's environment, not the API's: a checker is the project's own code (an ESLint plugin,
+        # a mypy plugin, a Gradle build script) and is owed no database password or model key.
+        env = child_env({"CI": "1", "NO_COLOR": "1", "FORCE_COLOR": "0", "TERM": "dumb"})
         try:
             proc = await asyncio.create_subprocess_exec(
                 *self.sandbox.wrap(tool.checker.argv), cwd=folder, stdin=asyncio.subprocess.DEVNULL,

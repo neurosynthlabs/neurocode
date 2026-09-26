@@ -49,13 +49,13 @@ from .instructions import resolve as resolve_instructions
 from .knowledge import MemoryService
 from .retrieval import RetrievalService, entity_tokens
 from .retrieval import label as retrieval_label
-from .tool_rules import decide
+from .tool_rules import Decision, decide
 
 MAX_STEPS = 6                 # tool calls in one answer, then it must answer with what it has
 MAX_FILE_LINES = 400
 MAX_OBSERVATION = 6_000       # what one tool may put back into the conversation
 MAX_HISTORY = 24              # turns replayed to the model
-MAX_QUESTION = 4_000
+MAX_QUESTION = 50_000
 MAX_SKILLS_LISTED = 60        # one line each in the system prompt; beyond this the prompt is the cost
 #: Compaction: the newest turns stay word for word; at least this many older ones must be there to fold.
 KEEP_RECENT = 6
@@ -78,6 +78,11 @@ PERMISSION = "permission"
 CONTEXT = "context"
 #: Rows that are the person's own input around a question: a command's expansion and what they attached.
 INPUTS = ("command", CONTEXT)
+#: The turns replayed to a model after the summary: every kind but the summary itself.
+REPLAYED = ("you", "assistant", "tool", "note")
+#: How far back an answer reads its own line to begin: the card it resumes, the question it answers, and the
+#: turns before that question whose names a short question is searched with. Far more than any of those needs.
+LINE_READ = 200
 #: What one attached item, and all of them together, may put in front of the model, in characters.
 ATTACH_ITEM = 12_000
 ATTACH_TOTAL = 40_000
@@ -102,6 +107,16 @@ def _nothing_near(below: int) -> str:
             f"{below} pieces in the index share words with this question and none is close enough to it")
     return (f"{said}, so nothing is quoted here. Read the files with the tools, or call `find` with the "
             "words this repository would itself use. Do not say the repository lacks the thing.")
+
+
+def _without(unseen: frozenset[str], pieces: list[dict[str, Any]],
+             searched: dict[str, Any]) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+    """Grounding with the pieces of referenced projects this person may not see taken out: from the text the
+    model is handed, and from the trace kept on the turn, which the person reads too."""
+    kept = [p for p in pieces if p.get("project") not in unseen]
+    hits = [h for h in searched.get("hits") or [] if str(h.get("ref") or "").partition(":")[0] not in unseen]
+    text = RetrievalService._as_text(kept) if kept else ""       # noqa: SLF001 — the one shape grounding takes
+    return text, kept, {**searched, "hits": hits}
 
 
 # ── the tools ────────────────────────────────────────────────────
@@ -131,21 +146,45 @@ def _safe(root: Path, rel: str) -> Path:
     return root.joinpath(*parts)
 
 
+def _sees(who: Person | None, project: Project) -> bool:
+    """Whether the person an answer is for may see this project: `Person.may_see`, the rule a project's own
+    pages answer 404 by. An open project is everyone's. A restricted one is read only for someone listed on
+    it — never for an answer that is for nobody in particular."""
+    return not project.restricted or (who is not None and who.may_see(project.id, project.restricted))
+
+
+async def _references(session: AsyncSession, project_id: str,
+                      who: Person | None) -> tuple[dict[str, Project], frozenset[str]]:
+    """(the projects this one references that this person may see, by id; the ids of those they may not).
+
+    A reference is a person's decision about what a project reads, not a door around the restriction on
+    the project it names: a file, a symbol or a piece of one this person gets 404 for on its own page is
+    not read into their session either — nor is its name, since the same 404 withholds that too."""
+    from ..repositories.references import ProjectReferenceRepository
+    rows = await ProjectReferenceRepository(session).of(project_id)
+    return ({other.id: other for _, other in rows if _sees(who, other)},
+            frozenset(other.id for _, other in rows if not _sees(who, other)))
+
+
 class Tools:
     """What a session may do. Everything here reads; nothing writes and nothing runs."""
 
     def __init__(self, session: AsyncSession, gateway: Gateway, project: Project,
-                 skills: Sequence[SkillFile] = ()) -> None:
+                 skills: Sequence[SkillFile] = (), who: Person | None = None) -> None:
         self.session = session
         self.project = project
         # The skills this answer may load, discovered once before it started — never globbed per call.
         self.skills = skills
         self.retrieval = RetrievalService(session, gateway)
         self.memory = MemoryRepository(session)
+        #: The person the answer is for: what a referenced project may be read for (`_sees`).
+        self.who = who
         #: The facts this tool call put in front of the model, recorded as recalls once it has run.
         self.recalled: list[str] = []
-        #: The projects this one references, read once per tool call when a path or query names one.
+        #: The projects this one references, read once per tool call when a path or query names one —
+        #: those this person may see, and the ids of those they may not.
         self._referenced: dict[str, Project] | None = None
+        self._unseen: frozenset[str] = frozenset()
 
     def root(self) -> Path:
         """The project's first source on this machine. A file is found with `locate`, which knows the rest."""
@@ -167,17 +206,22 @@ class Tools:
 
     async def referenced(self) -> dict[str, Project]:
         """The projects this one reads from, by id — every one a person added, not only the few retrieval
-        searches: a model that names one's file by its prefix may read it."""
+        searches: a model that names one's file by its prefix may read it. Only those the person the
+        answer is for may see (`_references`)."""
         if self._referenced is None:
-            from ..repositories.references import ProjectReferenceRepository
-            rows = await ProjectReferenceRepository(self.session).of(self.project.id)
-            self._referenced = {other.id: other for _, other in rows}
+            self._referenced, self._unseen = await _references(self.session, self.project.id, self.who)
         return self._referenced
+
+    async def unseen(self) -> frozenset[str]:
+        """The referenced projects this person may not see, whose pieces a search leaves out."""
+        await self.referenced()
+        return self._unseen
 
     async def elsewhere(self, named: str) -> tuple[Project, str] | None:
         """A path or query that starts `<project id>:` — a project this one references — as that project
         and the rest. None when it names no project. Refused when it names a project that is not
-        referenced: its files are that project's, and are not read from here.
+        referenced: its files are that project's, and are not read from here. A project this person may
+        not see names no project at all, exactly as its own page answers them 404.
 
         Read only, always: nothing in this catalogue writes, and agents never write outside their own
         project's worktrees (`code.writable_at` says so for every prefixed path)."""
@@ -187,16 +231,32 @@ class Tools:
         found = (await self.referenced()).get(head)
         if found is not None:
             return found, rest.strip()
-        if await ProjectRepository(self.session).get(head) is not None:
+        other = await ProjectRepository(self.session).get(head)
+        if other is not None and _sees(self.who, other):
             raise Refused(f"{head} is not a project {self.project.name} references, so its files are not "
                           "read from here. A person can add it in Project Overview → References.", status=403)
         return None
+
+    async def read_subject(self, path: str) -> tuple[str, str] | None:
+        """What a `read` rule weighs for this path, read exactly as `read_file` will read it: (the project whose
+        rules weigh it, the path in that project) — a referenced project's prefix split off, `\\` as `/`, and
+        `.` and empty parts dropped. A rule is matched on the file that would be opened, never on the
+        spelling that named it, or `secrets\\token.txt` would be read past a rule denying `secrets/*`.
+        None for a path the reader refuses on its own."""
+        named = await self.elsewhere(path)
+        owner, rest = (named[0].id, named[1]) if named is not None else (self.project.id, path)
+        try:
+            return owner, _safe(Path(), rest).as_posix()
+        except Refused:
+            return None
 
     async def find(self, args: dict[str, Any]) -> tuple[str, str]:
         q = _text(args, "query", "q", "question")
         if not q:
             raise Refused("find needs a query.", status=422)
-        found = await self.retrieval.search(self.project.id, q, limit=6)
+        unseen = await self.unseen()
+        found = [x for x in await self.retrieval.search(self.project.id, q, limit=6)
+                 if x.get("project") not in unseen]
         if not found:
             return (f"Retrieval holds nothing about {q!r}. The project may not be indexed yet.",
                     f"{q} · nothing found")
@@ -350,6 +410,61 @@ CATALOGUE: tuple[Tool, ...] = (
          "question", Tools.load_skill),
 )
 BY_NAME = {t.name: t for t in CATALOGUE}
+
+_KINDS = {bool: "boolean", int: "integer", float: "number", str: "string", list: "array", dict: "object"}
+
+
+def _schema(takes: str) -> dict[str, Any]:
+    """A tool's arguments as JSON Schema, read off the example the catalogue gives for it. Nothing is
+    required: models name arguments loosely, and `_text` takes the first name that is there."""
+    try:
+        example = json.loads(takes)
+    except ValueError:
+        example = {}
+    fields = example if isinstance(example, dict) else {}
+    return {"type": "object", "properties": {k: {"type": _KINDS.get(type(v), "string")} for k, v in fields.items()}}
+
+
+def tool_specs(skills: Sequence[SkillFile] = (), acting: Acting | None = None,
+               agent: AgentSpec | None = None) -> list[dict[str, Any]]:
+    """The tools this answer may call, declared natively. A model trained to call tools — GPT-OSS on Groq,
+    Qwen on Ollama — calls one whatever the prompt says, and a provider that was not told about any refuses
+    the answer, or hands back no text at all. The same list the system prompt names, so both agree."""
+    specs = [{"type": "function",
+              "function": {"name": t.name, "description": t.what[:1024], "parameters": _schema(t.takes)}}
+             for t in CATALOGUE if (t.name != "load_skill" or skills) and (agent is None or agent.may(t.name))]
+    if acting is not None:
+        extra: list[tuple[str, str, dict[str, Any]]] = []
+        if acting.fetch:
+            extra.append(("web_fetch", "read one public web page, as text", {"url": {"type": "string"}}))
+        if acting.search:
+            extra.append(("web_search", "search the web; answers titles, links and snippets",
+                          {"query": {"type": "string"}}))
+        if acting.servers:
+            extra.append(("mcp", "call a tool on one of the MCP servers listed in the instructions",
+                          {"server": {"type": "string"}, "tool": {"type": "string"}, "arguments": {"type": "object"}}))
+        if acting.custom:
+            extra.append(("custom_tool", "call one of the workspace's custom tools listed in the instructions",
+                          {"name": {"type": "string"}, "arguments": {"type": "object"}}))
+        specs += [{"type": "function", "function": {"name": n, "description": d,
+                                                    "parameters": {"type": "object", "properties": props}}}
+                  for n, d, props in extra]
+    return specs
+
+
+def read_turn(raw: str) -> Turn:
+    """A model's turn: a tool to call, or the answer. JSON when it wrote JSON; words when it simply answered —
+    which is what a model given its tools natively does once it has what it needs."""
+    try:
+        data = extract_json(raw, trim=False)
+    except ValueError:
+        data = None
+    if isinstance(data, dict) and (data.get("tool") or "answer" in data):
+        return Turn.model_validate(data)
+    words = raw.strip()
+    if not words:
+        raise ValueError("the answer is empty")
+    return Turn(answer=words)
 
 
 class Turn(BaseModel):
@@ -523,6 +638,21 @@ async def pending_permission(session: AsyncSession, chat_id: str) -> ChatMessage
         .order_by(ChatMessage.id.desc()).limit(1))).scalar_one_or_none()
 
 
+async def _take_up(session: AsyncSession, card: ChatMessage) -> bool:
+    """Claim an answered card for the one answer that resumes from it. False: another answer already has.
+
+    Two answers handed the same card at once each read it as the newest turn and each resumed from it, so
+    the question was answered twice and the call a person allowed could be made twice. The card's row is
+    held and read again once held, as `ChatService.permit` holds it; the first to hold it marks it taken up
+    (its `state` stays what the person decided), and the second reads the mark and leaves it to the first."""
+    held = (await session.execute(select(ChatMessage).where(ChatMessage.id == card.id).with_for_update()
+                                  .execution_options(populate_existing=True))).scalar_one_or_none()
+    if held is None or (held.arguments or {}).get("resumed"):
+        return False
+    held.arguments = {**(held.arguments or {}), "resumed": True}
+    return True
+
+
 async def waiting_on(session: AsyncSession, chat_ids: Sequence[str]) -> dict[str, ChatMessage]:
     """chat id → the permission card it waits on, for every one of these sessions that waits on one."""
     if not chat_ids:
@@ -546,11 +676,14 @@ def _announce(session: AsyncSession, chat: Chat, message: ChatMessage) -> None:
 class ChatService:
     """Starting a session, asking it something, and reading it back."""
 
-    def __init__(self, session: AsyncSession, gateway: Gateway) -> None:
+    def __init__(self, session: AsyncSession, gateway: Gateway, who: Person | None = None) -> None:
         self.session = session
         self.gateway = gateway
         self.chats = ChatRepository(session)
         self.projects = ProjectRepository(session)
+        #: The person asking, when the caller knows them: whose view of the referenced projects an attached
+        #: file is read under. Without one, only open projects are read from.
+        self.who = who
 
     async def start(self, project_id: str, by: str, title: str = "", agent: str | None = None) -> Chat:
         """A new session on a project — an ordinary one, or one answered by an agent (`agent` is its key:
@@ -571,8 +704,15 @@ class ChatService:
             agent=spec.key if spec else None))
 
     async def _open(self, ref: str, doing: str) -> Chat:
-        """The session, idle and not waiting on a person — the state every change to its turns needs."""
-        chat = await self.chats.by_ref(ref)
+        """The session, idle and not waiting on a person — the state every change to its turns needs.
+
+        Its row is held for the rest of this transaction and read again once held, so two requests at once
+        (a double Send, a retried post) cannot both find it idle: the second waits for the first to commit,
+        then reads that it is answering, and is refused in the same words as any later one."""
+        # FOR NO KEY UPDATE: it serialises two changes to the session, and leaves a turn's insert (which only
+        # needs the row to stay there) free to go on elsewhere.
+        chat = (await self.session.execute(select(Chat).where(Chat.ref == ref).with_for_update(key_share=True)
+                                           .execution_options(populate_existing=True))).scalar_one_or_none()
         if chat is None:
             raise NotFound(f"session {ref}")
         if chat.status == "thinking":
@@ -700,7 +840,7 @@ class ChatService:
         if kind in ("file", "symbol"):
             if project is None:
                 raise NotFound(f"project {chat.project_id}")
-            tools = Tools(self.session, self.gateway, project)
+            tools = Tools(self.session, self.gateway, project, who=self.who)
             if kind == "file":
                 text, _ = await tools.read_file({"path": ref, "lines": MAX_FILE_LINES})
                 return ref, text, {}
@@ -760,8 +900,8 @@ class ChatService:
         named — and the old answer, with the tool calls that led to it, stays readable beside the new one."""
         chat = await self._open(ref, "regenerate")
         answer = await self._turn(chat, message_id, ("assistant", "note"), "regenerate")
-        line = active(await self.chats.messages(chat.id, limit=1000))
-        question = next((m for m in reversed(line) if m.role == "you" and m.id < answer.id), None)
+        before = await self.chats.tail(chat.id, 1, before=answer.id, roles=("you",), folded=True)
+        question = before[-1] if before else None
         if question is None:
             raise Refused("That answer has no question before it to ask again.", status=409)
         if question.compacted:
@@ -804,6 +944,14 @@ class ChatService:
         card = await pending_permission(self.session, chat.id)
         if card is None or card.id != message_id:
             raise Refused("That request is no longer waiting for an answer.", status=409)
+        # The card, held for the rest of this transaction and read again once held — `ApprovalService._claim`'s
+        # reason exactly: two Allow posts at once (a double click, a retry) both read `pending`, both wrote,
+        # and both resumed the answer, so the session answered twice. The second now waits for the first to
+        # commit, reads what it wrote, and is refused like any late answer.
+        card = (await self.session.execute(select(ChatMessage).where(ChatMessage.id == card.id).with_for_update()
+                                           .execution_options(populate_existing=True))).scalar_one()
+        if (card.arguments or {}).get("state") != "pending":
+            raise Refused("That request is no longer waiting for an answer.", status=409)
         asked = dict(card.arguments or {})
         state = "refused" if decision == "refuse" else "allowed"
         asked.update(state=state, scope=decision, decidedBy=who.name, decidedAt=utcnow().isoformat())
@@ -825,12 +973,11 @@ class ChatService:
         return chat
 
     async def compact(self, ref: str, by: str) -> ChatMessage:
-        """A person's "Compact": fold the older turns now, rather than when the window is nearly full."""
-        chat = await self.chats.by_ref(ref)
-        if chat is None:
-            raise NotFound(f"session {ref}")
-        if chat.status == "thinking":
-            raise Refused(f"{ref} is still answering. Compact it once the answer is in.")
+        """A person's "Compact": fold the older turns now, rather than when the window is nearly full.
+
+        Not while a card waits either: the summary would become the newest turn, and the call the person
+        then allows would have nothing to resume from."""
+        chat = await self._open(ref, "compact")
         return await fold(self.session, self.gateway, chat, by)
 
     async def _command(self, chat: Chat, text: str) -> tuple[extensions.CommandFile, str] | None:
@@ -879,6 +1026,9 @@ class _Answer:
         self.raw += piece
         if self.done:
             return ""
+        lead = self.raw.lstrip()
+        if lead and lead[0] not in "{`":            # words, not JSON: they are the answer as they come
+            return piece
         if self.at is None:
             start = self.raw.find('"answer"')
             colon = self.raw.find(":", start + 8) if start >= 0 else -1
@@ -1011,12 +1161,15 @@ async def _wire(session: AsyncSession, chat: Chat, project_name: str,
     out: list[dict[str, Any]] = [{"role": "system",
                                   "content": system_prompt(project_name, skills, project_instructions, acting,
                                                            agent, steps)}]
-    turns = [m for m in active(await ChatRepository(session).messages(chat.id)) if not m.compacted]
-    summary = next((m for m in reversed(turns) if m.role == "summary"), None)
+    # Read from the newest end, each on its own: read from the oldest, a long session filled the page with
+    # folded turns and the model was sent neither the summary nor the question it was answering.
+    repo = ChatRepository(session)
+    newest = await repo.tail(chat.id, 1, roles=("summary",))
+    summary = newest[-1] if newest else None
     if summary is not None:
         out.append({"role": "user", "content": "A summary of the earlier conversation, written by a model; the "
                                                f"turns it covers are left out:\n{summary.body}"})
-    replayed = [m for m in turns if m.role != "summary"][-MAX_HISTORY:]
+    replayed = await repo.tail(chat.id, MAX_HISTORY, roles=REPLAYED)
     asking = next((m for m in reversed(replayed) if m.role == "you"), None)
     for m in replayed:
         if m.role == "you":
@@ -1070,6 +1223,7 @@ class Gate:
     rule_id: int | None
     grant: str                   # what a session grant for this call is kept as
     covers: str                  # the same, in words for the card
+    by: str = ""                 # the person whose "Allow for this session" answered the ask, when one did
 
 
 def _granted(chat: Chat, tool: str, grant: str) -> dict[str, Any] | None:
@@ -1078,22 +1232,31 @@ def _granted(chat: Chat, tool: str, grant: str) -> dict[str, Any] | None:
 
 
 async def _gate(session: AsyncSession, chat: Chat, tool: str, args: dict[str, Any],
-                acting: Acting | None) -> Gate | None:
+                acting: Acting | None, tools: Tools | None = None) -> Gate | None:
     """Weigh one call against the tool rules. None for a call no rule governs.
 
     The reading tools stay as they always were — reading the project's own files needs no rule — unless
-    someone wrote one: a `read` rule that denies or asks is kept. The acting tools always pass through:
+    someone wrote one: a `read` rule that denies or asks is kept. It is weighed on the file `tools` would
+    open, in the project that file belongs to (`Tools.read_subject`). The acting tools always pass through:
     no rule means ask, except for an MCP server whose own default effect says otherwise. A grant a person
     gave this session ("Allow for this session") answers an ask, never a deny. Raises Refused for a call
     that names nothing callable, so the model is told why in the tool's own turn."""
+    decision: Decision | None = None
     if tool == "read_file":
         path = _text(args, "path", "file", "filename")
         if not path:
             return None
-        decision = await decide(session, "read", path, chat.project_id)
+        assert tools is not None, "a read is weighed by the tools that will read it"
+        read = await tools.read_subject(path)
+        if read is None:
+            return None                              # a path the reader refuses on its own
+        owner, weighed = read
+        decision = await decide(session, "read", weighed, owner)
         if decision.rule_id is None:
             return None
-        rule_tool, subject, grant, covers = "read", decision_subject(path), path, f"reading {path}"
+        # One spelling for the card and the grant too, so "Allow for this session" holds for every spelling.
+        subject = weighed if owner == chat.project_id else f"{owner}:{weighed}"
+        rule_tool, grant, covers = "read", subject, f"reading {subject}"
     elif tool == "web_fetch":
         url = _text(args, "url", "href", "link", "address")
         try:
@@ -1134,7 +1297,8 @@ async def _gate(session: AsyncSession, chat: Chat, tool: str, args: dict[str, An
     else:
         return None
 
-    decision = await decide(session, rule_tool, subject, chat.project_id)
+    if decision is None:
+        decision = await decide(session, rule_tool, subject, chat.project_id)
     action, why = decision.action, decision.why
     if tool == "mcp" and decision.rule_id is None and acting is not None:
         effect = acting.servers[subject.split("/", 1)[0]].default_effect
@@ -1148,17 +1312,11 @@ async def _gate(session: AsyncSession, chat: Chat, tool: str, args: dict[str, An
         action = "deny"
         why = (f"No tool rule allows the custom tool {subject}, so it does not run. Someone with "
                f"rules:manage can allow it in Governance → Permissions → Tool rules.")
+    by = ""
     if action == "ask" and (found := _granted(chat, rule_tool, grant)) is not None:
-        action, why = "allow", f"Allowed for this session by {found.get('by') or 'a person'}."
-    return Gate(action, subject, why, decision.rule_id, grant, covers)
-
-
-def decision_subject(path: str) -> str:
-    """A path as a rule and a card show it: without a leading `./`."""
-    text = path.strip()
-    while text.startswith("./"):
-        text = text[2:]
-    return text
+        by = str(found.get("by") or "a person")
+        action, why = "allow", f"Allowed for this session by {by}."
+    return Gate(action, subject, why, decision.rule_id, grant, covers, by)
 
 
 def _capped(text: str, limit: int = MAX_OBSERVATION) -> str:
@@ -1169,14 +1327,24 @@ def _capped(text: str, limit: int = MAX_OBSERVATION) -> str:
     return text[:limit - 80] + marker
 
 
+def _granted_hosts(chat: Chat) -> frozenset[str]:
+    """The hosts a person allowed this session to fetch from ("every page on …"), as `host[:port]`."""
+    return frozenset(urllib.parse.urlsplit(str(g.get("subject") or "")).netloc
+                     for g in chat.grants or [] if isinstance(g, dict) and g.get("tool") == "web_fetch")
+
+
 async def _act(session: AsyncSession, chat: Chat, tool: str, args: dict[str, Any], acting: Acting,
-               by: str) -> tuple[str, str, bool]:
+               by: str, allowed_by: str = "allowed by a tool rule") -> tuple[str, str, bool]:
     """Run one acting tool through the service that owns it — the same guards, logs and audit a person's
-    own call gets. Returns (what goes back to the model, the turn's one-line detail, ok)."""
+    own call gets. Returns (what goes back to the model, the turn's one-line detail, ok).
+
+    `allowed_by` is who let the call run, in the words its activity line carries: a rule, or the person
+    who answered its card or allowed it for the session. A fetch's redirects go on only to its own host,
+    a host this session was allowed, or one a rule allows — nobody was asked about any other."""
     web = web_service.WebService(session, acting.secrets)
     if tool == "web_fetch":
         page = await web.fetch(_text(args, "url", "href", "link", "address"), actor=by,
-                               project_id=chat.project_id, actor_kind="agent")
+                               project_id=chat.project_id, actor_kind="agent", allowed_hosts=_granted_hosts(chat))
         host = urllib.parse.urlsplit(page["url"]).hostname or page["url"]
         head = f"{page['title'] or page['url']}\n{page['url']} · HTTP {page['status']}"
         cut = " · cut" if page["truncated"] else ""
@@ -1198,8 +1366,7 @@ async def _act(session: AsyncSession, chat: Chat, tool: str, args: dict[str, Any
             raise Refused("That tool is no longer defined here.", status=404)
         inner = args.get("arguments") if isinstance(args.get("arguments"), dict) else {}
         project = await ProjectRepository(session).get(chat.project_id) if chat.project_id else None
-        called = await service.call(defined, inner, project, actor=by or "a session",
-                                    allowed_by="allowed by a tool rule")
+        called = await service.call(defined, inner, project, actor=by or "a session", allowed_by=allowed_by)
         return _capped(service.answer(defined, called)), f"{defined.name} · {called.detail}", called.ok
     # mcp: the registry's own call, which checks the server and the tool again and records who called it.
     if acting.who is None:
@@ -1221,7 +1388,7 @@ async def _act(session: AsyncSession, chat: Chat, tool: str, args: dict[str, Any
 async def _tool_turn(session: AsyncSession, gateway: Gateway, chat: Chat, project: Project,
                      turn: Turn, skills: Sequence[SkillFile] = (), recalled: set[str] | None = None,
                      reasoning: str = "", *, acting: Acting | None = None, allowed: bool = False,
-                     by: str = "", agent: AgentSpec | None = None) -> bool:
+                     by: str = "", agent: AgentSpec | None = None, allowed_by: str = "") -> bool:
     """Run one tool and write what it found — a refusal is reported into the conversation, not raised.
 
     `recalled` is the facts this answer has already been handed, so a fact two tools both return is
@@ -1229,7 +1396,8 @@ async def _tool_turn(session: AsyncSession, gateway: Gateway, chat: Chat, projec
 
     Every call is weighed by the tool rules first (`_gate`): a deny is written as the tool's answer, and
     an ask writes a permission card instead of running anything — True is returned, and the answer
-    pauses there until a person decides. `allowed` is that decision, when the call is being resumed."""
+    pauses there until a person decides. `allowed` is that decision, when the call is being resumed, and
+    `allowed_by` says whose it was ("allowed once by Rajat"), for the call's line in the activity feed."""
     repo = ChatRepository(session)
     name = turn.tool.strip()
     args = turn.arguments or {}
@@ -1251,8 +1419,9 @@ async def _tool_turn(session: AsyncSession, gateway: Gateway, chat: Chat, projec
                        tool=name, arguments=args, why=turn.why[:160], detail="not this agent's", ok=False,
                        reasoning=reasoning)
         return False
+    tools = Tools(session, gateway, project, skills, who=acting.who if acting is not None else None)
     try:
-        gate = await _gate(session, chat, name, args, acting)
+        gate = await _gate(session, chat, name, args, acting, tools)
     except Refused as refused:
         chat.tool_calls += 1
         await repo.say(chat.id, role="tool", body=str(refused), tool=name, arguments=args, why=turn.why[:160],
@@ -1273,14 +1442,19 @@ async def _tool_turn(session: AsyncSession, gateway: Gateway, chat: Chat, projec
             reasoning=reasoning)
         return True
 
-    tools = Tools(session, gateway, project, skills)
+    if allowed:
+        because = allowed_by or "allowed by a person"
+    elif gate is not None and gate.by:
+        because = f"allowed for this session by {gate.by}"
+    else:
+        because = "allowed by a tool rule"
     try:
         if tool is not None:
             observation, detail = await tool.run(tools, args)
             ok = True
         else:
             assert acting is not None
-            observation, detail, ok = await _act(session, chat, name, args, acting, by)
+            observation, detail, ok = await _act(session, chat, name, args, acting, by, because)
     except Refused as refused:
         observation, detail, ok = str(refused), "refused", False
     except Exception as e:                       # a tool that breaks must not end the session
@@ -1365,7 +1539,9 @@ async def fold(session: AsyncSession, gateway: Gateway, chat: Chat, by: str) -> 
     for word. The folded turns are marked, never deleted: the person still reads all of it, and the
     model is sent the summary instead. Refused when there is too little to fold or no lane can write it."""
     repo = ChatRepository(session)
-    live = [m for m in active(await repo.messages(chat.id, limit=1000)) if not m.compacted]
+    # The newest turns still sent whole — read from the oldest end, a long session's page was all folded
+    # turns, and there was never anything left to fold.
+    live = await repo.tail(chat.id, 1000)
     turns = [m for m in live if m.role != "summary"]
     older = turns[:-KEEP_RECENT] if len(turns) > KEEP_RECENT else []
     if len(older) < MIN_TO_FOLD:
@@ -1453,12 +1629,23 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str, who: Person |
             return
         project = await ProjectRepository(s).get(chat.project_id)
         project_name = project.name if project else chat.project_id
-        line = active(await ChatRepository(s).messages(chat.id, limit=1000))
+        # The newest end of the line: read from the oldest, a long session resumed nothing and answered an
+        # old question. Folded turns are kept in it, as the carried names of a short question may be there.
+        line = await ChatRepository(s).tail(chat.id, LINE_READ, folded=True)
         waiting = line[-1] if line and line[-1].role == "tool" and line[-1].tool == PERMISSION else None
         if waiting is not None and (waiting.arguments or {}).get("state") == "pending":
             return                                   # still the person's to decide: nothing to resume
+        if waiting is not None and not await _take_up(s, waiting):
+            return                                   # another answer already resumed from this card
         question = next((m for m in reversed(line) if m.role == "you"), None)
+        if waiting is None and question is not None and any(
+                m.tool == PERMISSION and (m.arguments or {}).get("resumed") for m in line if m.id > question.id):
+            # A card this question raised was taken up, and the call it allowed already written after it:
+            # the answer to this question is that one's, still going or done — not a second one's.
+            return
         asked, carried = ("", []) if waiting is not None else _grounding_question(line)
+        # Grounding reads referenced projects too: not the ones this person may not see.
+        unseen = (await _references(s, chat.project_id, who))[1] if asked else frozenset()
         # The agent the session is asked through, read again at every answer: an edit to it applies from
         # the next answer on, and one that is gone ends the answer in words rather than as another agent.
         agent = await CustomAgentService(s).resolve(project, chat.agent) if chat.agent else None
@@ -1522,19 +1709,23 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str, who: Person |
     recalled: set[str] = set()
     if waiting is not None and (waiting.arguments or {}).get("state") == "allowed":
         asked_call = waiting.arguments or {}
+        decided = f"{waiting.detail} by {asked_call.get('decidedBy') or 'a person'}"
         async with db.session() as s:
             fresh = await ChatRepository(s).by_ref(ref)
             if fresh is not None:
                 await _tool_turn(s, gateway, fresh, project, Turn(tool=str(asked_call.get("tool") or ""),
                                                                    arguments=asked_call.get("input") or {},
                                                                    why=waiting.why),
-                                 found.skills, recalled, acting=acting, allowed=True, by=by, agent=agent)
+                                 found.skills, recalled, acting=acting, allowed=True, by=by, agent=agent,
+                                 allowed_by=decided)
     if asked:
         async with db.session() as s:
             try:
                 ground, pieces, searched = await RetrievalService(s, gateway).grounded(chat.project_id, asked)
             except Exception:
                 ground, pieces, searched = "", [], {}
+            if unseen and any(p.get("project") in unseen for p in pieces):
+                ground, pieces, searched = _without(unseen, pieces, searched)
             if ground:
                 # The trace goes into the turn's own `arguments`, which is JSONB and was empty on a
                 # grounding turn: the query, the ranks and both raw scores, so which pieces answered
@@ -1575,10 +1766,10 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str, who: Person |
             tap = _Tap(db.bus, ref, step)
             try:
                 result = await asyncio.to_thread(
-                    gateway.ask, messages,
-                    lambda raw: Turn.model_validate(extract_json(raw, trim=False)),
+                    gateway.ask, messages, read_turn,
                     feature="chat", actor=by, project=chat.project_id, role=CHAT, lane=wanted,
-                    agent=agent.name if agent is not None else "", on_delta=tap, stop=lambda: ref in _STOPPED)
+                    agent=agent.name if agent is not None else "", on_delta=tap, stop=lambda: ref in _STOPPED,
+                    tools=None if last else tool_specs(found.skills, acting, agent))
             except Stopped as stopped:
                 # What had been written stays, marked as stopped: it is the person's to read, not an answer.
                 words = _Answer()

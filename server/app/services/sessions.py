@@ -244,13 +244,14 @@ class SessionShapes:
                                                                      by_id=who.id)
 
     # ── the composer: mentions and uploads ───────────────────────
-    async def mentions(self, project_id: str, q: str) -> list[dict[str, Any]]:
+    async def mentions(self, project_id: str, q: str, *, hidden: frozenset[str] = frozenset()) -> list[dict[str, Any]]:
         """What `@` offers: files and symbols from the code index, memory facts for this project or the
         whole workspace, and this project's plans — the closest names first (pg_trgm), a few of each.
 
         Files of a reference source say "reference"; files of a project this one references come after
         the project's own, named `<project id>:<path>` — the prefix the session's tools read them with —
-        and say whose they are. Both are read only."""
+        and say whose they are. Both are read only. `hidden` is the projects the person asking may not see
+        (`unseen_by`): a project this one references that is among them offers nothing, not even its name."""
         project = await ProjectRepository(self.session).get(project_id)
         if project is None:
             raise NotFound(f"project {project_id}")
@@ -271,6 +272,8 @@ class SessionShapes:
             read_only = " · reference, read only" if cut and head in labels else ""
             out.append({"kind": "file", "ref": path, "name": path, "detail": f"{lines} lines{read_only}"})
         for other, name in await referenced(self.session, project_id):
+            if other in hidden:
+                continue
             for path, lines in (await self.session.execute(found_files(other, MENTION_REFERENCED))).all():
                 out.append({"kind": "file", "ref": f"{other}:{path}", "name": f"{other}:{path}",
                             "detail": f"{name} · reference, read only · {lines} lines"})

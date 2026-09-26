@@ -15,8 +15,9 @@ Hooks are discovered, redacted and shown, and a hook is refused by default: a re
 somebody else's shell script, and nothing runs it because it is there. A person may allow a specific
 one with a tool rule of kind `hook` — matched on `event/command`, the command as it is really written —
 and only then does it fire at its event, inside the project's checkout, under the machine's roots, with
-a timeout and a cap on what it may say back. Every firing is in the activity log. A command's !`shell`
-lines are still never run: they are replaced with a note when a session expands the command.
+a timeout and a cap on what it may say back. It runs behind the OS sandbox a run's test command runs
+behind, and without the API's own secrets in its environment. Every firing is in the activity log. A
+command's !`shell` lines are still never run: they are replaced with a note when a session expands it.
 
 Plugins are read from Claude Code's own cache, which NeuroCode never writes to, and from a folder of the
 workspace's own — `NEUROCODE_PLUGINS_DIR`, or `.plugins` beside the clones. A plugin installed there came
@@ -50,6 +51,7 @@ from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import onboarding
+from ..agent.env import child_env
 from ..agent.git import git
 from ..data.base import utcnow
 from ..models import Chat, ChatMessage, Project
@@ -57,7 +59,7 @@ from ..repositories import ActivityRepository, AuditRepository, NotFound, Projec
 from ..repositories.work import PrefRepository
 from ..schemas.extensions import command_json, hook_json, skill_json
 from ..settings import settings
-from . import machine
+from . import machine, sandbox
 from .code import checkout
 from .errors import Refused
 from .identity import Person
@@ -885,20 +887,24 @@ class Fired:
                 "ms": self.ms}
 
 
-def run_hook(hook: HookEntry, cwd: Path, payload: dict[str, Any]) -> tuple[int, str, int]:
+def run_hook(hook: HookEntry, cwd: Path, payload: dict[str, Any],
+             fence: sandbox.Sandbox | None = None) -> tuple[int, str, int]:
     """Blocking. One hook, in the project's checkout, with its event's payload on stdin as JSON.
 
     The same limits every command in this product runs under: a timeout the settings file may shorten but
-    never lengthen, output cut rather than buffered without end, and no shell state carried in beyond the
-    environment this server already runs with. Returns its exit code, what it printed, and how long it took.
+    never lengthen, output cut rather than buffered without end, and the fence a run's test command gets —
+    `fence`, or one drawn around `cwd` with the deployment's own policy when the caller named none. Its
+    environment is the machine's, not the API's (`child_env`): a repository's hook is somebody else's
+    script and is owed no database password. Returns its exit code, what it printed, and how long it took.
     """
+    fence = fence if fence is not None else sandbox.around(cwd, sandbox.env_policy())
     seconds = min(hook.timeout_s or MAX_HOOK_SECONDS, MAX_HOOK_SECONDS)
     started = time.monotonic()
     try:
-        done = subprocess.run(["/bin/sh", "-c", hook.raw], cwd=cwd, input=json.dumps(payload), text=True,
-                              capture_output=True, timeout=seconds, check=False,
-                              env={**os.environ, "CI": "1", "NO_COLOR": "1", "CLAUDE_PROJECT_DIR": str(cwd),
-                                   "NEUROCODE_HOOK_EVENT": hook.event})
+        done = subprocess.run(fence.wrap(["/bin/sh", "-c", hook.raw]), cwd=cwd, input=json.dumps(payload),
+                              text=True, capture_output=True, timeout=seconds, check=False,
+                              env=child_env({"CI": "1", "NO_COLOR": "1", "CLAUDE_PROJECT_DIR": str(cwd),
+                                             "NEUROCODE_HOOK_EVENT": hook.event}))
     except subprocess.TimeoutExpired:
         return 124, f"It did not finish within {seconds} s, so it was stopped.", int((time.monotonic() - started) * 1000)
     except OSError as e:
@@ -928,6 +934,7 @@ async def fire(session: AsyncSession, event: str, project: Project | None, paylo
     verdicts = await hook_verdicts(session, at_event, project.id if project else None)
     activity = ActivityRepository(session)
     out: list[Fired] = []
+    fence: sandbox.Sandbox | None = None
     for hook in at_event:
         verdict = verdicts[hook.id]
         if not verdict.allowed:
@@ -948,7 +955,10 @@ async def fire(session: AsyncSession, event: str, project: Project | None, paylo
         except Refused as refused:
             out.append(Fired(hook.id, event, hook.command, False, None, "", False, str(refused), 0))
             continue
-        code, said, ms = await asyncio.to_thread(run_hook, hook, root, payload)
+        if fence is None:
+            # Drawn once, around the checkout, with the workspace's answer about the network.
+            fence = sandbox.around(root, await sandbox.read_policy(session))
+        code, said, ms = await asyncio.to_thread(run_hook, hook, root, payload, fence)
         blocked = hook.blocking and code == REFUSAL_CODE
         fired = Fired(hook.id, event, hook.command, True, code, said, blocked,
                       f"{verdict.why} It exited {code}." + (" It refused what was about to happen."
@@ -957,7 +967,7 @@ async def fire(session: AsyncSession, event: str, project: Project | None, paylo
         await activity.record(
             actor=actor, actor_kind=actor_kind, action="Hook fired",
             detail=f"{event} · {hook.command[:120]} · exit {code} · {ms} ms"
-                   + (" · refused the action" if blocked else ""),
+                   + (" · refused the action" if blocked else "") + f" · {fence.words()}",
             project_id=project.id if project else None,
             level="warn" if blocked or code not in (0, REFUSAL_CODE) else "info")
     return out

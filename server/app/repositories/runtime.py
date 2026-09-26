@@ -114,6 +114,23 @@ class ChatRepository(Repository[Chat]):
                 .order_by(ChatMessage.id).limit(min(limit, 1000)))
         return list((await self.session.execute(stmt)).scalars())
 
+    async def tail(self, chat_id: str, limit: int = 500, *, before: int | None = None,
+                   roles: Sequence[str] | None = None, folded: bool = False) -> list[ChatMessage]:
+        """The newest turns of a session's current line, oldest first: what a model is sent and where an
+        answer resumes. `messages` pages forward from an id, which is what a screen catching up wants; read
+        that way and cut, a long session handed the model its oldest turns and never the question just
+        asked. A replaced turn is never here, and a folded one only with `folded` — its summary stands in
+        for it. `before` reads the line up to a turn; `roles`, only turns of those kinds."""
+        where: list[ColumnElement[bool]] = [ChatMessage.chat_id == chat_id, ChatMessage.superseded_by.is_(None)]
+        if not folded:
+            where.append(ChatMessage.compacted.is_(False))
+        if before is not None:
+            where.append(ChatMessage.id < before)
+        if roles is not None:
+            where.append(ChatMessage.role.in_(list(roles)))
+        stmt = select(ChatMessage).where(*where).order_by(ChatMessage.id.desc()).limit(min(limit, 1000))
+        return list(reversed(list((await self.session.execute(stmt)).scalars())))
+
     async def say(self, chat_id: str, *, role: str, body: str, **extra: object) -> ChatMessage:
         """One turn, written the moment it happens — that is the whole promise of a session — and
         announced in the same breath, so an open tab sees it arrive rather than on the next reload."""

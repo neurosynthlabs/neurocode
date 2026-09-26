@@ -216,7 +216,10 @@ LANES: tuple[Lane, ...] = (
     # https://ai.google.dev/gemini-api/docs/openai — `reasoning_effort`, where "none" turns thinking off
     # on 2.5 models; "Reasoning cannot be turned off for Gemini 2.5 Pro or 3 models", so an admin who
     # moves this lane to a 3.x model will have that field dropped and asked again without it.
-    Lane("gemini", "Google Gemini", "openai", "gemini-2.5-flash",
+    # https://ai.google.dev/gemini-api/docs/pricing (updated 2026-09-24, read 2026-09-26): gemini-3.8-flash is
+    # free, "engineered for long-horizon software engineering"; 3.7/3.6/3.5 Flash and the Flash-Lites are free
+    # too, 2.5 Flash still is, 2.5 Pro is being phased out and 3.1 Pro is not free. Limits are per model.
+    Lane("gemini", "Google Gemini", "openai", "gemini-3.8-flash",
          "https://generativelanguage.googleapis.com/v1beta/openai",
          True, 10, 200, (PLAN, REVIEW, CHAT), "gemini_api_key", "GEMINI_API_KEY", "https://aistudio.google.com/apikey",
          "Free, no card, and a million tokens of context — the lane for planning and for reading a long "
@@ -225,10 +228,12 @@ LANES: tuple[Lane, ...] = (
          embed="gemini-embedding-001", window=1_048_576, thinks="effort", caps="ours",
          allowance="Google stopped publishing the free tier's limits: \"Specified rate limits are not "
                    "guaranteed\". Yours are in AI Studio, at aistudio.google.com/rate-limit.",
-         models=("gemini-2.5-flash", "gemini-3.5-flash-lite"),
+         models=("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
+                 "gemini-2.5-flash"),
          # gemini-3.5-flash-lite's card (read 2026-09-20) gives the same 1,048,576 input limit and
-         # inputs "Text, Image, Video, Audio, and PDF".
-         vision=("gemini-2.5-flash", "gemini-3.5-flash-lite")),
+         # inputs "Text, Image, Video, Audio, and PDF"; every Gemini Flash reads images.
+         vision=("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.5-flash",
+                 "gemini-3.5-flash-lite")),
     # https://docs.z.ai/guides/overview/pricing (read 2026-09-20): GLM-4.7-Flash, GLM-4.5-Flash and
     # GLM-4.6V-Flash are "Free | Free | Free | Free" — input, cached input, storage and output.
     # https://docs.z.ai/guides/overview/overview.md — GLM-4.7-Flash 200K context, GLM-4.6V-Flash 128K
@@ -267,15 +272,18 @@ LANES: tuple[Lane, ...] = (
     # qwen/qwen3.8-27b:free declares image input; nvidia/nemotron-3-ultra-550b-a55b:free has 1,000,000.
     # https://openrouter.ai/docs/api-reference/limits — free models are 20 calls a minute, and 50 a day
     # until ten credits have been bought all-time, then 1,000. Ours are under the first pair.
-    Lane("openrouter", "OpenRouter", "openai", "poolside/laguna-s-2.1:free", "https://openrouter.ai/api/v1",
+    # Re-read 2026-09-26 (live /api/v1/models): thinkingmachines/inkling:free (975B, 41B active, 1M window)
+    # and nvidia/nemotron-3-ultra-550b-a55b:free (1M) lead the `:free` list, both with tool calling. The lane
+    # hands OpenRouter the next two as fallbacks (`FALLS_BACK`), so a busy model is skipped, not waited on.
+    Lane("openrouter", "OpenRouter", "openai", "thinkingmachines/inkling:free", "https://openrouter.ai/api/v1",
          True, 18, 45, (WRITE, PLAN), "openrouter_api_key", "OPENROUTER_API_KEY", "https://openrouter.ai/keys",
          "One key, 21 `:free` models. Fifty calls a day on a zero balance — a good overflow lane, and "
          "the cheapest capacity on this list: buying $10 of credit once raises it to 1,000 a day.",
-         window=262_144,
+         window=1_048_576,
          allowance="OpenRouter publishes 20 calls a minute and 50 a day for `:free` models, or 1,000 a "
                    "day once ten credits have been bought. `GET /api/v1/key` reports what is left.",
-         models=("poolside/laguna-s-2.1:free", "nvidia/nemotron-3-ultra-550b-a55b:free",
-                 "qwen/qwen3.8-27b:free", "cohere/north-mini-code:free"),
+         models=("thinkingmachines/inkling:free", "nvidia/nemotron-3-ultra-550b-a55b:free",
+                 "qwen/qwen3.8-27b:free", "poolside/laguna-s-2.1:free", "cohere/north-mini-code:free"),
          vision=("qwen/qwen3.8-27b:free",)),
     # https://api-docs.deepseek.com/quick_start/pricing (read 2026-09-19): deepseek-flash and
     # deepseek-v4-pro, 1M context each; per million tokens at peak — flash $0.30 miss, $0.006 cache
@@ -323,12 +331,16 @@ LANES: tuple[Lane, ...] = (
     # now says in those words. hw.memsize is 16 GiB here, which is the real ceiling on the model: a
     # 7-8B at Q4 is about 5 GB resident; qwen3-coder:30b is a 19 GB download
     # (https://ollama.com/library/qwen3-coder/tags) and does not fit.
-    Lane("ollama", "Ollama · this Mac", "ollama", "qwen2.5-coder:7b", "http://127.0.0.1:11434",
+    # https://ollama.com/library/qwen3.5/tags (read 2026-09-26): qwen3.5:9b is 6.6 GB at Q4 with tools,
+    # thinking, vision and a 256K window — the strongest that leaves a 16 GB Mac room for everything else.
+    # qwen3.5:27b (18 GB), qwen3.5:35b-a3b (20 GB+) and gpt-oss:20b (14 GB) do not fit beside the app.
+    Lane("ollama", "Ollama · this Mac", "ollama", "qwen3.5:9b", "http://127.0.0.1:11434",
          True, 0, 0, (WRITE, REVIEW, PLAN, CHAT), "", "", "https://ollama.com/download",
          "Local, free and unmetered — the only place where free really is unlimited, and the price is "
-         "the model. On 16 GB this Mac runs a 7-8B at Q4 (about 5 GB resident); a 30B, even at Q4, is a "
-         "19 GB download and does not fit.", embed="nomic-embed-text", caps="",
-         allowance="Nothing meters this lane but the machine it runs on."),
+         "the model. On 16 GB this Mac runs a 9B at Q4 (about 7 GB, 9 with a 32K window); a 27B is an "
+         "18 GB download and does not fit.", embed="nomic-embed-text", caps="",
+         allowance="Nothing meters this lane but the machine it runs on.",
+         models=("qwen3.5:9b", "qwen3:8b", "qwen2.5-coder:7b", "gemma3:12b")),
 )
 
 BY_ID: dict[str, Lane] = {lane.id: lane for lane in LANES}
@@ -608,7 +620,9 @@ def priced_models(lane_id: str) -> tuple[str, ...] | None:
         return None
     if not lane.free:
         return tuple(price_table(lane_id))
-    return tuple(m for m in (lane.model, lane.embed) if m)
+    # Every model a free lane lists is one of its provider's free models: moving the lane from one to
+    # another leaves the calls already made on the first free, not unpriced.
+    return tuple(dict.fromkeys(m for m in (lane.model, lane.embed, *lane.models) if m))
 
 
 def priced_call(lane_id: str, model: str) -> bool:
@@ -662,10 +676,19 @@ def key_source(lane: Lane, secrets: Secrets, environ: dict[str, str] | None = No
     return "environment" if lane.env and env.get(lane.env) else None
 
 
+#: Lanes whose provider takes a list of models and falls back along it by itself when one is busy or down:
+#: OpenRouter's `models` (https://openrouter.ai/docs/features/model-routing). Its free models share one
+#: key's allowance, so a busy one is worth skipping, not waiting on.
+FALLS_BACK = {"openrouter"}
+
+
 def config(lane: Lane, secrets: Secrets, environ: dict[str, str] | None = None) -> dict[str, Any]:
     """What a provider call needs. `baseUrl` and `url` are both given: the two APIs name it differently."""
-    return {"id": lane.id, "model": lane.model, "baseUrl": lane.base_url, "url": lane.base_url,
-            "key": key_of(lane, secrets, environ), "api": lane.api}
+    out = {"id": lane.id, "model": lane.model, "baseUrl": lane.base_url, "url": lane.base_url,
+           "key": key_of(lane, secrets, environ), "api": lane.api}
+    if lane.id in FALLS_BACK and len(lane.models) > 1:
+        out["fallbacks"] = [m for m in lane.models if m != lane.model][:2]
+    return out
 
 
 def describe(lane: Lane) -> dict[str, Any]:

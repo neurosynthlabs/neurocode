@@ -62,7 +62,7 @@ async function mustBeFree(port, what) {
   });
 }
 
-export async function startStack({ name, apiPort, webPort, web = 'dev', fixture = false, owner = false }) {
+export async function startStack({ name, apiPort, webPort, web = 'dev', fixture = false, owner = false, model: lanes = 'stub' }) {
   await mustBeFree(apiPort, 'API');
   await mustBeFree(webPort, 'web');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `nc-${name}-`));
@@ -74,7 +74,10 @@ export async function startStack({ name, apiPort, webPort, web = 'dev', fixture 
   python(['-m', 'alembic', 'upgrade', 'head'], { NEUROCODE_DATABASE_URL: url });
   if (fixture) python([path.join(ROOT, 'scripts/load-fixture.py'), '--database', url], {}, ROOT);
 
-  const model = await startStubModel();
+  // 'stub' (every check): a fake model on the Groq lane. 'machine': the lanes whose keys this machine saved
+  // (server/secrets.json), for walking the loop against a real model by hand; nothing is stubbed.
+  const real = lanes === 'machine';
+  const model = real ? { url: '', seen: [], close: async () => {} } : await startStubModel();
   const spawnLogged = (label, cmd, args, env) => {
     const p = spawn(cmd, args, { cwd: ROOT, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
     p.log = '';
@@ -92,7 +95,7 @@ export async function startStack({ name, apiPort, webPort, web = 'dev', fixture 
     {
       NEUROCODE_DATABASE_URL: url,
       // Nothing from this machine: no .env, no saved keys, no Claude folder, no pinned compiler.
-      NEUROCODE_SECRETS_PATH: path.join(tmp, 'secrets.json'),
+      NEUROCODE_SECRETS_PATH: real ? path.join(ROOT, 'server/secrets.json') : path.join(tmp, 'secrets.json'),
       NEUROCODE_BACKUPS_DIR: path.join(tmp, 'backups'),
       // Runs and clones go here too, so a test stack never leaves worktrees in server/.worktrees.
       NEUROCODE_WORKTREES_DIR: path.join(tmp, 'worktrees'),
@@ -102,9 +105,11 @@ export async function startStack({ name, apiPort, webPort, web = 'dev', fixture 
       // The stack's own temporary folder is where the checks put the repositories they onboard, so it is a root
       // the folder browser and local onboarding may reach, beside the home folder.
       NEUROCODE_MACHINE_ROOTS: `${os.homedir()}:${tmp}`,
-      ...Object.fromEntries(LANE_KEYS.map((k) => [k, ''])),
+      ...(real ? {} : Object.fromEntries(LANE_KEYS.map((k) => [k, '']))),
       // The one lane that answers is the stub.
-      GROQ_API_KEY: 'stub', NEUROCODE_GROQ_URL: model.url,
+      ...(real ? {} : { GROQ_API_KEY: 'stub', NEUROCODE_GROQ_URL: model.url }),
+      // A model running on this machine (Ollama) answers no check either; port 9 answers nothing.
+      ...(real ? {} : { NEUROCODE_OLLAMA_URL: 'http://127.0.0.1:9' }),
     });
 
   const vite = path.join(ROOT, 'node_modules/vite/bin/vite.js');

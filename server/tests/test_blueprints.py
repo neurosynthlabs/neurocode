@@ -292,7 +292,8 @@ async def test_a_review_proposes_and_a_person_decides(client: AsyncClient, monke
     reviewed = await client.post(f"/blueprints/{bp['id']}/suggest", json={"expectRevision": 1})
     assert reviewed.status_code == 200, reviewed.text
     body = reviewed.json()
-    assert "Clinic bookings" in sent[0][1]["content"] and "fastapi (FastAPI, backend)" in sent[0][1]["content"]
+    said = "\n".join(m["content"] for m in sent[0][1:])
+    assert "Clinic bookings" in sent[0][-1]["content"] and "fastapi (FastAPI, backend)" in said
     review = body["review"]
     assert review["model"] and review["revision"] == 1 and review["summary"].startswith("Solid")
     assert [c["path"] for c in review["changes"]] == ["layers.queue.choice", "layers.search"]

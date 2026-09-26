@@ -41,19 +41,19 @@ class McpRepository(Repository[McpServer]):
         return await self.list(order_by=McpServer.name, limit=200)
 
 
-#: The most rules `decide` reads for one tool. A workspace with more rules than this for a single tool
-#: has stopped writing rules and started writing a list; the ceiling keeps a decision one small query.
-RULES_PER_DECISION = 500
-
-
 class ToolRuleRepository(Repository[ToolRule]):
     model = ToolRule
 
     async def applicable(self, tool: str, project_id: str | None) -> list[ToolRule]:
-        """Every rule that could apply to this tool here: the workspace's, and this project's own."""
+        """Every rule that could apply to this tool here: the workspace's, and this project's own.
+
+        All of them, never the first so many. A ceiling here once cut at 500, oldest first — and "Always
+        allow in this project" writes a literal rule per path, so an active project passed it in weeks,
+        after which every rule written later, a deny included, was silently never read. A decision is
+        only as good as the rules it weighs, and a tool's rules in one scope are a small table."""
         scope = (or_(ToolRule.project_id.is_(None), ToolRule.project_id == project_id) if project_id
                  else ToolRule.project_id.is_(None))
-        stmt = select(ToolRule).where(ToolRule.tool == tool, scope).order_by(ToolRule.id).limit(RULES_PER_DECISION)
+        stmt = select(ToolRule).where(ToolRule.tool == tool, scope).order_by(ToolRule.id)
         return list((await self.session.execute(stmt)).scalars())
 
     async def listed(self, *, project: str | None = None, tool: str | None = None, limit: int | None = None,

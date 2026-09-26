@@ -32,6 +32,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -84,13 +85,58 @@ class NoModel(RuntimeError):
     """Nothing can answer: no lane has a key, and no local model is pulled."""
 
 
-class ProviderError(RuntimeError):
-    """A provider answered with an HTTP error. 401 or 403 means the key itself is bad."""
+#: Who is calling, on every request to a provider. Python's own "Python-urllib/3.x" is refused outright by
+#: the Cloudflare firewall in front of Groq and others ("error code: 1010"), which read as a refused key: the
+#: lane was switched off with a valid key in it, and no call ever reached the model.
+USER_AGENT = "NeuroCode/0.9 (+https://github.com/neurosynthlabs/neurocode)"
+#: A firewall's refusal, not the provider's: Cloudflare answers 403 with "error code: 10xx".
+FIREWALL = re.compile(r"error code: 10\d\d")
 
-    def __init__(self, status: int, body: str) -> None:
+
+#: How long one call waits on a provider that says "try again in N seconds" before the next lane gets it. A
+#: free tier's minute is full far more often than the provider is down — Groq's free tier is 8,000 tokens a
+#: minute, a couple of calls — and waiting out a few seconds beats failing a person's question.
+RETRY_WAIT = 20.0
+RETRIES = 2
+_AGAIN = re.compile(r"try again in (?:(\d+)m)?(\d+(?:\.\d+)?)(ms|s)\b", re.IGNORECASE)
+
+
+def _wait_for(e: ProviderError, left: float) -> float | None:
+    """Seconds to wait before asking the same lane again, when it said how long and that fits — or None."""
+    if e.status != 429:
+        return None
+    seconds = e.retry_after
+    if seconds is None and (m := _AGAIN.search(e.body or "")):
+        n = float(m.group(2))
+        seconds = int(m.group(1) or 0) * 60 + (n / 1000 if m.group(3).lower() == "ms" else n)
+    if seconds is None or seconds > RETRY_WAIT or seconds + 5 > left:
+        return None
+    return seconds + 0.25
+
+
+def _refused(e: urllib.error.HTTPError) -> ProviderError:
+    """The provider's refusal, with enough of its body to say why and when to try again."""
+    header = e.headers.get("retry-after") if e.headers else None
+    try:
+        after = float(header) if header else None
+    except ValueError:
+        after = None
+    return ProviderError(e.code, e.read()[:600].decode(errors="replace"), after)
+
+
+class ProviderError(RuntimeError):
+    """A provider answered with an HTTP error. A 401, or a 403 the provider wrote, means the key itself is bad."""
+
+    def __init__(self, status: int, body: str, retry_after: float | None = None) -> None:
         super().__init__(f"HTTP {status}: {body}")
         self.status = status
         self.body = body
+        self.retry_after = retry_after
+
+    @property
+    def key_refused(self) -> bool:
+        """The key is bad — not a firewall between here and the provider refusing this client."""
+        return self.status == 401 or (self.status == 403 and not FIREWALL.search(self.body or ""))
 
 
 class LaneTooSlow(TimeoutError):
@@ -170,12 +216,12 @@ def _read(response: Any, clock: _Budget) -> bytes:
 
 def _post(url: str, payload: dict[str, Any], headers: dict[str, str], clock: _Budget) -> dict[str, Any]:
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST",
-                                 headers={"Content-Type": "application/json", **headers})
+                                 headers={"Content-Type": "application/json", "User-Agent": USER_AGENT, **headers})
     try:
         with urllib.request.urlopen(req, timeout=clock.left()) as r:
             return json.loads(_read(r, clock))
     except urllib.error.HTTPError as e:  # the body says why: a bad key, no balance, an unknown model
-        raise ProviderError(e.code, e.read()[:200].decode(errors="replace")) from e
+        raise _refused(e) from e
 
 
 Usage = dict[str, int]      # {"in": prompt, "out": completion, "cached": of in, "reasoning": of out}
@@ -196,7 +242,7 @@ class Reply:
 
 #: Request fields a lane may refuse by name, and so are dropped and asked again without: not every free
 #: model takes JSON mode, and a lane pointed at a model that does not reason refuses its effort setting.
-OPTIONAL = ("response_format", "stream_options", "reasoning_effort", "thinking")
+OPTIONAL = ("response_format", "stream_options", "reasoning_effort", "thinking", "tools", "tool_choice", "models")
 
 
 def _refusal(e: ProviderError, body: dict[str, Any]) -> str | None:
@@ -226,9 +272,69 @@ def _body(messages: list[dict[str, str]], cfg: dict[str, Any], stream: bool) -> 
     body: dict[str, Any] = {"model": cfg["model"], "messages": messages, "temperature": 0.2,
                             "max_tokens": cfg.get("maxTokens") or lanes.max_tokens(thinks, level),
                             "response_format": {"type": "json_object"}, **lanes.thinking_params(thinks, level)}
+    # Tools declared natively, for a model trained to call them — GPT-OSS on Groq calls a tool even when
+    # asked for JSON in the text, and the provider then refuses the answer. JSON mode and tools do not mix.
+    if cfg.get("tools"):
+        body.pop("response_format", None)
+        body.update(tools=cfg["tools"], tool_choice="auto")
+    if cfg.get("fallbacks"):           # the provider moves along these by itself when the first is busy
+        body["models"] = [cfg["model"], *cfg["fallbacks"]]
     if stream:
         body.update(stream=True, stream_options={"include_usage": True})
     return body
+
+
+#: About how many characters a token holds, counted low on purpose: code and JSON pack fewer than prose.
+CHARS_PER_TOKEN = 3.0
+#: Kept back from a lane's ceiling for what a count by characters cannot see (roles, tool specs, framing).
+FIT_MARGIN = 400
+CUT = "\n[… cut here to fit this model's limit …]\n"
+
+
+def _size(messages: list[dict[str, Any]]) -> int:
+    return int(sum(len(m["content"]) for m in messages if isinstance(m.get("content"), str)) / CHARS_PER_TOKEN)
+
+
+def fit(messages: list[dict[str, Any]], room: int) -> list[dict[str, Any]]:
+    """The messages, made to fit `room` tokens. A lane whose whole request — prompt and answer — must stay
+    under a small ceiling (Groq's free tier refuses anything over 8,000 tokens a minute with a 413, before
+    it reads a word) used to be sent what could never pass. Now the longest parts shrink first — retrieved
+    code, a tool's output, old turns — keeping each one's head and saying it was cut; the system prompt is
+    cut last, and the question asked is kept whole as long as anything else can give way."""
+    if room <= 0 or _size(messages) <= room:
+        return messages
+    out = [dict(m) for m in messages]
+    last_user = max((i for i, m in enumerate(out) if m.get("role") == "user"), default=-1)
+    for _ in range(64):
+        if _size(out) <= room:
+            break
+        # Everything but the system prompt and the question first; then those, when nothing else is left.
+        pool = [i for i, m in enumerate(out) if isinstance(m.get("content"), str) and m.get("role") != "system"
+                and i != last_user and len(m["content"]) > 240]
+        pool = pool or [i for i, m in enumerate(out) if isinstance(m.get("content"), str) and len(m["content"]) > 240]
+        if not pool:
+            break
+        i = max(pool, key=lambda k: len(out[k]["content"]))
+        head, _, tail = out[i]["content"].partition(CUT)
+        text = head + tail
+        over = (_size(out) - room) * CHARS_PER_TOKEN
+        keep = max(200, min(len(text) // 2, int(len(text) - over)))
+        # The middle goes: a message opens with what it is and ends with what matters now — the question,
+        # a person's answers — and the bulk between (a catalogue, retrieved code, a log) is what can give.
+        front = int(keep * 0.6)
+        out[i]["content"] = text[:front] + CUT + text[len(text) - (keep - front):]
+    return out
+
+
+def _called(name: str, arguments: Any) -> str:
+    """A native tool call, in the shape an answer written as JSON takes: {"tool", "arguments", "why"}."""
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments or "{}")
+        except ValueError:
+            arguments = {}
+    name = name.removeprefix("functions.")
+    return json.dumps({"tool": name, "arguments": arguments if isinstance(arguments, dict) else {}, "why": ""})
 
 
 def _answered(reply: Reply, cfg: dict[str, Any], budget: int) -> Reply:
@@ -245,19 +351,30 @@ def call_openai(messages: list[dict[str, str]], cfg: dict[str, Any]) -> Reply:
     url = f"{cfg['baseUrl']}/chat/completions"
     headers = {"Authorization": f"Bearer {cfg['key']}"}
     clock = _Budget(cfg.get("seconds"))
-    for _ in range(len(OPTIONAL) + 1):
+    waited = 0
+    for _ in range(len(OPTIONAL) + RETRIES + 1):
         try:
             out = _post(url, body, headers, clock)
             break
         except ProviderError as e:  # a field this lane does not take: ask again without it
-            if (name := _refusal(e, body)) is None:
-                raise
-            body = {k: v for k, v in body.items() if k != name}
+            if (name := _refusal(e, body)) is not None:
+                body = {k: v for k, v in body.items() if k != name}
+                continue
+            if waited < RETRIES and (wait := _wait_for(e, clock.left())) is not None:
+                waited += 1           # its minute is full: wait it out rather than fail the question
+                time.sleep(wait)
+                continue
+            raise
     choice = out["choices"][0]
     message = choice.get("message") or {}
     # DeepSeek names it `reasoning_content`; Groq and OpenRouter `reasoning`.
     reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
-    return _answered(Reply(message.get("content") or "", _counted(out.get("usage")),
+    content = message.get("content") or ""
+    calls = message.get("tool_calls") or []
+    if calls and not content.strip():
+        fn = calls[0].get("function") or {}
+        content = _called(fn.get("name", ""), fn.get("arguments"))
+    return _answered(Reply(content, _counted(out.get("usage")),
                            reasoning if isinstance(reasoning, str) else "", choice.get("finish_reason") or ""),
                      cfg, body.get("max_tokens", 0))
 
@@ -269,11 +386,11 @@ Delta = Callable[[str, str], None]
 def _lines(url: str, payload: dict[str, Any], headers: dict[str, str], clock: _Budget):
     """The response's lines as they arrive — a context manager, so a stop closes the socket."""
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST",
-                                 headers={"Content-Type": "application/json", **headers})
+                                 headers={"Content-Type": "application/json", "User-Agent": USER_AGENT, **headers})
     try:
         return urllib.request.urlopen(req, timeout=clock.left())
     except urllib.error.HTTPError as e:
-        raise ProviderError(e.code, e.read()[:200].decode(errors="replace")) from e
+        raise _refused(e) from e
 
 
 class _Collect:
@@ -287,6 +404,13 @@ class _Collect:
         self.thought_ms: int | None = None
         self.usage: Usage = {}
         self.finish = ""
+        self.calls: dict[int, dict[str, str]] = {}   # a native tool call, arriving in pieces by index
+
+    def call(self, piece: dict[str, Any]) -> None:
+        held = self.calls.setdefault(int(piece.get("index") or 0), {"name": "", "arguments": ""})
+        fn = piece.get("function") or {}
+        held["name"] += fn.get("name") or ""
+        held["arguments"] += fn.get("arguments") or ""
 
     def add(self, answer: str, reasoning: str) -> None:
         if reasoning:
@@ -301,7 +425,11 @@ class _Collect:
     def reply(self) -> Reply:
         if self.reasoning and self.thought_ms is None:     # it reasoned and never answered
             self.thought_ms = _ms(self.t0)
-        return Reply("".join(self.text), self.usage, "".join(self.reasoning), self.finish, True, self.thought_ms)
+        text = "".join(self.text)
+        if self.calls and not text.strip():               # it answered with a tool call, not with words
+            first = self.calls[min(self.calls)]
+            text = _called(first["name"], first["arguments"])
+        return Reply(text, self.usage, "".join(self.reasoning), self.finish, True, self.thought_ms)
 
     def check(self) -> None:
         if self.stop is not None and self.stop():
@@ -316,14 +444,20 @@ def stream_openai(messages: list[dict[str, str]], cfg: dict[str, Any], on_delta:
     url = f"{cfg['baseUrl']}/chat/completions"
     headers = {"Authorization": f"Bearer {cfg['key']}", "Accept": "text/event-stream"}
     clock = _Budget(cfg.get("seconds"))
-    for _ in range(len(OPTIONAL) + 1):
+    waited = 0
+    for _ in range(len(OPTIONAL) + RETRIES + 1):
         try:
             response = _lines(url, body, headers, clock)
             break
         except ProviderError as e:
-            if (name := _refusal(e, body)) is None:
-                raise
-            body = {k: v for k, v in body.items() if k != name}
+            if (name := _refusal(e, body)) is not None:
+                body = {k: v for k, v in body.items() if k != name}
+                continue
+            if waited < RETRIES and (wait := _wait_for(e, clock.left())) is not None:
+                waited += 1
+                time.sleep(wait)
+                continue
+            raise
     got = _Collect(on_delta, stop)
     with response:
         for raw in response:
@@ -342,6 +476,8 @@ def stream_openai(messages: list[dict[str, str]], cfg: dict[str, Any], on_delta:
                 delta = choice.get("delta") or {}
                 thought = delta.get("reasoning_content") or delta.get("reasoning") or ""
                 got.add(delta.get("content") or "", thought if isinstance(thought, str) else "")
+                for piece in delta.get("tool_calls") or []:
+                    got.call(piece)
                 got.finish = choice.get("finish_reason") or got.finish
     return _answered(got.reply(), cfg, body.get("max_tokens", 0))
 
@@ -359,15 +495,39 @@ def embed_ollama(texts: list[str], cfg: dict[str, Any]) -> tuple[list[list[float
     return out["embeddings"], out.get("prompt_eval_count", 0)
 
 
+#: The window a local model is given. Ollama's own default is a few thousand tokens and it cuts a longer
+#: prompt silently, from the front — the instructions go first. 32K holds a session's grounding and turns;
+#: on a 16 GB Mac a 9B model with it is about 9 GB resident.
+OLLAMA_CONTEXT = 32_768
+
+
+def _ollama_body(messages: list[dict[str, Any]], cfg: dict[str, Any], stream: bool) -> dict[str, Any]:
+    body: dict[str, Any] = {"model": cfg["model"], "messages": messages, "stream": stream,
+                            "options": {"temperature": 0.2, "num_ctx": OLLAMA_CONTEXT}}
+    if cfg.get("tools"):          # tools natively, as for the remote lanes; JSON mode and tools do not mix
+        body["tools"] = cfg["tools"]
+    else:
+        body["format"] = "json"
+    return body
+
+
+def _ollama_call(message: dict[str, Any]) -> str:
+    """Ollama's tool call, as the JSON an answer written in text takes (its arguments arrive as an object)."""
+    calls = message.get("tool_calls") or []
+    fn = (calls[0].get("function") or {}) if calls else {}
+    return _called(fn.get("name", ""), fn.get("arguments") or {}) if fn else ""
+
+
 def call_ollama(messages: list[dict[str, str]], cfg: dict[str, Any]) -> Reply:
     # The local lane gets longer by default: it loads a model off this machine's disk before it starts.
-    body = _post(f"{cfg['url']}/api/chat", {"model": cfg["model"], "messages": messages, "format": "json",
-                                            "stream": False, "options": {"temperature": 0.2}}, {},
+    body = _post(f"{cfg['url']}/api/chat", _ollama_body(messages, cfg, stream=False), {},
                  _Budget(cfg.get("seconds") or 300))
     message = body.get("message") or {}
+    content = message.get("content") or ""
+    if not content.strip():
+        content = _ollama_call(message) or content
     # A thinking model on Ollama puts its reasoning in `message.thinking`; it is shown when it is there.
-    return Reply(message.get("content") or "", {"in": body.get("prompt_eval_count", 0),
-                                                "out": body.get("eval_count", 0)},
+    return Reply(content, {"in": body.get("prompt_eval_count", 0), "out": body.get("eval_count", 0)},
                  message.get("thinking") or "", body.get("done_reason") or "")
 
 
@@ -375,8 +535,7 @@ def stream_ollama(messages: list[dict[str, str]], cfg: dict[str, Any], on_delta:
                   stop: Callable[[], bool] | None = None) -> Reply:
     """Ollama streams one JSON object a line, and counts the tokens in the last one (`done: true`)."""
     clock = _Budget(cfg.get("seconds") or 300)
-    response = _lines(f"{cfg['url']}/api/chat", {"model": cfg["model"], "messages": messages, "format": "json",
-                                                 "stream": True, "options": {"temperature": 0.2}}, {}, clock)
+    response = _lines(f"{cfg['url']}/api/chat", _ollama_body(messages, cfg, stream=True), {}, clock)
     got = _Collect(on_delta, stop)
     with response:
         for raw in response:
@@ -387,6 +546,11 @@ def stream_ollama(messages: list[dict[str, str]], cfg: dict[str, Any], on_delta:
             chunk = json.loads(raw)
             message = chunk.get("message") or {}
             got.add(message.get("content") or "", message.get("thinking") or "")
+            for n, call in enumerate(message.get("tool_calls") or []):
+                fn = call.get("function") or {}
+                args = fn.get("arguments")
+                text = args if isinstance(args, str) else json.dumps(args or {})
+                got.call({"index": n, "function": {"name": fn.get("name", ""), "arguments": text}})
             if chunk.get("done"):
                 got.usage = {"in": int(chunk.get("prompt_eval_count") or 0), "out": int(chunk.get("eval_count") or 0)}
                 got.finish = chunk.get("done_reason") or ""
@@ -587,7 +751,7 @@ class Gateway:
         if seen_for == signature and time.monotonic() - at < 30:
             return why
         try:
-            with urllib.request.urlopen(f"{cfg['url']}/api/tags", timeout=0.4) as r:
+            with urllib.request.urlopen(f"{cfg['url']}/api/tags", timeout=1.5) as r:
                 names = {m.get("name", "") for m in json.loads(r.read()).get("models", [])}
             why = None if cfg["model"] in names or f"{cfg['model']}:latest" in names else \
                 f"Ollama is running, but {cfg['model']} is not pulled — `ollama pull {cfg['model']}`"
@@ -732,9 +896,14 @@ class Gateway:
     # ── calls ────────────────────────────────────────────────────
     def _call(self, provider: Provider, messages: list[dict[str, str]], feature: str,
               on_delta: Delta | None, stop: Callable[[], bool] | None,
-              seconds: float | None = None) -> Reply:
+              seconds: float | None = None, tools: list[dict[str, Any]] | None = None) -> Reply:
         """The provider call itself: streamed when asked for and the lane's real call is in place."""
         cfg = self._asked(provider.id, feature, seconds)
+        if tools:
+            cfg = {**cfg, "tools": tools}
+        lane = self.lane(provider.id)
+        if lane is not None and lane.tpm:        # a whole request must fit the lane's minute
+            messages = fit(messages, lane.tpm - int(cfg.get("maxTokens") or 0) - FIT_MARGIN)
         real, streaming = STREAMS.get(provider.id, (None, None))
         if on_delta is not None and streaming is not None and CALLS.get(provider.id) is real:
             return streaming(messages, cfg, on_delta, stop)
@@ -743,7 +912,7 @@ class Gateway:
     def _try(self, provider: Provider, messages: list[dict[str, str]], parse: Callable[[str], T], feature: str,
              actor: str | None, project: str | None, agent: str = "", run_id: str | None = None,
              on_delta: Delta | None = None, stop: Callable[[], bool] | None = None,
-             seconds: float | None = None) -> Result[T] | str:
+             seconds: float | None = None, tools: list[dict[str, Any]] | None = None) -> Result[T] | str:
         """One lane, one attempt. Returns the answer, or the reason it could not be used.
 
         A stop is not a failure of the lane, so it is not handed to the next one: it is ledgered with the
@@ -751,14 +920,14 @@ class Gateway:
         t0, reply = time.monotonic(), Reply("")
         self._recent.setdefault(provider.id, []).append(time.monotonic())
         try:
-            reply = self._call(provider, messages, feature, on_delta, stop, seconds)
+            reply = self._call(provider, messages, feature, on_delta, stop, seconds, tools)
             data = parse(reply.text)
         except Stopped as stopped:
             self._record(feature, provider, False, _ms(t0), stopped.reply.usage, actor, project,
                          "stopped by a person", agent, run_id)
             raise
         except Exception as e:  # network, key, quota, malformed JSON, schema: unusable either way
-            if isinstance(e, ProviderError) and e.status in (401, 403):
+            if isinstance(e, ProviderError) and e.key_refused:
                 key = lanes.key_of(self.lane(provider.id), self.secrets) if self.lane(provider.id) else None
                 if key:
                     self._rejected[provider.id] = _fp(key)
@@ -802,7 +971,7 @@ class Gateway:
             actor: str | None = None, project: str | None = None, role: str | None = None,
             lane: str | None = None, avoid: str | None = None, agent: str = "",
             run_id: str | None = None, on_delta: Delta | None = None,
-            stop: Callable[[], bool] | None = None) -> Result[T]:
+            stop: Callable[[], bool] | None = None, tools: list[dict[str, Any]] | None = None) -> Result[T]:
         """For work with no honest offline version — writing code, reviewing a diff. A lane answers,
         or the next lane does, or this raises; nothing is ever invented to fill the gap.
 
@@ -812,6 +981,11 @@ class Gateway:
         chain = self.chain(role=role, lane=lane, avoid=avoid)
         if not chain:
             raise NoModel("No model is configured. Add a free key in Models → Keys, or pull an Ollama model.")
+        # Nothing is cut that need not be: a lane that can take the whole request goes before one that could
+        # only take it cut down to its minute. The small lane still answers when it is the only one open.
+        need, level = _size(messages) + FIT_MARGIN, self.thinking(feature)
+        whole = [c for c in chain if not c.tpm or need + lanes.budget(c, level)[1] <= c.tpm]
+        chain = whole + [c for c in chain if c not in whole]
         reason, until = "", time.monotonic() + CHAIN_SECONDS
         for n, candidate in enumerate(chain):
             left = until - time.monotonic()
@@ -821,7 +995,7 @@ class Gateway:
             if n and on_delta is not None:
                 on_delta("restart", candidate.id)
             out = self._try(Provider(candidate.id, candidate.model), messages, parse, feature, actor,
-                            project, agent, run_id, on_delta, stop, min(LANE_SECONDS, left))
+                            project, agent, run_id, on_delta, stop, min(LANE_SECONDS, left), tools)
             if isinstance(out, str):
                 reason = out
                 continue
@@ -849,7 +1023,7 @@ class Gateway:
         try:
             vectors, tokens = EMBEDS[chosen.id](texts, cfg)
         except Exception as e:
-            if isinstance(e, ProviderError) and e.status in (401, 403) and cfg["key"]:
+            if isinstance(e, ProviderError) and e.key_refused and cfg["key"]:
                 self._rejected[chosen.id] = _fp(cfg["key"])
             elif (ill := _sick(e)) is not None:
                 self._rest(chosen.id, ill)
@@ -884,7 +1058,7 @@ class Gateway:
             self._record("test", provider, True, _ms(t0), usage, actor, None)
             return {"ok": True, "ms": _ms(t0), "detail": f"{cfg['model']} answered."}
         except Exception as e:  # report whatever went wrong; this is a diagnostic
-            if isinstance(e, ProviderError) and e.status in (401, 403) and cfg["key"]:
+            if isinstance(e, ProviderError) and e.key_refused and cfg["key"]:
                 self._rejected[lane_id] = _fp(cfg["key"])
             elif (ill := _sick(e)) is not None:
                 self._rest(lane_id, ill)

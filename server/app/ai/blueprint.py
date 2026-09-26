@@ -72,9 +72,12 @@ def review(gw: Gateway, name: str, answers: dict[str, Any], arch: dict[str, Any]
     when every lane that tried failed. Blocking, like the gateway."""
     asked = "\n".join(f"- {k}: {json.dumps(v, ensure_ascii=False)}" for k, v in answers.items()) or "(none given)"
     techs = "\n".join(f"{tid} ({tname}, {cat})" for tid, tname, cat in catalogue)
+    # The catalogue is reference, in a message of its own: on a lane with a small limit it is what gives way,
+    # and the person's answers and the architecture under review arrive whole.
     msgs = [{"role": "system", "content": SYSTEM},
-            {"role": "user", "content": f"Technology catalogue:\n{techs}\n\nBlueprint: {name}\n\n"
-                                        f"Answers:\n{asked}\n\nArchitecture:\n{_compact(arch)}"}]
+            {"role": "user", "content": f"Technology catalogue:\n{techs}"},
+            {"role": "user", "content": f"Blueprint: {name}\n\nAnswers:\n{asked}\n\n"
+                                        f"Architecture:\n{_compact(arch)}"}]
 
     def parse(raw: str) -> ReviewOut:
         out = ReviewOut.model_validate(extract_json(raw))

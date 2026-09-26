@@ -40,7 +40,7 @@ class Provider:
     def __init__(self) -> None:
         self.replies: list[tuple[int, Any]] = []
         self.sent: list[dict[str, Any]] = []
-        self.models = ["qwen2.5-coder:7b"]
+        self.models = [lanes.BY_ID["ollama"].model]
         #: Seconds of silence before a whole answer, and between the pieces of a streamed one. A
         #: provider that goes soft does not stop sending — that is why a socket timeout never fires.
         self.stall = 0.0
@@ -237,6 +237,7 @@ def test_a_stand_in_answers_whole_even_when_asked_to_stream(gateway: Gateway, mo
 
 
 def test_ollama_streams_one_object_a_line(provider: Provider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("NEUROCODE_OLLAMA_URL", raising=False)   # this test points the lane itself
     monkeypatch.setenv("NEUROCODE_COMPILER", "ollama")
     gw = Gateway(MemoryLedger({"ai.lane.ollama": {"baseUrl": provider.url}}), Secrets(tmp_path / "s.json"))
     provider.replies.append((200, [
@@ -561,6 +562,7 @@ def test_ollama_says_whether_it_is_installed_or_only_missing_the_model(provider:
                                                                         monkeypatch: pytest.MonkeyPatch):
     """Two different problems with two different first moves. Calling both "no model pulled" sent a
     person to `ollama pull` on a machine with no Ollama on it — which is this one, today."""
+    monkeypatch.delenv("NEUROCODE_OLLAMA_URL", raising=False)   # this test points the lane itself
     monkeypatch.setenv("NEUROCODE_COMPILER", "local")
     secrets = Secrets(tmp_path / "secrets.json")
 
@@ -568,7 +570,7 @@ def test_ollama_says_whether_it_is_installed_or_only_missing_the_model(provider:
     assert "not running on this machine" in (dead.why_not(dead.lane("ollama")) or "")
     assert dead.ollama_ready() is False
 
-    provider.models = ["qwen2.5-coder:7b"]
+    provider.models = [lanes.BY_ID["ollama"].model]
     wrong = Gateway(MemoryLedger({"ai.lane.ollama": {"baseUrl": provider.url, "model": "llama3:70b"}}), secrets)
     assert wrong.why_not(wrong.lane("ollama")) == \
         "Ollama is running, but llama3:70b is not pulled — `ollama pull llama3:70b`"
@@ -626,3 +628,26 @@ def test_a_lane_an_admin_saves_is_the_lane_the_next_call_uses(tmp_path: Path,
     assert gw.preference() == "auto"
     gw.store.save_setting("ai.preference", "free")
     assert gw.preference() == "free"
+
+
+def test_a_request_goes_whole_to_a_lane_that_can_hold_it_before_one_that_must_cut_it(
+        provider: Provider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Nothing is cut that need not be. Groq's free minute is 8,000 tokens for the whole request; a question
+    carrying 40,000 characters of retrieved code goes to Gemini first, whole, and to Groq — cut down — only
+    after it. A small question keeps the order the router chose."""
+    gw = _two_free_lanes(provider, tmp_path, monkeypatch)
+    tried: list[str] = []
+
+    def attempt(p: Any, *_: Any, **__: Any) -> str:
+        tried.append(p.id)
+        return "not this time"
+
+    monkeypatch.setattr(gw, "_try", attempt)
+    big = [{"role": "user", "content": "code\n" * 8_000 + "What does this do?"}]
+    with pytest.raises(gateway_module.ProviderError):
+        gw.ask(big, json.loads, feature="chat")
+    assert tried[:2] == ["gemini", "groq"]
+    tried.clear()
+    with pytest.raises(gateway_module.ProviderError):
+        gw.ask(ASK, json.loads, feature="chat")
+    assert tried[0] == gw.chain()[0].id

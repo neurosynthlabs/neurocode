@@ -263,9 +263,12 @@ export const runtimeApi = {
       The answer is the run, with what came back under `pushed.pullRequest`. */
   openPullRequest: (ref: string) => request<RunDoc>(`/runs/${seg(ref)}/pr`, { ...POST(), ...remote() }),
   /** Read that request's state back from the forge. Safe to ask of any run: a run with none says so.
-      What this machine can open one *with* — GET /runs/forges, and the token PUT beside it — is read by
-      `nc forges` today; no screen asks for it yet, so no call for it is kept here unused. */
+      What this machine can open one *with* is GET /runs/forges, read by `nc forges`. */
   pullRequest: (ref: string) => request<PullRequestView>(`/runs/${seg(ref)}/pr`, remote()),
+  /** Keep the workspace's token for a forge (github.com, gitlab.com): used to clone a private repository,
+      push, and open requests. Needs workspace:admin; the token is never sent back. */
+  setForgeToken: (host: string, token: string) =>
+    request<unknown>(`/runs/forges/${seg(host)}/token`, { method: 'PUT', json: { token } }),
   /** Read the run's diff again as the branch is now; the review step runs in the background. */
   reviewAgain: (ref: string) => request<RunDoc>(`/runs/${seg(ref)}/review`, POST()),
   /** Dispatch a plan; with `goalBudget` (1–5) it runs until its completion check passes or the attempts run out. */

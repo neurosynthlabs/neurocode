@@ -45,6 +45,8 @@ services:
     env_file: .env
     environment:
       NEUROCODE_DATABASE_URL: postgresql+asyncpg://neurocode:${NEUROCODE_DB_PASSWORD}@db:5432/neurocode
+      # Where people open the app, for links sent outside it (Telegram's "Open").
+      NEUROCODE_PUBLIC_URL: https://${DOMAIN}
     volumes:
       - data:/data
     healthcheck:

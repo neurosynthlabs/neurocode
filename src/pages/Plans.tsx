@@ -193,13 +193,13 @@ export default function Plans() {
   };
 
   const untilDone = goal.on && criteria.length > 0;
-  const dispatch = async () => {
+  const dispatch = async (skipQuestions = false) => {
     setWorking('dispatch');
     let ok: boolean;
-    if (untilDone || stepGate) {
+    if (untilDone || stepGate || skipQuestions) {
       // The store's own dispatch sends no options; the plan and its run arrive on the stream either way.
       try {
-        setFresh(await plansApi.dispatch(p.ref, { goalBudget: untilDone ? goal.budget : undefined, stepGate }));
+        setFresh(await plansApi.dispatch(p.ref, { goalBudget: untilDone ? goal.budget : undefined, stepGate, skipQuestions }));
         ok = true;
       } catch (e) {
         toast.error('Not dispatched', { description: e instanceof ApiError ? e.message : 'The local API did not answer.' });
@@ -657,9 +657,18 @@ export default function Plans() {
           )}
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
-            <Button size="sm" disabled={underway || open > 0 || working !== null} onClick={dispatch}>
+            <Button size="sm" disabled={underway || open > 0 || working !== null} onClick={() => void dispatch()}>
               <Play className="size-3.5" />{underway ? 'Dispatched' : working === 'dispatch' ? 'Dispatching…' : 'Dispatch plan'}
             </Button>
+            {!underway && open > 0 && can('plans:decide') && (
+              <Button size="sm" variant="outline" disabled={working !== null} onClick={() => void dispatch(true)}
+                title={`Defers ${open === 1 ? 'the open question' : `all ${open} open questions`} on the record, then starts`}>
+                <Play className="size-3.5" />Skip and start
+              </Button>
+            )}
+            {!underway && open > 0 && (
+              <span className="text-[12.5px] text-dim">{open === 1 ? '1 question is open' : `${open} questions are open`}: answer above, or skip.</span>
+            )}
             <Button size="sm" variant="outline" onClick={() => nav('/architecture')}>See impact</Button>
             <Button size="sm" variant="ghost" disabled={underway || working !== null} onClick={again}>
               <RefreshCw className={cn('size-3.5', working === 'recompile' && 'animate-spin')} />

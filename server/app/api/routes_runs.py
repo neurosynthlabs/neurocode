@@ -23,7 +23,7 @@ from ..schemas import run_json, run_log_json
 from ..services.identity import Person
 from ..services import runs as runtime
 from ..services.runs import RunService
-from .deps import current_person, database, gateway, hand_off, must_see, require, session, unseen_by
+from .deps import current_person, database, gateway, hand_off, holds_in, must_see, require, session, unseen_by
 
 router = APIRouter(prefix="/runs")
 
@@ -62,6 +62,17 @@ async def _context(open_session: AsyncSession, runs: list[Run]) -> dict[str, dic
         select(Plan).where(Plan.id.in_(plan_ids)))).scalars()} if plan_ids else {}
     children = await RunRepository(open_session).children_of([r.id for r in runs])
     return {"projects": projects, "tasks": tasks, "plans": plans, "children": children}
+
+
+async def _fenced(ref: str, who: Person, open_session: AsyncSession, *permissions: str) -> Person:
+    """The fence a write reached by a bare reference needs, and the rights it is weighed with: 404 when
+    the run's project is one this person may not see — the answer its read gives — and the permission
+    asked of what they hold in that project, not across the workspace, so a grant there narrows all a
+    person can do to its runs. Returns the person so narrowed."""
+    found = await RunRepository(open_session).by_ref(ref)
+    if found is None:
+        raise NotFound(f"run {ref}")
+    return await holds_in(who, open_session, found.project_id, f"run {ref}", *permissions)
 
 
 def _one(run: Run, context: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -137,6 +148,7 @@ async def cancel(ref: str, who: Person = Depends(require("runs:run")),
                  open_session: AsyncSession = Depends(session),
                  gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Stop it. The worktree stays where it is, for you to look at."""
+    who = await _fenced(ref, who, open_session, "runs:run")
     stopped = await RunService(open_session, gw).cancel(ref, who.name)
     return _one(stopped, await _context(open_session, [stopped]))
 
@@ -146,6 +158,7 @@ async def merge(ref: str, request: Request, who: Person = Depends(require("runs:
                 open_session: AsyncSession = Depends(session),
                 gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Merge an accepted run into the branch your repository has checked out."""
+    who = await _fenced(ref, who, open_session, "runs:merge")
     service = RunService(open_session, gw)
     result = await service.merge(ref, who.name)
     merged = await RunRepository(open_session).by_ref(ref)
@@ -162,10 +175,7 @@ async def unmerge(ref: str, request: Request, who: Person = Depends(require("run
                   open_session: AsyncSession = Depends(session),
                   gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Undo a merge this app made, while the checkout still stands exactly on it."""
-    found = await RunRepository(open_session).by_ref(ref)
-    if found is None:
-        raise NotFound(f"run {ref}")
-    await must_see(who, open_session, found.project_id, f"run {ref}")
+    who = await _fenced(ref, who, open_session, "runs:merge")
     run, undone = await RunService(open_session, gw).unmerge(ref, who.name)
     await AuditRepository(open_session).record(
         action="run.unmerge", user_id=who.id, target=f"{run.branch} ↩ {undone['into']}",
@@ -181,6 +191,7 @@ async def push(ref: str, request: Request, body: PushIn | None = None,
     """Push an accepted run's own branch to the project's remote with your git credentials, never forced.
     Refused while the branch is not exactly what was reviewed. Answers the run, whose `pushed` carries
     the compare link where you open the pull request yourself."""
+    who = await _fenced(ref, who, open_session, "runs:merge")
     pushed = await RunService(open_session, gw).push(ref, who.name, body.remote if body else None)
     await AuditRepository(open_session).record(
         action="run.push", user_id=who.id, target=f"{pushed.branch} → {pushed.pushed['remote']}",
@@ -198,6 +209,7 @@ async def open_pull_request(ref: str, request: Request, who: Person = Depends(re
     what the reviewer found, what the tests said. A draft while findings stand unanswered, ready once
     it is signed, and the request itself says which. Answers the run, whose `pushed.pullRequest`
     carries the number, the URL and the state."""
+    who = await _fenced(ref, who, open_session, "runs:merge")
     run = await RunService(open_session, gw).open_pull_request(ref, who.name)
     opened = (run.pushed or {}).get("pullRequest") or {}
     await AuditRepository(open_session).record(
@@ -229,6 +241,7 @@ async def review_again(ref: str, jobs: BackgroundTasks, who: Person = Depends(re
                        gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Read the run's diff again, as the branch is now, for a new review and a new receipt. The reading
     happens after the response; what comes back is the run with its review step running."""
+    who = await _fenced(ref, who, open_session, "runs:run")
     run, step = await RunService(open_session, gw).review_again(ref, who.name)
     answer = _one(run, await _context(open_session, [run]))
     await hand_off(open_session, jobs, runtime.reread, db, gw, ref, step, who.name)
@@ -240,6 +253,7 @@ async def discard(ref: str, who: Person = Depends(require("runs:run")),
                   open_session: AsyncSession = Depends(session),
                   gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Remove the worktree and the branch. Only once the run has stopped."""
+    who = await _fenced(ref, who, open_session, "runs:run")
     removed = await RunService(open_session, gw).discard(ref, who.name)
     return _one(removed, await _context(open_session, [removed]))
 
@@ -251,6 +265,7 @@ async def rework(ref: str, body: ReworkIn, jobs: BackgroundTasks, who: Person = 
     """Send it back: the same plan, done again as a new run that is told your notes and the review's
     findings. The old run's worktree and branch go, and a signature it was waiting for is refused. The
     new run is made here and starts after the response; what comes back is the new run."""
+    who = await _fenced(ref, who, open_session, "runs:run")
     made = await RunService(open_session, gw).rework(ref, body.notes, by=who.name, by_id=who.id,
                                                     may_decide=who.can("approvals:decide"))
     lead = made[-1]
@@ -282,6 +297,7 @@ async def resume(ref: str, request: Request, jobs: BackgroundTasks,
     commits they made; a step killed half way has its loose files kept on a ref of the run's own before
     the worktree is taken back to the boundary. The rest runs after the response. Audited: it moves a
     branch and it spends money."""
+    who = await _fenced(ref, who, open_session, "runs:run")
     run = await RunService(open_session, gw).carry_on(ref, who.name)
     last = (run.review or {}).get("resumes", [{}])[-1]
     await AuditRepository(open_session).record(
@@ -301,6 +317,7 @@ async def revert(ref: str, n: int, request: Request, jobs: BackgroundTasks, body
     """Take the run's worktree back to how it stood after step `n` — its own worktree, never your checkout —
     and mark the later steps taken back. With `redo`, they run again from step n + 1, after the response.
     Refused while the run is working. Audited: it rewrites a branch."""
+    who = await _fenced(ref, who, open_session, "runs:run")
     redo = bool(body and body.redo)
     run = await RunService(open_session, gw).revert(ref, n, who.name, redo=redo)
     last = (run.review or {}).get("reverts", [{}])[-1]

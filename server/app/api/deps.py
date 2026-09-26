@@ -168,16 +168,28 @@ def scoped(*permissions: str, path: str = "pid"):
         if not pid or not isinstance(pid, str):
             _all_of(who.permissions, permissions)
             return who
-        found = await ProjectRepository(open_session).get(pid)
-        if found is None:
-            _all_of(who.permissions, permissions)
-            return who
-        if not who.may_see(pid, found.restricted):
-            raise NotFound(f"project {pid}")
-        held = who.in_project(pid, found.restricted)
-        _all_of(held, permissions)
-        return who if held == who.permissions else replace(who, permissions=held)
+        return await holds_in(who, open_session, pid, f"project {pid}", *permissions)
     return dependency
+
+
+async def holds_in(who: Person, open_session: AsyncSession, project_id: str | None, what: str,
+                   *permissions: str) -> Person:
+    """`scoped`, for a row reached by its own reference — a run, a plan — once the row has told us its
+    project: 404 naming `what` when the project is one this person may not see, then every permission
+    asked of what they hold *there*. Returns the person narrowed to that, so what the route asks of them
+    afterwards (may they also decide the gate?) is answered inside the project too.
+
+    A row of no project, or of a project id that is not a project, is weighed against the workspace set,
+    exactly as `scoped` weighs a path that names none."""
+    found = await ProjectRepository(open_session).get(project_id) if project_id else None
+    if found is None:
+        _all_of(who.permissions, permissions)
+        return who
+    if not who.may_see(found.id, found.restricted):
+        raise NotFound(what)
+    held = who.in_project(found.id, found.restricted)
+    _all_of(held, permissions)
+    return who if held == who.permissions else replace(who, permissions=held)
 
 
 async def unseen_by(who: Person, open_session: AsyncSession) -> frozenset[str]:

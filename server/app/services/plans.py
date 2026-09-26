@@ -163,6 +163,8 @@ class PlanService:
         self.projects = ProjectRepository(session)
         self.memory = MemoryRepository(session)
         self.activity = ActivityRepository(session)
+        #: Why the last dispatch started no run, in words, for the screen that asked; None when it did.
+        self.no_run: str | None = None
 
     async def _facts(self, requirement: str, project_id: str) -> list[dict[str, Any]]:
         found = await self.memory.search(requirement, project=project_id, limit=FACTS_FOR_CONTEXT)
@@ -793,21 +795,33 @@ class PlanService:
         return plan, changes
 
     # ── dispatching ──────────────────────────────────────────────
-    async def dispatch(self, ref: str, *, by: str, may_run: bool,
-                       goal_budget: int | None = None, step_gate: bool = False) -> tuple[Plan, list[Any]]:
+    async def dispatch(self, ref: str, *, by: str, may_run: bool, goal_budget: int | None = None,
+                       step_gate: bool = False, skip_questions: bool = False) -> tuple[Plan, list[Any]]:
         """Settle the gate, then hand the work to the runtime. Returns the plan and the runs to start.
 
         `goal_budget` (1–5) is "run until done": the run ends with a completion check against the plan's
         acceptance criteria and tries again on its own while it misses and attempts remain. A goal
         needs criteria to be judged against, so a plan without them is refused before anything moves.
         `step_gate` is "pause before each step": the runtime stops at an approval between one step and
-        the next (`step_gate_for`), so a person reads each step's work before the next one starts."""
+        the next (`step_gate_for`), so a person reads each step's work before the next one starts.
+        `skip_questions` is a person's "skip and start": every open question is deferred in their name — it
+        stays on the plan, marked, and nothing is answered for them — and the plan goes."""
         plan = await self.plans.by_ref(ref)
         if plan is None:
             raise NotFound(f"plan {ref}")
         if plan.status == "dispatched":
             raise Refused(f"{ref} is already under way.")
         open_questions = await self.plans.open_questions(plan.id)
+        if open_questions and skip_questions:
+            for question in open_questions:
+                question.deferred = True
+            await self.session.flush()
+            await self.activity.record(
+                actor=by, actor_kind="human", action="Questions skipped",
+                detail=f"{ref} · {len(open_questions)} deferred at dispatch: "
+                       + "; ".join(q.question for q in open_questions)[:400], level="warn",
+                project_id=plan.project_id)
+            open_questions = []
         if open_questions:
             n = len(open_questions)
             raise Refused(f"{ref} still has {n} open question{'s' if n > 1 else ''}. "
@@ -837,12 +851,17 @@ class PlanService:
             level="ok", project_id=plan.project_id, task_ref=task.ref if task else None)
 
         project = await self.projects.get(plan.project_id)
-        if not may_run or project is None or not project.source_kind:
+        if not may_run:
+            self.no_run = "Starting its runs needs the runs:run permission; the plan waits for someone who has it."
+            return plan, []
+        if project is None or not project.source_kind:
+            self.no_run = "This project has no code on this machine, so there is nothing for an agent to work in."
             return plan, []
         try:
             made = await RunService(self.session, self.gateway).plan_runs(plan, task, project, by,
                                                                           goal_budget=goal_budget)
         except Refused as refused:      # no code here, no git, nothing to branch from: say so, don't fail
+            self.no_run = str(refused)
             await self.activity.record(actor=roster.ORCHESTRATOR, actor_kind="agent", action="No run started",
                                        detail=str(refused), level="warn", project_id=plan.project_id)
             return plan, []

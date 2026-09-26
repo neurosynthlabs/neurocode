@@ -11,7 +11,8 @@ not under /sessions, since what it looks up belongs to a project.
 
 Whose sessions these are: your own, always. Someone else's — its turns, its files, its export — needs
 `sessions:read`, because a transcript is where a person's own code and whatever they pasted end up in
-plain text.
+plain text. Every route that changes or copies a session reads it first, so it stops at that same fence
+(`_acting`), and a session of a restricted project somebody is not listed on is not there for them at all.
 """
 from __future__ import annotations
 
@@ -37,7 +38,7 @@ from ..services.custom_agents import CustomAgentService
 from ..services.errors import Denied
 from ..services.identity import Person
 from ..services.sessions import MAX_IMAGE_UPLOAD, SessionShapes, upload_json
-from .deps import (current_person, database, gateway, hand_off, must_see, require, scoped, session,
+from .deps import (current_person, database, gateway, hand_off, holds_in, must_see, require, scoped, session,
                    unseen_by)
 
 router = APIRouter()
@@ -131,6 +132,18 @@ async def readable(ref: str, who: Person, open_session: AsyncSession) -> Chat:
     return chat
 
 
+async def _acting(ref: str, who: Person, open_session: AsyncSession, *rights: str) -> tuple[Chat, Person]:
+    """A session to change or copy, and the person as they stand inside its project.
+
+    Asking, answering a card, compacting, stopping, editing, forking, uploading and "Make this a plan" all
+    read the session before they change it — its turns go to a model, into a copy, into a plan — so each is
+    fenced exactly as reading it is (`readable`). The rights the change needs are then weighed inside the
+    session's project (`holds_in`, as `scoped` weighs a project in the path), and the person handed on is
+    narrowed to them: the answer that follows reaches only what they may reach there."""
+    chat = await readable(ref, who, open_session)
+    return chat, await holds_in(who, open_session, chat.project_id, f"session {ref}", *rights)
+
+
 @sessions_router.get("")
 async def sessions(project: str | None = None, limit: int | None = None, offset: int = 0,
                    who: Person = Depends(current_person),
@@ -159,6 +172,8 @@ async def sessions(project: str | None = None, limit: int | None = None, offset:
 async def create(body: SessionIn, who: Person = Depends(require("sessions:chat")),
                  open_session: AsyncSession = Depends(session),
                  gw: Gateway = Depends(gateway)) -> dict[str, Any]:
+    # Named in the body, so `scoped` cannot see it: weighed here, with the same 404 the project itself gives.
+    who = await holds_in(who, open_session, body.projectId, f"project {body.projectId}", "sessions:chat")
     chat = await ChatService(open_session, gw).start(body.projectId, who.name, body.title, agent=body.agent)
     return chat_json(chat, project_name=await _name_of(open_session, chat.project_id))
 
@@ -189,7 +204,8 @@ async def ask(ref: str, body: AskIn, jobs: BackgroundTasks,
               open_session: AsyncSession = Depends(session), db: Database = Depends(database),
               gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Ask, and let it think in the background — the turns arrive on the stream as they are written."""
-    out = await ChatService(open_session, gw).ask(ref, body.text, who.name, _items(body.attachments) or [])
+    _, who = await _acting(ref, who, open_session, "sessions:chat")
+    out = await ChatService(open_session, gw, who).ask(ref, body.text, who.name, _items(body.attachments) or [])
     await hand_off(open_session, jobs, _answer, db, gw, ref, who)
     return {"message": chat_message_json(out["message"]),
             "session": chat_json(out["chat"], project_name=await _name_of(open_session, out["chat"].project_id))}
@@ -202,6 +218,7 @@ async def compact(ref: str, who: Person = Depends(require("sessions:chat")),
     """Fold the session's older turns into one summary a model writes. The turns stay, marked, for the
     person to read; the model is sent the summary instead. Asked in the request, like Ask memory: the
     person is waiting on it, and a background job would only make them wait for the stream instead."""
+    _, who = await _acting(ref, who, open_session, "sessions:chat")
     summary = await ChatService(open_session, gw).compact(ref, who.name)
     chat = await ChatRepository(open_session).by_ref(ref)
     if chat is None:
@@ -213,9 +230,7 @@ async def compact(ref: str, who: Person = Depends(require("sessions:chat")),
 @sessions_router.post("/{ref}/cancel")
 async def stop(ref: str, who: Person = Depends(require("sessions:chat")),
                open_session: AsyncSession = Depends(session)) -> dict[str, Any]:
-    chat = await ChatRepository(open_session).by_ref(ref)
-    if chat is None:
-        raise NotFound(f"session {ref}")
+    chat, _ = await _acting(ref, who, open_session, "sessions:chat")
     chat_service.stop(ref)
     return chat_json(chat, project_name=await _name_of(open_session, chat.project_id))
 
@@ -232,6 +247,7 @@ async def permit(ref: str, message_id: int, body: PermitIn, jobs: BackgroundTask
                  gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Answer a permission card: allow once, allow for this session, or refuse. The answer resumes where
     it paused — an allowed call is made first; a refused one is told to the model as refused."""
+    _, who = await _acting(ref, who, open_session, "sessions:chat")
     chat = await ChatService(open_session, gw).permit(ref, message_id, body.decision, who)
     await hand_off(open_session, jobs, _answer, db, gw, ref, who)
     return await _json(open_session, chat)
@@ -244,7 +260,9 @@ async def edit(ref: str, message_id: int, body: EditIn, jobs: BackgroundTasks,
                gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Ask an edited question in place of an earlier one. The old question and what followed it stay,
     marked as replaced, and the model is sent only the new line."""
-    out = await ChatService(open_session, gw).edit(ref, message_id, body.text, who.name, _items(body.attachments))
+    _, who = await _acting(ref, who, open_session, "sessions:chat")
+    out = await ChatService(open_session, gw, who).edit(ref, message_id, body.text, who.name,
+                                                        _items(body.attachments))
     await hand_off(open_session, jobs, _answer, db, gw, ref, who)
     return {"message": chat_message_json(out["message"]), "session": await _json(open_session, out["chat"])}
 
@@ -255,7 +273,8 @@ async def regenerate(ref: str, message_id: int, jobs: BackgroundTasks, body: Reg
                      open_session: AsyncSession = Depends(session), db: Database = Depends(database),
                      gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """Answer the question behind this answer again, on another lane when one is named."""
-    out = await ChatService(open_session, gw).regenerate(ref, message_id, who.name, body.lane if body else None)
+    _, who = await _acting(ref, who, open_session, "sessions:chat")
+    out = await ChatService(open_session, gw, who).regenerate(ref, message_id, who.name, body.lane if body else None)
     await hand_off(open_session, jobs, _answer, db, gw, ref, who)
     return {"message": chat_message_json(out["message"]), "session": await _json(open_session, out["chat"])}
 
@@ -265,9 +284,9 @@ async def fork(ref: str, body: ForkIn, who: Person = Depends(require("sessions:c
                open_session: AsyncSession = Depends(session), gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """A new session with this one's turns up to `at`, which remembers where it came from — and the agent
     it was asked through, while that agent is still there."""
+    parent, who = await _acting(ref, who, open_session, "sessions:chat")
     made = await SessionShapes(open_session, gw).fork(ref, body.at, who)
-    parent = await ChatRepository(open_session).by_ref(ref)
-    if parent is not None and parent.agent:
+    if parent.agent:
         project = await ProjectRepository(open_session).get(made.project_id)
         if await CustomAgentService(open_session).resolve(project, parent.agent) is not None:
             made.agent = parent.agent
@@ -290,6 +309,7 @@ async def import_session(body: ImportIn, who: Person = Depends(require("sessions
                          open_session: AsyncSession = Depends(session),
                          gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """A session export read back into a new session on the named project."""
+    who = await holds_in(who, open_session, body.projectId, f"project {body.projectId}", "sessions:chat")
     made = await SessionShapes(open_session, gw).import_(body.projectId, body.document, who)
     return await _json(open_session, made)
 
@@ -299,6 +319,7 @@ async def to_plan(ref: str, who: Person = Depends(require("plans:compile")),
                   open_session: AsyncSession = Depends(session), gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """"Make this a plan": the last question and the refs its answer rests on, compiled like any
     requirement. Needs a model — 409 with none configured, 502 when every lane failed."""
+    _, who = await _acting(ref, who, open_session, "plans:compile")
     plan, task = await SessionShapes(open_session, gw).to_plan(ref, who)
     return {**plan_json(plan, task_ref=task.ref), "task": task_json(task)}
 
@@ -307,6 +328,7 @@ async def to_plan(ref: str, who: Person = Depends(require("plans:compile")),
 async def upload(ref: str, body: UploadIn, who: Person = Depends(require("sessions:chat")),
                  open_session: AsyncSession = Depends(session), gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """A file dropped into the composer. It is attached to a question by its id (`kind: upload`)."""
+    _, who = await _acting(ref, who, open_session, "sessions:chat")
     return upload_json(await SessionShapes(open_session, gw).upload(ref, body.name, body.mime, body.data, who))
 
 
@@ -325,14 +347,16 @@ async def uploaded(ref: str, file_id: int, who: Person = Depends(current_person)
         "Content-Security-Policy": "default-src 'none'; sandbox"})
 
 
-@router.get("/projects/{pid}/mentions", dependencies=[Depends(scoped())])
-async def mentions(pid: str, q: str = Query(default="", max_length=120),
+@router.get("/projects/{pid}/mentions")
+async def mentions(pid: str, q: str = Query(default="", max_length=120), who: Person = Depends(scoped()),
                    open_session: AsyncSession = Depends(session), gw: Gateway = Depends(gateway)) -> dict[str, Any]:
     """What the composer's `@` offers for this project: files, symbols, facts and plans.
 
     Asked inside the project, because the answer is the project: its file names, its symbols and the
-    first line of its facts. A restricted project somebody is not listed on answers 404 here too."""
-    return {"items": await SessionShapes(open_session, gw).mentions(pid, q)}
+    first line of its facts. A restricted project somebody is not listed on answers 404 here too, and
+    the files of one this project references are not offered to them either."""
+    hidden = await unseen_by(who, open_session)
+    return {"items": await SessionShapes(open_session, gw).mentions(pid, q, hidden=hidden)}
 
 
 # Last, once every route above is on it: included routes are copied at the moment of inclusion.

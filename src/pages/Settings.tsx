@@ -10,6 +10,7 @@ import {
 import { API_BASE, ApiError } from '@/lib/api';
 import { useRemote } from '@/lib/remote';
 import { webApi, WEB_KEY_PERMISSION, type WebPage, type WebSearch, type WebStatus } from '@/lib/live/web';
+import { channelsApi, type Channels, type LinkCode } from '@/lib/live/channels';
 import {
   tokensApi, MACHINE_PERMISSION, type AccessToken, type MadeToken, type TokenPage,
 } from '@/lib/live/tokens';
@@ -64,7 +65,7 @@ export default function Settings() {
     <Page>
       <PageHeader
         title="Settings"
-        subtitle="Appearance, web search, access tokens and reset."
+        subtitle="Appearance, notifications, web search, tokens and reset."
         about={<p>Routing, model keys, approvals and roles each have a screen of their own, linked under Set elsewhere.</p>}
       />
 
@@ -129,6 +130,8 @@ export default function Settings() {
             </Panel>
 
             <WebPanel />
+
+            <NotificationsPanel />
 
             <TokensPanel />
 
@@ -360,6 +363,105 @@ function loginLine(): string {
 const STATE_TONE = { active: 'ok', expired: 'neutral', revoked: 'danger' } as const;
 
 /** Your personal access tokens: made here (shown once), listed with when each was last used, revoked in two clicks. */
+/* Telegram: the gates that need you, on your phone. An admin adds the bot once; each person links their own
+   chat with a one-time code, so a chat is only ever the account that made the code. */
+function NotificationsPanel() {
+  const { can } = useAuth();
+  const admin = can('workspace:admin');
+  const [version, setVersion] = useState(0);
+  const status = useRemote<Channels>(`channels:${version}`, () => channelsApi.status());
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [code, setCode] = useState<LinkCode | null>(null);
+  const tg = status.data?.telegram;
+  const waiting = !!code && !!tg && !tg.linked;
+  // While a code is out, ask every few seconds whether the bot has heard it.
+  useEffect(() => {
+    if (!waiting) return;
+    const id = window.setInterval(() => setVersion((v) => v + 1), 3000);
+    return () => window.clearInterval(id);
+  }, [waiting]);
+
+  const act = async (fn: () => Promise<unknown>, done: string) => {
+    setBusy(true);
+    try {
+      await fn();
+      toast.success(done);
+      setVersion((v) => v + 1);
+      return true;
+    } catch (e) {
+      toast.error('Not saved', { description: reason(e) });
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const saveToken = async (e: SyntheticEvent) => {
+    e.preventDefault();
+    if (await act(() => channelsApi.setToken(token.trim()), 'Bot saved')) setToken('');
+  };
+  const link = async () => {
+    setBusy(true);
+    try {
+      setCode(await channelsApi.link());
+    } catch (e) {
+      toast.error('No code made', { description: reason(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Panel title="Notifications"
+      about={<><p>Gates you may decide arrive in Telegram with their answers as buttons.</p><p>A signature or a question opens here, where the diff is.</p></>}>
+      {status.error ? <p className="text-[13px] text-danger">{status.error}</p> : !tg ? (
+        <Loader2 className="size-4 animate-spin text-dim" />
+      ) : (
+        <div className="space-y-3">
+          <KV k="Telegram" v={!tg.configured ? <Tag>Not set up</Tag> : (
+            <span className="inline-flex flex-wrap items-center gap-2">
+              <Mono>{tg.bot}</Mono>
+              {tg.linked ? <Tag tone="ok">Linked{tg.chat ? ` · @${tg.chat}` : ''}</Tag> : <Tag>Not linked</Tag>}
+            </span>
+          )} />
+          {tg.configured && !tg.linked && (code ? (
+            <div className="space-y-1.5 text-[13px] text-ink-2">
+              <p>Send this to {tg.bot} within ten minutes:</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Mono>/start {code.code}</Mono>
+                <a href={code.url} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">Open Telegram</a>
+                <Loader2 className="size-3.5 animate-spin text-dim" />
+              </div>
+            </div>
+          ) : (
+            <Button size="sm" onClick={() => void link()} disabled={busy}>Link Telegram</Button>
+          ))}
+          {tg.linked && (
+            <Button size="sm" variant="outline" disabled={busy}
+              onClick={() => { setCode(null); void act(() => channelsApi.unlink(), 'Telegram unlinked'); }}>Unlink</Button>
+          )}
+          {admin && (
+            <More label={tg.configured ? 'Bot token' : 'Set up the bot'} open={!tg.configured}>
+              <form onSubmit={saveToken} className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                <Field className="flex-1" label="Bot token" type="password" mono value={token} onChange={setToken}
+                  placeholder="123456789:AA…" autoComplete="off" icon={<KeyRound className="size-3.5" />} />
+                <Button type="submit" disabled={busy || !token.trim()}>Save token</Button>
+                {tg.configured && (
+                  <Button type="button" variant="ghost" className="text-danger hover:text-danger" disabled={busy}
+                    onClick={() => void act(() => channelsApi.setToken(''), 'Telegram turned off')}>Turn off</Button>
+                )}
+              </form>
+              <p className="mt-2 text-[12px] text-dim">
+                Make a bot with @BotFather and paste its token.{typeof tg.linkedPeople === 'number' ? ` ${plural(tg.linkedPeople, 'person', 'people')} linked.` : ''}
+              </p>
+            </More>
+          )}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 function TokensPanel() {
   const { catalogue } = useAccess();
   const [version, setVersion] = useState(0);

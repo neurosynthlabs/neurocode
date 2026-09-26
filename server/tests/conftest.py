@@ -25,6 +25,10 @@ os.environ.setdefault("NEUROCODE_WORKTREES_DIR", os.path.join(_SCRATCH, "worktre
 os.environ.setdefault("NEUROCODE_REPOS_DIR", os.path.join(_SCRATCH, "repos"))
 # Routines fire only when a test fires them: an app whose lifespan runs must not start the scheduler.
 os.environ.setdefault("NEUROCODE_SCHEDULER", "false")
+os.environ.setdefault("NEUROCODE_CHANNELS", "false")
+# A model running on this machine (Ollama) must never answer a test: a test that expects "no model" would
+# find one, and one that expects a stub would wait on real generation. Port 9 answers nothing.
+os.environ.setdefault("NEUROCODE_OLLAMA_URL", "http://127.0.0.1:9")
 atexit.register(shutil.rmtree, _SCRATCH, ignore_errors=True)
 
 import pytest  # noqa: E402 — the environment above must be in place first

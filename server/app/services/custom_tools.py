@@ -16,6 +16,8 @@ It is not a way around the rules. It is another thing the rules govern, and the 
 3. **Then it runs where its kind runs.** A command runs in the run's worktree or the project's checkout,
    inside `NEUROCODE_MACHINE_ROOTS`, with the same timeout and output cap every other command here has,
    and as an argv list — never through a shell, so nothing a model said can become a second command.
+   It runs behind the same OS sandbox as a run's test command (`services/sandbox.py`), and with the
+   machine's environment rather than the API's (`agent/env.py`), so it holds no database password.
    An HTTP call goes through the address guard in `services/mcp.py`: no proxy, no redirect, and only a
    public address once the name is resolved.
 4. **What comes back is data.** It is shown as a tool call in the transcript and handed to the model as
@@ -29,7 +31,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 import secrets as token
 import subprocess
@@ -44,10 +45,11 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..agent.env import child_env
 from ..models import CustomTool, Project
 from ..repositories import ActivityRepository, AuditRepository, NotFound, ProjectRepository
 from ..schemas.work import when
-from . import machine
+from . import machine, sandbox
 from .code import checkout
 from .errors import Refused
 from .extensions import fire
@@ -304,15 +306,21 @@ class Called:
     ms: int
 
 
-def _run_command(spec: dict[str, Any], arguments: dict[str, Any], cwd: Path) -> Called:
+def _run_command(spec: dict[str, Any], arguments: dict[str, Any], cwd: Path,
+                 fence: sandbox.Sandbox | None = None) -> Called:
     """Blocking. The tool's argv, filled in, in `cwd`. No shell: the list is handed to the kernel as it
-    is, so a value holding `; rm -rf /` is an argument with a semicolon in it and nothing else."""
+    is, so a value holding `; rm -rf /` is an argument with a semicolon in it and nothing else.
+
+    It starts behind `fence`, the caller's sandbox for the checkout — or, when none is given, one drawn
+    around `cwd` with the deployment's own policy, so there is no way to call this unfenced by leaving
+    an argument out. The environment is `child_env`: the API's secrets stay behind."""
     argv = [_fill(piece, arguments) for piece in spec["argv"]]
+    fence = fence if fence is not None else sandbox.around(cwd, sandbox.env_policy())
     seconds = _seconds(spec)
     started = time.monotonic()
     try:
-        done = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=seconds, check=False,
-                              env={**os.environ, "CI": "1", "NO_COLOR": "1"})
+        done = subprocess.run(fence.wrap(argv), cwd=cwd, capture_output=True, text=True, timeout=seconds,
+                              check=False, env=child_env({"CI": "1", "NO_COLOR": "1"}))
     except subprocess.TimeoutExpired:
         return Called(False, f"It did not finish within {seconds} s, so it was stopped.",
                       f"timed out after {seconds} s", int((time.monotonic() - started) * 1000))
@@ -485,6 +493,7 @@ class CustomToolService:
         if refused is not None:
             raise Refused(f"A hook refused this call before it ran: {refused.output.strip() or refused.why}",
                           status=409)
+        fenced = ""
         if tool.kind == "command":
             machine.enabled()
             root = worktree if worktree is not None else (checkout(project) if project is not None else None)
@@ -495,7 +504,12 @@ class CustomToolService:
             if not where.is_dir():
                 raise Refused(f"{tool.name} runs in {spec.get('cwd')}, and there is no such folder in the "
                               f"checkout.", status=409)
-            called = await asyncio.to_thread(_run_command, spec, checked, where)
+            # The fence a run's test command gets, around the whole checkout (a tool with a `cwd` may still
+            # write beside it), with the workspace's answer about the network. Said in the log line, as a
+            # run says it, including "none" and why.
+            fence = sandbox.around(root, await sandbox.read_policy(self.session))
+            fenced = f" · {fence.words()}"
+            called = await asyncio.to_thread(_run_command, spec, checked, where, fence)
         else:
             called = await asyncio.to_thread(_call_http, spec, checked)
         # PostToolUse: the same hooks, after the fact. Nothing it says can undo the call, so nothing here
@@ -506,7 +520,7 @@ class CustomToolService:
                    subject=tool.name, actor=actor, actor_kind="agent" if who is None else "human")
         await ActivityRepository(self.session).record(
             actor=actor, actor_kind="agent" if who is None else "human", action="Custom tool called",
-            detail=f"{tool.name} · {called.detail}" + (f" · {allowed_by}" if allowed_by else ""),
+            detail=f"{tool.name} · {called.detail}" + (f" · {allowed_by}" if allowed_by else "") + fenced,
             project_id=project.id if project is not None else None,
             level="info" if called.ok else "warn")
         return called

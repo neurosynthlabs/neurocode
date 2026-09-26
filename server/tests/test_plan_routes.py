@@ -150,6 +150,20 @@ async def test_it_refuses_to_guess_and_dispatch_waits_for_you(client: AsyncClien
     assert again.status_code == 409 and "already under way" in again.json()["detail"]
 
 
+async def test_skip_and_start_defers_the_open_questions_on_the_record_and_goes(client: AsyncClient, monkeypatch):
+    """A prompt should start the work: "skip and start" is the person's own choice to go without answers.
+    Nothing is answered for them — each question is deferred, stays on the plan, and the feed says so."""
+    answering(monkeypatch, PLAN)
+    plan = await compile_tax(client)
+    assert plan["openQuestions"]
+    started = await client.post(f"/plans/{plan['ref']}/dispatch", json={"skipQuestions": True})
+    assert started.status_code == 200 and started.json()["status"] == "dispatched"
+    after = (await client.get(f"/plans/{plan['ref']}")).json()
+    assert after["openQuestions"] == [] and len(after["deferred"]) == len(plan["openQuestions"])
+    feed = (await client.get("/activity")).json()
+    assert any(e["action"] == "Questions skipped" and plan["ref"] in e["detail"] for e in feed)
+
+
 async def test_dispatching_moves_the_task_it_carries(client: AsyncClient, monkeypatch):
     answering(monkeypatch, PLAN)
     plan = await compile_tax(client)

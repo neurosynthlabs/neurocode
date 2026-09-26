@@ -103,6 +103,13 @@ class Settings(BaseSettings):
     #: Several API processes may all run it — an advisory lock lets only one claim a routine — and the
     #: tests switch it off, so nothing fires on its own while a test is looking.
     scheduler: bool = True
+    #: Chat channels (Telegram): a loop in the lifespan that polls the bot, when a token is set. Tests switch
+    #: it off; `telegram_url` is where the Bot API is, which a test points at a fake.
+    channels: bool = True
+    telegram_url: str = "https://api.telegram.org"
+    #: The address people open the app at, for links sent outside it (a chat's "Open" button). Empty on a
+    #: laptop, where no phone could open it anyway; the server sets it from its domain.
+    public_url: str = ""
 
     # ── the web layer ────────────────────────────────────────────
     #: Origins allowed to carry the session cookie. Local by default; add a domain to host it.

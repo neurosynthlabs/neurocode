@@ -13,9 +13,12 @@ import hashlib
 import json
 import os
 import re
+import select
 import shutil
+import signal
 import subprocess
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,10 +27,22 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
 
+from .env import child_env
+
 MAX_FILES, MAX_FILE_BYTES, MAX_DIFF = 20, 256_000, 200_000
 TEST_TIMEOUT, TEST_LINES = 600, 400
+#: How long a test command's processes are given to end on SIGTERM before they are killed, and how long
+#: its output is still read once the command itself has exited.
+TEST_GRACE, TEST_DRAIN = 2.0, 1.0
 
 AUTHOR = ["-c", "user.name=NeuroCode", "-c", "user.email=neurocode@localhost", "-c", "commit.gpgsign=false"]
+#: Git's hooks switched off, on every call the runtime makes that could run one: opening a worktree, a
+#: step's commit, the integration merge and the merge into a person's checkout. A repository may point
+#: core.hooksPath at a tracked folder (husky's .husky/_, a .githooks), and a worktree shares that config —
+#: so a hook file a model rewrote through `apply_files` would be run by the runtime's own commit, outside
+#: every approval and every sandbox, with this API's environment. A person's own commit from the Workbench
+#: (`commit_paths`) keeps their hooks: those are theirs to run.
+NO_HOOKS = ["-c", f"core.hooksPath={os.devnull}"]
 
 # How a project runs its own tests. The first match whose tool is installed wins.
 TEST_RECIPES: list[tuple[str, list[str], str | None]] = [
@@ -167,7 +182,7 @@ def open_worktree(repo: Path, branch: str, base: str, path: Path) -> None:
     if path.exists():
         shutil.rmtree(path, ignore_errors=True)
         git(["worktree", "prune"], repo)
-    out = git(["worktree", "add", "-b", branch, str(path), base], repo, timeout=300)
+    out = git([*NO_HOOKS, "worktree", "add", "-b", branch, str(path), base], repo, timeout=300)
     if out.returncode != 0:
         raise RuntimeError(f"git worktree: {out.stderr.strip()[:200]}")
 
@@ -193,7 +208,8 @@ def reopen_worktree(repo: Path, branch: str, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # A worktree whose directory was deleted is still registered, and git refuses to add it twice.
     git(["worktree", "prune"], repo)
-    out = git(["worktree", "add", str(path), branch], repo, timeout=300)
+    # The branch holds what the model wrote, so a post-checkout hook here would be the model's own.
+    out = git([*NO_HOOKS, "worktree", "add", str(path), branch], repo, timeout=300)
     if out.returncode != 0:
         raise RuntimeError(f"git worktree: {out.stderr.strip()[:200]}")
 
@@ -249,19 +265,33 @@ def keep_partial(tree: Path, ref: str, message: str) -> str:
     return sha
 
 
+#: Code points HFS+ ignores in a name — ".g", a zero-width non-joiner and "it" still name ".git" on a Mac.
+#: The same list git itself skips.
+_IGNORED = re.compile(r"[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]")
+
+
+def _is_git_dir(part: str) -> bool:
+    """Whether a path part names the git directory on some filesystem this runs on: any case (APFS and
+    NTFS fold it), with the characters HFS+ ignores, with the dots and spaces NTFS drops from the end, as
+    an NTFS alternate stream (`.git::$INDEX_ALLOCATION`), or by its 8.3 short name `git~1`."""
+    name = _IGNORED.sub("", part).lower().rstrip(". ")
+    return name in (".git", "git~1") or name.startswith(".git:")
+
+
 def safe_path(rel: str) -> Path:
     """A path the runtime is willing to write: inside the worktree, never .git, never upwards.
     A path that tries to leave is refused, never quietly rewritten."""
     p = PurePosixPath(str(rel).strip().replace("\\", "/"))
     parts = [part for part in p.parts if part != "."]
-    if not parts or p.is_absolute() or any(part in ("..", ".git") for part in parts):
+    if not parts or p.is_absolute() or any(part == ".." or _is_git_dir(part) for part in parts):
         raise Refused(f"refused to write outside the worktree: {rel}")
     return Path(*parts)
 
 
-def apply_files(work: Path, files: Iterable[tuple[str, str]]) -> list[str]:
-    """Write what a model proposed. Bounded in number and size, and never outside the worktree."""
-    written: list[str] = []
+def _checked(work: Path, files: Iterable[tuple[str, str]]) -> list[tuple[str, Path, str]]:
+    """Every file a model proposed, as (path, where it lands, content) — or the refusal of the first one
+    that may not be written. Nothing is written here."""
+    out: list[tuple[str, Path, str]] = []
     root = work.resolve()
     for path, content in list(files)[:MAX_FILES]:
         rel = safe_path(path)
@@ -270,10 +300,27 @@ def apply_files(work: Path, files: Iterable[tuple[str, str]]) -> list[str]:
             raise Refused(f"refused to write outside the worktree: {path}")
         if len(content.encode()) > MAX_FILE_BYTES:
             raise Refused(f"refused to write {path}: it is larger than {MAX_FILE_BYTES // 1000} kB")
+        out.append((str(rel), target, content))
+    return out
+
+
+def check_files(work: Path, files: Iterable[tuple[str, str]]) -> None:
+    """Refuse now whatever `apply_files` would refuse, so a step writing to several worktrees can ask all
+    of them before it writes to any."""
+    _checked(work, files)
+
+
+def apply_files(work: Path, files: Iterable[tuple[str, str]]) -> list[str]:
+    """Write what a model proposed. Bounded in number and size, and never outside the worktree.
+
+    Every file is checked before the first one is written: a refusal half-way through would leave the
+    files before it loose in the worktree, and the next step's `git add -A` would commit them under its
+    own name — a failed step's work landing as another step's."""
+    checked = _checked(work, files)
+    for _, target, content in checked:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
-        written.append(str(rel))
-    return written
+    return [rel for rel, _, _ in checked]
 
 
 def stats(tree: Path, base: str) -> dict[str, int]:
@@ -295,7 +342,7 @@ def commit(work: Path, message: str) -> bool:
     git(["add", "-A"], work)
     if not git(["status", "--porcelain"], work).stdout.strip():
         return False
-    out = git([*AUTHOR, "commit", "-m", message], work)
+    out = git([*AUTHOR, *NO_HOOKS, "commit", "-m", message], work)
     if out.returncode != 0:
         raise RuntimeError(f"git commit: {out.stderr.strip()[:200]}")
     return True
@@ -335,7 +382,8 @@ def merge_branch(work: Path, branch: str, base: str, into: str) -> tuple[bool, l
     """Bring one branch into this worktree. On a collision the merge is undone, never half-applied."""
     if git(["rev-list", "--count", f"{base}..{branch}"], work).stdout.strip() in ("", "0"):
         return False, []
-    out = git([*AUTHOR, "merge", "--no-ff", "-m", f"Merge {branch} into {into}", branch], work, timeout=300)
+    out = git([*AUTHOR, *NO_HOOKS, "merge", "--no-ff", "-m", f"Merge {branch} into {into}", branch], work,
+              timeout=300)
     if out.returncode == 0:
         return True, []
     files = [ln for ln in git(["diff", "--name-only", "--diff-filter=U"], work).stdout.splitlines() if ln.strip()]
@@ -343,26 +391,73 @@ def merge_branch(work: Path, branch: str, base: str, into: str) -> tuple[bool, l
     return False, files[:20]
 
 
+def _end_group(proc: subprocess.Popen[bytes]) -> None:
+    """The command and everything it started — its own process group — asked to stop, then killed. A
+    group that is already gone is not an error: there is nothing left to end."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        if sig == signal.SIGTERM:
+            try:
+                proc.wait(timeout=TEST_GRACE)
+            except subprocess.TimeoutExpired:
+                pass
+
+
 def run_tests(argv: list[str], cwd: Path, on_line: Callable[[int, str], None],
               stopped: threading.Event) -> tuple[int, list[str]]:
-    """The project's own command, with a timeout and a kill switch. Returns its code and its last lines."""
-    proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                            env={**os.environ, "CI": "1", "NO_COLOR": "1"})
-    killer = threading.Timer(TEST_TIMEOUT, proc.kill)
-    killer.start()
+    """The project's own command, with a timeout and a kill switch. Returns its code and its last lines.
+
+    It is the repository's code, which an agent may just have written, so it starts with `child_env` —
+    none of the API's secrets — and in a session of its own, so the timeout and a person's stop end every
+    process it started rather than only the first: a server a test forgot to stop included. Its output
+    is read against the clock, not to the end of the pipe, because a child that got away still holds the
+    pipe open, and waiting for it would keep the run "testing" past its timeout, possibly for ever. Once
+    the command itself has exited and its output is drained, whatever it left running is ended too."""
+    proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            env=child_env({"CI": "1", "NO_COLOR": "1"}), start_new_session=True)
+    assert proc.stdout is not None
+    deadline = time.monotonic() + TEST_TIMEOUT
+    fd = proc.stdout.fileno()
     tail: list[str] = []
+    pending = b""
+    count = 0
+
+    def said(raw: bytes) -> None:
+        nonlocal tail, count
+        text = raw.decode(errors="replace").rstrip()[:400]
+        tail = [*tail[-4:], text]
+        on_line(count, text)
+        count += 1
+
+    exited: float | None = None
     try:
-        for i, line in enumerate(proc.stdout or []):
-            if stopped.is_set():
-                proc.kill()
-                break
-            text = line.rstrip()[:400]
-            tail = [*tail[-4:], text]
-            on_line(i, text)
-        code = proc.wait(timeout=60)
+        while not stopped.is_set() and time.monotonic() < deadline:
+            if exited is None and proc.poll() is not None:
+                exited = time.monotonic()
+            ready, _, _ = select.select([fd], [], [], 0.2)
+            if exited is not None and (not ready or time.monotonic() - exited > TEST_DRAIN):
+                break                       # it has exited; what it left behind is not waited for
+            if not ready:
+                continue
+            chunk = os.read(fd, 65_536)
+            if not chunk:
+                break                       # end of output: every holder of the pipe has closed it
+            pending += chunk
+            *lines, pending = pending.split(b"\n")
+            for raw in lines:
+                said(raw)
+        if pending:
+            said(pending)
+        # Its output ended; the command itself is given the rest of its time to exit on its own.
+        while proc.poll() is None and not stopped.is_set() and time.monotonic() < deadline:
+            stopped.wait(0.2)
     finally:
-        killer.cancel()
-    return code, tail
+        _end_group(proc)
+        proc.stdout.close()
+    return proc.wait(timeout=60), tail
 
 
 def diff(tree: Path, base: str) -> str:
@@ -808,19 +903,27 @@ def dirty(repo: Path) -> bool:
 
 def merge_into_checkout(repo: Path, branch: str, message: str) -> dict[str, Any]:
     """Merge into whatever the repository has checked out. Refuses a dirty tree, undoes itself on a
-    collision, and always hands back the command that undoes it."""
+    collision, and always hands back the command that undoes it.
+
+    A branch the checkout already holds every commit of is not merged at all: git would answer "Already
+    up to date" and make no commit, and recording that as a merge would name the person's own HEAD as
+    ours — for an undo to reset away. It answers `nothing` instead. A real merge keeps `tip`, the commit
+    of the branch it brought in, so an undo can tell this merge from any other."""
     if dirty(repo):
         raise Refused(DIRTY)
     into = git(["rev-parse", "--abbrev-ref", "HEAD"], repo).stdout.strip()
     before = git(["rev-parse", "HEAD"], repo).stdout.strip()
-    out = git([*AUTHOR, "merge", "--no-ff", "-m", message, branch], repo, timeout=300)
+    tip = git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}"], repo).stdout.strip()
+    if tip and git(["merge-base", "--is-ancestor", tip, "HEAD"], repo).returncode == 0:
+        return {"merged": False, "nothing": True, "into": into, "conflicts": [], "commit": None, "undo": None}
+    out = git([*AUTHOR, *NO_HOOKS, "merge", "--no-ff", "-m", message, branch], repo, timeout=300)
     if out.returncode != 0:
         files = [ln for ln in git(["diff", "--name-only", "--diff-filter=U"], repo).stdout.splitlines() if ln.strip()]
         git(["merge", "--abort"], repo)
         return {"merged": False, "into": into, "conflicts": files[:20], "commit": None, "undo": None}
     sha = git(["rev-parse", "HEAD"], repo).stdout.strip()
     return {"merged": True, "into": into, "conflicts": [], "commit": sha[:7],
-            "undo": f"git reset --hard {before[:7]}", "before": before}
+            "undo": f"git reset --hard {before[:7]}", "before": before, "tip": tip}
 
 
 def undo_merge(repo: Path, before: str, commit: str) -> bool:
@@ -835,25 +938,39 @@ def undo_merge(repo: Path, before: str, commit: str) -> bool:
 
 
 
-def unmerge_refusal(repo: Path, commit: str) -> str | None:
+def unmerge_refusal(repo: Path, commit: str, *, into: str = "", tip: str = "") -> str | None:
     """Why a merge this runtime made cannot be taken back right now, in words — or None when it can: the
-    checkout still stands exactly on the merge, its tree is clean, and the commit really is a merge."""
+    checkout still stands exactly on the merge, on the branch the merge went `into`, its tree is clean,
+    and the commit really is a merge whose second parent is `tip`, the run's branch as it was merged.
+
+    Standing on the merge is not enough on its own. A branch a person started from the merge stands on
+    it too, and resetting that one would rewind their branch while the one merged into keeps the merge;
+    and a commit recorded as ours may be a merge the person made. Either is refused in words."""
     head = git(["rev-parse", "HEAD"], repo).stdout.strip()
     if not head or not head.startswith(commit):
         return (f"The checkout has moved on since the merge (it is at {head[:7] or 'an unknown commit'}, the merge "
                 f"was {commit}), so undoing it here would lose that work. Use git revert -m 1 {commit} instead.")
+    on = git(["rev-parse", "--abbrev-ref", "HEAD"], repo).stdout.strip()
+    if into and on != into:
+        return (f"The checkout is on {on or 'no branch'} now, not on {into}, where the merge went, so undoing it "
+                f"here would move the wrong branch. Switch back to {into} to undo it, or use git revert -m 1 "
+                f"{commit} on {into}.")
     if dirty(repo):
         return "Your working tree has changes that are not committed. Commit or stash them, then undo the merge."
-    if len(git(["rev-list", "--parents", "-n", "1", head], repo).stdout.split()) != 3:
+    parents = git(["rev-list", "--parents", "-n", "1", head], repo).stdout.split()
+    if len(parents) != 3:
         return f"{commit} is not a merge commit, so there is no merge to undo."
+    if not tip or parents[2] != tip:
+        return (f"{commit} is not the merge NeuroCode made of this run's branch, so it is not taken back here. "
+                f"Use git revert -m 1 {commit} if it is one you want out.")
     return None
 
 
-def take_back_merge(repo: Path, commit: str) -> str:
+def take_back_merge(repo: Path, commit: str, *, into: str = "", tip: str = "") -> str:
     """Undo, for a person, a merge this runtime made: back to the merge's first parent, which is where the
     checkout stood before it. Only while `unmerge_refusal` finds nothing, so no one's later work is lost.
     Returns the commit the checkout is back at."""
-    refusal = unmerge_refusal(repo, commit)
+    refusal = unmerge_refusal(repo, commit, into=into, tip=tip)
     if refusal:
         raise Refused(refusal)
     before = git(["rev-parse", "HEAD^1"], repo).stdout.strip()

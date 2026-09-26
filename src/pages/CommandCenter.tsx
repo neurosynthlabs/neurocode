@@ -1,13 +1,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ArrowUp, Bell, BellOff, Bug, Check, ChevronRight, Compass, Cpu, FolderGit2, GitBranchPlus, Lightbulb, Loader2, MessagesSquare, ShieldAlert, ShieldCheck,
-  Sparkles, TriangleAlert, WandSparkles, X, type LucideIcon,
+  ArrowUp, Bell, BellOff, Bug, Play, Check, ChevronRight, Compass, Cpu, FolderGit2, GitBranchPlus, Lightbulb, Loader2, MessagesSquare, ShieldAlert, ShieldCheck,
+  Sparkles, TriangleAlert, WandSparkles, type LucideIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Page, PageBody, Panel, RiskPill, Dot, Mono, Empty, BlockBar } from '@/components/os';
-import type { AskAnswer, RunDoc } from '@/lib/api';
+import { api, ApiError, type AskAnswer, type RunDoc } from '@/lib/api';
+import { plansApi } from '@/lib/live/plans';
+import { AnswerCard } from '@/components/memory/AnswerCard';
 import { useAuth } from '@/lib/auth';
 import { useProject } from '@/lib/project-context';
 import { useData } from '@/lib/data';
@@ -20,9 +22,9 @@ import { ago } from '@/lib/time';
 import { cn } from '@/lib/utils';
 
 /* Home. One question in the middle of the screen, the way a good assistant opens, with the
-   work that needs you laid out calmly underneath. The composer plans, asks memory or
-   brainstorms. Planning and brainstorming need a model; asking memory answers without one, by
-   quoting the matching facts, and says so. */
+   work that needs you laid out calmly underneath. The composer plans, asks or brainstorms. A question
+   opens a session on the project, which reads its code, documents and memory; with no model to answer,
+   it is memory that answers, by quoting the matching facts, and says so. */
 
 type Kind = 'plan' | 'ask' | 'idea';
 interface Mode { id: Kind; label: string; icon: LucideIcon; placeholder: string; action: string; verb: string; perm: string }
@@ -30,7 +32,7 @@ interface Suggestion { icon: LucideIcon; label: string; text: string }
 
 const MODES: Mode[] = [
   { id: 'plan', label: 'Plan', icon: GitBranchPlus, placeholder: 'Describe the change you want, in your own words…', action: 'Compile Plan', verb: 'compile', perm: 'plans:compile' },
-  { id: 'ask', label: 'Ask', icon: MessagesSquare, placeholder: 'Ask what memory knows about this project…', action: 'Ask memory', verb: 'ask', perm: 'ai:use' },
+  { id: 'ask', label: 'Ask', icon: MessagesSquare, placeholder: 'Ask about this project’s code, docs or decisions…', action: 'Ask', verb: 'ask', perm: 'ai:use' },
   { id: 'idea', label: 'Brainstorm', icon: Lightbulb, placeholder: 'Pitch an idea. The brief argues against itself.', action: 'Brainstorm', verb: 'brainstorm', perm: 'ai:use' },
 ];
 
@@ -49,6 +51,8 @@ const STARTERS: Record<'plan' | 'idea', Suggestion[]> = {
     { icon: Lightbulb, label: 'Offline orders', text: 'Field staff create orders offline, and they sync when the phone is back online.' },
   ],
 };
+
+const AUTO_START = 'nc.composer.autoStart';
 
 /** How many of a run's steps are behind it, as a share of all of them. */
 const progress = (r: RunDoc) =>
@@ -71,6 +75,16 @@ export default function CommandCenter() {
   const [req, setReq] = useState(() => (loc.state as { draft?: string } | null)?.draft ?? '');
   const [busy, setBusy] = useState(false);
   const [answer, setAnswer] = useState<(AskAnswer & { q: string }) | null>(null);
+  // "Start right away": a prompt compiles and the agents begin, its open questions deferred on the record.
+  // This person's habit, kept in this browser; the gates, the review and the signature still stand.
+  const [autoStart, setAutoStart] = useState(() => {
+    try { return localStorage.getItem(AUTO_START) !== 'off'; } catch { return true; }
+  });
+  const flipAutoStart = () => {
+    const next = !autoStart;
+    setAutoStart(next);
+    try { localStorage.setItem(AUTO_START, next ? 'on' : 'off'); } catch { /* private window: this visit only */ }
+  };
   const box = useRef<HTMLTextAreaElement>(null);
   const m = MODES.find((x) => x.id === kind) ?? MODES[0];
   const permitted = can(m.perm);
@@ -117,13 +131,28 @@ export default function CommandCenter() {
     if (!project) return;
     setBusy(true);
     const plan = await compileRequirement(text, project.id);
-    setBusy(false);
-    if (!plan) return;
+    if (!plan) { setBusy(false); return; }
     setReq('');
+    if (autoStart && can('plans:decide')) {
+      try {
+        const started = await plansApi.dispatch(plan.ref, { skipQuestions: true });
+        setBusy(false);
+        const skipped = plan.openQuestions.length;
+        if (started.noRun) toast.warning(`${plan.ref} dispatched, no run started`, { description: started.noRun });
+        else toast.success(`${plan.ref} started`, {
+          description: `${plan.steps.length} steps${skipped ? ` · ${skipped} open questions deferred` : ''}${plan.compiler ? ` · ${plan.compiler.model}` : ''}`,
+        });
+        nav(started.runRef ? `/runs?ref=${started.runRef}` : `/plans?ref=${plan.ref}`);
+        return;
+      } catch (e) {
+        toast.error(`${plan.ref} compiled, not started`, { description: e instanceof ApiError ? e.message : 'The API did not answer.' });
+      }
+    }
+    setBusy(false);
     toast.success(`${plan.ref} compiled`, {
       description: `${plan.steps.length} steps · ${plan.openQuestions.length} open questions${plan.compiler ? ` · ${plan.compiler.model}` : ''}`,
     });
-    nav('/plans');
+    nav(`/plans?ref=${plan.ref}`);
   };
 
   const submit = async () => {
@@ -132,6 +161,20 @@ export default function CommandCenter() {
     if (kind === 'plan') { await compile(text); return; }
     setBusy(true);
     if (kind === 'ask') {
+      // A model and a project: a session, which reads the code as well as memory, and keeps the conversation.
+      if (project && health?.compiler && health.compiler.provider !== 'rules' && can('sessions:chat')) {
+        try {
+          const session = await api.newSession(project.id);
+          await api.askSession(session.ref, text);
+          setReq('');
+          nav(`/sessions?ref=${session.ref}`);
+        } catch (e) {
+          toast.error('The question was not asked', { description: e instanceof Error ? e.message : 'The local API did not answer.' });
+        } finally {
+          setBusy(false);
+        }
+        return;
+      }
       const a = await ask(text, project?.id);
       setBusy(false);
       if (a) setAnswer({ ...a, q: text });
@@ -196,7 +239,16 @@ export default function CommandCenter() {
                 <Cpu className="size-3.5" />{engine}
                 {note && <TriangleAlert className="size-3.5 text-warn" aria-label={note} />}
               </span>
-              <span className="ml-auto hidden pr-2 text-[12px] text-dim md:inline">⌘↵ to {m.verb}</span>
+              {kind === 'plan' && can('plans:decide') && (
+                <button type="button" role="switch" aria-checked={autoStart} onClick={flipAutoStart}
+                  title={autoStart ? 'Agents start as soon as the plan is compiled; open questions are deferred'
+                    : 'The plan waits for you to answer its questions and dispatch it'}
+                  className={cn('flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12.5px] transition-colors',
+                    autoStart ? 'bg-brand/12 text-brand' : 'text-soft hover:text-ink')}>
+                  <Play className="size-3.5" />Start right away
+                </button>
+              )}
+              <span className="ml-auto hidden pr-2 text-[12px] text-dim md:inline">⌘↵ to {autoStart && kind === 'plan' ? 'start' : m.verb}</span>
               <button
                 onClick={() => void submit()}
                 disabled={!req.trim() || busy || !permitted || blocked}
@@ -209,39 +261,7 @@ export default function CommandCenter() {
             </div>
           </div>
 
-          {answer && (
-            <div className="animate-slide-up mt-4 rounded-2xl border border-line bg-surface p-5">
-              <div className="flex items-start gap-3">
-                <span className="grid size-8 shrink-0 place-items-center rounded-full bg-brand/12 text-brand"><Sparkles className="size-4" /></span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-[12.5px] text-dim">{answer.q}</p>
-                  <p className="mt-1.5 text-[14.5px] leading-relaxed whitespace-pre-line text-ink">{answer.answer}</p>
-                  {answer.citations.length > 0 && (
-                    <div className="mt-3 flex flex-wrap gap-1.5">
-                      {answer.citations.map((c) => (
-                        <Link
-                          key={c.ref} to={`/memory?ref=${c.ref}`} title={c.title}
-                          className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-line bg-surface-2/60 px-2.5 py-1 text-[12.5px] text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
-                        >
-                          <span className="font-mono text-[11.5px] text-brand">{c.ref}</span>
-                          <span className="truncate">{c.title}</span>
-                        </Link>
-                      ))}
-                    </div>
-                  )}
-                  <p className="mt-3 text-[12px] text-dim">
-                    {answer.provider === 'rules'
-                      ? 'Memory search, no model: matching facts, quoted. Add a model for a written answer.'
-                      : `${answer.model} · ${(answer.ms / 1000).toFixed(1)} s`}
-                  </p>
-                </div>
-                <button onClick={() => setAnswer(null)} aria-label="Close the answer"
-                  className="grid size-7 shrink-0 place-items-center rounded-full text-dim transition-colors hover:bg-surface-2 hover:text-ink">
-                  <X className="size-4" />
-                </button>
-              </div>
-            </div>
-          )}
+          {answer && <div className="mt-4"><AnswerCard answer={answer} onClose={() => setAnswer(null)} /></div>}
 
           <div className="mt-4 flex flex-wrap justify-center gap-2">
             {suggestions.map(({ icon: I, label, text }) => (

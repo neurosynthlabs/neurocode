@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type SyntheticEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Search, Pin, Archive, FileSearch, TriangleAlert, Globe, Layers, FilePlus2, Loader2, Sparkles, Zap, Split, Activity,
-  Download, Check, X, Pencil, ChevronDown, ChevronUp, Scale,
+  Download, Check, X, Pencil, ChevronDown, ChevronUp, Scale, MessagesSquare,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -11,7 +11,9 @@ import { Switch } from '@/components/ui/switch';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { SIGNAL_LABEL, tasteApi, tasteMarkdown, type TasteKind, type TasteRule, type TasteSignal } from '@/lib/live/taste';
-import type { Extracted } from '@/lib/api';
+import type { AskAnswer, Extracted } from '@/lib/api';
+import { Textarea } from '@/components/ui/textarea';
+import { AnswerCard } from '@/components/memory/AnswerCard';
 import {
   Page, PageHeader, PageBody, Panel, Tag, Mono, Segmented, ListRow, Empty, About,
   Stat, StatGrid, KV, DataTable, Row, Cell, Field, SelectField,
@@ -47,6 +49,7 @@ export default function Memory() {
   const [sel, setSel] = useState<string | null>(null);
   const [tab, setTab] = useState<'facts' | 'health' | 'conflicts' | 'taste'>('facts');
   const [adding, setAdding] = useState(false);
+  const [asking, setAsking] = useState(false);
   const [marking, setMarking] = useState<{ a: string } | null>(null);
 
   const { memory, conflicts, capped, setPinned, archive, searchMemory, resolveConflict } = useData();
@@ -113,6 +116,7 @@ export default function Memory() {
         </>}
         actions={
           <>
+            <Button size="sm" variant="outline" onClick={() => setAsking(true)}><MessagesSquare className="size-3.5" />Ask</Button>
             <Button size="sm" variant="outline" onClick={() => setAdding(true)}><FilePlus2 className="size-3.5" />Add from text</Button>
             {project && (
               <Segmented
@@ -348,6 +352,7 @@ export default function Memory() {
           </div>
         )}
       </PageBody>
+      <AskMemory open={asking} onOpenChange={setAsking} projectId={projectId} />
       <AddFromText
         open={adding} onOpenChange={setAdding} projectId={projectId}
         onAdded={(docs) => { setTab('facts'); setCat('all'); setQ(''); setSel(docs[0].id); }}
@@ -857,5 +862,41 @@ function Evidence({ rule, onClose }: { rule: TasteRule | null; onClose: () => vo
         )}
       </SheetContent>
     </Sheet>
+  );
+}
+
+/* A question answered from the facts alone: a model writes the answer and cites the facts it used, or, with
+   no model, the matching facts are quoted. A question about the code is a session's, from the home screen. */
+function AskMemory({ open, onOpenChange, projectId }: { open: boolean; onOpenChange: (o: boolean) => void; projectId: string | null }) {
+  const { ask } = useData();
+  const [q, setQ] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [answer, setAnswer] = useState<(AskAnswer & { q: string }) | null>(null);
+  const submit = async (e: SyntheticEvent) => {
+    e.preventDefault();
+    const text = q.trim();
+    if (!text || busy) return;
+    setBusy(true);
+    const a = await ask(text, projectId ?? undefined);
+    setBusy(false);
+    if (a) setAnswer({ ...a, q: text });
+  };
+  return (
+    <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) setAnswer(null); }}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Ask memory</DialogTitle>
+          <DialogDescription>Answered from the facts, each one cited.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-3">
+          <Textarea aria-label="Question" value={q} onChange={(e) => setQ(e.target.value)} rows={3}
+            placeholder="What must a credit note reference?" />
+          <DialogFooter>
+            <Button type="submit" disabled={busy || !q.trim()}>{busy && <Loader2 className="size-3.5 animate-spin" />}Ask memory</Button>
+          </DialogFooter>
+        </form>
+        {answer && <AnswerCard answer={answer} />}
+      </DialogContent>
+    </Dialog>
   );
 }

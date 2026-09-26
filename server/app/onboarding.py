@@ -7,6 +7,7 @@ and the project record says so instead of pretending.
 """
 from __future__ import annotations
 
+import base64
 import fnmatch
 import os
 import re
@@ -114,13 +115,31 @@ def title(project_slug: str) -> str:
     return " ".join(w.upper() if len(w) <= 3 else w.capitalize() for w in project_slug.split("-") if w)
 
 
-def clone(repo: str, branch: str, dest: Path) -> None:
+#: The user name each forge takes beside a token over HTTPS.
+TOKEN_USER = {"github.com": "x-access-token", "gitlab.com": "oauth2"}
+
+
+def host_of(repo: str) -> str:
+    """`https://github.com/org/x.git` and `git@github.com:org/x.git` → `github.com`; "" when there is none."""
+    found = re.match(r"^(?:[a-z+]+://)?(?:[^@/\s]+@)?([\w.-]+)[:/]", repo.strip(), re.I)
+    return found.group(1).lower() if found else ""
+
+
+def clone(repo: str, branch: str, dest: Path, token: str | None = None) -> None:
+    """A shallow clone of one branch. `token` is the person's own for that forge, for a private repository:
+    it rides in an HTTP header set through git's environment, so it is never in the URL, the clone's
+    .git/config, the process list or a log line."""
     if dest.exists():
         shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     # never prompt (a prompt would hang the job), never run the ext:: or file:: transports, and `--`
     # so a "URL" that starts with a dash can never be read as an option
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_SSH_COMMAND": "ssh -o BatchMode=yes -o ConnectTimeout=15"}
+    host = host_of(repo)
+    if token and repo.strip().lower().startswith("https://") and host in TOKEN_USER:
+        basic = base64.b64encode(f"{TOKEN_USER[host]}:{token}".encode()).decode()
+        env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0=f"http.https://{host}/.extraHeader",
+                   GIT_CONFIG_VALUE_0=f"Authorization: Basic {basic}")
     result = subprocess.run(
         ["git", "-c", "protocol.ext.allow=never", "-c", "protocol.file.allow=never", "clone", "--depth", "1",
          "--single-branch", "--branch", branch, "--", repo, str(dest)],

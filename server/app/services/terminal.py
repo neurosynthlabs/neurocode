@@ -279,6 +279,7 @@ class Terminal:
         self._writing = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ended = asyncio.Event()
+        self._restarting = asyncio.Lock()
 
     # ── life ──────────────────────────────────────────────────────
     def spawn(self) -> None:
@@ -385,9 +386,13 @@ class Terminal:
             await asyncio.wait_for(self._ended.wait(), timeout=grace + 3)
 
     async def restart(self) -> None:
-        await self.stop()
-        self.record(b"\r\n\x1b[2m-- restarted --\x1b[0m\r\n")
-        self.spawn()
+        """Stop the program and start it again, one restart at a time. Two that arrived together (a
+        double click, two tabs) would otherwise both stop the old process and both spawn, and the first
+        new one would be left running with nobody holding its handle to stop it."""
+        async with self._restarting:
+            await self.stop()
+            self.record(b"\r\n\x1b[2m-- restarted --\x1b[0m\r\n")
+            self.spawn()
 
     # ── input and size ────────────────────────────────────────────
     def write(self, data: bytes) -> None:
@@ -751,12 +756,13 @@ class RunConfigService:
         who.must(MACHINE, "run a configuration")
         config, _ = await self.one(config_id)
         project = await self.project(config.project_id)
-        running = terminals.running_for(who.id, config.id)
-        if running is not None:
-            raise Refused(f"{config.name} is already running. Restart it, or stop it first.")
         source, folder = folder_in_project(await project_roots(self.session, project), config.cwd)
         line = command_line(config, Path(os.path.realpath(source.root)), folder)
         shell = pick_shell()
+        # Asked here, with no await between the question and the open: two starts that arrive together
+        # (a double click, two tabs) interleave at every await, and would both find nothing running.
+        if terminals.running_for(who.id, config.id) is not None:
+            raise Refused(f"{config.name} is already running. Restart it, or stop it first.")
         terminal = terminals.open(owner=who.id, kind="run", title=config.name, argv=shell_argv(shell, line),
                                   cwd=folder, env=base_env({str(k): str(v) for k, v in (config.env or {}).items()}),
                                   cols=cols, rows=rows, project_id=project.id, run_config_id=config.id,
