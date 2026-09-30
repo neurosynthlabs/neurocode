@@ -219,7 +219,7 @@ async def compact(ref: str, who: Person = Depends(require("sessions:chat")),
     person to read; the model is sent the summary instead. Asked in the request, like Ask memory: the
     person is waiting on it, and a background job would only make them wait for the stream instead."""
     _, who = await _acting(ref, who, open_session, "sessions:chat")
-    summary = await ChatService(open_session, gw).compact(ref, who.name)
+    summary = await ChatService(open_session, gw).compact(ref, who.name, who.id)
     chat = await ChatRepository(open_session).by_ref(ref)
     if chat is None:
         raise NotFound(f"session {ref}")

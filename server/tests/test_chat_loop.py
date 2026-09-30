@@ -21,6 +21,7 @@ from app.data.engine import Database
 from app.models import Chat, Pref, Project
 from app.repositories import ChatRepository
 from app.services.chat import MAX_STEPS, think
+from app.services.identity import Person
 
 PROJECT, CHAT = "loop-test-project", "CHAT-9001"
 
@@ -33,13 +34,15 @@ class FakeGateway:
         self.raises = raises
         self.calls = 0
         self.seen: list[list[dict[str, str]]] = []
+        self.actors: list[str | None] = []
 
     def embed_lane(self) -> None:
         return None                                   # no embeddings: retrieval stays lexical
 
-    def ask(self, messages: list[dict[str, str]], parse: Any, **_: Any) -> Result[Any]:
+    def ask(self, messages: list[dict[str, str]], parse: Any, **asked: Any) -> Result[Any]:
         self.calls += 1
         self.seen.append(messages)
+        self.actors.append(asked.get("actor"))
         if self.raises is not None:
             raise self.raises
         raw = self.script.pop(0) if self.script else '{"answer": "Done."}'
@@ -100,6 +103,19 @@ async def test_it_reaches_for_a_tool_then_answers(live: Database):
     async with live.read() as s:
         chat = await ChatRepository(s).by_ref(CHAT)
     assert chat.status == "idle" and chat.turns == 1 and chat.tool_calls == 1
+
+
+async def test_the_usage_ledger_is_told_who_asked_by_id_not_by_name(live: Database):
+    # The ledger's user_id is a foreign key to users. Handed the asker's name, every line was refused and
+    # no chat call was ever counted on the usage screen.
+    await start(live, "where is tax handled?")
+    gateway = FakeGateway('{"answer": "In pkg/tax.py."}')
+    who = Person("usr-rajat", "rajat@example.com", "Rajat", "active", ("owner",), frozenset())
+
+    await think(live, gateway, CHAT, "Rajat", who)
+
+    assert gateway.actors == ["usr-rajat"]
+    assert (await turns_of(live))[-1].body == "In pkg/tax.py."
 
 
 async def test_a_tool_it_invented_is_reported_back_not_raised(live: Database):

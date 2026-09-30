@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   BookOpen, Bot, Brain, ChevronLeft, ChevronRight, Code2, Download, FileInput, FoldVertical, GitFork, ListChecks, Loader2,
-  MessageSquarePlus, MoreHorizontal, Paperclip, Pencil, RefreshCw, Search, Wrench,
+  MessageSquarePlus, MessagesSquare, MoreHorizontal, Paperclip, Pencil, RefreshCw, Search, Wrench,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Ascii, Bar, Dot, Empty, Field, ListRow, Mono, Page, PageBody, PageHeader, Panel, Tag } from '@/components/os';
+import { Answer } from '@/components/sessions/Answer';
 import { Composer, type Chip } from '@/components/sessions/Composer';
 import { matchSessions, readSession, turnsSaying } from '@/components/sessions/transcript';
 import { PermissionCard } from '@/components/sessions/PermissionCard';
@@ -18,6 +19,7 @@ import { api, type ChatAttachment, type ChatMessage, type ChatStream, type Sessi
 import { agentName, useAccess } from '@/lib/access';
 import { useAuth } from '@/lib/auth';
 import { useData } from '@/lib/data';
+import { useProject } from '@/lib/project-context';
 import { agentsApi, SOURCE_LABEL, type AgentSession, type CustomAgent } from '@/lib/live/agents';
 import { fetchModels, type FleetLane } from '@/lib/live/models';
 import { download, sessionsApi, workbenchLink, type PermitDecision } from '@/lib/live/sessions';
@@ -26,8 +28,9 @@ import { useRemote } from '@/lib/remote';
 import { cn } from '@/lib/utils';
 import { ago } from '@/pages/code/format';
 
-/* Sessions: a conversation that can read this project's code, and — with a person's say-so — reach the
-   web and MCP tools. You ask, it reaches for a tool, the tool runs here, and every turn is written down
+/* Chat: a conversation that answers directly, and reads this project's code when the question needs it —
+   with a person's say-so, the web and MCP tools too. What it looked at folds into one "steps" line above
+   the answer, so the conversation reads as one. You ask, it reaches for a tool, the tool runs here, and every turn is written down
    before anything else happens. A call no rule allows waits on a card in the transcript until you
    answer it. An edited question or a regenerated answer is a new turn; the old one stays, behind a
    "1/2 · 2/2" switch, and only the current line is sent to the model. */
@@ -127,6 +130,8 @@ function citedFiles(placed: Placed[]): Map<number, { path: string; line?: number
 
 export default function Sessions() {
   const { projects, onChat } = useData();
+  const { project: current } = useProject();
+  const [searching, setSearching] = useState(false);
   const { can } = useAuth();
   const navigate = useNavigate();
   const linked = useSearchParams()[0].get('ref');
@@ -421,7 +426,7 @@ export default function Sessions() {
             <p className="px-1.5 pt-1 text-[11.5px] text-dim">The original stays as a version.</p>
           </div>
         ) : (
-          <p className={cn('max-w-[85%] rounded-xl rounded-br-sm bg-brand/12 px-3.5 py-2 text-[13.5px] whitespace-pre-wrap text-ink', old && 'opacity-75')}>{m.text}</p>
+          <p className={cn('max-w-[85%] rounded-2xl rounded-br-md bg-surface-2 px-4 py-2.5 text-[14.5px] leading-relaxed whitespace-pre-wrap text-ink', old && 'opacity-75')}>{m.text}</p>
         )}
         {(m.attachments?.length ?? 0) > 0 && <Chips session={session} items={m.attachments ?? []} />}
         <div className="flex items-center gap-1.5">
@@ -491,9 +496,9 @@ export default function Sessions() {
     );
     const files = cited.get(m.id) ?? [];
     return (
-      <div key={m.id} className="group max-w-[92%] space-y-1.5">
+      <div key={m.id} className="group space-y-2">
         {m.reasoning && <Reasoning text={m.reasoning} label={thoughtLabel(m)} />}
-        <p className={cn('rounded-xl rounded-bl-sm bg-surface-2/70 px-3.5 py-2.5 text-[13.5px] leading-relaxed whitespace-pre-wrap text-ink', old && 'opacity-75')}>{m.text}</p>
+        <Answer text={m.text} className={old ? 'opacity-75' : undefined} />
         {session && files.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[11.5px] text-dim">Read</span>
@@ -574,8 +579,8 @@ export default function Sessions() {
   return (
     <Page>
       <PageHeader
-        title="Sessions"
-        subtitle="Ask about the code; it answers from what its tools found."
+        title="Chat"
+        subtitle="Talk it through. It reads the code when the question needs it."
         about={<>
           <p>A session reads this project's code and, with your say-so, the web and MCP tools. Every turn is written down first.</p>
           <p>A call no rule allows waits on a card until you answer. An edit or a regenerated answer is a new turn; the old one stays as a version.</p>
@@ -587,7 +592,10 @@ export default function Sessions() {
             <Button size="sm" variant="outline" onClick={() => importFile.current?.click()} title="Import a session exported as JSON">
               <FileInput className="size-3.5" />Import
             </Button>
-            <Button size="sm" onClick={() => setChoosing((v) => (v === 'new' ? null : 'new'))}><MessageSquarePlus className="size-3.5" />New session</Button>
+            <Button size="sm" onClick={() => { if (current && !choosing) void pickProject(current.id, current.name); else setChoosing((v) => (v === 'new' ? null : 'new')); }}
+              title={current ? `A new chat on ${current.name}` : 'Pick a project to chat about'}>
+              <MessageSquarePlus className="size-3.5" />New chat
+            </Button>
           </div>
         )}
       />
@@ -595,13 +603,13 @@ export default function Sessions() {
         <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 pt-4 pb-4 sm:px-6 md:flex-row">
           <div className="flex w-full shrink-0 max-h-[32vh] md:max-h-none md:w-[280px] flex-col overflow-y-auto rounded-xl border border-line bg-surface">
             <div className="flex shrink-0 items-center border-b border-line px-4 py-2.5 text-[12px] font-medium text-dim">
-              <span className="flex-1">{choosing ? 'Pick a project' : seeking ? `${listed.length} of ${sessions.length} sessions` : `${sessions.length} sessions`}</span>
+              <span className="flex-1">{choosing ? 'Pick a project' : seeking ? `${listed.length} of ${sessions.length} chats` : `${sessions.length} chats`}</span>
               {choosing && <button type="button" className="text-[12px] text-dim hover:text-ink" onClick={() => { setChoosing(null); setImporting(null); setAnswerers(null); }}>Cancel</button>}
             </div>
             {!choosing && sessions.length > 0 && (
               <div className="shrink-0 border-b border-line/60 px-2.5 py-2">
                 <Field value={findSession} onChange={setFindSession} icon={<Search className="size-3.5" />}
-                  placeholder="Find a session" onClear={() => setFindSession('')} />
+                  placeholder="Find a chat" onClear={() => setFindSession('')} />
               </div>
             )}
             <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
@@ -612,15 +620,13 @@ export default function Sessions() {
               ) : listed.map((s) => (
                 <ListRow key={s.ref} active={s.ref === ref} onClick={() => setPicked(s.ref)}>
                   <div className="flex items-center gap-2">
-                    <Dot state={s.waitingOn ? 'waiting' : s.status === 'thinking' ? 'running' : 'idle'} pulse={s.status === 'thinking'} />
-                    <Mono>{s.ref}</Mono>
-                    {s.parentId && <GitFork className="size-3 text-dim" aria-label="Forked" />}
-                    {(s as AgentSession).agent && <Bot className="size-3 text-dim" aria-label="Answered by an agent" />}
-                    <span className="ml-auto text-[11.5px] text-dim">{ago(s.lastAt)}</span>
+                    {(s.waitingOn || s.status === 'thinking') && <Dot state={s.waitingOn ? 'waiting' : 'running'} pulse={s.status === 'thinking'} />}
+                    <p className="min-w-0 flex-1 truncate text-[13.5px] text-ink">{s.title}</p>
+                    {s.parentId && <GitFork className="size-3 shrink-0 text-dim" aria-label="Forked" />}
+                    {(s as AgentSession).agent && <Bot className="size-3 shrink-0 text-dim" aria-label="Answered by an agent" />}
                   </div>
-                  <p className="mt-1 truncate text-[13px] text-ink">{s.title}</p>
-                  <p className="mt-1 truncate text-[11.5px] text-dim">
-                    {s.waitingOn ? `waiting for you · ${s.waitingOn.tool}` : `${s.projectName} · ${s.toolCalls} tool calls`}
+                  <p className="mt-0.5 truncate text-[12px] text-dim">
+                    {s.waitingOn ? `waiting for you · ${s.waitingOn.tool}` : `${s.projectName} · ${ago(s.lastAt)}`}
                   </p>
                 </ListRow>
               ))}
@@ -629,14 +635,19 @@ export default function Sessions() {
 
           {!session ? (
             <div className="flex min-w-0 flex-1 items-center justify-center rounded-xl border border-line bg-surface">
-              <Empty icon={<Bot className="size-6" />} title="No session yet"
-                hint="Start one on a project." />
+              <Empty icon={<MessagesSquare className="size-6" />} title="No chat yet"
+                hint={current ? `Start one with New chat — it opens on ${current.name}.` : 'Start one on a project.'} />
             </div>
           ) : (
             <div className="flex min-w-0 flex-1 flex-col gap-3">
               <Context session={session} files={detail.data?.instructions ?? null} busy={compacting || thinking}
                 canCompact={mayChat} onCompact={() => void compact()}
                 actions={(
+                  <>
+                  {messages.length > 0 && (
+                    <Button size="icon-xs" variant="ghost" aria-label="Search this chat" title="Search this chat"
+                      aria-pressed={searching} onClick={() => setSearching((v) => !v)}><Search /></Button>
+                  )}
                   <DropdownMenu>
                     <DropdownMenuTrigger render={<Button size="xs" variant="outline" aria-label="More for this session" />}>
                       {acting === 'plan' || acting === 'fork' ? <Loader2 className="size-3 animate-spin" /> : <MoreHorizontal className="size-3" />}More
@@ -655,6 +666,7 @@ export default function Sessions() {
                       <DropdownMenuItem onClick={() => void exportAs('json')}><Download className="size-3.5" />Export as JSON</DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
+                  </>
                 )} />
               {(detail.data?.parentRef || session.grants.length > 0 || readsFrom.length > 0 || agentKey) && (
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[12px] text-dim">
@@ -682,16 +694,17 @@ export default function Sessions() {
                   )}
                 </div>
               )}
-              {messages.length > 0 && (
+              {messages.length > 0 && (searching || looking) && (
                 <div className="flex flex-wrap items-center gap-2">
                   <Field className="min-w-[200px] flex-1" value={findTurn} onChange={setFindTurn} icon={<Search className="size-3.5" />}
-                    placeholder="Search this session" onClear={() => setFindTurn('')} />
+                    placeholder="Search this chat" onClear={() => { setFindTurn(''); setSearching(false); }} />
                   {looking && (
                     <span className="text-[12px] text-dim">{matching.length} of {placed.length} turns match</span>
                   )}
                 </div>
               )}
-              <div ref={box} className="min-h-0 flex-1 space-y-2.5 overflow-y-auto rounded-xl border border-line bg-surface p-4">
+              <div ref={box} className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-line/60 bg-surface">
+                <div className="mx-auto w-full max-w-[780px] space-y-5 px-4 py-6 sm:px-6">
                 {detail.error && messages.length === 0 && (
                   <div className="flex items-center gap-3 text-[13px] text-ink-2">
                     <span className="flex-1">{detail.error}</span>
@@ -699,7 +712,12 @@ export default function Sessions() {
                   </div>
                 )}
                 {detail.loading && messages.length === 0 && <p className="flex items-center gap-2 text-[12.5px] text-dim"><Loader2 className="size-3.5 animate-spin" />Reading the session…</p>}
-                {!detail.loading && !detail.error && messages.length === 0 && <p className="text-[13px] text-soft">Ask about {session.projectName}. Type @ to attach context.</p>}
+                {!detail.loading && !detail.error && messages.length === 0 && (
+                  <div className="py-10 text-center">
+                    <p className="text-[20px] font-semibold tracking-[-0.02em] text-ink">What's on your mind?</p>
+                    <p className="mt-2 text-[14px] text-soft">Ask anything about {session.projectName}, or anything at all. Type @ to attach a file, / for a command.</p>
+                  </div>
+                )}
                 {detail.data?.earlier && (
                   <p className="text-[12px] text-dim">The earliest turns are only in the export.</p>
                 )}
@@ -712,26 +730,32 @@ export default function Sessions() {
                 {looking && matching.length === 0 && (
                   <p className="text-[13px] text-soft">No turn here says “{findTurn.trim()}”.</p>
                 )}
-                {grouped(matching).map((g) => g.folded
+                {grouped(matching).map((g, i, all) => g.folded
                   ? <Folded key={`folded-${g.turns[0].m.id}`} count={g.turns.length}>{g.turns.map(turn)}</Folded>
-                  : turn(g.turns[0]))}
+                  : g.steps
+                    ? <Steps key={`steps-${g.turns[0].m.id}`} turns={g.turns} live={thinking && i === all.length - 1}>{g.turns.map(turn)}</Steps>
+                    : turn(g.turns[0]))}
                 {thinking && !card && (writing && (writing.answer || writing.reasoning) ? (
-                  <div className="max-w-[92%] space-y-1.5" aria-live="polite">
+                  <div className="space-y-2" aria-live="polite">
                     {writing.reasoning && <Reasoning text={writing.reasoning} label={writing.answer ? `Thought for ${seconds(writing.ms)}` : 'Thinking…'} live={!writing.answer} />}
                     {writing.answer && (
-                      <p className="rounded-xl rounded-bl-sm bg-surface-2/70 px-3.5 py-2.5 text-[13.5px] leading-relaxed whitespace-pre-wrap text-ink">
-                        {writing.answer}<span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-brand/70 align-middle" />
-                      </p>
+                      <div>
+                        <Answer text={writing.answer} />
+                        <span className="mt-1 inline-block h-3.5 w-1.5 animate-pulse bg-brand/70 align-middle" />
+                      </div>
                     )}
                     {writing.broken && <p className="text-[11.5px] text-dim">A piece was missed; the full answer follows.</p>}
                   </div>
                 ) : (
-                  <p className="flex items-center gap-2 text-[12.5px] text-dim"><Loader2 className="size-3.5 animate-spin" />reading, then answering…</p>
+                  <p className="flex items-center gap-2 text-[13px] text-dim"><Loader2 className="size-3.5 animate-spin" />Thinking…</p>
                 ))}
+                </div>
               </div>
 
-              <Composer session={session} canAsk={mayChat} thinking={thinking} waiting={card !== null}
-                onSend={send} onStop={() => void api.cancelSession(session.ref).catch(() => undefined)} />
+              <div className="mx-auto w-full max-w-[780px]">
+                <Composer session={session} canAsk={mayChat} thinking={thinking} waiting={card !== null}
+                  onSend={send} onStop={() => void api.cancelSession(session.ref).catch(() => undefined)} />
+              </div>
             </div>
           )}
         </div>
@@ -774,15 +798,38 @@ function Chips({ session, items }: { session: SessionDoc | null; items: ChatAtta
   );
 }
 
-/** Runs of folded turns, each run shown as one closed row, in the order they were said. */
-function grouped(placed: Placed[]): { folded: boolean; turns: Placed[] }[] {
-  const out: { folded: boolean; turns: Placed[] }[] = [];
+/** Runs of folded turns, and runs of tool steps, each shown as one closed row, in the order they were said. */
+function grouped(placed: Placed[]): { folded: boolean; steps: boolean; turns: Placed[] }[] {
+  const out: { folded: boolean; steps: boolean; turns: Placed[] }[] = [];
   for (const p of placed) {
     const last = out[out.length - 1];
+    const step = !p.m.compacted && p.m.role === 'tool' && !p.m.permission;
     if (p.m.compacted && last?.folded) last.turns.push(p);
-    else out.push({ folded: !!p.m.compacted, turns: [p] });
+    else if (step && last?.steps) last.turns.push(p);
+    else out.push({ folded: !!p.m.compacted, steps: step, turns: [p] });
   }
   return out;
+}
+
+/** What it looked at before answering: one quiet line, open to read every step. */
+function Steps({ turns, live, children }: { turns: Placed[]; live: boolean; children: ReactNode }) {
+  const [shown, setShown] = useState(false);
+  const did = [...new Set(turns.map(({ m }) => TOOL_LABEL[m.tool ?? ''] ?? m.tool ?? 'a step'))];
+  const failedSteps = turns.filter(({ m }) => m.ok === false).length;
+  return (
+    <div>
+      <button onClick={() => setShown((v) => !v)} aria-expanded={shown}
+        className="flex max-w-full items-center gap-2 rounded-full py-1 pr-2 text-left text-[12.5px] text-dim transition-colors hover:text-ink-2">
+        {live ? <Loader2 className="size-3.5 shrink-0 animate-spin" /> : <Wrench className="size-3.5 shrink-0" />}
+        <span className="truncate">
+          {live ? 'Working · ' : ''}{turns.length} {turns.length === 1 ? 'step' : 'steps'} · {did.slice(0, 3).join(', ')}{did.length > 3 ? '…' : ''}
+          {failedSteps > 0 && <span className="text-warn"> · {failedSteps} failed</span>}
+        </span>
+        <ChevronRight className={cn('size-3.5 shrink-0 transition-transform', shown && 'rotate-90')} />
+      </button>
+      {shown && <div className="mt-1.5 space-y-1.5 border-l border-line pl-3">{children}</div>}
+    </div>
+  );
 }
 
 function Folded({ count, children }: { count: number; children: ReactNode }) {

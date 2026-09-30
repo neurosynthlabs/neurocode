@@ -21,6 +21,7 @@ export interface NavItem {
 /** Single source of truth: drives the sidebar, the router and ⌘K. */
 export const NAV: NavItem[] = [
   { section: 'Home', to: '/',            label: 'Command Center',    icon: 'LayoutDashboard', keywords: 'home requirement prompt start plan active work ask' },
+  { section: 'Home', to: '/sessions',    label: 'Chat',              icon: 'MessagesSquare',  keywords: 'sessions chat conversation ask talk question checkpoints rewind resume fork transcript' },
   { section: 'Home', to: '/activity',    label: 'Activity',          icon: 'ScrollText',      keywords: 'brain log timeline events' },
   { section: 'Home', to: '/projects',    label: 'Projects',          icon: 'FolderKanban',    keywords: 'repos repository switch onboard clone measure' },
 
@@ -54,7 +55,6 @@ export const NAV: NavItem[] = [
 
   { section: 'Governance', to: '/permissions', label: 'Permissions',  icon: 'ShieldCheck', keywords: 'approval gates allow deny risk sandbox' },
   { section: 'Governance', to: '/cost',        label: 'Cost & Usage', icon: 'Coins',       keywords: 'tokens spend ledger price agent project lane' },
-  { section: 'Governance', to: '/sessions',    label: 'Sessions',     icon: 'History',     keywords: 'checkpoints rewind resume fork transcript' },
   { section: 'Governance', to: '/settings',    label: 'Settings',     icon: 'Settings',    keywords: 'general appearance notifications preferences' },
 
   { section: 'Admin', to: '/admin/users',     label: 'People',              icon: 'Users',        perm: ['people:read', 'users:manage', 'teams:manage'], keywords: 'users accounts invite members disable reset password' },

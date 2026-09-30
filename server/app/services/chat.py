@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 import time
 import urllib.parse
 from collections.abc import Awaitable, Callable, Sequence
@@ -51,12 +52,16 @@ from .retrieval import RetrievalService, entity_tokens
 from .retrieval import label as retrieval_label
 from .tool_rules import Decision, decide
 
-MAX_STEPS = 6                 # tool calls in one answer, then it must answer with what it has
+MAX_STEPS = 4                 # tool calls in one answer, then it must answer: each is a free lane's minute
 MAX_FILE_LINES = 400
-MAX_OBSERVATION = 6_000       # what one tool may put back into the conversation
+MAX_OBSERVATION = 4_000       # what one tool may put back into the conversation: each step replays them all
 MAX_HISTORY = 24              # turns replayed to the model
 MAX_QUESTION = 50_000
-MAX_SKILLS_LISTED = 60        # one line each in the system prompt; beyond this the prompt is the cost
+MAX_SKILLS_LISTED = 12        # one line each in the system prompt; beyond this the prompt is the cost
+#: The project's AGENTS.md / CLAUDE.md as a session's prompt carries it. A 30 KB CLAUDE.md in every call put
+#: a plain "hi" over a free lane's 8,000-tokens-a-minute limit (HTTP 413) before a word was said; the rest
+#: of the file is one read_file away.
+CHAT_INSTRUCTIONS = 3_500
 #: Compaction: the newest turns stay word for word; at least this many older ones must be there to fold.
 KEEP_RECENT = 6
 MIN_TO_FOLD = 4
@@ -584,10 +589,16 @@ def system_prompt(project_name: str, skills: Sequence[SkillFile] = (), instructi
     lists are offered, and the rules that follow hold whatever it says. `steps` is its tool calls per answer."""
     offered = [t for t in CATALOGUE if (t.name != "load_skill" or skills) and (agent is None or agent.may(t.name))]
     catalogue = "\n".join(f"- {t.name} {t.takes} — {t.what}" for t in offered)
-    listed = "".join(f"\n- {s.slug} — {s.description[:200]}" for s in skills[:MAX_SKILLS_LISTED])
+    listed = "".join(f"\n- {s.slug} — {s.description[:100]}" for s in skills[:MAX_SKILLS_LISTED])
+    if len(skills) > MAX_SKILLS_LISTED:
+        listed += f"\n- …and {len(skills) - MAX_SKILLS_LISTED} more, loaded by name the same way"
     skill_section = f"Skills (load one with load_skill when it fits):{listed}\n\n" if skills else ""
+    standing = instructions.strip()
+    if len(standing) > CHAT_INSTRUCTIONS:
+        standing = (standing[:CHAT_INSTRUCTIONS].rsplit("\n", 1)[0] +
+                    "\n[…cut here: the full file is in the repository, read it with read_file when it matters]")
     project_section = (f"The project's instructions, from files in its repository — follow them where they "
-                       f"apply to your answer:\n{instructions.strip()}\n\n" if instructions.strip() else "")
+                       f"apply to your answer:\n{standing}\n\n" if standing else "")
     opening = ("You are NeuroCode, working inside an engineering workspace. You answer questions about one "
                f"project: {project_name}.\n\n")
     if agent is not None:
@@ -596,9 +607,13 @@ def system_prompt(project_name: str, skills: Sequence[SkillFile] = (), instructi
                    "and win.\n\n")
     return (
         opening +
-        "You cannot see the code until you read it. Use the tools, one at a time, until you know "
-        "enough, then answer from what they returned. Never invent a file, a symbol, a line number or "
-        "a fact — if the tools do not show it, say so plainly.\n\n"
+        "Talk like a sharp, friendly colleague. Not every message needs the code: a greeting, thanks, "
+        "small talk or a general question you can answer from what you know gets a direct answer, with no "
+        "tool. When the answer depends on this project, you cannot see the code until you read it: use "
+        "the tools, one at a time, until you know enough, then answer from what they returned. Never "
+        "invent a file, a symbol, a line number or a fact — if the tools do not show it, say so plainly.\n"
+        "Write answers in Markdown: short paragraphs, lists where they help, code in fenced blocks with "
+        "the language, file paths in backticks. Lead with the answer, not the process.\n\n"
         f"Tools:\n{catalogue or '(none: answer from what you already know, and say what you would need to read)'}\n\n"
         f"{_acting_section(acting)}"
         f"{skill_section}"
@@ -972,13 +987,13 @@ class ChatService:
         _announce(self.session, chat, card)
         return chat
 
-    async def compact(self, ref: str, by: str) -> ChatMessage:
+    async def compact(self, ref: str, by: str, actor: str | None = None) -> ChatMessage:
         """A person's "Compact": fold the older turns now, rather than when the window is nearly full.
 
         Not while a card waits either: the summary would become the newest turn, and the call the person
         then allows would have nothing to resume from."""
         chat = await self._open(ref, "compact")
-        return await fold(self.session, self.gateway, chat, by)
+        return await fold(self.session, self.gateway, chat, by, actor)
 
     async def _command(self, chat: Chat, text: str) -> tuple[extensions.CommandFile, str] | None:
         """The command a `/name args` question names, if one is on disk. A question that only looks like
@@ -1470,6 +1485,16 @@ async def _tool_turn(session: AsyncSession, gateway: Gateway, chat: Chat, projec
     return False
 
 
+_SMALL_TALK = re.compile(
+    r"(hi+|hey+|hello+|yo|hola|namaste|good (morning|afternoon|evening|night)|thanks?( you)?|thank you|thx|ty|"
+    r"ok(ay)?|cool|nice|great|bye|see you|who are you|what can you do|how are you)[\s!.?,]*", re.I)
+
+
+def _small_talk(asked: str) -> bool:
+    """A greeting, a thanks, "who are you": nothing the index could hold, so nothing is looked up for it."""
+    return bool(_SMALL_TALK.fullmatch(asked.strip())) or not terms(asked)
+
+
 def _grounding_question(turns: Sequence[Any]) -> tuple[str, list[str]]:
     """What retrieval should look for, and the names carried into it from the turns before.
 
@@ -1491,6 +1516,8 @@ def _grounding_question(turns: Sequence[Any]) -> tuple[str, list[str]]:
             asked = str((command.arguments or {}).get("args") or "") or command.body[:MAX_QUESTION]
         else:
             asked = turns[i].body
+        if _small_talk(asked):
+            return "", []
         if len(terms(asked)) >= SELF_CONTAINED:
             return asked, []
         earlier = [m for m in turns[:i] if m.role in ("you", "assistant") and m.body][-CARRY_TURNS:]
@@ -1534,10 +1561,14 @@ def _transcript(turns: Sequence[ChatMessage]) -> str:
     return text[-FOLD_TRANSCRIPT:]
 
 
-async def fold(session: AsyncSession, gateway: Gateway, chat: Chat, by: str) -> ChatMessage:
+async def fold(session: AsyncSession, gateway: Gateway, chat: Chat, by: str,
+               actor: str | None = None) -> ChatMessage:
     """Fold a session's older turns into one summary written by a model, keeping the newest turns word
     for word. The folded turns are marked, never deleted: the person still reads all of it, and the
-    model is sent the summary instead. Refused when there is too little to fold or no lane can write it."""
+    model is sent the summary instead. Refused when there is too little to fold or no lane can write it.
+
+    `by` is the name the summary is signed with; `actor` is the id of the person it is for, which the usage
+    ledger keeps — handed the name, its foreign key refused the line and the call was never counted."""
     repo = ChatRepository(session)
     # The newest turns still sent whole — read from the oldest end, a long session's page was all folded
     # turns, and there was never anything left to fold.
@@ -1552,7 +1583,7 @@ async def fold(session: AsyncSession, gateway: Gateway, chat: Chat, by: str) -> 
             gateway.ask, [{"role": "system", "content": FOLD_SYSTEM},
                           {"role": "user", "content": _transcript(folding)}],
             lambda raw: Folded.model_validate(extract_json(raw, trim=False)),
-            feature="compact", actor=by, project=chat.project_id, role=CHAT)
+            feature="compact", actor=actor, project=chat.project_id, role=CHAT)
     except NoModel as e:
         raise Refused(f"Nothing was folded: {e}", status=409) from e
     except ProviderError as e:
@@ -1620,9 +1651,11 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str, who: Person |
     A tool call that waits for a person ends the answer where it is, with its permission card. Once a
     person decides, this runs again and resumes there: an allowed call is made first — a refused one is
     replayed to the model as refused — and the answer goes on from what it found. `who` is the person the
-    answer is for; the acting tools it may reach are the ones they may reach.
+    answer is for; the acting tools it may reach are the ones they may reach. `by` is their name, for the
+    turns it signs; the usage ledger is given their id.
     """
     _STOPPED.discard(ref)
+    actor = who.id if who is not None else None
     async with db.session() as s:
         chat = await ChatRepository(s).by_ref(ref)
         if chat is None:
@@ -1700,7 +1733,7 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str, who: Person |
             fresh = await ChatRepository(s).by_ref(ref)
             if fresh is not None:
                 try:
-                    await fold(s, gateway, fresh, by)
+                    await fold(s, gateway, fresh, by, actor)
                 except Refused:
                     pass
 
@@ -1767,7 +1800,7 @@ async def think(db: Database, gateway: Gateway, ref: str, by: str, who: Person |
             try:
                 result = await asyncio.to_thread(
                     gateway.ask, messages, read_turn,
-                    feature="chat", actor=by, project=chat.project_id, role=CHAT, lane=wanted,
+                    feature="chat", actor=actor, project=chat.project_id, role=CHAT, lane=wanted,
                     agent=agent.name if agent is not None else "", on_delta=tap, stop=lambda: ref in _STOPPED,
                     tools=None if last else tool_specs(found.skills, acting, agent))
             except Stopped as stopped:

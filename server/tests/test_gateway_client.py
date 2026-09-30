@@ -96,6 +96,44 @@ def test_a_streamed_tool_call_is_put_together_from_its_pieces(monkeypatch: pytes
     assert got.reasoning == "I should read it."
 
 
+# ── a refusal sent mid-stream ────────────────────────────────────────
+def _refused_midway(monkeypatch: pytest.MonkeyPatch, error: dict[str, Any]) -> None:
+    """What Groq streams when it will not hand a tool call over: the reasoning, then an `error` event."""
+    lines = [f"data: {json.dumps({'choices': [{'delta': {'reasoning': 'Greet them.'}}]})}\n".encode(),
+             b"event: error\n", f"data: {json.dumps({'error': error})}\n".encode()]
+    monkeypatch.setattr(gateway, "_lines", lambda *a, **k: _Reply(b"".join(lines)))
+
+
+def _tool_use_failed(generation: str) -> dict[str, Any]:
+    return {"message": "Tool call validation failed: attempted to call tool 'answer' which was not in request.tools",
+            "type": "invalid_request_error", "code": "tool_use_failed", "failed_generation": generation,
+            "status_code": 400}
+
+
+def test_an_answer_groq_refused_as_a_tool_call_is_kept_as_the_answer(monkeypatch: pytest.MonkeyPatch):
+    # Found against a real key: GPT-OSS wrote the prompt's {"answer": …} as a call to `answer`, Groq refused
+    # it mid-stream, and the session said "the answer is empty" to every question — "hello" included.
+    _refused_midway(monkeypatch, _tool_use_failed('{"name": "answer", "arguments": {"answer": "Hello! How can I help?"}}'))
+    got = gateway.stream_openai([{"role": "user", "content": "hello"}], {**CFG, "tools": READ}, lambda k, p: None)
+    assert json.loads(got.text) == {"answer": "Hello! How can I help?"}
+    assert got.reasoning == "Greet them."
+
+
+def test_a_refused_call_to_a_tool_is_handed_on_as_that_call(monkeypatch: pytest.MonkeyPatch):
+    _refused_midway(monkeypatch, _tool_use_failed('{"name": "read_file", "arguments": "{\\"path\\": 7}"}'))
+    got = gateway.stream_openai([{"role": "user", "content": "hi"}], {**CFG, "tools": READ}, lambda k, p: None)
+    assert json.loads(got.text) == {"tool": "read_file", "arguments": {"path": 7}, "why": ""}
+
+
+def test_a_refusal_with_nothing_to_keep_fails_the_lane_in_the_providers_words(monkeypatch: pytest.MonkeyPatch):
+    for error in ({"message": "Service unavailable", "type": "server_error", "status_code": 503},
+                  _tool_use_failed('{"name": "answer", "arguments": {}}')):
+        _refused_midway(monkeypatch, error)
+        with pytest.raises(gateway.ProviderError) as refused:
+            gateway.stream_openai([{"role": "user", "content": "hi"}], {**CFG, "tools": READ}, lambda k, p: None)
+        assert refused.value.status == error["status_code"] and refused.value.body == error["message"]
+
+
 # ── a full minute is waited out, not failed ─────────────────────────
 GROQ_429 = ("Rate limit reached for model `openai/gpt-oss-120b` in organization `org_x` service tier `on_demand` on "
             "tokens per minute (TPM): Limit 8000, Used 7200, Requested 1500. Please try again in 5.4s. Need more?")

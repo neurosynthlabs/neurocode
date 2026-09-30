@@ -134,6 +134,8 @@ async def test_compacting_folds_older_turns_through_the_route(client: AsyncClien
     assert len(detail) == 17                                       # every turn is still there to read
     assert sum(1 for m in detail if m.get("compacted")) == 16 - KEEP_RECENT
     assert api_gateway.store.calls[-1]["feature"] == "compact"
+    me = (await client.get("/auth/me")).json()["user"]
+    assert api_gateway.store.calls[-1]["user_id"] == me["id"] != me["name"]    # an id: the ledger's foreign key
 
     chat.status = "thinking"
     await session.flush()

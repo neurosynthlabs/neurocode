@@ -21,18 +21,19 @@ import { clock } from '@/lib/live/work';
 import { ago } from '@/lib/time';
 import { cn } from '@/lib/utils';
 
-/* Home. One question in the middle of the screen, the way a good assistant opens, with the
-   work that needs you laid out calmly underneath. The composer plans, asks or brainstorms. A question
-   opens a session on the project, which reads its code, documents and memory; with no model to answer,
-   it is memory that answers, by quoting the matching facts, and says so. */
+/* Home. One box in the middle of the screen, the way a good assistant opens, with the work that needs
+   you laid out calmly underneath. It chats by default: a message opens a conversation on the project that
+   answers directly, and reads the code only when the question needs it. Build is the explicit other mode:
+   it compiles a plan and, with "Start right away", sets agents on it. With no model to answer, memory
+   answers by quoting the matching facts, and says so. */
 
 type Kind = 'plan' | 'ask' | 'idea';
 interface Mode { id: Kind; label: string; icon: LucideIcon; placeholder: string; action: string; verb: string; perm: string }
 interface Suggestion { icon: LucideIcon; label: string; text: string }
 
 const MODES: Mode[] = [
-  { id: 'plan', label: 'Plan', icon: GitBranchPlus, placeholder: 'Describe the change you want, in your own words…', action: 'Compile Plan', verb: 'compile', perm: 'plans:compile' },
-  { id: 'ask', label: 'Ask', icon: MessagesSquare, placeholder: 'Ask about this project’s code, docs or decisions…', action: 'Ask', verb: 'ask', perm: 'ai:use' },
+  { id: 'ask', label: 'Chat', icon: MessagesSquare, placeholder: 'Ask anything — about this project’s code, or not at all…', action: 'Send', verb: 'send', perm: 'ai:use' },
+  { id: 'plan', label: 'Build', icon: GitBranchPlus, placeholder: 'Describe what to build or fix. Agents plan it, then do it…', action: 'Compile Plan', verb: 'plan', perm: 'plans:compile' },
   { id: 'idea', label: 'Brainstorm', icon: Lightbulb, placeholder: 'Pitch an idea. The brief argues against itself.', action: 'Brainstorm', verb: 'brainstorm', perm: 'ai:use' },
 ];
 
@@ -70,9 +71,10 @@ export default function CommandCenter() {
   const { user, can } = useAuth();
   const { tasks, approvals, activity, memory, health, runs: agentRuns, compile: compileRequirement, ask, brainstorm } = useData();
   const [models, setModels] = useState<ModelsReport | null>(null);
-  const [kind, setKind] = useState<Kind>('plan');
-  // Brainstorm's "Plan the MVP" lands here with the requirement drafted.
-  const [req, setReq] = useState(() => (loc.state as { draft?: string } | null)?.draft ?? '');
+  // Brainstorm's "Plan the MVP" lands here with the requirement drafted, in Build; anything else opens on Chat.
+  const drafted = (loc.state as { draft?: string } | null)?.draft;
+  const [kind, setKind] = useState<Kind>(drafted ? 'plan' : 'ask');
+  const [req, setReq] = useState(() => drafted ?? '');
   const [busy, setBusy] = useState(false);
   const [answer, setAnswer] = useState<(AskAnswer & { q: string }) | null>(null);
   // "Start right away": a prompt compiles and the agents begin, its open questions deferred on the record.
@@ -89,7 +91,7 @@ export default function CommandCenter() {
   const m = MODES.find((x) => x.id === kind) ?? MODES[0];
   const permitted = can(m.perm);
 
-  // "New requirement" in the sidebar lands here with the composer focused.
+  // "New chat" in the sidebar lands here with the composer focused.
   const compose = (loc.state as { compose?: number } | null)?.compose;
   useEffect(() => { if (compose) box.current?.focus(); }, [compose]);
 
@@ -209,7 +211,7 @@ export default function CommandCenter() {
           </h1>
           <p className="mt-2.5 text-center text-[15px] text-soft">
             {project
-              ? <>What should we build in <span className="font-medium text-ink-2">{project.name}</span>?</>
+              ? <>Chat about <span className="font-medium text-ink-2">{project.name}</span>, or switch to Build to set agents on it.</>
               : <>Onboard a repository in <Link to="/projects" className="font-medium text-ink-2 underline-offset-4 hover:underline">Projects</Link> to start.</>}
           </p>
 
@@ -218,7 +220,7 @@ export default function CommandCenter() {
               ref={box}
               value={req}
               onChange={(e) => setReq(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void submit(); } }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void submit(); } }}
               aria-label="Requirement"
               rows={3}
               placeholder={m.placeholder}
@@ -251,12 +253,12 @@ export default function CommandCenter() {
                   <Play className="size-3.5" />Start right away
                 </button>
               )}
-              <span className="ml-auto hidden pr-2 text-[12px] text-dim md:inline">⌘↵ to {autoStart && kind === 'plan' ? 'start' : m.verb}</span>
+              <span className="ml-auto hidden pr-2 text-[12px] text-dim md:inline">↵ to {autoStart && kind === 'plan' ? 'start' : m.verb} · ⇧↵ new line</span>
               <button
                 onClick={() => void submit()}
                 disabled={!req.trim() || busy || !permitted || blocked}
                 aria-label={m.action}
-                title={!permitted ? 'Your role cannot do this' : blocked ? 'Onboard a project first' : `${m.action} (⌘↵)`}
+                title={!permitted ? 'Your role cannot do this' : blocked ? 'Onboard a project first' : `${m.action} (↵)`}
                 className="ml-auto grid size-9 shrink-0 place-items-center rounded-full bg-brand text-brand-ink transition-[opacity,transform] hover:scale-105 disabled:scale-100 disabled:opacity-30 md:ml-0"
               >
                 {busy ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-[18px]" strokeWidth={2.4} />}
@@ -343,7 +345,7 @@ export default function CommandCenter() {
             flush
           >
             {active.length === 0 ? (
-              <Empty title="Nothing in flight" hint="Describe a change above to plan it." />
+              <Empty title="Nothing in flight" hint="Switch the box above to Build to plan a change." />
             ) : (
               <div className="divide-y divide-line/60">
                 {active.slice(0, 5).map((t) => {

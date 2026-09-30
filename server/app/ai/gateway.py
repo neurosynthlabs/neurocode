@@ -100,9 +100,10 @@ FIREWALL = re.compile(r"error code: 10\d\d")
 
 #: How long one call waits on a provider that says "try again in N seconds" before the next lane gets it. A
 #: free tier's minute is full far more often than the provider is down — Groq's free tier is 8,000 tokens a
-#: minute, a couple of calls — and waiting out a few seconds beats failing a person's question.
-RETRY_WAIT = 20.0
-RETRIES = 2
+#: minute, and a three-step answer spends twice that in seconds — so waiting out most of a minute beats failing
+#: a person's question. The lane's own clock (LANE_SECONDS) still bounds the whole call.
+RETRY_WAIT = 45.0
+RETRIES = 3
 _AGAIN = re.compile(r"try again in (?:(\d+)m)?(\d+(?:\.\d+)?)(ms|s)\b", re.IGNORECASE)
 
 
@@ -353,6 +354,37 @@ def _called(name: str, arguments: Any) -> str:
     return json.dumps({"tool": name, "arguments": arguments if isinstance(arguments, dict) else {}, "why": ""})
 
 
+def _salvaged(error: dict[str, Any]) -> str | None:
+    """The turn a provider refused to hand over as a tool call, in the shape an answer written as JSON takes.
+
+    GPT-OSS on Groq writes the prompt's `{"answer": "…"}` as a call to a function named `answer`, which is
+    not declared, so Groq refuses it (`tool_use_failed`) — streaming, in an `error` event after the reasoning —
+    and sends what the model wrote back as `failed_generation`. That is the model's turn: an answer to the
+    person, or a call the session's own tool rules then weigh like any other. None: nothing to keep."""
+    raw = error.get("failed_generation") if error.get("code") == "tool_use_failed" else None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        call = json.loads(raw)
+    except ValueError:
+        return raw                               # words, not a call: the caller's parser reads them as they are
+    if not isinstance(call, dict) or not isinstance(call.get("name"), str):
+        return raw
+    arguments = call.get("arguments")
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments or "{}")
+        except ValueError:
+            arguments = {}
+    arguments = arguments if isinstance(arguments, dict) else {}
+    if call["name"].removeprefix("functions.") != "answer":
+        return _called(call["name"], arguments)
+    words = arguments.get("answer")
+    if not isinstance(words, str):
+        words = next((v for v in arguments.values() if isinstance(v, str)), None)
+    return json.dumps({"answer": words}) if words and words.strip() else None
+
+
 def _answered(reply: Reply, cfg: dict[str, Any], budget: int) -> Reply:
     """An empty answer cut off at the budget is a model that thought past it — said so, by name."""
     if not reply.text.strip() and reply.finish == "length":
@@ -428,6 +460,15 @@ class _Collect:
         held["name"] += fn.get("name") or ""
         held["arguments"] += fn.get("arguments") or ""
 
+    def refused(self, error: dict[str, Any]) -> None:
+        """A refusal sent mid-stream, as an `error` event. Read past, it left an empty answer that failed as
+        "the answer is empty" and hid what the provider said: now the refused turn is kept when it can be,
+        and otherwise the lane fails in the provider's own words."""
+        words = _salvaged(error)
+        if words is None:
+            raise ProviderError(_int(error.get("status_code")) or 502, str(error.get("message") or error)[:600])
+        self.text, self.calls = [words], {}
+
     def add(self, answer: str, reasoning: str) -> None:
         if reasoning:
             self.reasoning.append(reasoning)
@@ -486,6 +527,9 @@ def stream_openai(messages: list[dict[str, str]], cfg: dict[str, Any], on_delta:
             if data == "[DONE]":
                 break
             chunk = json.loads(data)
+            if isinstance(chunk.get("error"), dict):
+                got.refused(chunk["error"])
+                break
             if chunk.get("usage"):
                 got.usage = _counted(chunk["usage"])
             for choice in chunk.get("choices") or []:

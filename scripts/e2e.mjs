@@ -159,6 +159,7 @@ try {
     // This one waits for its questions to be answered by hand; "Start right away" is walked further down.
     await page.evaluate(() => localStorage.setItem('nc.composer.autoStart', 'off'));
     await open('/');
+    await page.getByRole('radio', { name: 'Build' }).click();
     await page.getByLabel('Requirement').fill('Round invoice totals in pkg/core.py at the invoice level.');
     await page.getByRole('button', { name: /Compile Plan/ }).click();
     await page.waitForURL('**/plans**', { timeout: 20000 });
@@ -416,7 +417,7 @@ try {
 
   await step('a question on the home screen opens a session on the project, and the model answers it there', async () => {
     await open('/');
-    await page.getByRole('radio', { name: 'Ask' }).click();
+    await page.getByRole('radio', { name: 'Chat' }).click();
     await page.getByLabel('Requirement').fill('Where are invoice totals added up?');
     await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForURL('**/sessions?ref=*', { timeout: 15000 });
@@ -586,7 +587,7 @@ try {
   await step('with Start right away, a prompt compiles and its agents start at once', async () => {
     await page.evaluate(() => localStorage.setItem('nc.composer.autoStart', 'on'));
     await open('/');
-    await page.getByRole('radio', { name: 'Plan' }).click();
+    await page.getByRole('radio', { name: 'Build' }).click();
     await page.getByRole('switch', { name: /Start right away/ }).waitFor({ timeout: 5000 });
     await page.getByLabel('Requirement').fill('Round invoice totals in pkg/api.py at the invoice level too.');
     await page.getByRole('button', { name: /Compile Plan/ }).click();

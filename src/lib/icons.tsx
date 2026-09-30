@@ -6,7 +6,7 @@
 import {
   Activity, Blocks, Bot, Brain, BrainCircuit, Bug, Building2, CalendarClock, Circle, Code2, Coins, Compass, Cpu, Crown,
   Database, Dna, Eye, FileClock, FileCode, FileText, FlaskConical, FolderKanban, Gauge, GitBranchPlus, GitCommit, GitMerge,
-  History, KeyRound, LayoutDashboard, Library, Lightbulb, ListChecks, Mic, Microscope, Monitor, Network, Plug,
+  History, KeyRound, LayoutDashboard, Library, Lightbulb, ListChecks, MessagesSquare, Mic, Microscope, Monitor, Network, Plug,
   Rocket, Scale, ScanEye, ScrollText, Server, Settings, ShieldAlert, ShieldCheck, Sparkles, SquareSlash, Table2,
   Users, UsersRound, Webhook, Workflow, type LucideIcon,
 } from 'lucide-react';
@@ -14,7 +14,7 @@ import {
 export const ICONS: Record<string, LucideIcon> = {
   Activity, Blocks, Bot, Brain, BrainCircuit, Bug, Building2, CalendarClock, Circle, Code2, Coins, Compass, Cpu, Crown,
   Database, Dna, Eye, FileClock, FileCode, FileText, FlaskConical, FolderKanban, Gauge, GitBranchPlus, GitCommit, GitMerge,
-  History, KeyRound, LayoutDashboard, Library, Lightbulb, ListChecks, Mic, Microscope, Monitor, Network, Plug,
+  History, KeyRound, LayoutDashboard, Library, Lightbulb, ListChecks, MessagesSquare, Mic, Microscope, Monitor, Network, Plug,
   Rocket, Scale, ScanEye, ScrollText, Server, Settings, ShieldAlert, ShieldCheck, Sparkles, SquareSlash, Table2,
   Users, UsersRound, Webhook, Workflow,
 };

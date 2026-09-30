@@ -214,7 +214,7 @@ export function Sidebar({ collapsed, onToggle, onSearch, variant = 'rail' }: {
 
         {/* Quick actions */}
         <div className={cn('shrink-0 space-y-0.5 pb-2', mini ? 'px-2' : 'px-2.5')}>
-          <Action icon={SquarePen} label="New requirement" onClick={compose} mini={mini} accent />
+          <Action icon={SquarePen} label="New chat" onClick={compose} mini={mini} accent />
           {onSearch && <Action icon={Search} label="Search" hint="⌘K" onClick={onSearch} mini={mini} />}
         </div>
 

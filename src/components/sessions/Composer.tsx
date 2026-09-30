@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent,
 import { AtSign, Box, Brain, FileText, Image as ImageIcon, Loader2, Paperclip, Send, Slash, Square, SquareCode, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Mono } from '@/components/os';
 import type { ChatAttachment, SessionDoc } from '@/lib/api';
 import { extensions, type LiveCommand } from '@/lib/live/extensions';
 import { IMAGE_TYPES, UPLOAD_LIMITS, readAsBase64, sessionsApi, type Mention } from '@/lib/live/sessions';
@@ -163,10 +162,10 @@ export function Composer({ session, canAsk, thinking, waiting, onSend, onStop }:
 
   const hint = !canAsk ? 'Your role cannot use sessions.'
     : waiting ? 'Answer the permission request above first.'
-    : `Ask about ${session.projectName}… (@ to attach, / for commands)`;
+    : `Ask about ${session.projectName}, or anything…`;
 
   return (
-    <div className={cn('relative rounded-xl border bg-surface p-2.5 transition-colors', dragging ? 'border-brand/60' : 'border-line')}
+    <div className={cn('composer relative border bg-surface p-2 transition-colors', dragging ? 'border-brand/60' : 'border-line')} style={{ borderRadius: 'calc(var(--radius) * 2.4)' }}
       onDragOver={(e) => { if (canAsk) { e.preventDefault(); setDragging(true); } }} onDragLeave={() => setDragging(false)} onDrop={dropped}>
       {shown && (
         <div role="listbox" aria-label={shown.kind === 'mention' ? 'Attach from the project' : 'Commands'}
@@ -217,11 +216,11 @@ export function Composer({ session, canAsk, thinking, waiting, onSend, onStop }:
         onBlur={() => setClosedAt(key)} onFocus={() => setClosedAt(null)}
         disabled={!canAsk || waiting}
         placeholder={hint}
-        className="w-full resize-none bg-transparent px-2 py-1.5 text-[13.5px] text-ink outline-none placeholder:text-dim"
+        className="w-full resize-none bg-transparent px-2.5 pt-2 pb-1 text-[14.5px] leading-relaxed text-ink outline-none placeholder:text-dim"
       />
       <input ref={files} type="file" multiple hidden accept="text/*,.md,.json,.yaml,.yml,.toml,.csv,.sql,.py,.ts,.tsx,.js,.go,.rs,.java,.cs,.rb,.php,.sh,image/png,image/jpeg,image/gif,image/webp"
         onChange={(e) => { if (e.target.files) void upload(e.target.files); e.target.value = ''; }} />
-      <div className="flex items-center gap-1.5 border-t border-line/60 px-1 pt-2">
+      <div className="flex items-center gap-1.5 px-1">
         <Button size="icon-sm" variant="ghost" aria-label="Attach a file or picture" title="A text file up to 1 MB, or a picture up to 5 MB"
           disabled={!canAsk || waiting} onClick={() => files.current?.click()}><Paperclip className="size-3.5" /></Button>
         <Button size="icon-sm" variant="ghost" aria-label="Mention a file, symbol, fact or plan" title="Attach from the project (@)"
@@ -229,15 +228,17 @@ export function Composer({ session, canAsk, thinking, waiting, onSend, onStop }:
             const text = draft && !/\s$/.test(draft) ? `${draft} @` : `${draft}@`;
             setDraft(text); setCaret(text.length); setClosedAt(null); box.current?.focus();
           }}><AtSign className="size-3.5" /></Button>
-        <span className="min-w-0 flex-1 truncate text-[11.5px] text-dim">
-          <Mono>{session.ref}</Mono> · web and MCP tools ask first
+        <span className="min-w-0 flex-1 truncate text-[12px] text-dim" title={`${session.ref} · web and MCP tools ask before they run`}>
+          @ attach · / commands · ⇧↵ new line
         </span>
         {thinking && (
           <Button size="sm" variant="outline" onClick={onStop}><Square className="size-3.5" />Stop</Button>
         )}
-        <Button size="sm" onClick={() => void send()} disabled={!draft.trim() || thinking || waiting || !canAsk || uploading > 0}>
-          <Send className="size-3.5" />Ask
-        </Button>
+        <button type="button" onClick={() => void send()} disabled={!draft.trim() || thinking || waiting || !canAsk || uploading > 0}
+          aria-label="Ask" title="Ask (↵)"
+          className="grid size-8 shrink-0 place-items-center rounded-full bg-brand text-brand-ink transition-[opacity,transform] hover:scale-105 disabled:scale-100 disabled:opacity-30">
+          <Send className="size-3.5" />
+        </button>
       </div>
     </div>
   );
